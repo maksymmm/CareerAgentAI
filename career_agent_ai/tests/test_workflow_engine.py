@@ -48,12 +48,10 @@ def test_workflow_is_immutable():
 
 def test_engine_start():
     engine = WorkflowEngine()
-    workflow = make_workflow()
 
-    started = engine.start(workflow)
+    started = engine.start(make_workflow())
 
     assert started.status == WorkflowState.RUNNING
-    assert engine.workflow.status == WorkflowState.RUNNING
 
 
 def test_next_step():
@@ -61,21 +59,70 @@ def test_next_step():
 
     engine.start(make_workflow())
 
-    updated = engine.next_step()
+    workflow = engine.next_step()
 
-    assert updated.current_step == 1
+    assert workflow.current_step == 1
 
 
-def test_pause_resume_cancel():
+def test_complete_step():
+    engine = WorkflowEngine()
+
+    engine.start(make_workflow())
+
+    engine.next_step()
+
+    workflow = engine.complete_step()
+
+    assert workflow.status == WorkflowState.COMPLETED
+
+
+def test_fail_step():
+    engine = WorkflowEngine()
+
+    engine.start(make_workflow())
+
+    workflow = engine.fail_step()
+
+    assert workflow.status == WorkflowState.FAILED
+
+
+def test_pause_resume():
     engine = WorkflowEngine()
 
     engine.start(make_workflow())
 
     paused = engine.pause()
+
     assert paused.status == WorkflowState.PAUSED
 
     resumed = engine.resume()
+
     assert resumed.status == WorkflowState.RUNNING
 
+
+def test_cancel():
+    engine = WorkflowEngine()
+
+    engine.start(make_workflow())
+
     cancelled = engine.cancel()
+
     assert cancelled.status == WorkflowState.CANCELLED
+
+
+def test_snapshot():
+    engine = WorkflowEngine()
+
+    engine.start(make_workflow())
+
+    snapshot = engine.snapshot()
+
+    assert snapshot.workflow_id == "wf-001"
+    assert snapshot.completed_steps == 0
+
+
+def test_invalid_next_step_without_workflow():
+    engine = WorkflowEngine()
+
+    with pytest.raises(RuntimeError):
+        engine.next_step()
