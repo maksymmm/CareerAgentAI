@@ -4,25 +4,19 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
-from career_agent_ai.application.workflow.workflow import Workflow
-
 
 @dataclass(frozen=True)
-class AgentContext:
+class AgentResult:
     """
-    Immutable execution context used by the Agent Brain.
+    Immutable result returned by an Agent.
     """
 
-    user_id: str
+    success: bool
+    agent_id: str
 
-    memory_snapshot: MemorySnapshot
+    messages: tuple[str, ...] = field(default_factory=tuple)
 
-    active_workflow: Workflow | None = None
-
-    payload: Mapping[str, Any] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    execution_time: float = 0.0
 
     metadata: Mapping[str, Any] = field(
         default_factory=lambda: MappingProxyType({})
@@ -31,8 +25,8 @@ class AgentContext:
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
-            "payload",
-            MappingProxyType(dict(self.payload)),
+            "messages",
+            tuple(self.messages),
         )
 
         object.__setattr__(
