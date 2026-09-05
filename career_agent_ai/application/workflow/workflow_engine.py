@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Callable, Any
+from typing import Any, Callable
 
 from .workflow import Workflow
 from .workflow_result import WorkflowResult
@@ -9,22 +9,11 @@ from .workflow_state import WorkflowState
 from .workflow_step import WorkflowStep
 
 
-WorkflowStepExecutor = Callable[
-    [WorkflowStep, Workflow],
-    Any,
-]
+WorkflowStepExecutor = Callable[[WorkflowStep, Workflow], Any]
 
 
 class WorkflowEngine:
-    """
-    Executes and coordinates immutable workflows.
-
-    The engine owns workflow lifecycle state while keeping actual business
-    logic outside of the workflow layer.
-
-    A WorkflowStep contains a task identifier. An optional executor can
-    resolve that task identifier into an actual application action.
-    """
+    """Execute and coordinate immutable workflows."""
 
     def __init__(
         self,
@@ -36,10 +25,12 @@ class WorkflowEngine:
 
     @property
     def workflow(self) -> Workflow | None:
+        """Return the active workflow, if one exists."""
         return self._workflow
 
     @property
     def is_running(self) -> bool:
+        """Return whether a workflow is currently running."""
         return (
             self._workflow is not None
             and self._workflow.status == WorkflowState.RUNNING
@@ -47,20 +38,15 @@ class WorkflowEngine:
 
     @property
     def is_finished(self) -> bool:
-        return (
-            self._workflow is not None
-            and self._workflow.is_finished()
-        )
+        """Return whether the active workflow has finished."""
+        return self._workflow is not None and self._workflow.is_finished()
 
     def start(self, workflow: Workflow) -> Workflow:
-        """
-        Starts a new workflow.
-
-        A workflow can only be started when there is no active workflow.
-        """
-
+        """Start a workflow and reset its step execution state."""
         if self._workflow is not None and not self._workflow.is_finished():
             raise RuntimeError("Workflow is already running.")
+
+        self._step_results.clear()
 
         if not workflow.steps:
             self._workflow = replace(
@@ -68,359 +54,185 @@ class WorkflowEngine:
                 status=WorkflowState.COMPLETED,
                 current_step=0,
             )
-            self._step_results.clear()
             return self._workflow
 
-        self._step_results.clear()
-
         normalized_steps = tuple(
-            replace(
-                step,
-                status=WorkflowState.PENDING,
-            )
+            replace(step, status=WorkflowState.PENDING)
             for step in workflow.steps
         )
-
         self._workflow = replace(
             workflow,
             status=WorkflowState.RUNNING,
             current_step=0,
             steps=normalized_steps,
         )
-
         return self._workflow
 
     def current_step(self) -> WorkflowStep:
-        """
-        Returns the currently active workflow step.
-        """
-
+        """Return the currently selected workflow step."""
         workflow = self._require_workflow()
-
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Workflow is not running."
-            )
-
+        self._require_running(workflow)
         if workflow.current_step >= len(workflow.steps):
-            raise RuntimeError(
-                "Workflow already finished."
-            )
-
+            raise RuntimeError("Workflow already finished.")
         return workflow.steps[workflow.current_step]
 
     def execute_step(self) -> Any:
-        """
-        Executes the current workflow step.
-
-        The configured executor receives both the current step and the
-        complete workflow. The returned value is stored under the step id.
-
-        If no executor is configured, the step is considered successfully
-        processed and its task identifier is returned.
-        """
-
+        """Execute the current step and mark it completed."""
         workflow = self._require_workflow()
-
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Workflow is not running."
-            )
-
+        self._require_running(workflow)
         if workflow.current_step >= len(workflow.steps):
-            raise RuntimeError(
-                "Workflow already finished."
-            )
+            raise RuntimeError("Workflow already finished.")
 
         step = workflow.steps[workflow.current_step]
-
         if step.status == WorkflowState.COMPLETED:
             return self._step_results.get(step.id)
 
-        running_step = replace(
-            step,
-            status=WorkflowState.RUNNING,
-        )
-
+        running_step = replace(step, status=WorkflowState.RUNNING)
         self._replace_current_step(running_step)
 
         try:
-            if self._executor is None:
-                result = step.task
-            else:
-                result = self._executor(
-                    running_step,
-                    self._require_workflow(),
-                )
-
-        except Exception:
-            failed_step = replace(
-                running_step,
-                status=WorkflowState.FAILED,
+            result = (
+                step.task
+                if self._executor is None
+                else self._executor(running_step, self._require_workflow())
             )
-
-            self._replace_current_step(failed_step)
-
+        except Exception:
+            self._replace_current_step(
+                replace(running_step, status=WorkflowState.FAILED)
+            )
             self._workflow = replace(
                 self._require_workflow(),
                 status=WorkflowState.FAILED,
             )
-
             raise
 
-        completed_step = replace(
-            running_step,
-            status=WorkflowState.COMPLETED,
+        self._replace_current_step(
+            replace(running_step, status=WorkflowState.COMPLETED)
         )
-
-        self._replace_current_step(completed_step)
         self._step_results[step.id] = result
-
         return result
 
     def complete_step(self) -> Workflow:
-        """
-        Marks the current step as completed and advances the workflow.
-
-        This method is intentionally separate from execute_step so callers
-        can either execute through the engine or control completion
-        externally.
-        """
-
+        """Mark the current step completed and advance to the next step."""
         workflow = self._require_workflow()
-
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Workflow is not running."
-            )
-
+        self._require_running(workflow)
         if workflow.current_step >= len(workflow.steps):
-            raise RuntimeError(
-                "No current step."
-            )
-
-        current = workflow.steps[workflow.current_step]
+            raise RuntimeError("No current step.")
 
         completed = replace(
-            current,
+            workflow.steps[workflow.current_step],
             status=WorkflowState.COMPLETED,
         )
-
         steps = list(workflow.steps)
         steps[workflow.current_step] = completed
-
-        next_step_index = workflow.current_step + 1
-
-        if next_step_index >= len(steps):
-            self._workflow = replace(
-                workflow,
-                steps=tuple(steps),
-                current_step=next_step_index,
-                status=WorkflowState.COMPLETED,
-            )
-            return self._workflow
+        next_index = workflow.current_step + 1
 
         self._workflow = replace(
             workflow,
             steps=tuple(steps),
-            current_step=next_step_index,
-            status=WorkflowState.RUNNING,
+            current_step=next_index,
+            status=(
+                WorkflowState.COMPLETED
+                if next_index >= len(steps)
+                else WorkflowState.RUNNING
+            ),
         )
-
         return self._workflow
 
     def next_step(self) -> Workflow:
-        """
-        Moves to the next step.
+        """Move to the next workflow step without requiring prior completion.
 
-        The current step must already be completed.
+        This preserves the original workflow navigation contract while
+        allowing ``execute_step`` and ``complete_step`` to provide explicit
+        execution and completion semantics.
         """
-
         workflow = self._require_workflow()
-
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Workflow is not running."
-            )
-
+        self._require_running(workflow)
         if workflow.current_step >= len(workflow.steps):
-            raise RuntimeError(
-                "Workflow already finished."
-            )
+            raise RuntimeError("Workflow already finished.")
 
-        current = workflow.steps[workflow.current_step]
-
-        if current.status != WorkflowState.COMPLETED:
-            raise RuntimeError(
-                "Current workflow step must be completed first."
-            )
-
-        next_step_index = workflow.current_step + 1
-
-        if next_step_index >= len(workflow.steps):
-            self._workflow = replace(
-                workflow,
-                current_step=next_step_index,
-                status=WorkflowState.COMPLETED,
-            )
-            return self._workflow
-
+        next_index = workflow.current_step + 1
         self._workflow = replace(
             workflow,
-            current_step=next_step_index,
-            status=WorkflowState.RUNNING,
+            current_step=next_index,
+            status=(
+                WorkflowState.COMPLETED
+                if next_index >= len(workflow.steps)
+                else WorkflowState.RUNNING
+            ),
         )
-
         return self._workflow
 
     def run(self) -> Workflow:
-        """
-        Executes all remaining workflow steps.
-
-        This is the first autonomous execution primitive used by higher-level
-        agents. Each step is executed through the configured executor.
-        """
-
+        """Execute all remaining workflow steps autonomously."""
         workflow = self._require_workflow()
+        self._require_running(workflow)
 
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Workflow is not running."
-            )
-
-        while (
-            self._workflow is not None
-            and self._workflow.status == WorkflowState.RUNNING
-        ):
+        while self._workflow is not None and self._workflow.status == WorkflowState.RUNNING:
             self.execute_step()
-
-            if self._workflow is None:
+            if self._workflow is None or self._workflow.current_step >= len(self._workflow.steps) - 1:
+                if self._workflow is not None and self._workflow.current_step == len(self._workflow.steps) - 1:
+                    self.next_step()
                 break
-
-            if self._workflow.current_step >= len(
-                self._workflow.steps
-            ):
-                break
-
             self.next_step()
 
         return self._require_workflow()
 
     def fail_step(self) -> Workflow:
-        """
-        Marks the current step and workflow as failed.
-        """
-
+        """Mark the current step and workflow as failed."""
         workflow = self._require_workflow()
-
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Workflow is not running."
-            )
-
+        self._require_running(workflow)
         if workflow.current_step >= len(workflow.steps):
-            raise RuntimeError(
-                "No current step."
-            )
-
-        failed_step = replace(
-            workflow.steps[workflow.current_step],
-            status=WorkflowState.FAILED,
-        )
+            raise RuntimeError("No current step.")
 
         steps = list(workflow.steps)
-        steps[workflow.current_step] = failed_step
-
+        steps[workflow.current_step] = replace(
+            steps[workflow.current_step],
+            status=WorkflowState.FAILED,
+        )
         self._workflow = replace(
             workflow,
             steps=tuple(steps),
             status=WorkflowState.FAILED,
         )
-
         return self._workflow
 
     def pause(self) -> Workflow:
-        """
-        Pauses a running workflow.
-        """
-
+        """Pause a running workflow."""
         workflow = self._require_workflow()
-
-        if workflow.status != WorkflowState.RUNNING:
-            raise RuntimeError(
-                "Only a running workflow can be paused."
-            )
-
-        self._workflow = replace(
-            workflow,
-            status=WorkflowState.PAUSED,
-        )
-
+        self._require_running(workflow)
+        self._workflow = replace(workflow, status=WorkflowState.PAUSED)
         return self._workflow
 
     def resume(self) -> Workflow:
-        """
-        Resumes a paused workflow.
-        """
-
+        """Resume a paused workflow."""
         workflow = self._require_workflow()
-
         if workflow.status != WorkflowState.PAUSED:
-            raise RuntimeError(
-                "Only a paused workflow can be resumed."
-            )
-
-        self._workflow = replace(
-            workflow,
-            status=WorkflowState.RUNNING,
-        )
-
+            raise RuntimeError("Only a paused workflow can be resumed.")
+        self._workflow = replace(workflow, status=WorkflowState.RUNNING)
         return self._workflow
 
     def cancel(self) -> Workflow:
-        """
-        Cancels the current workflow.
-        """
-
+        """Cancel the active workflow."""
         workflow = self._require_workflow()
-
         if workflow.is_finished():
-            raise RuntimeError(
-                "Workflow is already finished."
-            )
-
-        self._workflow = replace(
-            workflow,
-            status=WorkflowState.CANCELLED,
-        )
-
+            raise RuntimeError("Workflow is already finished.")
+        self._workflow = replace(workflow, status=WorkflowState.CANCELLED)
         return self._workflow
 
     def step_result(self, step_id: str) -> Any:
-        """
-        Returns the result produced by a completed step.
-        """
-
+        """Return the stored result for a completed step."""
         if step_id not in self._step_results:
-            raise KeyError(
-                f"No result exists for workflow step '{step_id}'."
-            )
-
+            raise KeyError(f"No result exists for workflow step '{step_id}'.")
         return self._step_results[step_id]
 
     def snapshot(self) -> WorkflowResult:
-        """
-        Returns an immutable workflow execution snapshot.
-        """
-
+        """Return the current workflow execution snapshot."""
         workflow = self._require_workflow()
-
         completed_steps = sum(
-            1
+            step.status == WorkflowState.COMPLETED
             for step in workflow.steps
-            if step.status == WorkflowState.COMPLETED
         )
-
         failed_step = next(
             (
                 step.id
@@ -429,7 +241,6 @@ class WorkflowEngine:
             ),
             None,
         )
-
         return WorkflowResult(
             workflow_id=workflow.workflow_id,
             success=workflow.status == WorkflowState.COMPLETED,
@@ -445,31 +256,22 @@ class WorkflowEngine:
         )
 
     def reset(self) -> None:
-        """
-        Clears the current workflow and its execution results.
-        """
-
+        """Clear the active workflow and execution results."""
         self._workflow = None
         self._step_results.clear()
 
     def _require_workflow(self) -> Workflow:
         if self._workflow is None:
-            raise RuntimeError(
-                "No active workflow."
-            )
-
+            raise RuntimeError("No active workflow.")
         return self._workflow
 
-    def _replace_current_step(
-        self,
-        step: WorkflowStep,
-    ) -> None:
-        workflow = self._require_workflow()
+    @staticmethod
+    def _require_running(workflow: Workflow) -> None:
+        if workflow.status != WorkflowState.RUNNING:
+            raise RuntimeError("Workflow is not running.")
 
+    def _replace_current_step(self, step: WorkflowStep) -> None:
+        workflow = self._require_workflow()
         steps = list(workflow.steps)
         steps[workflow.current_step] = step
-
-        self._workflow = replace(
-            workflow,
-            steps=tuple(steps),
-        )
+        self._workflow = replace(workflow, steps=tuple(steps))
