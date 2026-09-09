@@ -23,6 +23,7 @@ class FakeAgent(Agent):
         self._id = agent_id
         self._result = result
         self._error = error
+        self.last_context = None
 
     @property
     def id(self) -> str:
@@ -41,6 +42,7 @@ class FakeAgent(Agent):
         return "fake"
 
     def execute(self, context):
+        self.last_context = context
         if self._error is not None:
             raise self._error
         if self._result is not None:
@@ -155,8 +157,8 @@ def test_run_persists_summary_in_memory():
     assert record.value["success"] is True
 
 
-def test_run_pauses_for_human_action():
-    agent = FakeAgent(
+def test_human_gated_run_can_be_resumed():
+    application = FakeAgent(
         "job_application",
         result=AgentResult(
             success=True,
@@ -164,17 +166,61 @@ def test_run_pauses_for_human_action():
             metadata={"requires_human": True},
         ),
     )
+    resume_agent = FakeAgent("resume")
+    orchestrator = make_orchestrator(agents=(application, resume_agent))
 
-    orchestrator = make_orchestrator(agents=(agent,))
-    result = orchestrator.run(
+    paused = orchestrator.run(
         "user-1",
         "Apply to the selected job",
-        {"actions": ["job_application"]},
+        {"actions": ["job_application", "resume"]},
     )
 
-    assert result.success is False
-    assert result.stopped_reason == "human_action_required"
+    assert paused.success is False
+    assert paused.stopped_reason == "human_action_required"
     assert orchestrator._workflow.workflow.status == WorkflowState.PAUSED
+
+    resumed = orchestrator.resume(paused.run_id, human_result={"approved": True})
+
+    assert resumed.success is True
+    assert resumed.stopped_reason is None
+    assert tuple(step.action for step in resumed.steps) == (
+        "job_application",
+        "resume",
+    )
+    assert resume_agent.last_context.payload["human_result"] == {"approved": True}
+    assert paused.run_id == resumed.run_id
+
+
+def test_human_gated_run_does_not_block_a_new_run():
+    application = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    orchestrator = make_orchestrator(agents=(application,))
+
+    paused = orchestrator.run("user-1", "Apply now", {"actions": ["job_application"]})
+    independent = orchestrator.run("user-1", "Find another job")
+
+    assert paused.run_id != independent.run_id
+    assert paused.stopped_reason == "human_action_required"
+    assert independent.success is True
+
+
+def test_resume_unknown_run_is_rejected():
+    with pytest.raises(KeyError):
+        make_orchestrator().resume("missing-run")
+
+
+def test_resume_requires_paused_run():
+    orchestrator = make_orchestrator()
+    completed = orchestrator.run("user-1", "Find a job")
+
+    with pytest.raises(RuntimeError):
+        orchestrator.resume(completed.run_id)
 
 
 def test_run_contains_agent_failure_without_raising():
