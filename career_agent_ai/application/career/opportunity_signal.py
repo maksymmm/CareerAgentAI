@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -13,9 +13,13 @@ class OpportunitySignal:
     company: str
     signal_type: str
     strength: float
-    observed_at: datetime = datetime.now(timezone.utc)
+    observed_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     source: str = ""
-    metadata: Mapping[str, Any] = MappingProxyType({})
+    metadata: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def __post_init__(self) -> None:
         company = self.company.strip()
