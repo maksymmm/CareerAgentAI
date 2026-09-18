@@ -16,6 +16,7 @@ class PreVacancyDecisionEngine:
         self,
         opportunity: OpportunityScore,
     ) -> PreVacancyAction:
+        """Select a bounded action from one opportunity score."""
         if opportunity.score >= self.PREPARE_THRESHOLD:
             return PreVacancyAction.PREPARE_OUTREACH
 
@@ -28,6 +29,7 @@ class PreVacancyDecisionEngine:
         self,
         opportunities: Iterable[OpportunityScore],
     ) -> tuple[tuple[OpportunityScore, PreVacancyAction], ...]:
+        """Select bounded actions for opportunities without changing their order."""
         return tuple(
             (opportunity, self.decide(opportunity))
             for opportunity in opportunities
