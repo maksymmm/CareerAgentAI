@@ -8,11 +8,7 @@ from career_agent_ai.application.career.opportunity_signal import OpportunitySig
 
 
 class ProactiveOpportunityService:
-    """Turns weak hiring signals into ranked, explainable opportunities.
-
-    This service deliberately does not contact companies. It produces a reviewable
-    shortlist that a later communication agent can use with explicit user policy.
-    """
+    """Turns weak hiring signals into ranked, explainable opportunities."""
 
     _WEIGHTS = {
         "hiring_growth": 0.30,
@@ -26,6 +22,7 @@ class ProactiveOpportunityService:
         self,
         signals: Iterable[OpportunitySignal],
     ) -> tuple[OpportunityScore, ...]:
+        """Group signals by company and return scores in descending order."""
         grouped: dict[str, list[OpportunitySignal]] = defaultdict(list)
 
         for signal in signals:
@@ -49,6 +46,7 @@ class ProactiveOpportunityService:
         company: str,
         signals: tuple[OpportunitySignal, ...],
     ) -> OpportunityScore:
+        """Calculate one bounded, explainable company score."""
         weighted = 0.0
         matched_types: list[str] = []
 
