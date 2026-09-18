@@ -8,18 +8,21 @@ on:
       - "fix/**"
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-          cache: "pip"
 
       - name: Install test dependencies
         run: |
@@ -27,4 +30,5 @@ jobs:
           python -m pip install pytest pytest-cov
 
       - name: Run test suite
-        run: python -m pytest --cov=career_agent_ai --cov-report=term-missing --cov-fail-under=90
+        run: |
+          python -m pytest             --cov=career_agent_ai             --cov-report=term-missing             --cov-fail-under=90
