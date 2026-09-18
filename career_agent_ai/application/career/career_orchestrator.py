@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.brain.agent_context import AgentContext
+from career_agent_ai.application.career.career_decision_engine import CareerDecisionEngine
 from career_agent_ai.application.career.career_plan import CareerPlan, CareerPlanStep
 from career_agent_ai.application.career.career_run_state import CareerRunState
 from career_agent_ai.application.career.career_step_result import CareerStepResult
@@ -46,6 +47,7 @@ class CareerOrchestrator:
         self._workflow = workflow_engine
         self._factory = agent_factory
         self._max_steps = max_steps
+        self._decision_engine = CareerDecisionEngine()
         self._runs: dict[str, CareerRunState] = {}
 
     def plan(self, objective: str, payload: dict[str, Any] | None = None) -> CareerPlan:
@@ -56,6 +58,8 @@ class CareerOrchestrator:
 
         data = dict(payload or {})
         actions = self._requested_actions(data)
+        if actions is None:
+            actions = self._objective_actions(normalized, data)
         steps = tuple(
             CareerPlanStep(
                 id=f"career-step-{index}",
@@ -140,6 +144,11 @@ class CareerOrchestrator:
                 break
 
             step = state.plan.steps[engine.workflow.current_step]
+            decision = self._decision_engine.next_action(
+                state.objective,
+                tuple(item.action for item in state.steps),
+                state.payload,
+            )
             context = AgentContext(
                 user_id=state.user_id,
                 memory_snapshot=self._memory.snapshot(),
@@ -149,6 +158,9 @@ class CareerOrchestrator:
                     "career_run_id": state.run_id,
                     "career_step_id": step.id,
                     "objective": state.objective,
+                    "decision": decision.action,
+                    "decision_reason": decision.reason,
+                    "decision_confidence": decision.confidence,
                 },
             )
 
@@ -173,7 +185,12 @@ class CareerOrchestrator:
                 action=step.action,
                 success=result.success,
                 messages=result.messages,
-                metadata=result.metadata,
+                metadata={
+                    **dict(result.metadata),
+                    "decision": decision.action,
+                    "decision_reason": decision.reason,
+                    "decision_confidence": decision.confidence,
+                },
             )
             state.add_step(step_result)
 
@@ -251,8 +268,8 @@ class CareerOrchestrator:
         )
 
     @staticmethod
-    def _requested_actions(payload: dict[str, Any]) -> tuple[str, ...]:
-        """Read explicitly requested actions or use job search as the default."""
+    def _requested_actions(payload: dict[str, Any]) -> tuple[str, ...] | None:
+        """Read explicitly requested actions, preserving caller control."""
         requested = payload.get("actions")
         if isinstance(requested, (list, tuple)):
             actions = tuple(
@@ -262,7 +279,18 @@ class CareerOrchestrator:
             )
             if actions:
                 return actions
-        return ("job_search",)
+        return None
+
+    def _objective_actions(
+        self,
+        objective: str,
+        payload: dict[str, Any],
+    ) -> tuple[str, ...]:
+        """Derive a useful multi-step plan when actions were not explicit."""
+        decision = self._decision_engine.decide(objective, payload)
+        if decision.action == "job_application":
+            return ("job_search", "resume", "job_application")
+        return (decision.action,)
 
     @staticmethod
     def _describe(action: str) -> str:
