@@ -200,7 +200,8 @@ def test_human_gated_run_does_not_block_a_new_run():
             metadata={"requires_human": True},
         ),
     )
-    orchestrator = make_orchestrator(agents=(application,))
+    search_agent = FakeAgent("job_search")
+    orchestrator = make_orchestrator(agents=(application, search_agent))
 
     paused = orchestrator.run("user-1", "Apply now", {"actions": ["job_application"]})
     independent = orchestrator.run("user-1", "Find another job")
@@ -215,11 +216,11 @@ def test_resume_unknown_run_is_rejected():
         make_orchestrator().resume("missing-run")
 
 
-def test_resume_requires_paused_run():
+def test_resume_completed_run_is_rejected_as_unknown():
     orchestrator = make_orchestrator()
     completed = orchestrator.run("user-1", "Find a job")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(KeyError, match="Unknown career run"):
         orchestrator.resume(completed.run_id)
 
 
