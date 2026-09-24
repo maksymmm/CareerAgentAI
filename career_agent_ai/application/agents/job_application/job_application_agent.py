@@ -242,16 +242,11 @@ class JobApplicationAgent(Agent):
                 "Invalid application status."
             )
 
-        updated_application = JobApplication(
-            application_id=application.application_id,
-            user_id=application.user_id,
-            job_id=application.job_id,
-            status=status,
-        )
-
-        self._repository.add(
-            updated_application,
-        )
+        try:
+            updated_application = application.transition(status)
+            self._repository.update(updated_application, expected_version=application.version)
+        except ValueError:
+            return self._failure("Invalid application status transition.")
 
         return AgentResult(
             success=True,

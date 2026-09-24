@@ -48,18 +48,27 @@ and loaded. Records can be queried deterministically by user and memory type.
 
 ## 3. Application tracker
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: persist and track each job application across its lifecycle.
 
 Acceptance criteria:
-- [ ] Application aggregate and lifecycle states.
-- [ ] Repository boundary and SQLite implementation.
-- [ ] Link application to job/company and external-action operation IDs.
-- [ ] Timeline/history events.
-- [ ] Duplicate prevention.
-- [ ] Query/filter support.
-- [ ] Tests and documentation.
+- [x] Application aggregate and lifecycle states.
+- [x] Repository boundary and SQLite implementation.
+- [x] Link application to job/company and external-action operation IDs.
+- [x] Timeline/history events.
+- [x] Duplicate prevention.
+- [x] Query/filter support.
+- [x] Tests and documentation.
+
+Delivered: an immutable, validated application aggregate with explicit lifecycle
+transitions, chronological history, optimistic concurrency, unique candidate/job
+applications, and stable links to company and crash-safe external-action operation
+IDs. The provider-neutral repository has in-memory and restart-safe SQLite adapters;
+SQLite storage uses versioned strict JSON for event metadata and deterministic
+filtering and ordering. No external action is executed by the tracker.
+
+Next priority: communication adapter.
 
 ## 4. Communication adapter
 

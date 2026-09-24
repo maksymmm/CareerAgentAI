@@ -1,4 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Mapping
+from uuid import uuid4
 
 from career_agent_ai.application.jobs.job_application_status import (
     JobApplicationStatus,
@@ -7,10 +11,124 @@ from career_agent_ai.application.jobs.job_application_status import (
 
 @dataclass(frozen=True)
 class JobApplication:
+    """Immutable aggregate for a candidate's application to one job."""
+
     application_id: str
-
     user_id: str
-
     job_id: str
-
     status: JobApplicationStatus
+    company_id: str = ""
+    external_action_operation_ids: tuple[str, ...] = ()
+    timeline: tuple["ApplicationTimelineEvent", ...] = ()
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        for name in ("application_id", "user_id", "job_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must not be empty.")
+            if len(value.strip()) > 200:
+                raise ValueError(f"{name} must not exceed 200 characters.")
+            object.__setattr__(self, name, value.strip())
+        if not isinstance(self.company_id, str) or len(self.company_id.strip()) > 200:
+            raise ValueError("company_id must be a string of at most 200 characters.")
+        object.__setattr__(self, "company_id", self.company_id.strip())
+        if not isinstance(self.status, JobApplicationStatus):
+            raise ValueError("status must be a JobApplicationStatus.")
+        if self.version < 1:
+            raise ValueError("version must be positive.")
+        if any(value.tzinfo is None or value.utcoffset() is None for value in (self.created_at, self.updated_at)):
+            raise ValueError("Application timestamps must be timezone-aware.")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at must not be earlier than created_at.")
+        operation_ids = tuple(self.external_action_operation_ids)
+        if any(not isinstance(value, str) or not value.strip() or len(value.strip()) > 200 for value in operation_ids):
+            raise ValueError("External-action operation IDs must be non-empty strings of at most 200 characters.")
+        normalized_ids = tuple(value.strip() for value in operation_ids)
+        if len(set(normalized_ids)) != len(normalized_ids):
+            raise ValueError("External-action operation IDs must be unique.")
+        events = tuple(self.timeline)
+        if any(not isinstance(event, ApplicationTimelineEvent) for event in events):
+            raise ValueError("timeline must contain ApplicationTimelineEvent values.")
+        if tuple(sorted(events, key=lambda event: (event.occurred_at, event.event_id))) != events:
+            raise ValueError("timeline events must be in deterministic chronological order.")
+        if len({event.event_id for event in events}) != len(events):
+            raise ValueError("timeline event IDs must be unique.")
+        if any(previous.to_status != current.from_status for previous, current in zip(events, events[1:])):
+            raise ValueError("timeline lifecycle states must form a continuous history.")
+        object.__setattr__(self, "external_action_operation_ids", normalized_ids)
+        object.__setattr__(self, "timeline", events)
+
+    def transition(
+        self,
+        status: JobApplicationStatus,
+        *,
+        occurred_at: datetime | None = None,
+        operation_id: str | None = None,
+        note: str = "",
+        event_id: str | None = None,
+    ) -> "JobApplication":
+        """Return a new aggregate after a validated lifecycle transition."""
+        allowed = {
+            JobApplicationStatus.SAVED: {JobApplicationStatus.APPLIED, JobApplicationStatus.WITHDRAWN},
+            JobApplicationStatus.APPLIED: {JobApplicationStatus.INTERVIEW, JobApplicationStatus.REJECTED, JobApplicationStatus.WITHDRAWN},
+            JobApplicationStatus.INTERVIEW: {JobApplicationStatus.OFFER, JobApplicationStatus.REJECTED, JobApplicationStatus.WITHDRAWN},
+            JobApplicationStatus.OFFER: {JobApplicationStatus.WITHDRAWN},
+            JobApplicationStatus.REJECTED: set(),
+            JobApplicationStatus.WITHDRAWN: set(),
+        }
+        if status not in allowed[self.status]:
+            raise ValueError(f"Invalid application transition: {self.status.value} -> {status.value}.")
+        timestamp = occurred_at or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("Timeline event timestamp must be timezone-aware.")
+        if timestamp < self.updated_at:
+            raise ValueError("Timeline events cannot predate the latest application update.")
+        event = ApplicationTimelineEvent(
+            event_id=event_id or str(uuid4()),
+            from_status=self.status,
+            to_status=status,
+            occurred_at=timestamp,
+            operation_id=operation_id,
+            note=note,
+        )
+        operation_ids = self.external_action_operation_ids
+        if operation_id is not None and operation_id not in operation_ids:
+            operation_ids += (operation_id,)
+        return replace(
+            self,
+            status=status,
+            timeline=tuple(sorted(self.timeline + (event,), key=lambda item: (item.occurred_at, item.event_id))),
+            external_action_operation_ids=operation_ids,
+            updated_at=timestamp,
+            version=self.version + 1,
+        )
+
+
+@dataclass(frozen=True)
+class ApplicationTimelineEvent:
+    """A durable, ordered fact in an application's lifecycle."""
+
+    event_id: str
+    from_status: JobApplicationStatus
+    to_status: JobApplicationStatus
+    occurred_at: datetime
+    operation_id: str | None = None
+    note: str = ""
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.event_id, str) or not self.event_id.strip() or len(self.event_id.strip()) > 200:
+            raise ValueError("event_id must be a non-empty string of at most 200 characters.")
+        if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
+            raise ValueError("Timeline event timestamp must be timezone-aware.")
+        if self.operation_id is not None and (not isinstance(self.operation_id, str) or not self.operation_id.strip() or len(self.operation_id.strip()) > 200):
+            raise ValueError("operation_id must be a non-empty string of at most 200 characters.")
+        if not isinstance(self.note, str) or len(self.note) > 2000:
+            raise ValueError("note must be a string of at most 2000 characters.")
+        object.__setattr__(self, "event_id", self.event_id.strip())
+        if self.operation_id is not None:
+            object.__setattr__(self, "operation_id", self.operation_id.strip())
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
