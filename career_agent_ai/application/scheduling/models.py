@@ -188,6 +188,7 @@ class ScheduleEvent:
         *,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
+        clear_end: bool = False,
         timezone_name: str | None = None,
         provider_event_id: str | None = None,
         occurred_at: datetime | None = None,
@@ -196,7 +197,7 @@ class ScheduleEvent:
         if status not in _ALLOWED_TRANSITIONS[self.status]:
             raise ValueError(f"Invalid scheduling transition: {self.status} -> {status}.")
         next_start = self.start_at if start_at is None else start_at
-        next_end = self.end_at if end_at is None else end_at
+        next_end = None if clear_end else (self.end_at if end_at is None else end_at)
         next_timezone = self.timezone_name if timezone_name is None else timezone_name
         next_provider = (
             self.provider_event_id if provider_event_id is None else provider_event_id
