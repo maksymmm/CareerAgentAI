@@ -38,25 +38,41 @@ class _CalendarActionAdapter:
             raise ValueError("Prepared scheduling event no longer exists.")
 
         allowed = self._allowed_statuses(action_type)
-        claimed = self._repository.claim_action(event_id, operation_id, allowed)
+        target_start: datetime | None = None
+        target_end: datetime | None = None
+        target_timezone: str | None = None
+        if action_type == "calendar.accept":
+            target_start = event.start_at
+            target_end = event.end_at
+        elif action_type == "calendar.reschedule":
+            target_start = normalize_aware_datetime(
+                datetime.fromisoformat(str(payload["start_at"])), "start_at"
+            )
+            raw_end = payload.get("end_at")
+            target_end = (
+                None
+                if raw_end is None
+                else normalize_aware_datetime(
+                    datetime.fromisoformat(str(raw_end)), "end_at"
+                )
+            )
+            target_timezone = validate_timezone_name(str(payload["timezone_name"]))
+        claimed = self._repository.claim_action(
+            event_id,
+            operation_id,
+            allowed,
+            reservation_start=target_start,
+            reservation_end=target_end,
+            enforce_conflicts=action_type in {"calendar.accept", "calendar.reschedule"},
+        )
         try:
             if action_type == "calendar.accept":
                 delivered = self._provider.accept(operation_id, claimed)
             elif action_type == "calendar.decline":
                 delivered = self._provider.decline(operation_id, claimed)
             elif action_type == "calendar.reschedule":
-                target_start = normalize_aware_datetime(
-                    datetime.fromisoformat(str(payload["start_at"])), "start_at"
-                )
-                raw_end = payload.get("end_at")
-                target_end = (
-                    None
-                    if raw_end is None
-                    else normalize_aware_datetime(
-                        datetime.fromisoformat(str(raw_end)), "end_at"
-                    )
-                )
-                target_timezone = validate_timezone_name(str(payload["timezone_name"]))
+                if target_start is None or target_timezone is None:
+                    raise ValueError("Reschedule target was not prepared.")
                 delivered = self._provider.reschedule(
                     operation_id,
                     claimed,
