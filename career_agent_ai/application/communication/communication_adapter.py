@@ -7,6 +7,10 @@ from typing import Protocol
 from .models import CommunicationMessage
 
 
+class PreDeliveryCommunicationError(RuntimeError):
+    """Signal that a provider failed before any external delivery was attempted."""
+
+
 class CommunicationAdapter(Protocol):
     """Provider-neutral draft, send, read, and reply contract."""
 

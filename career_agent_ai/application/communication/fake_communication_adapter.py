@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from .communication_adapter import PreDeliveryCommunicationError
 from .models import CommunicationMessage, MessageDirection, validate_identifier
 
 
@@ -57,7 +58,7 @@ class FakeCommunicationAdapter:
             return existing
         self.calls.append((action, operation_id))
         if self.failure is not None:
-            raise self.failure
+            raise PreDeliveryCommunicationError(str(self.failure)) from self.failure
         delivered = replace(message, direction=MessageDirection.OUTBOUND)
         self._operations[operation_id] = delivered
         self._messages[delivered.message_id] = delivered

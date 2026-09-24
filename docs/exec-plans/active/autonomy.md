@@ -97,7 +97,9 @@ prepared intent, applies strict deterministic message typing, and orders persist
 threads by timezone-aware instants. A durable atomic draft-to-operation claim prevents
 stale and concurrent competing sends immediately before provider execution. Failures
 after possible provider success now require reconciliation rather than being recorded
-as safe failures.
+as safe failures. Successful reply retries reuse their durable result across restarts;
+only an explicit pre-delivery provider failure releases the delivery claim for a new
+deliberate operation, while ambiguous outcomes remain locked.
 
 Next priority: scheduling and interview coordination.
 

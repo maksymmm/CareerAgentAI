@@ -1,6 +1,6 @@
 """Provider-neutral, human-gated communication capability."""
 
-from .communication_adapter import CommunicationAdapter
+from .communication_adapter import CommunicationAdapter, PreDeliveryCommunicationError
 from .communication_repository import CommunicationRepository
 from .communication_service import CommunicationService
 from .fake_communication_adapter import FakeCommunicationAdapter
@@ -13,4 +13,5 @@ __all__ = [
     "CommunicationService",
     "FakeCommunicationAdapter",
     "MessageDirection",
+    "PreDeliveryCommunicationError",
 ]

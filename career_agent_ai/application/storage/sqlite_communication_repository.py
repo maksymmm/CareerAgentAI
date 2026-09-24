@@ -131,6 +131,25 @@ class SQLiteCommunicationRepository:
                 "Message is not an unclaimed draft owned by this delivery operation."
             )
 
+    def release_delivery(self, message_id: str, operation_id: str) -> None:
+        """Atomically release the exact operation's still-unsent delivery claim."""
+        normalized_message = validate_identifier(message_id, "message_id")
+        normalized_operation = validate_identifier(operation_id, "operation_id")
+        cursor = self._database.connection.execute(
+            """
+            UPDATE communication_messages
+            SET delivery_operation_id = NULL
+            WHERE message_id = ? AND direction = 'draft'
+              AND delivery_operation_id = ?
+            """,
+            (normalized_message, normalized_operation),
+        )
+        self._database.connection.commit()
+        if cursor.rowcount != 1:
+            raise OperationConflictError(
+                "Delivery claim is no longer releasable by this operation."
+            )
+
     def _create_schema(self) -> None:
         self._database.connection.execute(
             """

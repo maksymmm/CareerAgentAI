@@ -10,7 +10,7 @@ from career_agent_ai.application.external_actions import (
     ExternalActionStatus,
 )
 
-from .communication_adapter import CommunicationAdapter
+from .communication_adapter import CommunicationAdapter, PreDeliveryCommunicationError
 from .communication_repository import CommunicationRepository
 from .models import CommunicationMessage, MessageDirection
 
@@ -27,15 +27,23 @@ class _CommunicationActionAdapter:
         if message is None:
             raise ValueError("Prepared communication message no longer exists.")
         self._repository.claim_delivery(message.message_id, operation_id)
-        if action_type == "communication.send":
-            delivered = self._provider.send(operation_id, message)
-        elif action_type == "communication.reply":
-            parent = self._repository.get(str(payload["parent_message_id"]))
-            if parent is None:
-                raise ValueError("Reply parent no longer exists.")
-            delivered = self._provider.reply(operation_id, parent, message)
-        else:
-            raise ValueError("Unsupported communication action type.")
+        try:
+            if action_type == "communication.send":
+                delivered = self._provider.send(operation_id, message)
+            elif action_type == "communication.reply":
+                parent = self._repository.get(str(payload["parent_message_id"]))
+                if parent is None:
+                    raise ValueError("Reply parent no longer exists.")
+                delivered = self._provider.reply(operation_id, parent, message)
+            else:
+                raise ValueError("Unsupported communication action type.")
+        except PreDeliveryCommunicationError:
+            self._repository.release_delivery(message.message_id, operation_id)
+            raise
+        except Exception as exc:
+            raise AmbiguousExternalActionError(
+                "Provider delivery raised after its external outcome became uncertain."
+            ) from exc
         try:
             self._validate_delivery(message, delivered)
             delivered = self._repository.save(delivered)
@@ -129,6 +137,15 @@ class CommunicationService:
     ) -> CommunicationMessage | None:
         """Persist and send a reply once, retaining its conversation identifiers."""
         parent = self._require_message(parent_message_id)
+        payload = {"message_id": reply.message_id, "parent_message_id": parent.message_id}
+        existing_operation = self._external_actions.get(operation_id)
+        if existing_operation is not None:
+            persisted_reply = self._require_message(reply.message_id)
+            self._validate_retry_message(reply, persisted_reply)
+            self._external_actions.prepare(
+                operation_id, "communication.reply", payload
+            )
+            return self._execute(operation_id, human_approved)
         if reply.direction != MessageDirection.DRAFT:
             raise ValueError("A reply must initially be a draft.")
         if reply.thread_id != parent.thread_id or reply.in_reply_to != parent.message_id:
@@ -137,9 +154,26 @@ class CommunicationService:
         self._external_actions.prepare(
             operation_id,
             "communication.reply",
-            {"message_id": reply.message_id, "parent_message_id": parent.message_id},
+            payload,
         )
         return self._execute(operation_id, human_approved)
+
+    @staticmethod
+    def _validate_retry_message(
+        supplied: CommunicationMessage, persisted: CommunicationMessage
+    ) -> None:
+        """Ensure a repeated reply request describes the original durable intent."""
+        supplied_content = (
+            supplied.message_id, supplied.thread_id, supplied.sender, supplied.recipient,
+            supplied.subject, supplied.body, supplied.created_at, supplied.in_reply_to,
+        )
+        persisted_content = (
+            persisted.message_id, persisted.thread_id, persisted.sender,
+            persisted.recipient, persisted.subject, persisted.body,
+            persisted.created_at, persisted.in_reply_to,
+        )
+        if supplied_content != persisted_content:
+            raise ValueError("Reply retry does not match the persisted message intent.")
 
     def _execute(self, operation_id: str, human_approved: bool) -> CommunicationMessage | None:
         operation = self._external_actions.execute(

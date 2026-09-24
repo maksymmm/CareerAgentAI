@@ -188,6 +188,10 @@ delivery operation. Stale, restarted, or concurrent operations with other IDs ca
 cross that claim, even if they were prepared earlier. If a provider returns success
 but its response cannot be validated or durably stored, the operation moves to
 `reconciliation_required` rather than being mislabeled as a safe failure or retried.
+Successful reply operations can be replayed with the same operation ID after restart
+without another provider call. A provider's explicit pre-delivery failure releases
+the claim so a deliberate new operation can retry; uncertain or post-delivery failures
+retain the claim and continue to block competing sends until reconciliation.
 
 The included fake provider is deterministic, in-memory, and dry-run only. It performs
 no network I/O and needs no credentials. No production communication provider or

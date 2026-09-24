@@ -135,9 +135,10 @@ def test_provider_failure_is_safely_persisted_and_not_retried():
     assert provider.calls.count(("send", "send:1")) == 1
 
     provider.failure = None
-    assert service.send("send:2", "message-1", human_approved=True) is None
-    assert operations.get("send:2").status == ExternalActionStatus.FAILED
-    assert provider.calls.count(("send", "send:2")) == 0
+    retried = service.send("send:2", "message-1", human_approved=True)
+    assert retried is not None
+    assert operations.get("send:2").status == ExternalActionStatus.SUCCEEDED
+    assert provider.calls.count(("send", "send:2")) == 1
 
 
 def test_restart_replays_persisted_success_without_provider_side_effect(tmp_path):
@@ -153,6 +154,29 @@ def test_restart_replays_persisted_success_without_provider_side_effect(tmp_path
     recovered = restarted_service.send("send:1", "message-1", human_approved=True)
 
     assert recovered is not None and recovered.message_id == "message-1"
+    assert restarted_provider.calls == []
+
+
+def test_successful_reply_retry_is_idempotent_after_restart(tmp_path):
+    path = str(tmp_path / "reply-retry.sqlite")
+    first_database = SQLiteDatabase(path)
+    first, messages, _, first_provider = stack(first_database)
+    messages.save(message(direction=MessageDirection.INBOUND))
+    reply = message("message-2", in_reply_to="message-1")
+    delivered = first.reply(
+        "reply:1", "message-1", reply, human_approved=True
+    )
+    assert delivered is not None
+    assert first_provider.calls.count(("reply", "reply:1")) == 1
+    first_database.close()
+
+    restarted_provider = FakeCommunicationAdapter()
+    restarted, _, _, _ = stack(SQLiteDatabase(path), restarted_provider)
+    repeated = restarted.reply(
+        "reply:1", "message-1", reply, human_approved=True
+    )
+
+    assert repeated == delivered
     assert restarted_provider.calls == []
 
 
@@ -449,3 +473,7 @@ def test_provider_success_followed_by_repository_failure_requires_reconciliation
     assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert provider.calls.count(("send", "send:1")) == 1
     assert messages.get("message-1").direction == MessageDirection.DRAFT
+
+    assert service.send("send:2", "message-1", human_approved=True) is None
+    assert operations.get("send:2").status == ExternalActionStatus.FAILED
+    assert provider.calls.count(("send", "send:2")) == 0

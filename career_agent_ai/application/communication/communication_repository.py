@@ -21,3 +21,6 @@ class CommunicationRepository(Protocol):
 
     def claim_delivery(self, message_id: str, operation_id: str) -> None:
         """Atomically bind an unsent draft to its sole delivery operation."""
+
+    def release_delivery(self, message_id: str, operation_id: str) -> None:
+        """Release a claim only after a definite failure before delivery."""
