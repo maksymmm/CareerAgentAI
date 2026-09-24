@@ -155,7 +155,7 @@ def test_malformed_persisted_application_and_timeline_are_rejected():
     )
     database.connection.execute(
         """INSERT INTO application_timeline VALUES
-           ('bad-event', 'app-1', 'saved', 'interview', ?, NULL, '', '[]', 1)""",
+           ('bad-event', 'app-1', 'saved', 'interview', ?, NULL, '', '[]', 1, 0)""",
         (NOW.isoformat(),),
     )
     database.connection.commit()
@@ -300,3 +300,131 @@ def test_aggregate_rejects_invalid_timestamp_and_version_types():
             to_status=JobApplicationStatus.APPLIED,
             occurred_at="2026-01-02",  # type: ignore[arg-type]
         )
+
+
+def test_equal_timestamp_transitions_preserve_lifecycle_insertion_order():
+    repository = SQLiteJobApplicationRepository(SQLiteDatabase())
+    applied = application().transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=NOW + timedelta(hours=1),
+        event_id="z-first",
+    )
+    interviewing = applied.transition(
+        JobApplicationStatus.INTERVIEW,
+        occurred_at=NOW + timedelta(hours=1),
+        event_id="a-second",
+    )
+
+    assert tuple(event.event_id for event in interviewing.timeline) == (
+        "z-first",
+        "a-second",
+    )
+    repository.add(interviewing)
+    recovered = repository.get("app-1")
+    assert recovered is not None
+    assert tuple(event.event_id for event in recovered.timeline) == (
+        "z-first",
+        "a-second",
+    )
+    assert recovered.status == JobApplicationStatus.INTERVIEW
+
+
+def test_sqlite_orders_timestamp_instants_across_timezone_offsets():
+    database = SQLiteDatabase()
+    repository = SQLiteJobApplicationRepository(database)
+    plus_two = timezone(timedelta(hours=2))
+    chronologically_first = JobApplication(
+        application_id="first",
+        user_id="candidate-1",
+        job_id="job-first",
+        status=JobApplicationStatus.SAVED,
+        created_at=datetime(2026, 1, 2, 10, 0, tzinfo=plus_two),
+        updated_at=datetime(2026, 1, 2, 10, 0, tzinfo=plus_two),
+    )
+    chronologically_second = JobApplication(
+        application_id="second",
+        user_id="candidate-1",
+        job_id="job-second",
+        status=JobApplicationStatus.SAVED,
+        created_at=datetime(2026, 1, 2, 8, 30, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 2, 8, 30, tzinfo=timezone.utc),
+    )
+    repository.add(chronologically_second)
+    repository.add(chronologically_first)
+
+    assert tuple(item.application_id for item in repository.list("candidate-1")) == (
+        "first",
+        "second",
+    )
+    stored = database.connection.execute(
+        "SELECT created_at FROM job_applications WHERE application_id = 'first'"
+    ).fetchone()
+    assert stored == ("2026-01-02T08:00:00+00:00",)
+
+
+def test_sqlite_orders_timeline_instants_across_timezone_offsets():
+    repository = SQLiteJobApplicationRepository(SQLiteDatabase())
+    plus_two = timezone(timedelta(hours=2))
+    original = JobApplication(
+        application_id="offset-app",
+        user_id="candidate",
+        job_id="offset-job",
+        status=JobApplicationStatus.SAVED,
+        created_at=datetime(2026, 1, 2, 9, 0, tzinfo=plus_two),
+        updated_at=datetime(2026, 1, 2, 9, 0, tzinfo=plus_two),
+    )
+    applied = original.transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=datetime(2026, 1, 2, 10, 0, tzinfo=plus_two),
+        event_id="applied",
+    )
+    interviewing = applied.transition(
+        JobApplicationStatus.INTERVIEW,
+        occurred_at=datetime(2026, 1, 2, 8, 30, tzinfo=timezone.utc),
+        event_id="interview",
+    )
+    repository.add(interviewing)
+
+    recovered = repository.get("offset-app")
+    assert recovered is not None
+    assert tuple(event.event_id for event in recovered.timeline) == (
+        "applied",
+        "interview",
+    )
+    assert tuple(event.occurred_at.utcoffset() for event in recovered.timeline) == (
+        timedelta(0),
+        timedelta(0),
+    )
+
+
+def test_sqlite_migrates_existing_timeline_rows_to_stable_sequence_order():
+    database = SQLiteDatabase()
+    database.connection.executescript(
+        """
+        CREATE TABLE application_timeline (
+            event_id TEXT PRIMARY KEY,
+            application_id TEXT NOT NULL,
+            from_status TEXT NOT NULL,
+            to_status TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            operation_id TEXT,
+            note TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            serialization_version INTEGER NOT NULL
+        );
+        INSERT INTO application_timeline VALUES
+            ('z-first', 'app', 'saved', 'applied',
+             '2026-01-02T08:00:00+00:00', NULL, '', '{}', 1),
+            ('a-second', 'app', 'applied', 'interview',
+             '2026-01-02T08:00:00+00:00', NULL, '', '{}', 1);
+        """
+    )
+    database.connection.commit()
+
+    SQLiteJobApplicationRepository(database)
+
+    rows = database.connection.execute(
+        """SELECT event_id, sequence FROM application_timeline
+           ORDER BY sequence"""
+    ).fetchall()
+    assert rows == [("z-first", 0), ("a-second", 1)]

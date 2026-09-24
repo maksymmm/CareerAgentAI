@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from career_agent_ai.application.jobs.job_application import (
@@ -95,7 +95,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 (
                     application.company_id,
                     application.status.value,
-                    application.updated_at.isoformat(),
+                    self._timestamp(application.updated_at),
                     application.version,
                     application.application_id,
                     application.user_id,
@@ -144,7 +144,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                       a.status, a.created_at, a.updated_at, a.version,
                       a.serialization_version
                FROM job_applications a""" + join + where
-            + " ORDER BY a.created_at, a.application_id",
+            + " ORDER BY julianday(a.created_at), a.application_id",
             tuple(parameters),
         ).fetchall()
         return tuple(self._load(row) for row in rows)
@@ -164,21 +164,22 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         connection.executemany(
             """INSERT INTO application_timeline (
                    event_id, application_id, from_status, to_status, occurred_at,
-                   operation_id, note, metadata_json, serialization_version
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   operation_id, note, metadata_json, serialization_version, sequence
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 (
                     event.event_id,
                     application.application_id,
                     event.from_status.value,
                     event.to_status.value,
-                    event.occurred_at.isoformat(),
+                    self._timestamp(event.occurred_at),
                     event.operation_id,
                     event.note,
                     self._dump_metadata(event.metadata),
                     self.SERIALIZATION_VERSION,
+                    sequence,
                 )
-                for event in application.timeline
+                for sequence, event in enumerate(application.timeline)
             ),
         )
 
@@ -195,7 +196,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 """SELECT event_id, from_status, to_status, occurred_at,
                           operation_id, note, metadata_json, serialization_version
                    FROM application_timeline WHERE application_id = ?
-                   ORDER BY occurred_at, event_id""",
+                   ORDER BY julianday(occurred_at), sequence""",
                 (row[0],),
             ).fetchall()
             events = tuple(self._load_event(item) for item in event_rows)
@@ -251,11 +252,44 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 application_id TEXT NOT NULL REFERENCES job_applications(application_id) ON DELETE CASCADE,
                 from_status TEXT NOT NULL, to_status TEXT NOT NULL, occurred_at TEXT NOT NULL,
                 operation_id TEXT, note TEXT NOT NULL, metadata_json TEXT NOT NULL,
-                serialization_version INTEGER NOT NULL
+                serialization_version INTEGER NOT NULL, sequence INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_application_timeline_order
-                ON application_timeline(application_id, occurred_at, event_id);
             """
+        )
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(application_timeline)"
+            ).fetchall()
+        }
+        if "sequence" not in columns:
+            connection.execute(
+                "ALTER TABLE application_timeline "
+                "ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0"
+            )
+            connection.execute(
+                """WITH ranked AS (
+                       SELECT rowid AS target_rowid,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY application_id
+                                  ORDER BY julianday(occurred_at), rowid
+                              ) - 1 AS target_sequence
+                       FROM application_timeline
+                   )
+                   UPDATE application_timeline
+                   SET sequence = (
+                       SELECT target_sequence FROM ranked
+                       WHERE target_rowid = application_timeline.rowid
+                   )"""
+            )
+        connection.execute("DROP INDEX IF EXISTS idx_application_timeline_order")
+        connection.execute(
+            """CREATE INDEX idx_application_timeline_order
+               ON application_timeline(application_id, occurred_at, sequence)"""
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_application_timeline_sequence
+               ON application_timeline(application_id, sequence)"""
         )
         connection.commit()
 
@@ -263,9 +297,14 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
     def _application_values(cls, application: JobApplication) -> tuple[Any, ...]:
         return (
             application.application_id, application.user_id, application.job_id,
-            application.company_id, application.status.value, application.created_at.isoformat(),
-            application.updated_at.isoformat(), application.version, cls.SERIALIZATION_VERSION,
+            application.company_id, application.status.value, cls._timestamp(application.created_at),
+            cls._timestamp(application.updated_at), application.version, cls.SERIALIZATION_VERSION,
         )
+
+    @staticmethod
+    def _timestamp(value: datetime) -> str:
+        """Serialize an instant canonically so textual SQLite values sort safely."""
+        return value.astimezone(timezone.utc).isoformat()
 
     @staticmethod
     def _required_filter(value: str, name: str) -> str:

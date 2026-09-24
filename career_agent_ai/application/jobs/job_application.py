@@ -78,7 +78,10 @@ class JobApplication:
         events = tuple(self.timeline)
         if any(not isinstance(event, ApplicationTimelineEvent) for event in events):
             raise ValueError("timeline must contain ApplicationTimelineEvent values.")
-        if tuple(sorted(events, key=lambda event: (event.occurred_at, event.event_id))) != events:
+        if any(
+            previous.occurred_at > current.occurred_at
+            for previous, current in zip(events, events[1:])
+        ):
             raise ValueError("timeline events must be in deterministic chronological order.")
         if len({event.event_id for event in events}) != len(events):
             raise ValueError("timeline event IDs must be unique.")
@@ -134,7 +137,9 @@ class JobApplication:
         return replace(
             self,
             status=status,
-            timeline=tuple(sorted(self.timeline + (event,), key=lambda item: (item.occurred_at, item.event_id))),
+            # Transition order is authoritative when timestamps are equal. Sorting
+            # by event ID here could invert an otherwise valid lifecycle chain.
+            timeline=self.timeline + (event,),
             external_action_operation_ids=operation_ids,
             updated_at=timestamp,
             version=self.version + 1,
