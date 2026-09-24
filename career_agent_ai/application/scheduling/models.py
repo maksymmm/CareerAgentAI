@@ -234,6 +234,7 @@ class HumanScheduleView:
     local_end_date: str | None
     timezone_name: str
     utc_offset: str
+    end_utc_offset: str | None
     status: ScheduleStatus
 
     @classmethod
@@ -256,5 +257,10 @@ class HumanScheduleView:
             local_end_date=None if local_end is None else local_end.date().isoformat(),
             timezone_name=event.timezone_name,
             utc_offset=local_start.strftime("%z")[:3] + ":" + local_start.strftime("%z")[3:],
+            end_utc_offset=(
+                None
+                if local_end is None
+                else local_end.strftime("%z")[:3] + ":" + local_end.strftime("%z")[3:]
+            ),
             status=event.status,
         )
