@@ -505,6 +505,7 @@ def test_reschedule_claim_reserves_current_and_target_slots():
         "event-1",
         "reschedule:1",
         (ScheduleStatus.ACCEPTED,),
+        expected_version=1,
         reservation_start=target_start,
         reservation_end=target_start + timedelta(hours=1),
         enforce_conflicts=True,
@@ -515,10 +516,41 @@ def test_reschedule_claim_reserves_current_and_target_slots():
             "event-2",
             "accept:2",
             (ScheduleStatus.PROPOSED,),
+            expected_version=1,
             reservation_start=BASE_START + timedelta(minutes=15),
             reservation_end=BASE_START + timedelta(minutes=45),
             enforce_conflicts=True,
         )
+
+
+def test_prepared_acceptance_is_bound_to_original_event_version_and_slot():
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+
+    with pytest.raises(PermissionError):
+        service.accept("accept:stale-slot", "event-1", human_approved=False)
+
+    new_start = BASE_START + timedelta(days=2)
+    changed = service.reschedule(
+        "reschedule:winner",
+        "event-1",
+        start_at=new_start,
+        end_at=new_start + timedelta(hours=1),
+        timezone_name="Europe/Berlin",
+        human_approved=True,
+    )
+    assert changed is not None
+    assert changed.start_at == new_start
+
+    assert service.accept(
+        "accept:stale-slot", "event-1", human_approved=True
+    ) is None
+    assert (
+        operations.get("accept:stale-slot").status
+        == ExternalActionStatus.FAILED
+    )
+    assert repository.get("event-1").start_at == new_start
+    assert provider.calls == [("reschedule", "reschedule:winner")]
 
 def test_prepared_acceptance_rechecks_conflict_at_execution_time():
     service, _, operations, provider = stack(SQLiteDatabase())
