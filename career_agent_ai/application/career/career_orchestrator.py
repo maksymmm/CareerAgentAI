@@ -8,6 +8,7 @@ from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.brain.agent_context import AgentContext
 from career_agent_ai.application.career.career_decision_engine import CareerDecisionEngine
 from career_agent_ai.application.career.career_plan import CareerPlan, CareerPlanStep
+from career_agent_ai.application.career.career_run_repository import CareerRunRepository
 from career_agent_ai.application.career.career_run_state import CareerRunState
 from career_agent_ai.application.career.career_step_result import CareerStepResult
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
@@ -40,6 +41,7 @@ class CareerOrchestrator:
         workflow_engine: WorkflowEngine,
         agent_factory: AgentFactory,
         max_steps: int = DEFAULT_MAX_STEPS,
+        run_repository: CareerRunRepository | None = None,
     ) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be greater than zero.")
@@ -49,6 +51,7 @@ class CareerOrchestrator:
         self._max_steps = max_steps
         self._decision_engine = CareerDecisionEngine()
         self._runs: dict[str, CareerRunState] = {}
+        self._run_repository = run_repository
 
     def plan(self, objective: str, payload: dict[str, Any] | None = None) -> CareerPlan:
         """Build a bounded career action plan from an objective."""
@@ -106,6 +109,7 @@ class CareerOrchestrator:
         )
         self._runs[run_id] = state
         self._workflow = engine
+        self._persist_state(state)
         return self._continue(state)
 
     def resume(
@@ -115,6 +119,10 @@ class CareerOrchestrator:
     ) -> CareerRunResult:
         """Resume a paused human-gated run after recording optional human input."""
         state = self._runs.get(run_id)
+        if state is None and self._run_repository is not None:
+            state = self._run_repository.get(run_id)
+            if state is not None:
+                self._runs[run_id] = state
         if state is None:
             raise KeyError(f"Unknown career run '{run_id}'.")
 
@@ -177,6 +185,7 @@ class CareerOrchestrator:
                 )
                 state.add_step(step_result)
                 engine.fail_step()
+                self._persist_state(state)
                 stopped_reason = "agent_exception"
                 break
 
@@ -196,15 +205,18 @@ class CareerOrchestrator:
 
             if not result.success:
                 engine.fail_step()
+                self._persist_state(state)
                 stopped_reason = "agent_failed"
                 break
 
             if bool(result.metadata.get("requires_human")):
                 engine.pause()
+                self._persist_state(state)
                 stopped_reason = "human_action_required"
                 break
 
             engine.complete_step()
+            self._persist_state(state)
 
         if len(state.steps) >= self._max_steps and not engine.is_finished:
             stopped_reason = stopped_reason or "max_steps_reached"
@@ -227,8 +239,21 @@ class CareerOrchestrator:
         )
         self._remember_run(state.user_id, result)
         if success or final_workflow is None or final_workflow.is_finished():
-            self._runs.pop(state.run_id, None)
+            self._forget_state(state.run_id)
+        else:
+            self._persist_state(state)
         return result
+
+    def _persist_state(self, state: CareerRunState) -> None:
+        """Persist a resumable run when durable storage is configured."""
+        if self._run_repository is not None:
+            self._run_repository.save(state)
+
+    def _forget_state(self, run_id: str) -> None:
+        """Evict terminal state from memory and durable active-run storage."""
+        self._runs.pop(run_id, None)
+        if self._run_repository is not None:
+            self._run_repository.delete(run_id)
 
     def _remember_run(self, user_id: str, result: CareerRunResult) -> None:
         """Persist a compact run summary in the current memory engine."""
