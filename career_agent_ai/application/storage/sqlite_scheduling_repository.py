@@ -45,12 +45,13 @@ class SQLiteSchedulingRepository:
             return event
         except sqlite3.IntegrityError as exc:
             self._database.connection.rollback()
+            cause = exc
         existing = self.get(event.event_id)
         if existing is not None and existing == event:
             return existing
         raise SchedulingConflictError(
             "Scheduling event identity is already bound to different data."
-        ) from exc
+        ) from cause
 
     def get(self, event_id: str) -> ScheduleEvent | None:
         normalized = validate_schedule_identifier(event_id, "event_id")
