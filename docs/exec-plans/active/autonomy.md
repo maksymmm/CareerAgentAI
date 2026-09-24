@@ -72,18 +72,40 @@ Next priority: communication adapter.
 
 ## 4. Communication adapter
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: introduce a provider-neutral communication layer for recruiter/employer messages.
 
 Acceptance criteria:
-- [ ] Adapter protocol for draft/send/read/reply primitives.
-- [ ] Safe dry-run/fake provider.
-- [ ] Human approval gate before real send.
-- [ ] Idempotency integration.
-- [ ] Thread/conversation identifiers persisted.
-- [ ] Input sanitization and failure handling.
-- [ ] No production credentials in repository/tests.
+- [x] Adapter protocol for draft/send/read/reply primitives.
+- [x] Safe dry-run/fake provider.
+- [x] Human approval gate before real send.
+- [x] Idempotency integration.
+- [x] Thread/conversation identifiers persisted.
+- [x] Input sanitization and failure handling.
+- [x] No production credentials in repository/tests.
+
+Delivered: a provider-neutral communication boundary and deterministic no-I/O fake,
+strict validated plain-text message models, and restart-safe SQLite storage for
+message, thread, and reply-to identifiers. Send/reply actions always pass through
+the existing approval-gated external-action service. Duplicate requests reuse their
+durable result, failures remain safely terminal, and ambiguous in-flight actions are
+held for reconciliation without another provider call. No real provider, credential,
+or network send is configured. Review hardening also prevents a new operation ID from
+resending an outbound message, validates provider delivery results against their
+prepared intent, applies strict deterministic message typing, and orders persisted
+threads by timezone-aware instants. A durable atomic draft-to-operation claim prevents
+stale and concurrent competing sends immediately before provider execution. Failures
+after possible provider success now require reconciliation rather than being recorded
+as safe failures. Successful reply retries reuse their durable result across restarts;
+only an explicit pre-delivery provider failure releases the delivery claim for a new
+deliberate operation, while ambiguous outcomes remain locked.
+Concurrent identical message inserts converge on the durable winning row; conflicting
+reuse of a message ID remains rejected.
+Thread ordering preserves exact microsecond instants through a legacy-compatible UTC
+epoch backfill, and malformed lone Unicode surrogates are rejected at the domain edge.
+
+Next priority: scheduling and interview coordination.
 
 ## 5. Scheduling and interview coordination
 

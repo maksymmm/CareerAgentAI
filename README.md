@@ -22,6 +22,9 @@ CareerAgentAI
 │   │   ├── orchestration
 │   │   ├── pre-vacancy opportunity pipeline
 │   │   └── outreach drafting
+│   ├── communication
+│   │   ├── provider-neutral draft/send/read/reply protocol
+│   │   └── safe dry-run provider
 │   ├── external_actions
 │   ├── jobs
 │   │   └── durable application tracker
@@ -159,6 +162,50 @@ The current capability is infrastructure only: no production communication or ap
 
 ---
 
+## Communication Adapter
+
+Recruiter and employer communication is isolated behind a provider-neutral protocol
+covering draft, send, read, and reply primitives. The application service validates
+plain-text content and provider identifiers, persists message/thread/reply identifiers
+in SQLite, and retains them across restarts.
+
+Every send and reply—including local dry runs—requires explicit human approval and
+is executed through the crash-safe `ExternalActionService`. Stable operation IDs
+suppress duplicate requests and provider calls. A process restart after an operation
+entered `in_progress` moves it to `reconciliation_required` rather than risking a
+duplicate message. Provider failures are persisted as terminal failed attempts; a
+new deliberate attempt must use a new operation ID.
+
+Only persisted drafts can begin a new send operation, so changing the operation ID
+cannot resend an already-outbound message. Provider delivery responses must preserve
+the exact prepared content and conversation identifiers and must report an outbound
+state before they are persisted. Message timestamps are normalized to UTC, while
+thread retrieval compares timestamp instants so legacy offset timestamps remain
+chronologically safe.
+
+Immediately before a provider call, SQLite atomically binds the draft to exactly one
+delivery operation. Stale, restarted, or concurrent operations with other IDs cannot
+cross that claim, even if they were prepared earlier. If a provider returns success
+but its response cannot be validated or durably stored, the operation moves to
+`reconciliation_required` rather than being mislabeled as a safe failure or retried.
+Successful reply operations can be replayed with the same operation ID after restart
+without another provider call. A provider's explicit pre-delivery failure releases
+the claim so a deliberate new operation can retry; uncertain or post-delivery failures
+retain the claim and continue to block competing sends until reconciliation.
+Concurrent workers may also idempotently persist the same previously unseen message:
+the losing insert reloads and returns the identical winning row, while reuse of the
+same message ID for different content or direction remains a hard conflict.
+Thread chronology uses an indexed integer UTC epoch at exact microsecond precision;
+legacy ISO timestamps are safely backfilled during repository initialization. Message
+text validation also rejects lone Unicode surrogate code points before any adapter or
+SQLite boundary is reached.
+
+The included fake provider is deterministic, in-memory, and dry-run only. It performs
+no network I/O and needs no credentials. No production communication provider or
+credential configuration is included.
+
+---
+
 ## Application Tracker
 
 The application tracker persists an immutable aggregate for each candidate/job pair.
@@ -236,6 +283,8 @@ Implemented foundations:
 - Durable SQLite recovery for paused career runs
 - Crash-safe SQLite operation records for consequential external actions
 - Explicit human approval and reconciliation gates around external-action adapters
+- Provider-neutral, human-gated communication with a no-I/O fake provider
+- Restart-safe persistence of communication thread, message, and reply identifiers
 - Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
@@ -248,7 +297,6 @@ Next architectural steps:
 
 - real signal-source adapters
 - employer intelligence
-- communication adapter
 - scheduling
 - long-running autonomous execution
 
