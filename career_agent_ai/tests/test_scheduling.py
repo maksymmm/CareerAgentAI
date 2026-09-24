@@ -489,6 +489,37 @@ def test_concurrent_competing_actions_only_one_reaches_provider(tmp_path):
 
 
 
+
+def test_reschedule_claim_reserves_current_and_target_slots():
+    repository = SQLiteSchedulingRepository(SQLiteDatabase())
+    repository.create(event("event-1", status=ScheduleStatus.ACCEPTED))
+    repository.create(
+        event(
+            "event-2",
+            start_at=BASE_START + timedelta(minutes=15),
+            end_at=BASE_START + timedelta(minutes=45),
+        )
+    )
+    target_start = BASE_START + timedelta(hours=3)
+    repository.claim_action(
+        "event-1",
+        "reschedule:1",
+        (ScheduleStatus.ACCEPTED,),
+        reservation_start=target_start,
+        reservation_end=target_start + timedelta(hours=1),
+        enforce_conflicts=True,
+    )
+
+    with pytest.raises(SchedulingConflictError):
+        repository.claim_action(
+            "event-2",
+            "accept:2",
+            (ScheduleStatus.PROPOSED,),
+            reservation_start=BASE_START + timedelta(minutes=15),
+            reservation_end=BASE_START + timedelta(minutes=45),
+            enforce_conflicts=True,
+        )
+
 def test_prepared_acceptance_rechecks_conflict_at_execution_time():
     service, _, operations, provider = stack(SQLiteDatabase())
     service.add_event(event("event-1"))
