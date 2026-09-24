@@ -206,6 +206,18 @@ credential configuration is included.
 
 ---
 
+## Scheduling and Interview Coordination
+
+Human-participation career events such as interviews, trial days, phone calls, and video calls are modeled as durable scheduling aggregates. Each event preserves the employer, event type, address or meeting location, UTC-normalized start/end instants, the original IANA timezone used for presentation, lifecycle status, application linkage, and provider identifiers.
+
+The scheduling service exposes an exact human-facing projection with employer, location, local date, local start/end time, timezone, and UTC offset so DST transitions remain unambiguous. SQLite persistence uses integer epoch-microseconds for deterministic ordering without losing timestamp precision, validates persisted state on reload, and prevents duplicate provider-event identities.
+
+Accept, decline, and reschedule are provider-neutral calendar actions. Every consequential response passes through the existing human-approval and crash-safe external-action layer. A durable per-event operation claim prevents stale or concurrent workers from issuing competing calendar responses. Explicit pre-provider failures release the claim for a deliberate retry; uncertain provider outcomes and post-provider persistence failures require reconciliation and are never blindly retried.
+
+The included fake calendar adapter is deterministic, in-memory, and performs no network I/O. No production calendar provider or credential is configured.
+
+---
+
 ## Application Tracker
 
 The application tracker persists an immutable aggregate for each candidate/job pair.
@@ -285,6 +297,7 @@ Implemented foundations:
 - Explicit human approval and reconciliation gates around external-action adapters
 - Provider-neutral, human-gated communication with a no-I/O fake provider
 - Restart-safe persistence of communication thread, message, and reply identifiers
+- Durable, human-gated interview/trial-day scheduling with conflict detection and exact local-time presentation
 - Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
@@ -297,7 +310,6 @@ Next architectural steps:
 
 - real signal-source adapters
 - employer intelligence
-- scheduling
 - long-running autonomous execution
 
 ---
