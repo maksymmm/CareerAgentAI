@@ -144,12 +144,15 @@ class SQLiteSchedulingRepository:
         operation_id: str,
         allowed_statuses: Sequence[ScheduleStatus],
         *,
+        expected_version: int,
         reservation_start: datetime | None = None,
         reservation_end: datetime | None = None,
         enforce_conflicts: bool = False,
     ) -> ScheduleEvent:
-        """Atomically claim an event and reserve a target slot when required."""
+        """Atomically claim the expected event version and reserve a target slot."""
         event_id = validate_schedule_identifier(event_id, "event_id")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
+            raise ValueError("expected_version must be a positive integer.")
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         statuses = tuple(allowed_statuses)
         if not statuses or any(not isinstance(status, ScheduleStatus) for status in statuses):
@@ -176,15 +179,19 @@ class SQLiteSchedulingRepository:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT candidate_id, status, active_action_operation_id
+                SELECT candidate_id, status, active_action_operation_id, version
                 FROM scheduling_events WHERE event_id = ?
                 """,
                 (event_id,),
             ).fetchone()
             if row is None:
                 raise SchedulingOperationConflict("Scheduling event no longer exists.")
-            candidate_id, raw_status, active_operation = row
+            candidate_id, raw_status, active_operation, current_version = row
             current_status = ScheduleStatus(raw_status)
+            if current_version != expected_version:
+                raise SchedulingOperationConflict(
+                    "Prepared scheduling intent is stale for the current event version."
+                )
             if current_status not in statuses:
                 raise SchedulingOperationConflict(
                     "Event is not claimable in its current state."
@@ -236,7 +243,7 @@ class SQLiteSchedulingRepository:
                 SET active_action_operation_id = ?,
                     reservation_start_epoch_us = ?,
                     reservation_end_epoch_us = ?
-                WHERE event_id = ?
+                WHERE event_id = ? AND version = ?
                   AND (
                     active_action_operation_id IS NULL
                     OR active_action_operation_id = ?
@@ -247,6 +254,7 @@ class SQLiteSchedulingRepository:
                     reserved_start_us if enforce_conflicts else None,
                     reserved_end_us if enforce_conflicts else None,
                     event_id,
+                    expected_version,
                     operation_id,
                 ),
             )
