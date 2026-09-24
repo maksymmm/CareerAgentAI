@@ -44,11 +44,12 @@ class SchedulingRepository(Protocol):
         operation_id: str,
         allowed_statuses: Sequence[ScheduleStatus],
         *,
+        expected_version: int,
         reservation_start: datetime | None = None,
         reservation_end: datetime | None = None,
         enforce_conflicts: bool = False,
     ) -> ScheduleEvent:
-        """Atomically bind an event/action and reserve its target slot when needed."""
+        """Atomically bind the expected event version and reserve its target slot."""
 
     def release_action(self, event_id: str, operation_id: str) -> None:
         """Release an action claim after a definite pre-provider failure."""
