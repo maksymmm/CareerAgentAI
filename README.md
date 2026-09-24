@@ -183,6 +183,12 @@ state before they are persisted. Message timestamps are normalized to UTC, while
 thread retrieval compares timestamp instants so legacy offset timestamps remain
 chronologically safe.
 
+Immediately before a provider call, SQLite atomically binds the draft to exactly one
+delivery operation. Stale, restarted, or concurrent operations with other IDs cannot
+cross that claim, even if they were prepared earlier. If a provider returns success
+but its response cannot be validated or durably stored, the operation moves to
+`reconciliation_required` rather than being mislabeled as a safe failure or retried.
+
 The included fake provider is deterministic, in-memory, and dry-run only. It performs
 no network I/O and needs no credentials. No production communication provider or
 credential configuration is included.

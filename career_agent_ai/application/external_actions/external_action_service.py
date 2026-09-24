@@ -6,6 +6,10 @@ from .external_action_operation import ExternalActionOperation, ExternalActionSt
 from .external_action_repository import ExternalActionOperationRepository
 
 
+class AmbiguousExternalActionError(RuntimeError):
+    """Raised after a provider may have completed an action without a durable outcome."""
+
+
 class ExternalActionAdapter(Protocol):
     """Provider-neutral boundary for a consequential external action."""
 
@@ -86,6 +90,13 @@ class ExternalActionService:
                 operation.operation_id,
                 operation.action_type,
                 operation.payload,
+            )
+        except AmbiguousExternalActionError as exc:
+            return self._repository.transition(
+                operation.operation_id,
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+                error=self._safe_error(exc),
             )
         except Exception as exc:
             return self._repository.transition(

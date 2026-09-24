@@ -18,3 +18,6 @@ class CommunicationRepository(Protocol):
 
     def list_thread(self, thread_id: str) -> tuple[CommunicationMessage, ...]:
         """Return a thread in chronological order."""
+
+    def claim_delivery(self, message_id: str, operation_id: str) -> None:
+        """Atomically bind an unsent draft to its sole delivery operation."""

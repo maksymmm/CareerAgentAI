@@ -94,7 +94,10 @@ held for reconciliation without another provider call. No real provider, credent
 or network send is configured. Review hardening also prevents a new operation ID from
 resending an outbound message, validates provider delivery results against their
 prepared intent, applies strict deterministic message typing, and orders persisted
-threads by timezone-aware instants.
+threads by timezone-aware instants. A durable atomic draft-to-operation claim prevents
+stale and concurrent competing sends immediately before provider execution. Failures
+after possible provider success now require reconciliation rather than being recorded
+as safe failures.
 
 Next priority: scheduling and interview coordination.
 

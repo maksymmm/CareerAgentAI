@@ -10,6 +10,9 @@ from career_agent_ai.application.communication.models import (
     MessageDirection,
     validate_identifier,
 )
+from career_agent_ai.application.external_actions.external_action_repository import (
+    OperationConflictError,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -103,6 +106,31 @@ class SQLiteCommunicationRepository:
             raise ValueError("Communication thread changed while being read.")
         return tuple(message for message in messages if message is not None)
 
+    def claim_delivery(self, message_id: str, operation_id: str) -> None:
+        """Atomically grant one operation exclusive ownership of an unsent draft."""
+        normalized_message = validate_identifier(message_id, "message_id")
+        normalized_operation = validate_identifier(operation_id, "operation_id")
+        try:
+            cursor = self._database.connection.execute(
+                """
+                UPDATE communication_messages
+                SET delivery_operation_id = ?
+                WHERE message_id = ? AND direction = 'draft'
+                  AND (delivery_operation_id IS NULL OR delivery_operation_id = ?)
+                """,
+                (normalized_operation, normalized_message, normalized_operation),
+            )
+            self._database.connection.commit()
+        except sqlite3.IntegrityError as exc:
+            self._database.connection.rollback()
+            raise OperationConflictError(
+                "Delivery operation is already bound to another message."
+            ) from exc
+        if cursor.rowcount != 1:
+            raise OperationConflictError(
+                "Message is not an unclaimed draft owned by this delivery operation."
+            )
+
     def _create_schema(self) -> None:
         self._database.connection.execute(
             """
@@ -115,13 +143,29 @@ class SQLiteCommunicationRepository:
                 body TEXT NOT NULL,
                 direction TEXT NOT NULL CHECK(direction IN ('draft', 'outbound', 'inbound')),
                 created_at TEXT NOT NULL,
-                in_reply_to TEXT
+                in_reply_to TEXT,
+                delivery_operation_id TEXT
             )
             """
         )
+        columns = {
+            row[1]
+            for row in self._database.connection.execute(
+                "PRAGMA table_info(communication_messages)"
+            ).fetchall()
+        }
+        if "delivery_operation_id" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE communication_messages ADD COLUMN delivery_operation_id TEXT"
+            )
         self._database.connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_communication_thread
                ON communication_messages(thread_id, created_at)"""
+        )
+        self._database.connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_communication_delivery_operation
+               ON communication_messages(delivery_operation_id)
+               WHERE delivery_operation_id IS NOT NULL"""
         )
         self._database.connection.commit()
 

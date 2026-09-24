@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from career_agent_ai.application.external_actions import ExternalActionService, ExternalActionStatus
+from career_agent_ai.application.external_actions import (
+    AmbiguousExternalActionError,
+    ExternalActionService,
+    ExternalActionStatus,
+)
 
 from .communication_adapter import CommunicationAdapter
 from .communication_repository import CommunicationRepository
@@ -22,6 +26,7 @@ class _CommunicationActionAdapter:
         message = self._repository.get(str(payload["message_id"]))
         if message is None:
             raise ValueError("Prepared communication message no longer exists.")
+        self._repository.claim_delivery(message.message_id, operation_id)
         if action_type == "communication.send":
             delivered = self._provider.send(operation_id, message)
         elif action_type == "communication.reply":
@@ -31,8 +36,13 @@ class _CommunicationActionAdapter:
             delivered = self._provider.reply(operation_id, parent, message)
         else:
             raise ValueError("Unsupported communication action type.")
-        self._validate_delivery(message, delivered)
-        delivered = self._repository.save(delivered)
+        try:
+            self._validate_delivery(message, delivered)
+            delivered = self._repository.save(delivered)
+        except Exception as exc:
+            raise AmbiguousExternalActionError(
+                "Provider may have delivered the message, but its outcome could not be persisted."
+            ) from exc
         return {"message_id": delivered.message_id, "thread_id": delivered.thread_id}
 
     @staticmethod

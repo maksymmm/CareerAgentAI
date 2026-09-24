@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -133,9 +135,9 @@ def test_provider_failure_is_safely_persisted_and_not_retried():
     assert provider.calls.count(("send", "send:1")) == 1
 
     provider.failure = None
-    retried = service.send("send:2", "message-1", human_approved=True)
-    assert retried is not None
-    assert provider.calls.count(("send", "send:2")) == 1
+    assert service.send("send:2", "message-1", human_approved=True) is None
+    assert operations.get("send:2").status == ExternalActionStatus.FAILED
+    assert provider.calls.count(("send", "send:2")) == 0
 
 
 def test_restart_replays_persisted_success_without_provider_side_effect(tmp_path):
@@ -168,6 +170,72 @@ def test_ambiguous_in_flight_send_requires_reconciliation_without_provider_call(
     assert service.send("send:1", "message-1", human_approved=True) is None
     assert operations.get("send:1").status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert provider.calls == []
+
+
+def test_stale_prepared_operation_cannot_send_after_competing_operation_wins():
+    database = SQLiteDatabase()
+    service, repository, operations, provider = stack(database)
+    repository.save(message())
+    with pytest.raises(PermissionError):
+        service.send("stale:1", "message-1", human_approved=False)
+    with pytest.raises(PermissionError):
+        service.send("winner:1", "message-1", human_approved=False)
+
+    assert service.send("winner:1", "message-1", human_approved=True) is not None
+    assert service.send("stale:1", "message-1", human_approved=True) is None
+
+    assert operations.get("stale:1").status == ExternalActionStatus.FAILED
+    assert provider.calls.count(("send", "winner:1")) == 1
+    assert provider.calls.count(("send", "stale:1")) == 0
+
+
+def test_atomic_claim_prevents_concurrent_competing_sends(tmp_path):
+    path = str(tmp_path / "concurrent.sqlite")
+    entered_provider = Event()
+    release_provider = Event()
+
+    class BlockingProvider(FakeCommunicationAdapter):
+        def send(self, operation_id, prepared):
+            entered_provider.set()
+            assert release_provider.wait(timeout=5)
+            return super().send(operation_id, prepared)
+
+    provider = BlockingProvider()
+    setup_database = SQLiteDatabase(path)
+    setup, setup_messages, _, _ = stack(setup_database, provider)
+    setup_messages.save(message())
+    with pytest.raises(PermissionError):
+        setup.send("send:first", "message-1", human_approved=False)
+    with pytest.raises(PermissionError):
+        setup.send("send:second", "message-1", human_approved=False)
+    setup_database.close()
+
+    def execute(operation_id):
+        worker_database = SQLiteDatabase(path)
+        worker, _, _, _ = stack(worker_database, provider)
+        try:
+            return worker.send(operation_id, "message-1", human_approved=True)
+        finally:
+            worker_database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winner = executor.submit(execute, "send:first")
+        assert entered_provider.wait(timeout=5)
+        loser = executor.submit(execute, "send:second")
+        assert loser.result(timeout=5) is None
+        release_provider.set()
+        assert winner.result(timeout=5) is not None
+
+    verification_database = SQLiteDatabase(path)
+    _, _, verification_operations, _ = stack(verification_database, provider)
+    assert (
+        verification_operations.get("send:second").status
+        == ExternalActionStatus.FAILED
+    )
+    verification_database.close()
+    assert [call for call in provider.calls if call[0] == "send"] == [
+        ("send", "send:first")
+    ]
 
 
 @pytest.mark.parametrize(
@@ -328,8 +396,9 @@ def test_provider_delivery_must_match_prepared_send_intent(field, value):
 
     assert service.send("send:1", "message-1", human_approved=True) is None
     failed = operations.get("send:1")
-    assert failed is not None and failed.status == ExternalActionStatus.FAILED
-    assert "prepared message intent" in failed.error
+    assert failed is not None
+    assert failed.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert "could not be persisted" in failed.error
     assert repository.get("message-1").direction == MessageDirection.DRAFT
 
 
@@ -349,5 +418,34 @@ def test_provider_delivery_must_match_prepared_reply_intent():
         message("message-2", in_reply_to="message-1"),
         human_approved=True,
     ) is None
-    assert operations.get("reply:1").status == ExternalActionStatus.FAILED
+    assert (
+        operations.get("reply:1").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
     assert repository.get("message-2").direction == MessageDirection.DRAFT
+
+
+def test_provider_success_followed_by_repository_failure_requires_reconciliation():
+    class FailingDeliveryRepository(SQLiteCommunicationRepository):
+        def save(self, value):
+            if value.direction == MessageDirection.OUTBOUND:
+                raise RuntimeError("database unavailable after provider success")
+            return super().save(value)
+
+    database = SQLiteDatabase()
+    provider = FakeCommunicationAdapter()
+    messages = FailingDeliveryRepository(database)
+    operations = SQLiteExternalActionOperationRepository(database)
+    external = ExternalActionService(
+        operations, CommunicationService.action_adapter(provider, messages)
+    )
+    service = CommunicationService(messages, provider, external)
+    service.create_draft(message())
+
+    assert service.send("send:1", "message-1", human_approved=True) is None
+
+    operation = operations.get("send:1")
+    assert operation is not None
+    assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert provider.calls.count(("send", "send:1")) == 1
+    assert messages.get("message-1").direction == MessageDirection.DRAFT
