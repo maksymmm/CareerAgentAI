@@ -73,6 +73,21 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         connection = self._database.connection
         try:
             connection.execute("BEGIN")
+            current = connection.execute(
+                """SELECT user_id, job_id, created_at, version
+                   FROM job_applications WHERE application_id = ?""",
+                (application.application_id,),
+            ).fetchone()
+            if current is None or current[3] != expected_version:
+                raise ApplicationConflictError("Application is missing or has changed.")
+            if application.user_id != current[0] or application.job_id != current[1]:
+                raise ApplicationConflictError("Application identity cannot be changed.")
+            try:
+                persisted_created_at = datetime.fromisoformat(current[2])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Persisted job application is malformed.") from exc
+            if application.created_at != persisted_created_at:
+                raise ApplicationConflictError("Application created_at cannot be changed.")
             cursor = connection.execute(
                 """UPDATE job_applications
                    SET company_id = ?, status = ?, updated_at = ?, version = ?

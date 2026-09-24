@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -7,7 +8,10 @@ import pytest
 from career_agent_ai.application.jobs.in_memory_job_application_repository import (
     InMemoryJobApplicationRepository,
 )
-from career_agent_ai.application.jobs.job_application import JobApplication
+from career_agent_ai.application.jobs.job_application import (
+    ApplicationTimelineEvent,
+    JobApplication,
+)
 from career_agent_ai.application.jobs.job_application_repository import (
     ApplicationConflictError,
     ApplicationQuery,
@@ -184,3 +188,115 @@ def test_missing_get_clear_and_invalid_filters():
     repository.add(application())
     repository.clear()
     assert repository.find(ApplicationQuery()) == ()
+
+
+@pytest.mark.parametrize(
+    "repository_factory",
+    [
+        InMemoryJobApplicationRepository,
+        lambda: SQLiteJobApplicationRepository(SQLiteDatabase()),
+    ],
+)
+def test_repository_contract_normalizes_identifiers_and_rejects_empty_values(
+    repository_factory,
+):
+    repository = repository_factory()
+    repository.add(application())
+
+    assert repository.get(" app-1 ") == application()
+    assert repository.list(" candidate-1 ") == (application(),)
+    with pytest.raises(ValueError):
+        repository.get(" ")
+    with pytest.raises(ValueError):
+        repository.list(" ")
+
+
+@pytest.mark.parametrize(
+    "repository_factory",
+    [
+        InMemoryJobApplicationRepository,
+        lambda: SQLiteJobApplicationRepository(SQLiteDatabase()),
+    ],
+)
+def test_update_rejects_created_at_changes_consistently(repository_factory):
+    repository = repository_factory()
+    original = application()
+    repository.add(original)
+    transitioned = original.transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=NOW + timedelta(hours=1),
+        event_id="event",
+    )
+    changed_creation = replace(
+        transitioned,
+        created_at=NOW - timedelta(days=1),
+    )
+
+    with pytest.raises(ApplicationConflictError, match="created_at"):
+        repository.update(changed_creation, expected_version=1)
+    assert repository.get("app-1") == original
+
+
+def test_application_query_normalizes_all_string_filters():
+    query = ApplicationQuery(
+        user_id=" user ",
+        job_id=" job ",
+        company_id=" company ",
+        external_action_operation_id=" operation ",
+        status=JobApplicationStatus.APPLIED,
+    )
+    assert query.user_id == "user"
+    assert query.job_id == "job"
+    assert query.company_id == "company"
+    assert query.external_action_operation_id == "operation"
+    with pytest.raises(ValueError, match="status"):
+        ApplicationQuery(status="applied")  # type: ignore[arg-type]
+
+
+def test_aggregate_rejects_inconsistent_timeline_status_and_version():
+    applied = application().transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=NOW + timedelta(hours=1),
+        operation_id=" operation ",
+        event_id="event",
+    )
+    assert applied.external_action_operation_ids == ("operation",)
+    assert applied.timeline[0].operation_id == "operation"
+
+    with pytest.raises(ValueError, match="Latest timeline event"):
+        replace(applied, status=JobApplicationStatus.INTERVIEW)
+    with pytest.raises(ValueError, match="version"):
+        replace(applied, version=7)
+    with pytest.raises(ValueError, match="updated_at"):
+        replace(applied, updated_at=NOW + timedelta(hours=2))
+    with pytest.raises(ValueError, match="linked"):
+        replace(applied, external_action_operation_ids=())
+
+
+def test_aggregate_rejects_invalid_timeline_transition_and_predated_event():
+    with pytest.raises(ValueError, match="Invalid timeline transition"):
+        ApplicationTimelineEvent(
+            event_id="bad",
+            from_status=JobApplicationStatus.SAVED,
+            to_status=JobApplicationStatus.OFFER,
+            occurred_at=NOW,
+        )
+    with pytest.raises(ValueError, match="predate"):
+        application().transition(
+            JobApplicationStatus.APPLIED,
+            occurred_at=NOW - timedelta(seconds=1),
+        )
+
+
+def test_aggregate_rejects_invalid_timestamp_and_version_types():
+    with pytest.raises(ValueError, match="datetime values"):
+        replace(application(), created_at="2026-01-02")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="version"):
+        replace(application(), version=True)
+    with pytest.raises(ValueError, match="datetime value"):
+        ApplicationTimelineEvent(
+            event_id="event",
+            from_status=JobApplicationStatus.SAVED,
+            to_status=JobApplicationStatus.APPLIED,
+            occurred_at="2026-01-02",  # type: ignore[arg-type]
+        )

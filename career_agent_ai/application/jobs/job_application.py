@@ -9,6 +9,30 @@ from career_agent_ai.application.jobs.job_application_status import (
 )
 
 
+_ALLOWED_TRANSITIONS: dict[JobApplicationStatus, frozenset[JobApplicationStatus]] = {
+    JobApplicationStatus.SAVED: frozenset(
+        {JobApplicationStatus.APPLIED, JobApplicationStatus.WITHDRAWN}
+    ),
+    JobApplicationStatus.APPLIED: frozenset(
+        {
+            JobApplicationStatus.INTERVIEW,
+            JobApplicationStatus.REJECTED,
+            JobApplicationStatus.WITHDRAWN,
+        }
+    ),
+    JobApplicationStatus.INTERVIEW: frozenset(
+        {
+            JobApplicationStatus.OFFER,
+            JobApplicationStatus.REJECTED,
+            JobApplicationStatus.WITHDRAWN,
+        }
+    ),
+    JobApplicationStatus.OFFER: frozenset({JobApplicationStatus.WITHDRAWN}),
+    JobApplicationStatus.REJECTED: frozenset(),
+    JobApplicationStatus.WITHDRAWN: frozenset(),
+}
+
+
 @dataclass(frozen=True)
 class JobApplication:
     """Immutable aggregate for a candidate's application to one job."""
@@ -37,8 +61,10 @@ class JobApplication:
         object.__setattr__(self, "company_id", self.company_id.strip())
         if not isinstance(self.status, JobApplicationStatus):
             raise ValueError("status must be a JobApplicationStatus.")
-        if self.version < 1:
+        if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
             raise ValueError("version must be positive.")
+        if any(not isinstance(value, datetime) for value in (self.created_at, self.updated_at)):
+            raise ValueError("Application timestamps must be datetime values.")
         if any(value.tzinfo is None or value.utcoffset() is None for value in (self.created_at, self.updated_at)):
             raise ValueError("Application timestamps must be timezone-aware.")
         if self.updated_at < self.created_at:
@@ -58,6 +84,19 @@ class JobApplication:
             raise ValueError("timeline event IDs must be unique.")
         if any(previous.to_status != current.from_status for previous, current in zip(events, events[1:])):
             raise ValueError("timeline lifecycle states must form a continuous history.")
+        if events and events[-1].to_status != self.status:
+            raise ValueError("Latest timeline event must match application status.")
+        if any(event.occurred_at < self.created_at for event in events):
+            raise ValueError("Timeline events cannot predate application creation.")
+        if events and events[-1].occurred_at != self.updated_at:
+            raise ValueError("updated_at must match the latest timeline event.")
+        if self.version != len(events) + 1:
+            raise ValueError("version must equal the number of timeline events plus one.")
+        event_operation_ids = {
+            event.operation_id for event in events if event.operation_id is not None
+        }
+        if not event_operation_ids.issubset(normalized_ids):
+            raise ValueError("Timeline operation IDs must be linked to the application.")
         object.__setattr__(self, "external_action_operation_ids", normalized_ids)
         object.__setattr__(self, "timeline", events)
 
@@ -71,15 +110,9 @@ class JobApplication:
         event_id: str | None = None,
     ) -> "JobApplication":
         """Return a new aggregate after a validated lifecycle transition."""
-        allowed = {
-            JobApplicationStatus.SAVED: {JobApplicationStatus.APPLIED, JobApplicationStatus.WITHDRAWN},
-            JobApplicationStatus.APPLIED: {JobApplicationStatus.INTERVIEW, JobApplicationStatus.REJECTED, JobApplicationStatus.WITHDRAWN},
-            JobApplicationStatus.INTERVIEW: {JobApplicationStatus.OFFER, JobApplicationStatus.REJECTED, JobApplicationStatus.WITHDRAWN},
-            JobApplicationStatus.OFFER: {JobApplicationStatus.WITHDRAWN},
-            JobApplicationStatus.REJECTED: set(),
-            JobApplicationStatus.WITHDRAWN: set(),
-        }
-        if status not in allowed[self.status]:
+        if not isinstance(status, JobApplicationStatus):
+            raise ValueError("status must be a JobApplicationStatus.")
+        if status not in _ALLOWED_TRANSITIONS[self.status]:
             raise ValueError(f"Invalid application transition: {self.status.value} -> {status.value}.")
         timestamp = occurred_at or datetime.now(timezone.utc)
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -94,9 +127,10 @@ class JobApplication:
             operation_id=operation_id,
             note=note,
         )
+        normalized_operation_id = event.operation_id
         operation_ids = self.external_action_operation_ids
-        if operation_id is not None and operation_id not in operation_ids:
-            operation_ids += (operation_id,)
+        if normalized_operation_id is not None and normalized_operation_id not in operation_ids:
+            operation_ids += (normalized_operation_id,)
         return replace(
             self,
             status=status,
@@ -122,10 +156,18 @@ class ApplicationTimelineEvent:
     def __post_init__(self) -> None:
         if not isinstance(self.event_id, str) or not self.event_id.strip() or len(self.event_id.strip()) > 200:
             raise ValueError("event_id must be a non-empty string of at most 200 characters.")
+        if not isinstance(self.occurred_at, datetime):
+            raise ValueError("Timeline event timestamp must be a datetime value.")
         if self.occurred_at.tzinfo is None or self.occurred_at.utcoffset() is None:
             raise ValueError("Timeline event timestamp must be timezone-aware.")
         if self.operation_id is not None and (not isinstance(self.operation_id, str) or not self.operation_id.strip() or len(self.operation_id.strip()) > 200):
             raise ValueError("operation_id must be a non-empty string of at most 200 characters.")
+        if not isinstance(self.from_status, JobApplicationStatus) or not isinstance(self.to_status, JobApplicationStatus):
+            raise ValueError("Timeline statuses must be JobApplicationStatus values.")
+        if self.to_status not in _ALLOWED_TRANSITIONS[self.from_status]:
+            raise ValueError(
+                f"Invalid timeline transition: {self.from_status.value} -> {self.to_status.value}."
+            )
         if not isinstance(self.note, str) or len(self.note) > 2000:
             raise ValueError("note must be a string of at most 2000 characters.")
         object.__setattr__(self, "event_id", self.event_id.strip())

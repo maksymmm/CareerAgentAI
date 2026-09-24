@@ -8,6 +8,7 @@ from career_agent_ai.application.jobs.in_memory_job_application_repository impor
 )
 from career_agent_ai.application.jobs.job_application import JobApplication
 from career_agent_ai.application.jobs.job_application_repository import (
+    ApplicationConflictError,
     JobApplicationRepository,
 )
 from career_agent_ai.application.jobs.job_application_status import (
@@ -123,7 +124,10 @@ class JobApplicationAgent(Agent):
             status=status,
         )
 
-        self._repository.add(application)
+        try:
+            self._repository.add(application)
+        except ApplicationConflictError:
+            return self._failure("A job application for this job already exists.")
 
         return AgentResult(
             success=True,
@@ -247,6 +251,8 @@ class JobApplicationAgent(Agent):
             self._repository.update(updated_application, expected_version=application.version)
         except ValueError:
             return self._failure("Invalid application status transition.")
+        except ApplicationConflictError:
+            return self._failure("Job application changed; reload it and try again.")
 
         return AgentResult(
             success=True,

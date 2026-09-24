@@ -28,25 +28,28 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
         self,
         application_id: str,
     ) -> JobApplication | None:
-        return self._items.get(application_id)
+        return self._items.get(self._required_identifier(application_id, "application_id"))
 
     def list(
         self,
         user_id: str,
     ) -> tuple[JobApplication, ...]:
-        return tuple(sorted((
-            item
-            for item in self._items.values()
-            if item.user_id == user_id
-        ), key=lambda item: (item.created_at, item.application_id)))
+        return self.find(ApplicationQuery(user_id=user_id))
 
     def update(self, application: JobApplication, *, expected_version: int) -> None:
         """Replace an existing aggregate using optimistic concurrency."""
         current = self._items.get(application.application_id)
-        if current is None or current.version != expected_version or application.version != expected_version + 1:
+        if (
+            current is None
+            or expected_version < 1
+            or current.version != expected_version
+            or application.version != expected_version + 1
+        ):
             raise ApplicationConflictError("Application is missing or has changed.")
         if application.user_id != current.user_id or application.job_id != current.job_id:
             raise ApplicationConflictError("Application identity cannot be changed.")
+        if application.created_at != current.created_at:
+            raise ApplicationConflictError("Application created_at cannot be changed.")
         self._items[application.application_id] = application
 
     def find(self, query: ApplicationQuery) -> tuple[JobApplication, ...]:
@@ -64,3 +67,9 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
 
     def clear(self) -> None:
         self._items.clear()
+
+    @staticmethod
+    def _required_identifier(value: str, name: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must not be empty.")
+        return value.strip()

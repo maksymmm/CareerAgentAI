@@ -27,6 +27,10 @@ class ApplicationQuery:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError(f"{name} filter must not be empty.")
+            if value is not None:
+                object.__setattr__(self, name, value.strip())
+        if self.status is not None and not isinstance(self.status, JobApplicationStatus):
+            raise ValueError("status filter must be a JobApplicationStatus.")
 
 
 class JobApplicationRepository(ABC):
