@@ -209,15 +209,22 @@ class SQLiteSchedulingRepository:
                     (candidate_id, event_id),
                 ).fetchall()
                 for other in others:
-                    other_start = (
-                        other[4] if other[4] is not None else other[2]
-                    )
-                    other_end = other[5] if other[4] is not None else other[3]
-                    if self._overlaps_epoch(
-                        reserved_start_us,
-                        reserved_end_us,
-                        other_start,
-                        other_end,
+                    slots: list[tuple[int, int | None]] = []
+                    if other[1] in {
+                        ScheduleStatus.ACCEPTED.value,
+                        ScheduleStatus.RESCHEDULE_REQUESTED.value,
+                    }:
+                        slots.append((other[2], other[3]))
+                    if other[4] is not None:
+                        slots.append((other[4], other[5]))
+                    if any(
+                        self._overlaps_epoch(
+                            reserved_start_us,
+                            reserved_end_us,
+                            other_start,
+                            other_end,
+                        )
+                        for other_start, other_end in slots
                     ):
                         raise SchedulingConflictError(
                             "Target slot conflicts with a committed or reserved event."
