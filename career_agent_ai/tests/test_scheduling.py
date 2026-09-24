@@ -488,6 +488,28 @@ def test_concurrent_competing_actions_only_one_reaches_provider(tmp_path):
 
 
 
+
+def test_prepared_acceptance_rechecks_conflict_at_execution_time():
+    service, _, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event("event-1"))
+    service.add_event(
+        event(
+            "event-2",
+            start_at=BASE_START + timedelta(minutes=15),
+            end_at=BASE_START + timedelta(minutes=45),
+        )
+    )
+
+    with pytest.raises(PermissionError):
+        service.accept("accept:stale", "event-1", human_approved=False)
+
+    accepted = service.accept("accept:winner", "event-2", human_approved=True)
+    assert accepted is not None and accepted.status == ScheduleStatus.ACCEPTED
+
+    assert service.accept("accept:stale", "event-1", human_approved=True) is None
+    assert operations.get("accept:stale").status == ExternalActionStatus.FAILED
+    assert provider.calls == [("accept", "accept:winner")]
+
 def test_concurrent_overlapping_events_cannot_both_reach_provider(tmp_path):
     path = str(tmp_path / "concurrent-conflict.sqlite")
     entered = Event()
