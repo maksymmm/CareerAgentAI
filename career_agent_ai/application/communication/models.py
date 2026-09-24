@@ -31,6 +31,8 @@ def sanitize_text(value: str, field: str, *, maximum: int) -> str:
         raise ValueError(f"{field} must not exceed {maximum} characters.")
     if any(ord(character) < 32 and character not in "\n\t" for character in normalized):
         raise ValueError(f"{field} contains forbidden control characters.")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in normalized):
+        raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
     return normalized
 
 

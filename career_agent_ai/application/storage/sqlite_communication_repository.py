@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 from career_agent_ai.application.communication.models import (
     CommunicationMessage,
@@ -33,8 +33,8 @@ class SQLiteCommunicationRepository:
                 """
                 INSERT INTO communication_messages (
                     message_id, thread_id, sender, recipient, subject, body,
-                    direction, created_at, in_reply_to
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    direction, created_at, created_at_epoch_us, in_reply_to
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message.message_id,
@@ -45,6 +45,7 @@ class SQLiteCommunicationRepository:
                     message.body,
                     message.direction.value,
                     message.created_at.isoformat(),
+                    self._epoch_microseconds(message.created_at),
                     message.in_reply_to,
                 ),
             )
@@ -87,7 +88,7 @@ class SQLiteCommunicationRepository:
         rows = self._database.connection.execute(
             """SELECT message_id FROM communication_messages
                WHERE thread_id = ?
-               ORDER BY julianday(created_at), message_id""",
+               ORDER BY created_at_epoch_us, message_id""",
             (normalized,),
         ).fetchall()
         messages = tuple(self.get(row[0]) for row in rows)
@@ -151,6 +152,7 @@ class SQLiteCommunicationRepository:
                 body TEXT NOT NULL,
                 direction TEXT NOT NULL CHECK(direction IN ('draft', 'outbound', 'inbound')),
                 created_at TEXT NOT NULL,
+                created_at_epoch_us INTEGER NOT NULL,
                 in_reply_to TEXT,
                 delivery_operation_id TEXT
             )
@@ -166,6 +168,27 @@ class SQLiteCommunicationRepository:
             self._database.connection.execute(
                 "ALTER TABLE communication_messages ADD COLUMN delivery_operation_id TEXT"
             )
+        if "created_at_epoch_us" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE communication_messages ADD COLUMN created_at_epoch_us INTEGER"
+            )
+        rows = self._database.connection.execute(
+            """SELECT message_id, created_at FROM communication_messages
+               WHERE created_at_epoch_us IS NULL"""
+        ).fetchall()
+        for message_id, created_at in rows:
+            try:
+                parsed = datetime.fromisoformat(created_at)
+                epoch_microseconds = self._epoch_microseconds(parsed)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Persisted communication timestamp is malformed."
+                ) from exc
+            self._database.connection.execute(
+                """UPDATE communication_messages SET created_at_epoch_us = ?
+                   WHERE message_id = ?""",
+                (epoch_microseconds, message_id),
+            )
         self._database.connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_communication_thread
                ON communication_messages(thread_id, created_at)"""
@@ -174,6 +197,10 @@ class SQLiteCommunicationRepository:
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_communication_delivery_operation
                ON communication_messages(delivery_operation_id)
                WHERE delivery_operation_id IS NOT NULL"""
+        )
+        self._database.connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_communication_thread_instant
+               ON communication_messages(thread_id, created_at_epoch_us, message_id)"""
         )
         self._database.connection.commit()
 
@@ -207,3 +234,17 @@ class SQLiteCommunicationRepository:
         )
         self._database.connection.commit()
         return requested
+
+    @staticmethod
+    def _epoch_microseconds(value: datetime) -> int:
+        """Convert an aware timestamp to an exact integer UTC microsecond instant."""
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware.")
+        utc_value = value.astimezone(timezone.utc)
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        delta = utc_value - epoch
+        return (
+            delta.days * 86_400_000_000
+            + delta.seconds * 1_000_000
+            + delta.microseconds
+        )

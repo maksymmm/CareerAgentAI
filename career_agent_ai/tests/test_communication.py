@@ -289,6 +289,26 @@ def test_malformed_untrusted_message_input_is_rejected(changes):
 
 
 @pytest.mark.parametrize(
+    "field",
+    ["subject", "body"],
+)
+def test_lone_unicode_surrogates_are_rejected(field):
+    values = {
+        "message_id": "message-1",
+        "thread_id": "thread-1",
+        "sender": "candidate@example.test",
+        "recipient": "recruiter@example.test",
+        "subject": "Subject",
+        "body": "Body",
+        "direction": MessageDirection.DRAFT,
+    }
+    values[field] = "malformed \ud800 text"
+
+    with pytest.raises(ValueError, match="Unicode surrogate"):
+        CommunicationMessage(**values)
+
+
+@pytest.mark.parametrize(
     "changes,error_type",
     [
         ({"message_id": 42}, TypeError),
@@ -379,22 +399,48 @@ def test_malformed_persisted_message_is_rejected():
 
 def test_thread_ordering_uses_instants_instead_of_timestamp_text():
     database = SQLiteDatabase()
-    repository = SQLiteCommunicationRepository(database)
-    repository.save(message("message-first"))
-    repository.save(message("message-second"))
     database.connection.execute(
-        "UPDATE communication_messages SET created_at = ? WHERE message_id = ?",
-        ("2026-01-01T01:00:00+02:00", "message-first"),
+        """
+        CREATE TABLE communication_messages (
+            message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
+            sender TEXT NOT NULL, recipient TEXT NOT NULL, subject TEXT NOT NULL,
+            body TEXT NOT NULL, direction TEXT NOT NULL, created_at TEXT NOT NULL,
+            in_reply_to TEXT, delivery_operation_id TEXT
+        )
+        """
+    )
+    values = (
+        "thread-1", "candidate@example.test", "recruiter@example.test",
+        "Opportunity", "Body", "inbound", None, None,
     )
     database.connection.execute(
-        "UPDATE communication_messages SET created_at = ? WHERE message_id = ?",
-        ("2025-12-31T23:30:00+00:00", "message-second"),
+        """INSERT INTO communication_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("message-first", *values[:6], "2026-01-01T01:00:00+02:00", *values[6:]),
+    )
+    database.connection.execute(
+        """INSERT INTO communication_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("message-second", *values[:6], "2025-12-31T23:30:00+00:00", *values[6:]),
     )
     database.connection.commit()
+    repository = SQLiteCommunicationRepository(database)
 
     assert tuple(item.message_id for item in repository.list_thread("thread-1")) == (
         "message-first",
         "message-second",
+    )
+
+
+def test_thread_ordering_preserves_exact_microsecond_precision():
+    repository = SQLiteCommunicationRepository(SQLiteDatabase())
+    base = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    earlier = replace(message("z-earlier"), created_at=base)
+    later = replace(message("a-later"), created_at=base + timedelta(microseconds=1))
+    repository.save(later)
+    repository.save(earlier)
+
+    assert tuple(item.message_id for item in repository.list_thread("thread-1")) == (
+        "z-earlier",
+        "a-later",
     )
 
 

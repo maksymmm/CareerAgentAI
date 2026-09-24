@@ -102,6 +102,8 @@ only an explicit pre-delivery provider failure releases the delivery claim for a
 deliberate operation, while ambiguous outcomes remain locked.
 Concurrent identical message inserts converge on the durable winning row; conflicting
 reuse of a message ID remains rejected.
+Thread ordering preserves exact microsecond instants through a legacy-compatible UTC
+epoch backfill, and malformed lone Unicode surrogates are rejected at the domain edge.
 
 Next priority: scheduling and interview coordination.
 

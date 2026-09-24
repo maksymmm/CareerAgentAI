@@ -195,6 +195,10 @@ retain the claim and continue to block competing sends until reconciliation.
 Concurrent workers may also idempotently persist the same previously unseen message:
 the losing insert reloads and returns the identical winning row, while reuse of the
 same message ID for different content or direction remains a hard conflict.
+Thread chronology uses an indexed integer UTC epoch at exact microsecond precision;
+legacy ISO timestamps are safely backfilled during repository initialization. Message
+text validation also rejects lone Unicode surrogate code points before any adapter or
+SQLite boundary is reached.
 
 The included fake provider is deterministic, in-memory, and dry-run only. It performs
 no network I/O and needs no credentials. No production communication provider or
