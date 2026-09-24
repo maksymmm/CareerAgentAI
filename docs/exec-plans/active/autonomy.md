@@ -4,7 +4,7 @@ This document is the prioritized execution queue for CareerAgentAI. Codex should
 
 ## 1. Crash-safe idempotency for consequential external actions
 
-Status: **IMPLEMENTED — VERIFICATION BLOCKED**
+Status: **COMPLETED**
 
 Goal: guarantee that restart/retry behavior cannot silently duplicate a real-world action such as an application submission or recruiter message.
 
@@ -17,32 +17,34 @@ Acceptance criteria:
 - [x] Persist terminal outcome after execution.
 - [x] On restart, do not blindly repeat ambiguous in-flight operations.
 - [x] Add tests for duplicate invocation, crash/restart recovery, failure, and malformed persisted state.
-- [ ] Maintain >=90% total coverage.
+- [x] Maintain >=90% total coverage.
 - [x] Document the contract.
 
 Delivered: a provider-neutral adapter boundary, mandatory explicit approval at execution,
 atomic SQLite state transitions, terminal duplicate suppression, and safe recovery of
 ambiguous in-flight work. No real provider adapter or credential is configured.
 
-Verification blocker: the complete 217-test suite passes, but this environment does
-not contain `pytest-cov`, and its PyPI and apt package sources are rejected by the
-network proxy. The required coverage threshold must be verified once that dependency
-is available.
+Verification: GitHub CI verified all 217 tests passing with 90.67% total coverage.
 
 ## 2. Durable long-term career memory
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: replace purely in-memory career memory with a durable provider-neutral boundary.
 
 Acceptance criteria:
-- [ ] Define durable memory repository interface.
-- [ ] SQLite implementation.
-- [ ] Versioned/validated JSON-safe serialization.
-- [ ] Retrieval by user and memory type.
-- [ ] Restart tests.
-- [ ] No unsafe deserialization.
-- [ ] Existing `MemoryEngine` contract preserved or migrated explicitly.
+- [x] Define durable memory repository interface.
+- [x] SQLite implementation.
+- [x] Versioned/validated JSON-safe serialization.
+- [x] Retrieval by user and memory type.
+- [x] Restart tests.
+- [x] No unsafe deserialization.
+- [x] Existing `MemoryEngine` contract preserved or migrated explicitly.
+
+Delivered: a provider-neutral memory repository boundary, compatible in-memory
+default, and restart-safe SQLite implementation. Persisted values and metadata are
+strict JSON, carry an explicit serialization version, and are validated when written
+and loaded. Records can be queried deterministically by user and memory type.
 
 ## 3. Application tracker
 
