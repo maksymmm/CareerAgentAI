@@ -111,6 +111,7 @@ class ScheduleEvent:
     location: str
     start_at: datetime
     timezone_name: str
+    utc_offset: str
     status: ScheduleStatus = ScheduleStatus.PROPOSED
     end_at: datetime | None = None
     provider_event_id: str | None = None
@@ -247,5 +248,6 @@ class HumanScheduleView:
                 else local_end.time().isoformat(timespec="seconds")
             ),
             timezone_name=event.timezone_name,
+            utc_offset=local_start.strftime("%z")[:3] + ":" + local_start.strftime("%z")[3:],
             status=event.status,
         )
