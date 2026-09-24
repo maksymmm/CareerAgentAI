@@ -371,22 +371,22 @@ class SchedulingService:
             )
             return self._execute(operation_id, human_approved)
         if event.status not in {
-                ScheduleStatus.PROPOSED,
-                ScheduleStatus.ACCEPTED,
-                ScheduleStatus.RESCHEDULE_REQUESTED,
-            }:
-                raise ValueError("Event cannot be rescheduled from its current status.")
-            conflicts = tuple(
-                item
-                for item in self._repository.find_conflicts(
-                    event.candidate_id,
-                    target_start,
-                    target_end,
-                    exclude_event_id=event.event_id,
-                )
-                if item.status
-                in {ScheduleStatus.ACCEPTED, ScheduleStatus.RESCHEDULE_REQUESTED}
+            ScheduleStatus.PROPOSED,
+            ScheduleStatus.ACCEPTED,
+            ScheduleStatus.RESCHEDULE_REQUESTED,
+        }:
+            raise ValueError("Event cannot be rescheduled from its current status.")
+        conflicts = tuple(
+            item
+            for item in self._repository.find_conflicts(
+                event.candidate_id,
+                target_start,
+                target_end,
+                exclude_event_id=event.event_id,
             )
+            if item.status
+            in {ScheduleStatus.ACCEPTED, ScheduleStatus.RESCHEDULE_REQUESTED}
+        )
         if conflicts:
             raise SchedulingConflictError(
                 "Requested slot conflicts with another committed scheduling event."
