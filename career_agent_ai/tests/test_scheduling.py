@@ -125,6 +125,7 @@ def test_human_view_exposes_exact_local_details_and_dst_offset():
     assert view.local_date == "2026-03-29"
     assert view.local_start_time == "09:30:00"
     assert view.local_end_time == "10:30:00"
+    assert view.local_end_date == "2026-03-29"
     assert view.timezone_name == "Europe/Berlin"
     assert view.utc_offset == "+02:00"
     assert view.status == ScheduleStatus.PROPOSED
@@ -270,6 +271,7 @@ def test_accept_rejects_conflict_before_external_action_is_prepared():
             "event-2",
             start_at=BASE_START + timedelta(minutes=30),
             end_at=BASE_START + timedelta(hours=2),
+            status=ScheduleStatus.ACCEPTED,
         )
     )
 
@@ -288,6 +290,7 @@ def test_reschedule_rejects_conflicting_target_before_provider_call():
             "event-2",
             start_at=BASE_START + timedelta(hours=3),
             end_at=BASE_START + timedelta(hours=4),
+            status=ScheduleStatus.ACCEPTED,
         )
     )
 
@@ -304,6 +307,43 @@ def test_reschedule_rejects_conflicting_target_before_provider_call():
     assert operations.get("reschedule:1") is None
     assert provider.calls == []
 
+
+
+def test_overlapping_uncommitted_proposals_do_not_block_acceptance():
+    service, _, _, provider = stack(SQLiteDatabase())
+    service.add_event(event("event-1"))
+    service.add_event(
+        event(
+            "event-2",
+            start_at=BASE_START + timedelta(minutes=15),
+            end_at=BASE_START + timedelta(minutes=45),
+        )
+    )
+
+    accepted = service.accept("accept:1", "event-1", human_approved=True)
+
+    assert accepted is not None and accepted.status == ScheduleStatus.ACCEPTED
+    assert provider.calls == [("accept", "accept:1")]
+
+
+def test_reschedule_requested_event_can_request_a_new_slot_again():
+    service, _, _, provider = stack(SQLiteDatabase())
+    service.add_event(event(status=ScheduleStatus.RESCHEDULE_REQUESTED))
+    next_start = BASE_START + timedelta(days=1)
+
+    updated = service.reschedule(
+        "reschedule:again",
+        "event-1",
+        start_at=next_start,
+        end_at=next_start + timedelta(hours=1),
+        timezone_name="Europe/Berlin",
+        human_approved=True,
+    )
+
+    assert updated is not None
+    assert updated.status == ScheduleStatus.RESCHEDULE_REQUESTED
+    assert updated.start_at == next_start
+    assert provider.calls == [("reschedule", "reschedule:again")]
 
 def test_definite_pre_provider_failure_releases_claim_for_new_attempt():
     provider = FakeCalendarAdapter()
