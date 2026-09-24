@@ -4,21 +4,30 @@ This document is the prioritized execution queue for CareerAgentAI. Codex should
 
 ## 1. Crash-safe idempotency for consequential external actions
 
-Status: **NEXT**
+Status: **IMPLEMENTED — VERIFICATION BLOCKED**
 
 Goal: guarantee that restart/retry behavior cannot silently duplicate a real-world action such as an application submission or recruiter message.
 
 Acceptance criteria:
-- [ ] Introduce an explicit external-action operation model with stable operation/idempotency ID.
-- [ ] Add repository abstraction for external-action operations.
-- [ ] Add SQLite persistence with parameterized SQL and appropriate indexes.
-- [ ] Model at least: prepared, in_progress, succeeded, failed, reconciliation_required.
-- [ ] Persist intent before adapter execution.
-- [ ] Persist terminal outcome after execution.
-- [ ] On restart, do not blindly repeat ambiguous in-flight operations.
-- [ ] Add tests for duplicate invocation, crash/restart recovery, failure, and malformed persisted state.
+- [x] Introduce an explicit external-action operation model with stable operation/idempotency ID.
+- [x] Add repository abstraction for external-action operations.
+- [x] Add SQLite persistence with parameterized SQL and appropriate indexes.
+- [x] Model at least: prepared, in_progress, succeeded, failed, reconciliation_required.
+- [x] Persist intent before adapter execution.
+- [x] Persist terminal outcome after execution.
+- [x] On restart, do not blindly repeat ambiguous in-flight operations.
+- [x] Add tests for duplicate invocation, crash/restart recovery, failure, and malformed persisted state.
 - [ ] Maintain >=90% total coverage.
-- [ ] Document the contract.
+- [x] Document the contract.
+
+Delivered: a provider-neutral adapter boundary, mandatory explicit approval at execution,
+atomic SQLite state transitions, terminal duplicate suppression, and safe recovery of
+ambiguous in-flight work. No real provider adapter or credential is configured.
+
+Verification blocker: the complete 217-test suite passes, but this environment does
+not contain `pytest-cov`, and its PyPI and apt package sources are rejected by the
+network proxy. The required coverage threshold must be verified once that dependency
+is available.
 
 ## 2. Durable long-term career memory
 
