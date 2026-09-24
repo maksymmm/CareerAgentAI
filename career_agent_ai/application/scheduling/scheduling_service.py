@@ -175,6 +175,7 @@ class _CalendarActionAdapter:
             expected_status,
             start_at=start_at,
             end_at=end_at,
+            clear_end=(action_type == "calendar.reschedule" and end_at is None),
             timezone_name=timezone_name,
             provider_event_id=delivered.provider_event_id,
         )
