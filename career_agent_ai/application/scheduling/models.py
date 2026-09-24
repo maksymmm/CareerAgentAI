@@ -93,7 +93,12 @@ _ALLOWED_TRANSITIONS: dict[ScheduleStatus, frozenset[ScheduleStatus]] = {
         {ScheduleStatus.RESCHEDULE_REQUESTED, ScheduleStatus.CANCELLED}
     ),
     ScheduleStatus.RESCHEDULE_REQUESTED: frozenset(
-        {ScheduleStatus.ACCEPTED, ScheduleStatus.DECLINED, ScheduleStatus.CANCELLED}
+        {
+            ScheduleStatus.ACCEPTED,
+            ScheduleStatus.DECLINED,
+            ScheduleStatus.RESCHEDULE_REQUESTED,
+            ScheduleStatus.CANCELLED,
+        }
     ),
     ScheduleStatus.DECLINED: frozenset(),
     ScheduleStatus.CANCELLED: frozenset(),
@@ -226,6 +231,7 @@ class HumanScheduleView:
     local_date: str
     local_start_time: str
     local_end_time: str | None
+    local_end_date: str | None
     timezone_name: str
     utc_offset: str
     status: ScheduleStatus
@@ -247,6 +253,7 @@ class HumanScheduleView:
                 if local_end is None
                 else local_end.time().isoformat(timespec="seconds")
             ),
+            local_end_date=None if local_end is None else local_end.date().isoformat(),
             timezone_name=event.timezone_name,
             utc_offset=local_start.strftime("%z")[:3] + ":" + local_start.strftime("%z")[3:],
             status=event.status,
