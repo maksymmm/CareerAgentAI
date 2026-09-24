@@ -24,6 +24,7 @@ CareerAgentAI
 │   │   └── outreach drafting
 │   ├── external_actions
 │   ├── jobs
+│   │   └── durable application tracker
 │   ├── memory
 │   ├── search
 │   ├── storage
@@ -158,6 +159,23 @@ The current capability is infrastructure only: no production communication or ap
 
 ---
 
+## Application Tracker
+
+The application tracker persists an immutable aggregate for each candidate/job pair.
+It models validated transitions through `saved`, `applied`, `interview`, `offer`,
+`rejected`, and `withdrawn`, while retaining a chronologically ordered timeline.
+
+Both the provider-neutral repository and its SQLite implementation support stable
+queries by candidate, job, company, status, and external-action operation ID.
+SQLite enforces duplicate prevention for candidate/job pairs and optimistic versions
+prevent stale writers from silently overwriting newer state. Application submission
+operations can be linked by their stable crash-safe external-action IDs without
+causing or repeating any external action. Persisted records use versioned, strict
+JSON for timeline metadata and are fully validated after restart; no unsafe
+deserialization is used.
+
+---
+
 ## Workflow Engine
 
 Responsible for deterministic workflow lifecycle management.
@@ -218,6 +236,7 @@ Implemented foundations:
 - Durable SQLite recovery for paused career runs
 - Crash-safe SQLite operation records for consequential external actions
 - Explicit human approval and reconciliation gates around external-action adapters
+- Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
 - Pre-vacancy opportunity scoring
@@ -227,7 +246,6 @@ Implemented foundations:
 
 Next architectural steps:
 
-- application tracking
 - real signal-source adapters
 - employer intelligence
 - communication adapter
