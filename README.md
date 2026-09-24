@@ -192,6 +192,9 @@ Successful reply operations can be replayed with the same operation ID after res
 without another provider call. A provider's explicit pre-delivery failure releases
 the claim so a deliberate new operation can retry; uncertain or post-delivery failures
 retain the claim and continue to block competing sends until reconciliation.
+Concurrent workers may also idempotently persist the same previously unseen message:
+the losing insert reloads and returns the identical winning row, while reuse of the
+same message ID for different content or direction remains a hard conflict.
 
 The included fake provider is deterministic, in-memory, and dry-run only. It performs
 no network I/O and needs no credentials. No production communication provider or

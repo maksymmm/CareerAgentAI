@@ -100,6 +100,8 @@ after possible provider success now require reconciliation rather than being rec
 as safe failures. Successful reply retries reuse their durable result across restarts;
 only an explicit pre-delivery provider failure releases the delivery claim for a new
 deliberate operation, while ambiguous outcomes remain locked.
+Concurrent identical message inserts converge on the durable winning row; conflicting
+reuse of a message ID remains rejected.
 
 Next priority: scheduling and interview coordination.
 

@@ -27,23 +27,7 @@ class SQLiteCommunicationRepository:
         """Insert a message or update only its draft-to-outbound delivery state."""
         existing = self.get(message.message_id)
         if existing is not None:
-            comparable_existing = self._content(existing)
-            comparable_message = self._content(message)
-            if comparable_existing != comparable_message:
-                raise ValueError("message_id is already bound to different message content.")
-            if existing.direction == message.direction:
-                return existing
-            if not (
-                existing.direction == MessageDirection.DRAFT
-                and message.direction == MessageDirection.OUTBOUND
-            ):
-                raise ValueError("A persisted message direction cannot be replaced.")
-            self._database.connection.execute(
-                "UPDATE communication_messages SET direction = ? WHERE message_id = ?",
-                (message.direction.value, message.message_id),
-            )
-            self._database.connection.commit()
-            return message
+            return self._resolve_existing(existing, message, allow_delivery=True)
         try:
             self._database.connection.execute(
                 """
@@ -67,7 +51,12 @@ class SQLiteCommunicationRepository:
             self._database.connection.commit()
         except sqlite3.IntegrityError as exc:
             self._database.connection.rollback()
-            raise ValueError("Communication message violates persistence constraints.") from exc
+            winner = self.get(message.message_id)
+            if winner is None:
+                raise ValueError(
+                    "Communication message violates persistence constraints."
+                ) from exc
+            return self._resolve_existing(winner, message, allow_delivery=False)
         return message
 
     def get(self, message_id: str) -> CommunicationMessage | None:
@@ -194,3 +183,27 @@ class SQLiteCommunicationRepository:
             message.thread_id, message.sender, message.recipient, message.subject,
             message.body, message.created_at, message.in_reply_to,
         )
+
+    def _resolve_existing(
+        self,
+        existing: CommunicationMessage,
+        requested: CommunicationMessage,
+        *,
+        allow_delivery: bool,
+    ) -> CommunicationMessage:
+        if self._content(existing) != self._content(requested):
+            raise ValueError("message_id is already bound to different message content.")
+        if existing.direction == requested.direction:
+            return existing
+        if not (
+            allow_delivery
+            and existing.direction == MessageDirection.DRAFT
+            and requested.direction == MessageDirection.OUTBOUND
+        ):
+            raise ValueError("A persisted message direction cannot be replaced.")
+        self._database.connection.execute(
+            "UPDATE communication_messages SET direction = ? WHERE message_id = ?",
+            (requested.direction.value, requested.message_id),
+        )
+        self._database.connection.commit()
+        return requested

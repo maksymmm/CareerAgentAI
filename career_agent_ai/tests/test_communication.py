@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Barrier, Event
 
 import pytest
 
@@ -477,3 +477,86 @@ def test_provider_success_followed_by_repository_failure_requires_reconciliation
     assert service.send("send:2", "message-1", human_approved=True) is None
     assert operations.get("send:2").status == ExternalActionStatus.FAILED
     assert provider.calls.count(("send", "send:2")) == 0
+
+
+def test_concurrent_identical_message_saves_return_the_winning_row(tmp_path):
+    path = str(tmp_path / "identical-save.sqlite")
+    setup_database = SQLiteDatabase(path)
+    SQLiteCommunicationRepository(setup_database)
+    setup_database.close()
+    barrier = Barrier(2)
+
+    class SynchronizedRepository(SQLiteCommunicationRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self._first_get = True
+
+        def get(self, message_id):
+            result = super().get(message_id)
+            if self._first_get:
+                self._first_get = False
+                barrier.wait(timeout=5)
+            return result
+
+    def save_identical():
+        database = SQLiteDatabase(path)
+        repository = SynchronizedRepository(database)
+        try:
+            return repository.save(message())
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _: save_identical(), range(2)))
+
+    assert results == (message(), message())
+
+
+@pytest.mark.parametrize(
+    "conflicting",
+    [
+        message(direction=MessageDirection.OUTBOUND),
+        replace(message(), body="Conflicting content"),
+    ],
+)
+def test_concurrent_conflicting_message_saves_reject_the_loser(tmp_path, conflicting):
+    path = str(tmp_path / "conflicting-save.sqlite")
+    setup_database = SQLiteDatabase(path)
+    SQLiteCommunicationRepository(setup_database)
+    setup_database.close()
+    barrier = Barrier(2)
+
+    class SynchronizedRepository(SQLiteCommunicationRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self._first_get = True
+
+        def get(self, message_id):
+            result = super().get(message_id)
+            if self._first_get:
+                self._first_get = False
+                barrier.wait(timeout=5)
+            return result
+
+    def save_value(value):
+        database = SQLiteDatabase(path)
+        repository = SynchronizedRepository(database)
+        try:
+            return repository.save(value)
+        except ValueError as exc:
+            return exc
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(
+            executor.map(
+                save_value,
+                (message(), conflicting),
+            )
+        )
+
+    assert sum(isinstance(result, CommunicationMessage) for result in results) == 1
+    errors = [result for result in results if isinstance(result, ValueError)]
+    assert len(errors) == 1
+    assert "different message content" in str(errors[0]) or "direction" in str(errors[0])
