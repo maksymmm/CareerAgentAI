@@ -111,7 +111,6 @@ class ScheduleEvent:
     location: str
     start_at: datetime
     timezone_name: str
-    utc_offset: str
     status: ScheduleStatus = ScheduleStatus.PROPOSED
     end_at: datetime | None = None
     provider_event_id: str | None = None
@@ -228,6 +227,7 @@ class HumanScheduleView:
     local_start_time: str
     local_end_time: str | None
     timezone_name: str
+    utc_offset: str
     status: ScheduleStatus
 
     @classmethod
