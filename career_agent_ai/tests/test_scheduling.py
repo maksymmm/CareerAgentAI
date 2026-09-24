@@ -469,6 +469,62 @@ def test_concurrent_competing_actions_only_one_reaches_provider(tmp_path):
     ]
 
 
+
+def test_concurrent_overlapping_events_cannot_both_reach_provider(tmp_path):
+    path = str(tmp_path / "concurrent-conflict.sqlite")
+    entered = Event()
+    release = Event()
+
+    class BlockingProvider(FakeCalendarAdapter):
+        def accept(self, operation_id, value):
+            if operation_id == "accept:first":
+                entered.set()
+                assert release.wait(timeout=5)
+            return super().accept(operation_id, value)
+
+    provider = BlockingProvider()
+    setup_db = SQLiteDatabase(path)
+    setup, _, _, _ = stack(setup_db, provider)
+    setup.add_event(event("event-1"))
+    setup.add_event(
+        event(
+            "event-2",
+            start_at=BASE_START + timedelta(minutes=15),
+            end_at=BASE_START + timedelta(minutes=45),
+        )
+    )
+    with pytest.raises(PermissionError):
+        setup.accept("accept:first", "event-1", human_approved=False)
+    with pytest.raises(PermissionError):
+        setup.accept("accept:second", "event-2", human_approved=False)
+    setup_db.close()
+
+    def execute(operation_id: str, event_id: str):
+        worker_db = SQLiteDatabase(path)
+        worker, _, _, _ = stack(worker_db, provider)
+        try:
+            return worker.accept(operation_id, event_id, human_approved=True)
+        finally:
+            worker_db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(execute, "accept:first", "event-1")
+        assert entered.wait(timeout=5)
+        second = executor.submit(execute, "accept:second", "event-2")
+        assert second.result(timeout=5) is None
+        release.set()
+        assert first.result(timeout=5) is not None
+
+    verify_db = SQLiteDatabase(path)
+    verify, _, operations, _ = stack(verify_db, provider)
+    assert verify.get_event("event-1").status == ScheduleStatus.ACCEPTED
+    assert verify.get_event("event-2").status == ScheduleStatus.PROPOSED
+    assert operations.get("accept:second").status == ExternalActionStatus.FAILED
+    verify_db.close()
+    assert [call for call in provider.calls if call[0] == "accept"] == [
+        ("accept", "accept:first")
+    ]
+
 def test_malformed_persisted_timezone_is_rejected():
     database = SQLiteDatabase()
     repository = SQLiteSchedulingRepository(database)
