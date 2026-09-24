@@ -143,43 +143,122 @@ class SQLiteSchedulingRepository:
         event_id: str,
         operation_id: str,
         allowed_statuses: Sequence[ScheduleStatus],
+        *,
+        reservation_start: datetime | None = None,
+        reservation_end: datetime | None = None,
+        enforce_conflicts: bool = False,
     ) -> ScheduleEvent:
+        """Atomically claim an event and reserve a target slot when required."""
         event_id = validate_schedule_identifier(event_id, "event_id")
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         statuses = tuple(allowed_statuses)
         if not statuses or any(not isinstance(status, ScheduleStatus) for status in statuses):
             raise ValueError("allowed_statuses must contain ScheduleStatus values.")
-        placeholders = ",".join("?" for _ in statuses)
-        params = (
-            operation_id,
-            event_id,
-            *(status.value for status in statuses),
-            operation_id,
+        if enforce_conflicts and reservation_start is None:
+            raise ValueError("A conflict-enforced action requires reservation_start.")
+        reserved_start_us = (
+            None
+            if reservation_start is None
+            else self._epoch_microseconds(reservation_start)
         )
+        reserved_end_us = (
+            None if reservation_end is None else self._epoch_microseconds(reservation_end)
+        )
+        if (
+            reserved_start_us is not None
+            and reserved_end_us is not None
+            and reserved_end_us <= reserved_start_us
+        ):
+            raise ValueError("reservation_end must be later than reservation_start.")
+
+        connection = self._database.connection
         try:
-            cursor = self._database.connection.execute(
-                f"""
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT candidate_id, status, active_action_operation_id
+                FROM scheduling_events WHERE event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            if row is None:
+                raise SchedulingOperationConflict("Scheduling event no longer exists.")
+            candidate_id, raw_status, active_operation = row
+            current_status = ScheduleStatus(raw_status)
+            if current_status not in statuses:
+                raise SchedulingOperationConflict(
+                    "Event is not claimable in its current state."
+                )
+            if active_operation not in (None, operation_id):
+                raise SchedulingOperationConflict(
+                    "Event is already owned by another scheduling operation."
+                )
+
+            if enforce_conflicts and reserved_start_us is not None:
+                others = connection.execute(
+                    """
+                    SELECT event_id, status, start_epoch_us, end_epoch_us,
+                           reservation_start_epoch_us, reservation_end_epoch_us
+                    FROM scheduling_events
+                    WHERE candidate_id = ? AND event_id <> ?
+                      AND (
+                        status IN ('accepted', 'reschedule_requested')
+                        OR reservation_start_epoch_us IS NOT NULL
+                      )
+                    """,
+                    (candidate_id, event_id),
+                ).fetchall()
+                for other in others:
+                    other_start = (
+                        other[4] if other[4] is not None else other[2]
+                    )
+                    other_end = other[5] if other[4] is not None else other[3]
+                    if self._overlaps_epoch(
+                        reserved_start_us,
+                        reserved_end_us,
+                        other_start,
+                        other_end,
+                    ):
+                        raise SchedulingConflictError(
+                            "Target slot conflicts with a committed or reserved event."
+                        )
+
+            cursor = connection.execute(
+                """
                 UPDATE scheduling_events
-                SET active_action_operation_id = ?
+                SET active_action_operation_id = ?,
+                    reservation_start_epoch_us = ?,
+                    reservation_end_epoch_us = ?
                 WHERE event_id = ?
-                  AND status IN ({placeholders})
                   AND (
                     active_action_operation_id IS NULL
                     OR active_action_operation_id = ?
                   )
                 """,
-                params,
+                (
+                    operation_id,
+                    reserved_start_us if enforce_conflicts else None,
+                    reserved_end_us if enforce_conflicts else None,
+                    event_id,
+                    operation_id,
+                ),
             )
-            self._database.connection.commit()
+            if cursor.rowcount != 1:
+                raise SchedulingOperationConflict(
+                    "Event lost its scheduling action claim."
+                )
+            connection.commit()
         except sqlite3.IntegrityError as exc:
-            self._database.connection.rollback()
+            if connection.in_transaction:
+                connection.rollback()
             raise SchedulingOperationConflict(
                 "Scheduling operation is already bound to another event."
             ) from exc
-        if cursor.rowcount != 1:
-            raise SchedulingOperationConflict(
-                "Event is not claimable in its current state."
-            )
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
         event = self.get(event_id)
         if event is None:
             raise SchedulingOperationConflict("Claimed event disappeared.")
@@ -191,7 +270,9 @@ class SQLiteSchedulingRepository:
         cursor = self._database.connection.execute(
             """
             UPDATE scheduling_events
-            SET active_action_operation_id = NULL
+            SET active_action_operation_id = NULL,
+                reservation_start_epoch_us = NULL,
+                reservation_end_epoch_us = NULL
             WHERE event_id = ? AND active_action_operation_id = ?
             """,
             (event_id, operation_id),
@@ -223,7 +304,9 @@ class SQLiteSchedulingRepository:
                 UPDATE scheduling_events
                 SET start_at = ?, start_epoch_us = ?, end_at = ?, end_epoch_us = ?,
                     timezone_name = ?, status = ?, provider_event_id = ?,
-                    version = ?, updated_at = ?, active_action_operation_id = NULL
+                    version = ?, updated_at = ?, active_action_operation_id = NULL,
+                    reservation_start_epoch_us = NULL,
+                    reservation_end_epoch_us = NULL
                 WHERE event_id = ? AND version = ?
                   AND active_action_operation_id = ?
                 """,
@@ -286,11 +369,25 @@ class SQLiteSchedulingRepository:
                 application_id TEXT,
                 version INTEGER NOT NULL CHECK(version >= 1),
                 active_action_operation_id TEXT,
+                reservation_start_epoch_us INTEGER,
+                reservation_end_epoch_us INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(scheduling_events)").fetchall()
+        }
+        if "reservation_start_epoch_us" not in columns:
+            connection.execute(
+                "ALTER TABLE scheduling_events ADD COLUMN reservation_start_epoch_us INTEGER"
+            )
+        if "reservation_end_epoch_us" not in columns:
+            connection.execute(
+                "ALTER TABLE scheduling_events ADD COLUMN reservation_end_epoch_us INTEGER"
+            )
         connection.execute(
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduling_provider_event
                ON scheduling_events(provider_event_id)
@@ -308,6 +405,10 @@ class SQLiteSchedulingRepository:
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_scheduling_candidate_status
                ON scheduling_events(candidate_id, status)"""
+        )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_scheduling_candidate_reservation
+               ON scheduling_events(candidate_id, reservation_start_epoch_us)"""
         )
         connection.commit()
 
@@ -354,6 +455,23 @@ class SQLiteSchedulingRepository:
         first_end: datetime | None,
         second_start: datetime,
         second_end: datetime | None,
+    ) -> bool:
+        first_stop = first_start if first_end is None else first_end
+        second_stop = second_start if second_end is None else second_end
+        if first_stop == first_start and second_stop == second_start:
+            return first_start == second_start
+        if first_stop == first_start:
+            return second_start <= first_start < second_stop
+        if second_stop == second_start:
+            return first_start <= second_start < first_stop
+        return first_start < second_stop and second_start < first_stop
+
+    @staticmethod
+    def _overlaps_epoch(
+        first_start: int,
+        first_end: int | None,
+        second_start: int,
+        second_end: int | None,
     ) -> bool:
         first_stop = first_start if first_end is None else first_end
         second_stop = second_start if second_end is None else second_end
