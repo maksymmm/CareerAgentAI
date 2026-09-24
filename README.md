@@ -22,6 +22,9 @@ CareerAgentAI
 │   │   ├── orchestration
 │   │   ├── pre-vacancy opportunity pipeline
 │   │   └── outreach drafting
+│   ├── communication
+│   │   ├── provider-neutral draft/send/read/reply protocol
+│   │   └── safe dry-run provider
 │   ├── external_actions
 │   ├── jobs
 │   │   └── durable application tracker
@@ -159,6 +162,26 @@ The current capability is infrastructure only: no production communication or ap
 
 ---
 
+## Communication Adapter
+
+Recruiter and employer communication is isolated behind a provider-neutral protocol
+covering draft, send, read, and reply primitives. The application service validates
+plain-text content and provider identifiers, persists message/thread/reply identifiers
+in SQLite, and retains them across restarts.
+
+Every send and reply—including local dry runs—requires explicit human approval and
+is executed through the crash-safe `ExternalActionService`. Stable operation IDs
+suppress duplicate requests and provider calls. A process restart after an operation
+entered `in_progress` moves it to `reconciliation_required` rather than risking a
+duplicate message. Provider failures are persisted as terminal failed attempts; a
+new deliberate attempt must use a new operation ID.
+
+The included fake provider is deterministic, in-memory, and dry-run only. It performs
+no network I/O and needs no credentials. No production communication provider or
+credential configuration is included.
+
+---
+
 ## Application Tracker
 
 The application tracker persists an immutable aggregate for each candidate/job pair.
@@ -236,6 +259,8 @@ Implemented foundations:
 - Durable SQLite recovery for paused career runs
 - Crash-safe SQLite operation records for consequential external actions
 - Explicit human approval and reconciliation gates around external-action adapters
+- Provider-neutral, human-gated communication with a no-I/O fake provider
+- Restart-safe persistence of communication thread, message, and reply identifiers
 - Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
@@ -248,7 +273,6 @@ Next architectural steps:
 
 - real signal-source adapters
 - employer intelligence
-- communication adapter
 - scheduling
 - long-running autonomous execution
 

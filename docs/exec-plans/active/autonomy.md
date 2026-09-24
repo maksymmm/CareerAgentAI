@@ -72,18 +72,28 @@ Next priority: communication adapter.
 
 ## 4. Communication adapter
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: introduce a provider-neutral communication layer for recruiter/employer messages.
 
 Acceptance criteria:
-- [ ] Adapter protocol for draft/send/read/reply primitives.
-- [ ] Safe dry-run/fake provider.
-- [ ] Human approval gate before real send.
-- [ ] Idempotency integration.
-- [ ] Thread/conversation identifiers persisted.
-- [ ] Input sanitization and failure handling.
-- [ ] No production credentials in repository/tests.
+- [x] Adapter protocol for draft/send/read/reply primitives.
+- [x] Safe dry-run/fake provider.
+- [x] Human approval gate before real send.
+- [x] Idempotency integration.
+- [x] Thread/conversation identifiers persisted.
+- [x] Input sanitization and failure handling.
+- [x] No production credentials in repository/tests.
+
+Delivered: a provider-neutral communication boundary and deterministic no-I/O fake,
+strict validated plain-text message models, and restart-safe SQLite storage for
+message, thread, and reply-to identifiers. Send/reply actions always pass through
+the existing approval-gated external-action service. Duplicate requests reuse their
+durable result, failures remain safely terminal, and ambiguous in-flight actions are
+held for reconciliation without another provider call. No real provider, credential,
+or network send is configured.
+
+Next priority: scheduling and interview coordination.
 
 ## 5. Scheduling and interview coordination
 
