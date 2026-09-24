@@ -128,6 +128,7 @@ def test_human_view_exposes_exact_local_details_and_dst_offset():
     assert view.local_end_date == "2026-03-29"
     assert view.timezone_name == "Europe/Berlin"
     assert view.utc_offset == "+02:00"
+    assert view.end_utc_offset == "+02:00"
     assert view.status == ScheduleStatus.PROPOSED
 
 
@@ -146,6 +147,23 @@ def test_human_view_disambiguates_dst_fall_back_with_offset():
     assert view.local_start_time == "02:30:00"
     assert view.utc_offset == "+01:00"
 
+
+
+def test_human_view_exposes_distinct_offsets_across_dst_fall_back():
+    service, _, _, _ = stack(SQLiteDatabase())
+    service.add_event(
+        event(
+            start_at=datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc),
+            end_at=datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc),
+        )
+    )
+
+    view = service.human_view("event-1")
+
+    assert view.local_start_time == "02:30:00"
+    assert view.local_end_time == "02:30:00"
+    assert view.utc_offset == "+02:00"
+    assert view.end_utc_offset == "+01:00"
 
 def test_sqlite_restart_preserves_event_and_deterministic_order(tmp_path):
     path = str(tmp_path / "schedule.sqlite")
