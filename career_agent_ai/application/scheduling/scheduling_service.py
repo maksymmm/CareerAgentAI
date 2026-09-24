@@ -234,10 +234,15 @@ class SchedulingService:
                 ScheduleStatus.RESCHEDULE_REQUESTED,
             }:
                 raise ValueError("Event is not awaiting acceptance.")
-            conflicts = self.conflicts_for(event_id)
+            conflicts = tuple(
+                item
+                for item in self.conflicts_for(event_id)
+                if item.status
+                in {ScheduleStatus.ACCEPTED, ScheduleStatus.RESCHEDULE_REQUESTED}
+            )
             if conflicts:
                 raise SchedulingConflictError(
-                    "Event conflicts with another active scheduling event."
+                    "Event conflicts with another committed scheduling event."
                 )
         self._external_actions.prepare(
             operation_id, "calendar.accept", {"event_id": event.event_id}
@@ -285,15 +290,20 @@ class SchedulingService:
                 ScheduleStatus.RESCHEDULE_REQUESTED,
             }:
                 raise ValueError("Event cannot be rescheduled from its current status.")
-            conflicts = self._repository.find_conflicts(
-                event.candidate_id,
-                target_start,
-                target_end,
-                exclude_event_id=event.event_id,
+            conflicts = tuple(
+                item
+                for item in self._repository.find_conflicts(
+                    event.candidate_id,
+                    target_start,
+                    target_end,
+                    exclude_event_id=event.event_id,
+                )
+                if item.status
+                in {ScheduleStatus.ACCEPTED, ScheduleStatus.RESCHEDULE_REQUESTED}
             )
             if conflicts:
                 raise SchedulingConflictError(
-                    "Requested slot conflicts with another active scheduling event."
+                    "Requested slot conflicts with another committed scheduling event."
                 )
         payload: dict[str, Any] = {
             "event_id": event.event_id,
