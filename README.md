@@ -22,6 +22,7 @@ CareerAgentAI
 │   │   ├── orchestration
 │   │   ├── pre-vacancy opportunity pipeline
 │   │   └── outreach drafting
+│   ├── external_actions
 │   ├── jobs
 │   ├── memory
 │   ├── search
@@ -138,6 +139,18 @@ Career memory is currently in-memory. Resumable career-run state has a separate 
 
 ---
 
+## Crash-Safe External Actions
+
+Consequential provider calls are coordinated through a provider-neutral external-action service and a durable SQLite operation repository. Callers supply a stable operation ID, prepare the intent, obtain explicit human approval, and only then request execution.
+
+Operations move through `prepared`, `in_progress`, `succeeded`, `failed`, and `reconciliation_required` states. Intent is committed before an adapter is invoked and the terminal outcome is committed afterward. Reusing an operation ID with a different intent is rejected, while repeating a completed invocation returns its existing result without another provider call.
+
+An `in_progress` operation found after restart is treated as ambiguous. It moves to `reconciliation_required` and is **not** blindly executed again; a future provider-specific reconciliation workflow must determine the real external outcome. Adapters must also pass the operation ID to providers as their idempotency key.
+
+The current capability is infrastructure only: no production communication or application provider is configured, and no real external action is sent.
+
+---
+
 ## Workflow Engine
 
 Responsible for deterministic workflow lifecycle management.
@@ -196,6 +209,8 @@ Implemented foundations:
 - Isolated autonomous career runs
 - Human-gated resume support
 - Durable SQLite recovery for paused career runs
+- Crash-safe SQLite operation records for consequential external actions
+- Explicit human approval and reconciliation gates around external-action adapters
 - Workflow state restoration
 - Pre-vacancy opportunity scoring
 - Bounded pre-vacancy action policy
@@ -205,7 +220,6 @@ Implemented foundations:
 Next architectural steps:
 
 - durable long-term career memory
-- crash-safe idempotency for external actions
 - real signal-source adapters
 - employer intelligence
 - application tracking
