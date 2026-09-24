@@ -64,6 +64,7 @@ It supports:
 - agent failure handling
 - human-action gates
 - in-memory resume of paused runs
+- SQLite-backed recovery of paused runs after process restart
 - run summaries in memory
 
 A human-gated run pauses instead of performing the next external action automatically.
@@ -133,7 +134,7 @@ Signals enter through an explicit `OpportunitySignalProvider` boundary. The incl
 
 Responsible for career memory snapshots and run summaries.
 
-Current implementation is in-memory. Durable persistence is a planned infrastructure step.
+Career memory is currently in-memory. Resumable career-run state has a separate SQLite persistence boundary so paused human-gated runs can survive process restarts.
 
 ---
 
@@ -194,6 +195,8 @@ Implemented foundations:
 - Career Decision Engine
 - Isolated autonomous career runs
 - Human-gated resume support
+- Durable SQLite recovery for paused career runs
+- Workflow state restoration
 - Pre-vacancy opportunity scoring
 - Bounded pre-vacancy action policy
 - Unsent proactive outreach drafting
@@ -201,7 +204,8 @@ Implemented foundations:
 
 Next architectural steps:
 
-- durable career/run persistence
+- durable long-term career memory
+- crash-safe idempotency for external actions
 - real signal-source adapters
 - employer intelligence
 - application tracking
