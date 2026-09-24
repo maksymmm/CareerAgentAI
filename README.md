@@ -135,7 +135,14 @@ Signals enter through an explicit `OpportunitySignalProvider` boundary. The incl
 
 Responsible for career memory snapshots and run summaries.
 
-Career memory is currently in-memory. Resumable career-run state has a separate SQLite persistence boundary so paused human-gated runs can survive process restarts.
+The engine preserves its original in-memory default while accepting a provider-neutral
+memory repository. Its SQLite implementation persists JSON-safe, versioned records
+across process restarts, validates stored data on retrieval, and supports indexed
+queries by candidate user and memory type. Memory records use stable keys and retain
+metadata and timezone-aware creation timestamps without unsafe deserialization.
+
+Resumable career-run state continues to use a separate SQLite persistence boundary so
+paused human-gated runs can survive process restarts.
 
 ---
 
@@ -211,6 +218,7 @@ Implemented foundations:
 - Durable SQLite recovery for paused career runs
 - Crash-safe SQLite operation records for consequential external actions
 - Explicit human approval and reconciliation gates around external-action adapters
+- Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
 - Pre-vacancy opportunity scoring
 - Bounded pre-vacancy action policy
@@ -219,10 +227,9 @@ Implemented foundations:
 
 Next architectural steps:
 
-- durable long-term career memory
+- application tracking
 - real signal-source adapters
 - employer intelligence
-- application tracking
 - communication adapter
 - scheduling
 - long-running autonomous execution

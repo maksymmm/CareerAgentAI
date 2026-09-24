@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
+from .in_memory_memory_repository import InMemoryMemoryRepository
 from .memory_record import MemoryRecord
+from .memory_repository import MemoryRepository
 from .memory_result import MemoryResult
 from .memory_snapshot import MemorySnapshot
 from .memory_state import MemoryState
@@ -10,15 +10,13 @@ from .memory_state import MemoryState
 
 class MemoryEngine:
     """
-    Deterministic in-memory storage.
+    Deterministic career memory facade over an injected repository.
 
-    No database.
-    No files.
-    No networking.
+    Construction without a repository retains the original in-memory behavior.
     """
 
-    def __init__(self) -> None:
-        self._records: dict[str, MemoryRecord] = {}
+    def __init__(self, repository: MemoryRepository | None = None) -> None:
+        self._repository = repository or InMemoryMemoryRepository()
         self._state = MemoryState.EMPTY
 
     @property
@@ -29,7 +27,7 @@ class MemoryEngine:
         """
         Stores a new memory record.
         """
-        self._records[record.key] = record
+        self._repository.save(record)
         self._state = MemoryState.READY
 
         return MemoryResult(
@@ -41,13 +39,22 @@ class MemoryEngine:
         """
         Returns a memory record.
         """
-        return self._records.get(key)
+        return self._repository.get(key)
+
+    def find(
+        self,
+        *,
+        user_id: str | None = None,
+        memory_type: str | None = None,
+    ) -> tuple[MemoryRecord, ...]:
+        """Return memory records filtered by user and/or memory type."""
+        return self._repository.find(user_id=user_id, memory_type=memory_type)
 
     def update(self, record: MemoryRecord) -> MemoryResult:
         """
         Replaces an existing record.
         """
-        self._records[record.key] = record
+        self._repository.save(record)
         self._state = MemoryState.UPDATED
 
         return MemoryResult(
@@ -59,7 +66,7 @@ class MemoryEngine:
         """
         Removes all records.
         """
-        self._records.clear()
+        self._repository.clear()
         self._state = MemoryState.CLEARED
 
         return MemoryResult(
@@ -74,7 +81,8 @@ class MemoryEngine:
         return MemorySnapshot(
             records={
                 key: record.value
-                for key, record in self._records.items()
+                for record in self._repository.find()
+                for key in (record.key,)
             }
         )
 
