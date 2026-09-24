@@ -176,6 +176,13 @@ entered `in_progress` moves it to `reconciliation_required` rather than risking 
 duplicate message. Provider failures are persisted as terminal failed attempts; a
 new deliberate attempt must use a new operation ID.
 
+Only persisted drafts can begin a new send operation, so changing the operation ID
+cannot resend an already-outbound message. Provider delivery responses must preserve
+the exact prepared content and conversation identifiers and must report an outbound
+state before they are persisted. Message timestamps are normalized to UTC, while
+thread retrieval compares timestamp instants so legacy offset timestamps remain
+chronologically safe.
+
 The included fake provider is deterministic, in-memory, and dry-run only. It performs
 no network I/O and needs no credentials. No production communication provider or
 credential configuration is included.

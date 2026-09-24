@@ -44,6 +44,10 @@ class ExternalActionService:
             )
         )
 
+    def get(self, operation_id: str) -> ExternalActionOperation | None:
+        """Return an existing operation without changing its durable state."""
+        return self._repository.get(operation_id)
+
     def execute(
         self,
         operation_id: str,

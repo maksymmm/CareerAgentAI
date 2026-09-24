@@ -12,6 +12,8 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$")
 
 def validate_identifier(value: str, field: str) -> str:
     """Return a normalized, provider-safe identifier."""
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be text.")
     normalized = value.strip()
     if not _IDENTIFIER.fullmatch(normalized):
         raise ValueError(f"{field} is malformed.")
@@ -55,6 +57,10 @@ class CommunicationMessage:
     in_reply_to: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.direction, MessageDirection):
+            raise TypeError("direction must be a MessageDirection.")
+        if not isinstance(self.created_at, datetime):
+            raise TypeError("created_at must be a datetime.")
         object.__setattr__(self, "message_id", validate_identifier(self.message_id, "message_id"))
         object.__setattr__(self, "thread_id", validate_identifier(self.thread_id, "thread_id"))
         object.__setattr__(self, "sender", validate_identifier(self.sender, "sender"))
@@ -65,5 +71,6 @@ class CommunicationMessage:
             object.__setattr__(
                 self, "in_reply_to", validate_identifier(self.in_reply_to, "in_reply_to")
             )
-        if self.created_at.tzinfo is None:
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
             raise ValueError("created_at must be timezone-aware.")
+        object.__setattr__(self, "created_at", self.created_at.astimezone(timezone.utc))

@@ -91,7 +91,10 @@ message, thread, and reply-to identifiers. Send/reply actions always pass throug
 the existing approval-gated external-action service. Duplicate requests reuse their
 durable result, failures remain safely terminal, and ambiguous in-flight actions are
 held for reconciliation without another provider call. No real provider, credential,
-or network send is configured.
+or network send is configured. Review hardening also prevents a new operation ID from
+resending an outbound message, validates provider delivery results against their
+prepared intent, applies strict deterministic message typing, and orders persisted
+threads by timezone-aware instants.
 
 Next priority: scheduling and interview coordination.
 

@@ -31,8 +31,39 @@ class _CommunicationActionAdapter:
             delivered = self._provider.reply(operation_id, parent, message)
         else:
             raise ValueError("Unsupported communication action type.")
+        self._validate_delivery(message, delivered)
         delivered = self._repository.save(delivered)
         return {"message_id": delivered.message_id, "thread_id": delivered.thread_id}
+
+    @staticmethod
+    def _validate_delivery(
+        prepared: CommunicationMessage, delivered: CommunicationMessage
+    ) -> None:
+        """Reject provider output that does not exactly represent the prepared intent."""
+        if not isinstance(delivered, CommunicationMessage):
+            raise ValueError("Provider returned malformed delivery data.")
+        expected = (
+            prepared.message_id,
+            prepared.thread_id,
+            prepared.sender,
+            prepared.recipient,
+            prepared.subject,
+            prepared.body,
+            prepared.created_at,
+            prepared.in_reply_to,
+        )
+        actual = (
+            delivered.message_id,
+            delivered.thread_id,
+            delivered.sender,
+            delivered.recipient,
+            delivered.subject,
+            delivered.body,
+            delivered.created_at,
+            delivered.in_reply_to,
+        )
+        if delivered.direction != MessageDirection.OUTBOUND or actual != expected:
+            raise ValueError("Provider delivery does not match the prepared message intent.")
 
 
 class CommunicationService:
@@ -70,6 +101,9 @@ class CommunicationService:
     ) -> CommunicationMessage | None:
         """Send a persisted draft once through the crash-safe action service."""
         message = self._require_message(message_id)
+        existing_operation = self._external_actions.get(operation_id)
+        if message.direction != MessageDirection.DRAFT and existing_operation is None:
+            raise ValueError("Only a draft message can be sent.")
         self._external_actions.prepare(
             operation_id, "communication.send", {"message_id": message.message_id}
         )

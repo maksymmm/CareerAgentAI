@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -82,6 +82,19 @@ def test_dry_run_send_requires_approval_and_suppresses_duplicates():
     assert [call for call in provider.calls if call[0] == "send"] == [
         ("send", "send:message-1")
     ]
+
+
+def test_outbound_message_cannot_be_resent_with_a_new_operation_id():
+    service, _, operations, provider = stack(SQLiteDatabase())
+    service.create_draft(message())
+    assert service.send("send:1", "message-1", human_approved=True) is not None
+
+    with pytest.raises(ValueError, match="Only a draft"):
+        service.send("send:2", "message-1", human_approved=True)
+
+    assert operations.get("send:2") is None
+    assert provider.calls.count(("send", "send:1")) == 1
+    assert ("send", "send:2") not in provider.calls
 
 
 def test_dry_run_reply_persists_thread_and_parent_identifiers(tmp_path):
@@ -183,6 +196,41 @@ def test_malformed_untrusted_message_input_is_rejected(changes):
         CommunicationMessage(**values)
 
 
+@pytest.mark.parametrize(
+    "changes,error_type",
+    [
+        ({"message_id": 42}, TypeError),
+        ({"direction": "draft"}, TypeError),
+        ({"created_at": "2026-01-02T00:00:00Z"}, TypeError),
+        ({"created_at": datetime(2026, 1, 2)}, ValueError),
+    ],
+)
+def test_message_types_and_timestamps_are_strictly_validated(changes, error_type):
+    values = {
+        "message_id": "message-1",
+        "thread_id": "thread-1",
+        "sender": "candidate@example.test",
+        "recipient": "recruiter@example.test",
+        "subject": "Subject",
+        "body": "Body",
+        "direction": MessageDirection.DRAFT,
+    }
+    values.update(changes)
+    with pytest.raises(error_type):
+        CommunicationMessage(**values)
+
+
+def test_message_timestamp_is_deterministically_normalized_to_utc():
+    value = message()
+    offset_value = replace(
+        value,
+        created_at=datetime(2026, 1, 2, 2, tzinfo=timezone(timedelta(hours=2))),
+    )
+
+    assert offset_value.created_at == datetime(2026, 1, 2, tzinfo=timezone.utc)
+    assert offset_value.created_at.tzinfo is timezone.utc
+
+
 def test_read_validates_and_persists_inbound_provider_content():
     provider = FakeCommunicationAdapter()
     inbound = message(direction=MessageDirection.INBOUND)
@@ -235,3 +283,71 @@ def test_malformed_persisted_message_is_rejected():
 
     with pytest.raises(ValueError, match="malformed"):
         repository.get("message-1")
+
+
+def test_thread_ordering_uses_instants_instead_of_timestamp_text():
+    database = SQLiteDatabase()
+    repository = SQLiteCommunicationRepository(database)
+    repository.save(message("message-first"))
+    repository.save(message("message-second"))
+    database.connection.execute(
+        "UPDATE communication_messages SET created_at = ? WHERE message_id = ?",
+        ("2026-01-01T01:00:00+02:00", "message-first"),
+    )
+    database.connection.execute(
+        "UPDATE communication_messages SET created_at = ? WHERE message_id = ?",
+        ("2025-12-31T23:30:00+00:00", "message-second"),
+    )
+    database.connection.commit()
+
+    assert tuple(item.message_id for item in repository.list_thread("thread-1")) == (
+        "message-first",
+        "message-second",
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("message_id", "different-message"),
+        ("thread_id", "different-thread"),
+        ("recipient", "attacker@example.test"),
+        ("body", "Provider changed the body"),
+        ("direction", MessageDirection.DRAFT),
+    ],
+)
+def test_provider_delivery_must_match_prepared_send_intent(field, value):
+    class MutatingProvider(FakeCommunicationAdapter):
+        def send(self, operation_id, prepared):
+            delivered = super().send(operation_id, prepared)
+            return replace(delivered, **{field: value})
+
+    provider = MutatingProvider()
+    service, repository, operations, _ = stack(SQLiteDatabase(), provider)
+    service.create_draft(message())
+
+    assert service.send("send:1", "message-1", human_approved=True) is None
+    failed = operations.get("send:1")
+    assert failed is not None and failed.status == ExternalActionStatus.FAILED
+    assert "prepared message intent" in failed.error
+    assert repository.get("message-1").direction == MessageDirection.DRAFT
+
+
+def test_provider_delivery_must_match_prepared_reply_intent():
+    class MutatingReplyProvider(FakeCommunicationAdapter):
+        def reply(self, operation_id, parent, prepared):
+            delivered = super().reply(operation_id, parent, prepared)
+            return replace(delivered, in_reply_to="different-parent")
+
+    provider = MutatingReplyProvider()
+    service, repository, operations, _ = stack(SQLiteDatabase(), provider)
+    repository.save(message(direction=MessageDirection.INBOUND))
+
+    assert service.reply(
+        "reply:1",
+        "message-1",
+        message("message-2", in_reply_to="message-1"),
+        human_approved=True,
+    ) is None
+    assert operations.get("reply:1").status == ExternalActionStatus.FAILED
+    assert repository.get("message-2").direction == MessageDirection.DRAFT

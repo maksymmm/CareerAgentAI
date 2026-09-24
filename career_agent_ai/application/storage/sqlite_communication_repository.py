@@ -94,7 +94,8 @@ class SQLiteCommunicationRepository:
         normalized = validate_identifier(thread_id, "thread_id")
         rows = self._database.connection.execute(
             """SELECT message_id FROM communication_messages
-               WHERE thread_id = ? ORDER BY created_at, message_id""",
+               WHERE thread_id = ?
+               ORDER BY julianday(created_at), message_id""",
             (normalized,),
         ).fetchall()
         messages = tuple(self.get(row[0]) for row in rows)
