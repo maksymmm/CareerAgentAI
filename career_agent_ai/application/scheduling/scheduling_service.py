@@ -18,6 +18,7 @@ from .models import (
     ScheduleEventType,
     ScheduleStatus,
     normalize_aware_datetime,
+    validate_schedule_identifier,
     validate_timezone_name,
 )
 from .scheduling_repository import SchedulingConflictError, SchedulingRepository
@@ -362,6 +363,10 @@ class SchedulingService:
         A repeated operation ID replays its durable outcome. A prepared operation is
         bound to the event version and slot that the human was asked to approve.
         """
+        operation_id = validate_schedule_identifier(operation_id, "operation_id")
+        event_id = validate_schedule_identifier(event_id, "event_id")
+        operation_id = validate_schedule_identifier(operation_id, "operation_id")
+        event_id = validate_schedule_identifier(event_id, "event_id")
         event = self.get_event(event_id)
         existing = self._external_actions.get(operation_id)
         if existing is not None:
@@ -419,6 +424,8 @@ class SchedulingService:
         Duplicate calls with the same operation ID must describe the same event and
         requested target slot; execution is bound to the original source version.
         """
+        operation_id = validate_schedule_identifier(operation_id, "operation_id")
+        event_id = validate_schedule_identifier(event_id, "event_id")
         event = self.get_event(event_id)
         target_start = normalize_aware_datetime(start_at, "start_at")
         target_end = (
