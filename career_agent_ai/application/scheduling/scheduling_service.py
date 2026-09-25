@@ -15,11 +15,13 @@ from .calendar_adapter import CalendarAdapter, PreCalendarActionError
 from .models import (
     HumanScheduleView,
     ScheduleEvent,
+    ScheduleEventType,
     ScheduleStatus,
     normalize_aware_datetime,
     validate_timezone_name,
 )
 from .scheduling_repository import SchedulingConflictError, SchedulingRepository
+
 
 def _serialize_schedule_event(event: ScheduleEvent) -> dict[str, Any]:
     return {
@@ -49,10 +51,7 @@ def _deserialize_schedule_event(value: object) -> ScheduleEvent:
             event_id=str(value["event_id"]),
             candidate_id=str(value["candidate_id"]),
             employer_name=str(value["employer_name"]),
-            event_type=__import__(
-                "career_agent_ai.application.scheduling.models",
-                fromlist=["ScheduleEventType"],
-            ).ScheduleEventType(str(value["event_type"])),
+            event_type=ScheduleEventType(str(value["event_type"])),
             location=str(value["location"]),
             start_at=datetime.fromisoformat(str(value["start_at"])),
             end_at=None if raw_end is None else datetime.fromisoformat(str(raw_end)),
