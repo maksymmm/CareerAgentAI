@@ -21,6 +21,8 @@ CareerAgentAI
 │   │   ├── decision engine
 │   │   ├── orchestration
 │   │   ├── pre-vacancy opportunity pipeline
+│   │   ├── real hiring-evidence signal providers
+│   │   ├── employer intelligence aggregation
 │   │   └── outreach drafting
 │   ├── communication
 │   │   ├── provider-neutral draft/send/read/reply protocol
@@ -131,7 +133,22 @@ The current implementation deliberately stops at `prepare_outreach`.
 
 It does **not** send messages, contact employers, or perform other external communication.
 
-Signals enter through an explicit `OpportunitySignalProvider` boundary. The included static provider is deterministic and is intended for supplied data and tests; it does not pretend to discover live hiring signals.
+Signals enter through an explicit `OpportunitySignalProvider` boundary. The static
+provider remains available for supplied data and deterministic tests. A production-capable
+Arbeitnow adapter now converts actual public job records into attributable
+`active_job_posting` signals. Each signal carries a stable evidence ID, source URL,
+observation timestamp, provider/job identifiers, and publication metadata when available.
+
+The live adapter uses bounded retries and a configurable minimum request interval. It
+never emits funding, growth, leadership, or other inferred claims that are not present
+in the source. Missing/unknown employers are skipped rather than fabricated.
+
+Signal IDs are deduplicated before scoring. Re-observation of the same evidence keeps
+the newest observation, while reuse of one ID for different evidence is rejected.
+The employer-intelligence layer aggregates only those observed facts into deterministic
+company snapshots: evidence count, source set, signal types, active-job count, roles,
+locations, and latest observation time. This factual snapshot is attached to each
+proactive opportunity without changing the human gate for outreach.
 
 ---
 
@@ -302,15 +319,17 @@ Implemented foundations:
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
 - Pre-vacancy opportunity scoring
+- Real Arbeitnow hiring-evidence signal adapter with bounded retry/rate handling
+- Stable signal provenance, observation timestamps, and deterministic deduplication
+- Factual employer intelligence aggregation
 - Bounded pre-vacancy action policy
 - Unsent proactive outreach drafting
 - Continuous integration workflow
 
 Next architectural steps:
 
-- real signal-source adapters
-- employer intelligence
-- long-running autonomous execution
+- end-to-end autonomous career loop
+- production hardening
 
 ---
 
