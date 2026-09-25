@@ -239,6 +239,7 @@ class HumanScheduleView:
 
     @classmethod
     def from_event(cls, event: ScheduleEvent) -> "HumanScheduleView":
+        """Project a stored UTC event into its exact local timezone representation."""
         zone = ZoneInfo(event.timezone_name)
         local_start = event.start_at.astimezone(zone)
         local_end = None if event.end_at is None else event.end_at.astimezone(zone)
