@@ -5,6 +5,10 @@ from typing import Protocol
 from career_agent_ai.application.career.opportunity_signal import OpportunitySignal
 
 
+class OpportunitySignalProviderError(RuntimeError):
+    """Raised when a real external signal provider cannot collect evidence safely."""
+
+
 class OpportunitySignalProvider(Protocol):
     """Provide externally observed pre-vacancy hiring signals."""
 
