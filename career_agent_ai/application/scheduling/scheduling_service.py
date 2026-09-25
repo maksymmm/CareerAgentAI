@@ -15,11 +15,64 @@ from .calendar_adapter import CalendarAdapter, PreCalendarActionError
 from .models import (
     HumanScheduleView,
     ScheduleEvent,
+    ScheduleEventType,
     ScheduleStatus,
     normalize_aware_datetime,
     validate_timezone_name,
 )
 from .scheduling_repository import SchedulingConflictError, SchedulingRepository
+
+
+def _serialize_schedule_event(event: ScheduleEvent) -> dict[str, Any]:
+    return {
+        "event_id": event.event_id,
+        "candidate_id": event.candidate_id,
+        "employer_name": event.employer_name,
+        "event_type": event.event_type.value,
+        "location": event.location,
+        "start_at": event.start_at.isoformat(),
+        "end_at": None if event.end_at is None else event.end_at.isoformat(),
+        "timezone_name": event.timezone_name,
+        "status": event.status.value,
+        "provider_event_id": event.provider_event_id,
+        "application_id": event.application_id,
+        "version": event.version,
+        "created_at": event.created_at.isoformat(),
+        "updated_at": event.updated_at.isoformat(),
+    }
+
+
+def _deserialize_schedule_event(value: object) -> ScheduleEvent:
+    if not isinstance(value, Mapping):
+        raise ValueError("Stored scheduling outcome snapshot is malformed.")
+    try:
+        raw_end = value.get("end_at")
+        return ScheduleEvent(
+            event_id=str(value["event_id"]),
+            candidate_id=str(value["candidate_id"]),
+            employer_name=str(value["employer_name"]),
+            event_type=ScheduleEventType(str(value["event_type"])),
+            location=str(value["location"]),
+            start_at=datetime.fromisoformat(str(value["start_at"])),
+            end_at=None if raw_end is None else datetime.fromisoformat(str(raw_end)),
+            timezone_name=str(value["timezone_name"]),
+            status=ScheduleStatus(str(value["status"])),
+            provider_event_id=(
+                None
+                if value.get("provider_event_id") is None
+                else str(value["provider_event_id"])
+            ),
+            application_id=(
+                None
+                if value.get("application_id") is None
+                else str(value["application_id"])
+            ),
+            version=int(value["version"]),
+            created_at=datetime.fromisoformat(str(value["created_at"])),
+            updated_at=datetime.fromisoformat(str(value["updated_at"])),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Stored scheduling outcome snapshot is malformed.") from exc
 
 
 class _CalendarActionAdapter:
@@ -69,7 +122,7 @@ class _CalendarActionAdapter:
         try:
             self._validate_prepared_source(claimed, payload)
         except Exception:
-            self._repository.release_action(event_id, operation_id)
+            self._release_after_definite_failure(event_id, operation_id)
             raise
 
         try:
@@ -90,7 +143,7 @@ class _CalendarActionAdapter:
             else:
                 raise ValueError("Unsupported calendar action type.")
         except PreCalendarActionError:
-            self._repository.release_action(event_id, operation_id)
+            self._release_after_definite_failure(event_id, operation_id)
             raise
         except Exception as exc:
             raise AmbiguousExternalActionError(
@@ -111,7 +164,19 @@ class _CalendarActionAdapter:
             "event_id": persisted.event_id,
             "status": persisted.status.value,
             "provider_event_id": persisted.provider_event_id,
+            "event_snapshot": _serialize_schedule_event(persisted),
         }
+
+    def _release_after_definite_failure(
+        self, event_id: str, operation_id: str
+    ) -> None:
+        try:
+            self._repository.release_action(event_id, operation_id)
+        except Exception as exc:
+            raise AmbiguousExternalActionError(
+                "Calendar provider did not complete the action, but local claim "
+                "cleanup could not be confirmed."
+            ) from exc
 
     @staticmethod
     def _prepared_version(payload: Mapping[str, Any]) -> int:
@@ -462,4 +527,15 @@ class SchedulingService:
             return None
         if operation.result is None:
             raise ValueError("Successful calendar operation has no result.")
-        return self.get_event(str(operation.result["event_id"]))
+        snapshot = operation.result.get("event_snapshot")
+        if snapshot is not None:
+            return _deserialize_schedule_event(snapshot)
+
+        current = self.get_event(str(operation.result["event_id"]))
+        expected_status = str(operation.result.get("status", ""))
+        if expected_status and current.status.value != expected_status:
+            raise ValueError(
+                "Stored legacy calendar outcome cannot be replayed safely after "
+                "the event changed."
+            )
+        return current
