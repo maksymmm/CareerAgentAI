@@ -54,6 +54,7 @@ class SQLiteSchedulingRepository:
         ) from cause
 
     def get(self, event_id: str) -> ScheduleEvent | None:
+        """Return one validated persisted event by stable identifier."""
         normalized = validate_schedule_identifier(event_id, "event_id")
         row = self._database.connection.execute(
             """
@@ -98,6 +99,7 @@ class SQLiteSchedulingRepository:
             raise ValueError("Persisted scheduling event is malformed.") from exc
 
     def list_candidate(self, candidate_id: str) -> tuple[ScheduleEvent, ...]:
+        """Return a candidate's events in exact chronological order."""
         normalized = validate_schedule_identifier(candidate_id, "candidate_id")
         rows = self._database.connection.execute(
             """
@@ -120,6 +122,7 @@ class SQLiteSchedulingRepository:
         *,
         exclude_event_id: str | None = None,
     ) -> tuple[ScheduleEvent, ...]:
+        """Return non-terminal persisted events overlapping the requested slot."""
         start = normalize_aware_datetime(start_at, "start_at")
         end = None if end_at is None else normalize_aware_datetime(end_at, "end_at")
         if end is not None and end <= start:
@@ -280,6 +283,7 @@ class SQLiteSchedulingRepository:
         return event
 
     def release_action(self, event_id: str, operation_id: str) -> None:
+        """Release a durable claim after a definite pre-provider failure."""
         event_id = validate_schedule_identifier(event_id, "event_id")
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         cursor = self._database.connection.execute(
@@ -305,6 +309,7 @@ class SQLiteSchedulingRepository:
         *,
         expected_version: int,
     ) -> ScheduleEvent:
+        """Persist a provider-confirmed transition using optimistic concurrency."""
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         if event.version != expected_version + 1:
             raise ValueError("Completed event must advance version exactly once.")
