@@ -201,6 +201,34 @@ def test_duplicate_create_is_idempotent_but_provider_identity_collision_is_rejec
         )
 
 
+
+def test_opaque_provider_event_identifier_is_accepted_and_persisted():
+    repository = SQLiteSchedulingRepository(SQLiteDatabase())
+    opaque_id = "calendar/events/abc==/instance:2026-10-20T08:00:00Z"
+    value = event(provider_event_id=opaque_id)
+
+    persisted = repository.create(value)
+
+    assert persisted.provider_event_id == opaque_id
+    assert repository.get("event-1").provider_event_id == opaque_id
+
+
+@pytest.mark.parametrize(
+    "provider_event_id",
+    [
+        "",
+        "   ",
+        "bad\x00provider",
+        "bad\ud800provider",
+        "x" * 1001,
+    ],
+)
+def test_provider_event_identifier_rejects_only_unsafe_or_unbounded_values(
+    provider_event_id,
+):
+    with pytest.raises((TypeError, ValueError)):
+        event(provider_event_id=provider_event_id)
+
 def test_conflict_detection_ignores_terminal_events():
     repository = SQLiteSchedulingRepository(SQLiteDatabase())
     repository.create(event("active"))
