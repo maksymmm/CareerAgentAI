@@ -8,6 +8,7 @@ from threading import Event
 import pytest
 
 from career_agent_ai.application.external_actions import (
+    ExternalActionOperation,
     ExternalActionService,
     ExternalActionStatus,
 )
@@ -362,6 +363,41 @@ def test_reschedule_requested_event_can_request_a_new_slot_again():
     assert updated.status == ScheduleStatus.RESCHEDULE_REQUESTED
     assert updated.start_at == next_start
     assert provider.calls == [("reschedule", "reschedule:again")]
+
+
+def test_pre_provider_snapshot_validation_failure_releases_action_claim():
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+    operations.create(
+        ExternalActionOperation(
+            operation_id="accept:malformed-snapshot",
+            action_type="calendar.accept",
+            payload={
+                "event_id": "event-1",
+                "event_version": 1,
+                "event_start_at": (BASE_START + timedelta(hours=5)).isoformat(),
+                "event_end_at": (BASE_START + timedelta(hours=6)).isoformat(),
+                "event_timezone_name": "Europe/Berlin",
+                "event_status": ScheduleStatus.PROPOSED.value,
+            },
+        )
+    )
+
+    assert service.accept(
+        "accept:malformed-snapshot", "event-1", human_approved=True
+    ) is None
+    assert (
+        operations.get("accept:malformed-snapshot").status
+        == ExternalActionStatus.FAILED
+    )
+    assert provider.calls == []
+
+    retry = service.accept("accept:clean-retry", "event-1", human_approved=True)
+
+    assert retry is not None
+    assert retry.status == ScheduleStatus.ACCEPTED
+    assert repository.get("event-1").status == ScheduleStatus.ACCEPTED
+    assert provider.calls == [("accept", "accept:clean-retry")]
 
 def test_definite_pre_provider_failure_releases_claim_for_new_attempt():
     provider = FakeCalendarAdapter()
