@@ -19,9 +19,11 @@ class FakeCalendarAdapter:
 
     @property
     def is_dry_run(self) -> bool:
+        """Return True because this provider never performs network I/O."""
         return True
 
     def accept(self, operation_id: str, event: ScheduleEvent) -> ScheduleEvent:
+        """Simulate an idempotent calendar acceptance without external effects."""
         return self._deliver(
             "accept",
             operation_id,
@@ -33,6 +35,7 @@ class FakeCalendarAdapter:
         )
 
     def decline(self, operation_id: str, event: ScheduleEvent) -> ScheduleEvent:
+        """Simulate an idempotent decline without external effects."""
         return self._deliver(
             "decline",
             operation_id,
@@ -51,6 +54,7 @@ class FakeCalendarAdapter:
         end_at: datetime | None,
         timezone_name: str,
     ) -> ScheduleEvent:
+        """Simulate an idempotent reschedule request without external effects."""
         return self._deliver(
             "reschedule",
             operation_id,
