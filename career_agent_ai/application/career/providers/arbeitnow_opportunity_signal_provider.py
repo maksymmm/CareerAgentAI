@@ -84,12 +84,12 @@ class ArbeitnowOpportunitySignalProvider:
                 if self._is_http_url(job_url)
                 else ArbeitnowProvider.BASE_URL
             )
-            created_at = getattr(job, "created_at", None)
+            source_published_at = getattr(job, "published_at", None)
             published_at = (
-                created_at.astimezone(timezone.utc).isoformat()
-                if isinstance(created_at, datetime)
-                and created_at.tzinfo is not None
-                and created_at.utcoffset() is not None
+                source_published_at.astimezone(timezone.utc).isoformat()
+                if isinstance(source_published_at, datetime)
+                and source_published_at.tzinfo is not None
+                and source_published_at.utcoffset() is not None
                 else None
             )
             location = getattr(job, "location", None)
