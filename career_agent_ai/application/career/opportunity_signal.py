@@ -28,7 +28,7 @@ def _fallback_signal_id(
     company: str,
     signal_type: str,
     source: str,
-    observed_at: datetime,
+    strength: float,
 ) -> str:
     """Build a stable identifier for providers that do not supply one."""
     raw = "|".join(
@@ -36,7 +36,7 @@ def _fallback_signal_id(
             company.casefold(),
             signal_type.casefold(),
             source,
-            observed_at.isoformat(timespec="microseconds"),
+            format(strength, ".17g"),
         )
     )
     return f"signal:{sha256(raw.encode('utf-8')).hexdigest()}"
@@ -84,7 +84,7 @@ class OpportunitySignal:
         signal_id = (
             _clean_text(self.signal_id, "signal_id")
             if self.signal_id
-            else _fallback_signal_id(company, signal_type, source, observed_at)
+            else _fallback_signal_id(company, signal_type, source, strength)
         )
 
         object.__setattr__(self, "company", company)
