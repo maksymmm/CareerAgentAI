@@ -396,6 +396,7 @@ class ArbeitnowProvider(JobProvider):
             url=url,
             description=description,
             created_at=created_at,
+            published_at=created_at,
         )
 
     @staticmethod

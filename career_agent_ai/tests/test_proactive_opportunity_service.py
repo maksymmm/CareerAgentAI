@@ -57,3 +57,55 @@ def test_signal_validation():
 
     with pytest.raises(ValueError):
         OpportunitySignal(company="Alpha", signal_type="funding", strength=1.1)
+
+
+def test_rank_deduplicates_stable_signal_ids_before_scoring():
+    observed_at = datetime.now(timezone.utc)
+    duplicate = OpportunitySignal(
+        signal_id="posting-1",
+        company="Acme",
+        signal_type="active_job_posting",
+        strength=1.0,
+        observed_at=observed_at,
+        source="https://jobs.test/1",
+    )
+    repeated = OpportunitySignal(
+        signal_id="posting-1",
+        company="Acme",
+        signal_type="active_job_posting",
+        strength=1.0,
+        observed_at=observed_at,
+        source="https://jobs.test/1",
+    )
+
+    result = ProactiveOpportunityService().rank((duplicate, repeated))[0]
+
+    assert result.metadata["signal_count"] == 1
+    assert result.score == 0.12
+    assert result.metadata["sources"] == ("https://jobs.test/1",)
+
+
+def test_rank_groups_company_names_case_insensitively():
+    observed_at = datetime.now(timezone.utc)
+    signals = (
+        OpportunitySignal(
+            signal_id="signal-1",
+            company="Acme GmbH",
+            signal_type="funding",
+            strength=1.0,
+            observed_at=observed_at,
+        ),
+        OpportunitySignal(
+            signal_id="signal-2",
+            company="ACME GMBH",
+            signal_type="team_growth",
+            strength=1.0,
+            observed_at=observed_at,
+        ),
+    )
+
+    ranked = ProactiveOpportunityService().rank(signals)
+
+    assert len(ranked) == 1
+    assert ranked[0].metadata["signal_count"] == 2
+    assert ranked[0].score == 0.35

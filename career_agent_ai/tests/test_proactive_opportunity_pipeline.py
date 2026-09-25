@@ -34,6 +34,12 @@ def test_pipeline_prepares_but_does_not_send_outreach():
     assert result[0].action == PreVacancyAction.PREPARE_OUTREACH
     assert isinstance(result[0].outreach_draft, OutreachDraft)
     assert result[0].outreach_draft.metadata["sent"] is False
+    assert result[0].employer_intelligence is not None
+    assert result[0].employer_intelligence.company == "Alpha"
+    assert result[0].employer_intelligence.signal_types == (
+        "hiring_growth",
+        "leadership_hire",
+    )
 
 
 def test_pipeline_keeps_weak_opportunity_without_draft():

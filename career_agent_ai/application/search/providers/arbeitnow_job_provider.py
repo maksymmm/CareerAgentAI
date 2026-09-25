@@ -195,6 +195,7 @@ class ArbeitnowJobProvider(JobProvider):
             url=url,
             description=full_description,
             created_at=created_at,
+            published_at=created_at,
         )
 
     def _matches(
