@@ -279,6 +279,42 @@ def test_successful_accept_replay_returns_original_outcome_after_later_reschedul
         ("reschedule", "reschedule:later"),
     ]
 
+
+def test_accept_replay_normalizes_event_identifier():
+    service, _, _, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+
+    accepted = service.accept(
+        "accept:normalized",
+        " event-1 ",
+        human_approved=True,
+    )
+    replay = service.accept(
+        "accept:normalized",
+        " event-1 ",
+        human_approved=True,
+    )
+
+    assert accepted is not None
+    assert replay == accepted
+    assert provider.calls == [("accept", "accept:normalized")]
+
+
+def test_invalid_operation_identifier_is_rejected_before_prepare():
+    service, _, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+
+    with pytest.raises(ValueError, match="operation_id"):
+        service.accept(
+            "accept request 1",
+            "event-1",
+            human_approved=True,
+        )
+
+    assert operations.get("accept request 1") is None
+    assert provider.calls == []
+
+
 def test_decline_is_human_gated_and_persisted():
     service, repository, _, provider = stack(SQLiteDatabase())
     service.add_event(event())
