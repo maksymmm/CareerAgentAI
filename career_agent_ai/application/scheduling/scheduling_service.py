@@ -66,7 +66,11 @@ class _CalendarActionAdapter:
             reservation_end=target_end,
             enforce_conflicts=action_type in {"calendar.accept", "calendar.reschedule"},
         )
-        self._validate_prepared_source(claimed, payload)
+        try:
+            self._validate_prepared_source(claimed, payload)
+        except Exception:
+            self._repository.release_action(event_id, operation_id)
+            raise
 
         try:
             if action_type == "calendar.accept":
