@@ -22,6 +22,7 @@ class Job:
     description: str = ""
 
     created_at: datetime | None = None
+    published_at: datetime | None = None
 
     @classmethod
     def create(
@@ -38,6 +39,7 @@ class Job:
         description="",
         job_id: str | None = None,
         created_at: datetime | None = None,
+        published_at: datetime | None = None,
         **kwargs,
     ) -> "Job":
         return cls(
@@ -56,4 +58,5 @@ class Job:
                 if created_at is not None
                 else datetime.now(UTC)
             ),
+            published_at=published_at,
         )
