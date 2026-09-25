@@ -21,6 +21,21 @@ def validate_schedule_identifier(value: str, field: str) -> str:
     return normalized
 
 
+def validate_provider_identifier(value: str, field: str) -> str:
+    """Validate an opaque provider identifier without imposing internal ID grammar."""
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be text.")
+    if not value.strip():
+        raise ValueError(f"{field} must not be empty.")
+    if len(value) > 1_000:
+        raise ValueError(f"{field} must not exceed 1000 characters.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError(f"{field} contains forbidden control characters.")
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+        raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
+    return value
+
+
 def sanitize_schedule_text(value: str, field: str, *, maximum: int) -> str:
     """Validate untrusted human-readable scheduling text."""
     if not isinstance(value, str):
@@ -164,7 +179,7 @@ class ScheduleEvent:
             object.__setattr__(
                 self,
                 "provider_event_id",
-                validate_schedule_identifier(
+                validate_provider_identifier(
                     self.provider_event_id, "provider_event_id"
                 ),
             )
