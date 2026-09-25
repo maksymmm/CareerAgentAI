@@ -44,6 +44,7 @@ def job(
         url=url,
         description="Public job posting",
         created_at=created_at,
+        published_at=created_at,
     )
 
 
@@ -96,6 +97,21 @@ def test_arbeitnow_signal_provider_maps_real_postings_with_provenance():
     )
     assert fallback.source == ArbeitnowProvider.BASE_URL
 
+
+
+def test_signal_provider_preserves_missing_publication_timestamp():
+    source_job = job(created_at=None)
+    assert source_job.created_at is not None
+    assert source_job.published_at is None
+    provider = ArbeitnowOpportunitySignalProvider(
+        job_provider=FakeJobProvider((source_job,)),
+        minimum_interval_seconds=0,
+        clock=lambda: OBSERVED,
+    )
+
+    signal = provider.collect()[0]
+
+    assert signal.metadata["published_at"] is None
 
 def test_signal_provider_does_not_invent_unknown_company_evidence():
     provider = ArbeitnowOpportunitySignalProvider(
@@ -195,6 +211,26 @@ def test_signal_provider_configuration_validation(kwargs, error_type):
     with pytest.raises(error_type):
         ArbeitnowOpportunitySignalProvider(**kwargs)
 
+
+
+def test_fallback_signal_id_is_stable_across_reobservations():
+    first = OpportunitySignal(
+        company="Acme GmbH",
+        signal_type="funding",
+        strength=0.8,
+        observed_at=OBSERVED,
+        source="https://source.test/evidence",
+    )
+    later = OpportunitySignal(
+        company="Acme GmbH",
+        signal_type="funding",
+        strength=0.8,
+        observed_at=OBSERVED + timedelta(hours=1),
+        source="https://source.test/evidence",
+    )
+
+    assert first.signal_id == later.signal_id
+    assert deduplicate_opportunity_signals((first, later)) == (later,)
 
 def test_signal_deduplication_keeps_latest_reobservation():
     first = OpportunitySignal(
