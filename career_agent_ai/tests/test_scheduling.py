@@ -247,6 +247,38 @@ def test_accept_requires_human_approval_and_replays_after_restart(tmp_path):
     assert restarted_provider.calls == []
 
 
+
+def test_successful_accept_replay_returns_original_outcome_after_later_reschedule():
+    service, repository, _, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+    accepted = service.accept("accept:original", "event-1", human_approved=True)
+    assert accepted is not None
+
+    new_start = BASE_START + timedelta(days=3)
+    rescheduled = service.reschedule(
+        "reschedule:later",
+        "event-1",
+        start_at=new_start,
+        end_at=new_start + timedelta(hours=1),
+        timezone_name="Europe/Berlin",
+        human_approved=True,
+    )
+    assert rescheduled is not None
+    assert rescheduled.status == ScheduleStatus.RESCHEDULE_REQUESTED
+
+    replay = service.accept(
+        "accept:original", "event-1", human_approved=True
+    )
+
+    assert replay == accepted
+    assert replay.status == ScheduleStatus.ACCEPTED
+    assert replay.start_at == BASE_START
+    assert repository.get("event-1") == rescheduled
+    assert provider.calls == [
+        ("accept", "accept:original"),
+        ("reschedule", "reschedule:later"),
+    ]
+
 def test_decline_is_human_gated_and_persisted():
     service, repository, _, provider = stack(SQLiteDatabase())
     service.add_event(event())
@@ -414,6 +446,34 @@ def test_definite_pre_provider_failure_releases_claim_for_new_attempt():
     assert retried is not None and retried.status == ScheduleStatus.ACCEPTED
     assert provider.calls == [("accept", "accept:1"), ("accept", "accept:2")]
 
+
+
+def test_claim_release_failure_requires_reconciliation_and_blocks_blind_retry():
+    class FailingReleaseRepository(SQLiteSchedulingRepository):
+        def release_action(self, event_id, operation_id):
+            raise RuntimeError("database unavailable while releasing claim")
+
+    database = SQLiteDatabase()
+    repository = FailingReleaseRepository(database)
+    provider = FakeCalendarAdapter()
+    provider.failure = RuntimeError("provider unavailable before delivery")
+    operations = SQLiteExternalActionOperationRepository(database)
+    external = ExternalActionService(
+        operations, SchedulingService.action_adapter(provider, repository)
+    )
+    service = SchedulingService(repository, provider, external)
+    service.add_event(event())
+
+    assert service.accept("accept:cleanup", "event-1", human_approved=True) is None
+    assert (
+        operations.get("accept:cleanup").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+
+    provider.failure = None
+    assert service.accept("accept:retry", "event-1", human_approved=True) is None
+    assert operations.get("accept:retry").status == ExternalActionStatus.FAILED
+    assert provider.calls == [("accept", "accept:cleanup")]
 
 def test_ambiguous_provider_exception_requires_reconciliation_and_keeps_claim():
     class AmbiguousProvider(FakeCalendarAdapter):
