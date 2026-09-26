@@ -139,6 +139,24 @@ def test_collect_discards_anonymous_provider_placeholder_company():
     assert signals[0].metadata["job_ids"] == ("arbeitnow:trusted",)
 
 
+@pytest.mark.parametrize(
+    "bad_job",
+    [
+        job("bad\x00id", "Acme GmbH", "Engineer"),
+        job("arbeitnow:bad-title", "Acme GmbH", "bad\ud800title"),
+        job("arbeitnow:bad-url", "Acme GmbH", "Engineer", "https://bad\x00url"),
+    ],
+)
+def test_collect_rejects_malformed_provider_evidence(bad_job):
+    provider = QueryJobProvider({"": (bad_job,)})
+
+    with pytest.raises(OpportunitySignalProviderError, match="Arbeitnow"):
+        ArbeitnowOpportunitySignalProvider(
+            provider,
+            clock=lambda: OBSERVED_AT,
+        ).collect()
+
+
 def test_collect_retries_transient_provider_failure_with_bounded_backoff():
     value = job("arbeitnow:one", "Acme GmbH", "Engineer")
 
