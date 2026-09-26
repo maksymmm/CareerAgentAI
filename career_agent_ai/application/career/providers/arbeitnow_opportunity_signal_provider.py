@@ -162,7 +162,8 @@ class ArbeitnowOpportunitySignalProvider:
         evidence_hash = sha256(
             "\n".join(job_ids).encode("utf-8")
         ).hexdigest()
-        signal_id = f"arbeitnow:hiring-activity:{evidence_hash}"
+        company_hash = sha256(company.casefold().encode("utf-8")).hexdigest()
+        signal_id = f"arbeitnow:hiring-activity:{company_hash}"
         count = len(job_ids)
         strength = min(count / 5.0, 1.0)
 
@@ -177,6 +178,7 @@ class ArbeitnowOpportunitySignalProvider:
                 "provider": "arbeitnow",
                 "observation_method": "active_public_job_count",
                 "evidence_count": count,
+                "evidence_fingerprint": evidence_hash,
                 "job_ids": job_ids,
                 "job_titles": titles,
                 "job_urls": urls,
