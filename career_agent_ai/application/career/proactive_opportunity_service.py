@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 from career_agent_ai.application.career.opportunity_score import OpportunityScore
 from career_agent_ai.application.career.opportunity_signal import OpportunitySignal
+from career_agent_ai.application.career.opportunity_signal_deduplicator import (
+    OpportunitySignalDeduplicator,
+)
 
 
 class ProactiveOpportunityService:
-    """Turns weak hiring signals into ranked, explainable opportunities."""
+    """Turn sourced hiring signals into ranked, explainable opportunities."""
 
     _WEIGHTS = {
+        "hiring_activity": 0.30,
         "hiring_growth": 0.30,
         "leadership_hire": 0.25,
         "team_growth": 0.20,
@@ -18,26 +22,34 @@ class ProactiveOpportunityService:
         "new_product": 0.10,
     }
 
+    def __init__(
+        self,
+        deduplicator: OpportunitySignalDeduplicator | None = None,
+    ) -> None:
+        self._deduplicator = deduplicator or OpportunitySignalDeduplicator()
+
     def rank(
         self,
         signals: Iterable[OpportunitySignal],
     ) -> tuple[OpportunityScore, ...]:
-        """Group signals by company and return scores in descending order."""
+        """Deduplicate and rank employer signals deterministically."""
         grouped: dict[str, list[OpportunitySignal]] = defaultdict(list)
+        display_names: dict[str, str] = {}
 
-        for signal in signals:
-            grouped[signal.company].append(signal)
+        for signal in self._deduplicator.deduplicate(signals):
+            key = signal.company.casefold()
+            display_names.setdefault(key, signal.company)
+            grouped[key].append(signal)
 
         scored = [
-            self._score(company, tuple(company_signals))
-            for company, company_signals in grouped.items()
+            self._score(display_names[key], tuple(company_signals))
+            for key, company_signals in grouped.items()
         ]
 
         return tuple(
             sorted(
                 scored,
-                key=lambda item: item.score,
-                reverse=True,
+                key=lambda item: (-item.score, item.company.casefold()),
             )
         )
 
@@ -49,16 +61,19 @@ class ProactiveOpportunityService:
         """Calculate one bounded, explainable company score."""
         weighted = 0.0
         matched_types: list[str] = []
+        sources: list[str] = []
 
         for signal in signals:
             weight = self._WEIGHTS.get(signal.signal_type, 0.05)
             weighted += weight * signal.strength
             if signal.signal_type not in matched_types:
                 matched_types.append(signal.signal_type)
+            if signal.source and signal.source not in sources:
+                sources.append(signal.source)
 
         score = min(weighted, 1.0)
         rationale = (
-            f"{company} has {len(signals)} pre-vacancy hiring signal(s): "
+            f"{company} has {len(signals)} sourced hiring signal(s): "
             + ", ".join(matched_types)
             + "."
         )
@@ -71,5 +86,6 @@ class ProactiveOpportunityService:
             metadata={
                 "signal_count": len(signals),
                 "signal_types": tuple(matched_types),
+                "sources": tuple(sources),
             },
         )
