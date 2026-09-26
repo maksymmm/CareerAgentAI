@@ -38,10 +38,10 @@ class OpportunitySignal:
         default_factory=lambda: datetime.now(timezone.utc)
     )
     source: str = ""
-    signal_id: str = ""
     metadata: Mapping[str, Any] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    signal_id: str = ""
 
     def __post_init__(self) -> None:
         company = _validated_text(self.company, "company", maximum=500)
