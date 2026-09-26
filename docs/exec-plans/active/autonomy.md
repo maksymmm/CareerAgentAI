@@ -152,7 +152,7 @@ Acceptance criteria:
 Delivered: a production-capable Arbeitnow-backed signal provider that composes the
 existing live public job provider and derives employer `hiring_activity` observations
 only from returned job evidence. Each signal carries UTC observation time, source URL,
-stable evidence-derived signal ID, evidence job IDs/titles/URLs, and query provenance.
+stable employer/source signal ID plus an evidence fingerprint, evidence job IDs/titles/URLs, and query provenance.
 Collection uses bounded retry/backoff and fails closed after provider/data-quality
 errors instead of synthesizing evidence. Duplicate jobs across queries and duplicate
 signal identities are suppressed before scoring. Employer intelligence aggregates
