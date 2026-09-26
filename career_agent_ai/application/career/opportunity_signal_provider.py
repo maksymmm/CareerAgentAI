@@ -5,11 +5,15 @@ from typing import Protocol
 from career_agent_ai.application.career.opportunity_signal import OpportunitySignal
 
 
+class OpportunitySignalProviderError(RuntimeError):
+    """Raised when a live signal provider cannot produce a trustworthy observation."""
+
+
 class OpportunitySignalProvider(Protocol):
     """Provide externally observed pre-vacancy hiring signals."""
 
     def collect(self) -> tuple[OpportunitySignal, ...]:
-        """Return the currently available hiring signals."""
+        """Return the currently available sourced hiring signals."""
         ...
 
 
@@ -20,5 +24,5 @@ class StaticOpportunitySignalProvider:
         self._signals = tuple(signals)
 
     def collect(self) -> tuple[OpportunitySignal, ...]:
-        """Return the configured signals without mutating or fabricating them."""
+        """Return configured signals without mutating or fabricating them."""
         return self._signals
