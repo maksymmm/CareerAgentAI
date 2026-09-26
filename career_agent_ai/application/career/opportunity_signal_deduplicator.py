@@ -29,6 +29,14 @@ class OpportunitySignalDeduplicator:
                 by_key[key] = signal
                 order.append(key)
                 continue
+            if signal.signal_id and (
+                existing.company.casefold() != signal.company.casefold()
+                or existing.signal_type.casefold() != signal.signal_type.casefold()
+                or existing.source.casefold() != signal.source.casefold()
+            ):
+                raise ValueError(
+                    "signal_id is reused for conflicting opportunity evidence."
+                )
             if signal.observed_at > existing.observed_at:
                 by_key[key] = signal
 
