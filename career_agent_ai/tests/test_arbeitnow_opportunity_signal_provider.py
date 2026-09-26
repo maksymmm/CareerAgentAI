@@ -120,6 +120,25 @@ def test_repeated_company_observations_keep_stable_signal_identity_as_evidence_c
     assert second.metadata["evidence_count"] == 2
 
 
+def test_collect_discards_anonymous_provider_placeholder_company():
+    provider = QueryJobProvider(
+        {
+            "": (
+                job("arbeitnow:anonymous", "Unknown company", "Engineer"),
+                job("arbeitnow:trusted", "Acme GmbH", "Developer"),
+            )
+        }
+    )
+
+    signals = ArbeitnowOpportunitySignalProvider(
+        provider,
+        clock=lambda: OBSERVED_AT,
+    ).collect()
+
+    assert tuple(signal.company for signal in signals) == ("Acme GmbH",)
+    assert signals[0].metadata["job_ids"] == ("arbeitnow:trusted",)
+
+
 def test_collect_retries_transient_provider_failure_with_bounded_backoff():
     value = job("arbeitnow:one", "Acme GmbH", "Engineer")
 
