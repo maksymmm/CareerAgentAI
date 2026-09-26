@@ -44,33 +44,50 @@ def _serialize_schedule_event(event: ScheduleEvent) -> dict[str, Any]:
 
 
 def _deserialize_schedule_event(value: object) -> ScheduleEvent:
+    """Strictly rebuild one durable scheduling outcome snapshot."""
     if not isinstance(value, Mapping):
         raise ValueError("Stored scheduling outcome snapshot is malformed.")
+
+    def required_text(field: str) -> str:
+        raw = value[field]
+        if not isinstance(raw, str):
+            raise TypeError(f"{field} must be text.")
+        return raw
+
+    def optional_text(field: str) -> str | None:
+        raw = value.get(field)
+        if raw is None:
+            return None
+        if not isinstance(raw, str):
+            raise TypeError(f"{field} must be text or null.")
+        return raw
+
     try:
         raw_end = value.get("end_at")
+        if raw_end is not None and not isinstance(raw_end, str):
+            raise TypeError("end_at must be text or null.")
+        raw_version = value["version"]
+        if (
+            not isinstance(raw_version, int)
+            or isinstance(raw_version, bool)
+            or raw_version < 1
+        ):
+            raise TypeError("version must be a positive integer.")
         return ScheduleEvent(
-            event_id=str(value["event_id"]),
-            candidate_id=str(value["candidate_id"]),
-            employer_name=str(value["employer_name"]),
-            event_type=ScheduleEventType(str(value["event_type"])),
-            location=str(value["location"]),
-            start_at=datetime.fromisoformat(str(value["start_at"])),
-            end_at=None if raw_end is None else datetime.fromisoformat(str(raw_end)),
-            timezone_name=str(value["timezone_name"]),
-            status=ScheduleStatus(str(value["status"])),
-            provider_event_id=(
-                None
-                if value.get("provider_event_id") is None
-                else str(value["provider_event_id"])
-            ),
-            application_id=(
-                None
-                if value.get("application_id") is None
-                else str(value["application_id"])
-            ),
-            version=int(value["version"]),
-            created_at=datetime.fromisoformat(str(value["created_at"])),
-            updated_at=datetime.fromisoformat(str(value["updated_at"])),
+            event_id=required_text("event_id"),
+            candidate_id=required_text("candidate_id"),
+            employer_name=required_text("employer_name"),
+            event_type=ScheduleEventType(required_text("event_type")),
+            location=required_text("location"),
+            start_at=datetime.fromisoformat(required_text("start_at")),
+            end_at=None if raw_end is None else datetime.fromisoformat(raw_end),
+            timezone_name=required_text("timezone_name"),
+            status=ScheduleStatus(required_text("status")),
+            provider_event_id=optional_text("provider_event_id"),
+            application_id=optional_text("application_id"),
+            version=raw_version,
+            created_at=datetime.fromisoformat(required_text("created_at")),
+            updated_at=datetime.fromisoformat(required_text("updated_at")),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("Stored scheduling outcome snapshot is malformed.") from exc
