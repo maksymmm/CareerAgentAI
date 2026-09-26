@@ -40,6 +40,21 @@ def signal(
     )
 
 
+def test_opportunity_signal_preserves_legacy_positional_metadata_argument():
+    metadata = {"legacy": True}
+    value = OpportunitySignal(
+        "Acme",
+        "funding",
+        0.5,
+        BASE,
+        "source",
+        metadata,
+    )
+
+    assert dict(value.metadata) == metadata
+    assert value.signal_id == ""
+
+
 def test_deduplicator_keeps_newest_observation_for_same_signal_identity():
     older = signal(strength=0.4)
     newer = signal(
