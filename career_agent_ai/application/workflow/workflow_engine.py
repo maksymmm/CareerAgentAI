@@ -67,6 +67,16 @@ class WorkflowEngine:
         )
         return self._workflow
 
+    def restore(self, workflow: Workflow) -> Workflow:
+        """Restore a persisted workflow without resetting its execution state."""
+        if self._workflow is not None and not self._workflow.is_finished():
+            raise RuntimeError("Workflow is already running.")
+        if workflow.current_step < 0 or workflow.current_step > len(workflow.steps):
+            raise ValueError("workflow current_step is outside the valid range.")
+        self._step_results.clear()
+        self._workflow = workflow
+        return workflow
+
     def current_step(self) -> WorkflowStep:
         """Return the currently selected workflow step."""
         workflow = self._require_workflow()

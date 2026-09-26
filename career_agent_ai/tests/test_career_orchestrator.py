@@ -8,6 +8,10 @@ from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.agents.agent_result import AgentResult
 from career_agent_ai.application.career.career_orchestrator import CareerOrchestrator
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
+from career_agent_ai.application.storage.sqlite_career_run_repository import (
+    SQLiteCareerRunRepository,
+)
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.workflow.workflow_engine import WorkflowEngine
 from career_agent_ai.application.workflow.workflow_state import WorkflowState
 
@@ -200,7 +204,8 @@ def test_human_gated_run_does_not_block_a_new_run():
             metadata={"requires_human": True},
         ),
     )
-    orchestrator = make_orchestrator(agents=(application,))
+    search_agent = FakeAgent("job_search")
+    orchestrator = make_orchestrator(agents=(application, search_agent))
 
     paused = orchestrator.run("user-1", "Apply now", {"actions": ["job_application"]})
     independent = orchestrator.run("user-1", "Find another job")
@@ -215,11 +220,11 @@ def test_resume_unknown_run_is_rejected():
         make_orchestrator().resume("missing-run")
 
 
-def test_resume_requires_paused_run():
+def test_resume_completed_run_is_rejected_as_unknown():
     orchestrator = make_orchestrator()
     completed = orchestrator.run("user-1", "Find a job")
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(KeyError, match="Unknown career run"):
         orchestrator.resume(completed.run_id)
 
 
@@ -251,3 +256,73 @@ def test_empty_user_id_is_rejected():
 def test_invalid_max_steps_is_rejected():
     with pytest.raises(ValueError):
         make_orchestrator(max_steps=0)
+
+
+def test_paused_run_survives_process_restart(tmp_path):
+    database_path = str(tmp_path / "career-runs.sqlite")
+    first_database = SQLiteDatabase(database_path)
+    first_repository = SQLiteCareerRunRepository(first_database)
+    gated_application = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    first_registry = AgentRegistry()
+    first_registry.register(gated_application)
+    first_registry.register(FakeAgent("resume"))
+    first_orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(first_registry),
+        run_repository=first_repository,
+    )
+
+    paused = first_orchestrator.run(
+        "user-1",
+        "Apply to the selected job",
+        {"actions": ["job_application", "resume"]},
+    )
+    assert paused.stopped_reason == "human_action_required"
+    assert first_repository.get(paused.run_id) is not None
+    first_database.close()
+
+    second_database = SQLiteDatabase(database_path)
+    second_repository = SQLiteCareerRunRepository(second_database)
+    resume_agent = FakeAgent("resume")
+    second_registry = AgentRegistry()
+    second_registry.register(resume_agent)
+    second_orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(second_registry),
+        run_repository=second_repository,
+    )
+
+    resumed = second_orchestrator.resume(
+        paused.run_id,
+        human_result={"approved": True},
+    )
+
+    assert resumed.success is True
+    assert tuple(step.action for step in resumed.steps) == (
+        "job_application",
+        "resume",
+    )
+    assert resume_agent.last_context.payload["human_result"] == {"approved": True}
+    assert second_repository.get(paused.run_id) is None
+    second_database.close()
+
+
+def test_sqlite_run_repository_rejects_empty_run_id():
+    database = SQLiteDatabase()
+    repository = SQLiteCareerRunRepository(database)
+
+    with pytest.raises(ValueError, match="run_id"):
+        repository.get("   ")
+    with pytest.raises(ValueError, match="run_id"):
+        repository.delete("   ")
+
+    database.close()
