@@ -72,12 +72,18 @@ class ArbeitnowOpportunitySignalProvider:
             jobs = self._search_with_retry(query)
             for job in jobs:
                 job_id = self._trusted_job_id(job)
-                company = self._trusted_company(job)
+                company = self._company_name(job)
+                if company is None:
+                    continue
                 existing = evidence_by_job.get(job_id)
                 if existing is None:
                     evidence_by_job[job_id] = (job, {query})
                     continue
-                if self._trusted_company(existing[0]).casefold() != company.casefold():
+                existing_company = self._company_name(existing[0])
+                if (
+                    existing_company is None
+                    or existing_company.casefold() != company.casefold()
+                ):
                     raise OpportunitySignalProviderError(
                         "Arbeitnow returned one job identity for different companies."
                     )
@@ -86,7 +92,9 @@ class ArbeitnowOpportunitySignalProvider:
         grouped: dict[str, list[tuple[Job, set[str]]]] = defaultdict(list)
         display_names: dict[str, str] = {}
         for job, matched_queries in evidence_by_job.values():
-            company = self._trusted_company(job)
+            company = self._company_name(job)
+            if company is None:  # Defensive: anonymous evidence is filtered above.
+                continue
             key = company.casefold()
             display_names.setdefault(key, company)
             grouped[key].append((job, matched_queries))
@@ -195,10 +203,12 @@ class ArbeitnowOpportunitySignalProvider:
         return job.job_id.strip()
 
     @staticmethod
-    def _trusted_company(job: Job) -> str:
+    def _company_name(job: Job) -> str | None:
+        """Return a trustworthy provider company name or discard anonymous evidence."""
         company = getattr(job.company, "name", None)
-        if not isinstance(company, str) or not company.strip():
-            raise OpportunitySignalProviderError(
-                "Arbeitnow evidence is missing a trustworthy company name."
-            )
-        return company.strip()
+        if not isinstance(company, str):
+            return None
+        normalized = company.strip()
+        if not normalized or normalized.casefold() == "unknown company":
+            return None
+        return normalized
