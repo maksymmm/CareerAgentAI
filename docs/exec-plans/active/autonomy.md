@@ -109,17 +109,31 @@ Next priority: scheduling and interview coordination.
 
 ## 5. Scheduling and interview coordination
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: model interview/trial-day scheduling and present exact employer, address, date, and time when human participation is required.
 
 Acceptance criteria:
-- [ ] Scheduling domain model.
-- [ ] Calendar adapter boundary.
-- [ ] Human gate for accept/decline/reschedule.
-- [ ] Time-zone-aware storage.
-- [ ] Conflict handling.
-- [ ] Tests for restart and duplicate events.
+- [x] Scheduling domain model.
+- [x] Calendar adapter boundary.
+- [x] Human gate for accept/decline/reschedule.
+- [x] Time-zone-aware storage.
+- [x] Conflict handling.
+- [x] Tests for restart and duplicate events.
+
+Delivered: a provider-neutral scheduling domain for interviews, trial days, phone/video
+calls, and other human-participation events; a deterministic no-I/O calendar adapter;
+and restart-safe SQLite persistence. Events retain employer, location, application and
+provider identifiers, exact UTC instants, and their presentation timezone. Human-facing
+projections expose employer, event type, address/link, local date/time, timezone, UTC
+offset, and status. Accept, decline, and reschedule actions require explicit human
+approval and use the crash-safe external-action service. Durable per-event action
+claims suppress stale/concurrent duplicate responses; explicit pre-provider failures
+can be retried deliberately, while uncertain or post-provider outcomes require
+reconciliation. Conflict detection is deterministic and persisted state is strictly
+validated after restart.
+
+Next priority: real signal-source adapters and employer intelligence.
 
 ## 6. Real signal-source adapters and employer intelligence
 
