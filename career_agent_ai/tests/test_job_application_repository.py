@@ -11,7 +11,7 @@ def make_application(app_id: str) -> JobApplication:
     return JobApplication(
         application_id=app_id,
         user_id="user",
-        job_id="job",
+        job_id=f"job-{app_id}",
         status=JobApplicationStatus.APPLIED,
     )
 
