@@ -131,7 +131,7 @@ The current implementation deliberately stops at `prepare_outreach`.
 
 It does **not** send messages, contact employers, or perform other external communication.
 
-Signals enter through an explicit `OpportunitySignalProvider` boundary. A deterministic static provider remains available for supplied data and tests, while the production-capable `ArbeitnowOpportunitySignalProvider` derives employer-level `hiring_activity` signals from real public Arbeitnow job evidence. Live signals retain an observation timestamp, source URL, deterministic signal identity, exact evidence job IDs/titles/URLs, and the query provenance used to observe them.
+Signals enter through an explicit `OpportunitySignalProvider` boundary. A deterministic static provider remains available for supplied data and tests, while the production-capable `ArbeitnowOpportunitySignalProvider` derives employer-level `hiring_activity` signals from real public Arbeitnow job evidence. Live signals retain an observation timestamp, source URL, stable employer/source signal identity, exact evidence job IDs/titles/URLs, and the query provenance used to observe them.
 
 Live collection uses bounded retry/backoff and fails closed when trustworthy evidence cannot be obtained; it never fabricates a signal after a provider error. Duplicate jobs across queries and duplicate signal identities are suppressed before scoring so repeated evidence cannot inflate an employer's score.
 
