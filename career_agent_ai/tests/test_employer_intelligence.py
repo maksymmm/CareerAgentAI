@@ -52,6 +52,18 @@ def test_deduplicator_keeps_newest_observation_for_same_signal_identity():
     assert result == (newer,)
 
 
+def test_deduplicator_rejects_conflicting_reuse_of_signal_identity():
+    first = signal(company="Acme", signal_id="shared-id")
+    conflicting = signal(
+        company="Beta",
+        signal_id="shared-id",
+        observed_at=BASE + timedelta(minutes=1),
+    )
+
+    with pytest.raises(ValueError, match="conflicting opportunity evidence"):
+        OpportunitySignalDeduplicator().deduplicate((first, conflicting))
+
+
 def test_deduplicator_preserves_distinct_sourced_observations_without_signal_ids():
     first = OpportunitySignal(
         company="Acme",
