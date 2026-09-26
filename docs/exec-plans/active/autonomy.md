@@ -137,17 +137,30 @@ Next priority: real signal-source adapters and employer intelligence.
 
 ## 6. Real signal-source adapters and employer intelligence
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: replace static-only proactive opportunity input with real provider adapters while keeping scoring deterministic and explainable.
 
 Acceptance criteria:
-- [ ] At least one production-capable signal provider boundary implementation.
-- [ ] Provenance and observation timestamps.
-- [ ] Rate/error handling.
-- [ ] Deduplication.
-- [ ] Employer intelligence aggregation.
-- [ ] No fabricated signals.
+- [x] At least one production-capable signal provider boundary implementation.
+- [x] Provenance and observation timestamps.
+- [x] Rate/error handling.
+- [x] Deduplication.
+- [x] Employer intelligence aggregation.
+- [x] No fabricated signals.
+
+Delivered: a production-capable Arbeitnow-backed signal provider that composes the
+existing live public job provider and derives employer `hiring_activity` observations
+only from returned job evidence. Each signal carries UTC observation time, source URL,
+stable evidence-derived signal ID, evidence job IDs/titles/URLs, and query provenance.
+Collection uses bounded retry/backoff and fails closed after provider/data-quality
+errors instead of synthesizing evidence. Duplicate jobs across queries and duplicate
+signal identities are suppressed before scoring. Employer intelligence aggregates
+deduplicated evidence by normalized company with deterministic source/type/evidence
+summaries and confidence. Existing deterministic opportunity scoring now includes
+live hiring activity and source provenance without changing its bounded action policy.
+
+Next priority: end-to-end autonomous career loop.
 
 ## 7. End-to-end autonomous career loop
 
