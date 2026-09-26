@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
@@ -274,6 +275,30 @@ def test_accept_requires_human_approval_and_replays_after_restart(tmp_path):
     assert replay == accepted
     assert restarted_provider.calls == []
 
+
+
+def test_malformed_durable_replay_snapshot_is_rejected_strictly():
+    database = SQLiteDatabase()
+    service, _, _, _ = stack(database)
+    service.add_event(event())
+    accepted = service.accept("accept:strict-replay", "event-1", human_approved=True)
+    assert accepted is not None
+
+    row = database.connection.execute(
+        "SELECT result_json FROM external_action_operations WHERE operation_id = ?",
+        ("accept:strict-replay",),
+    ).fetchone()
+    assert row is not None
+    result = json.loads(row[0])
+    result["event_snapshot"]["event_id"] = 42
+    database.connection.execute(
+        "UPDATE external_action_operations SET result_json = ? WHERE operation_id = ?",
+        (json.dumps(result), "accept:strict-replay"),
+    )
+    database.connection.commit()
+
+    with pytest.raises(ValueError, match="snapshot is malformed"):
+        service.accept("accept:strict-replay", "event-1", human_approved=True)
 
 
 def test_successful_accept_replay_returns_original_outcome_after_later_reschedule():
