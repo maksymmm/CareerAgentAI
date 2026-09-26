@@ -152,9 +152,12 @@ class ArbeitnowOpportunitySignalProvider:
             )
         )
         job_ids = tuple(cls._trusted_job_id(item[0]) for item in ordered)
-        titles = tuple(item[0].title.strip() for item in ordered)
+        titles = tuple(
+            cls._evidence_text(item[0].title, "job title", maximum=2_000)
+            for item in ordered
+        )
         urls = tuple(
-            item[0].url.strip()
+            cls._evidence_text(item[0].url, "job URL", maximum=4_000)
             for item in ordered
             if isinstance(item[0].url, str) and item[0].url.strip()
         )
@@ -194,16 +197,16 @@ class ArbeitnowOpportunitySignalProvider:
             },
         )
 
-    @staticmethod
-    def _trusted_job_id(job: Job) -> str:
+    @classmethod
+    def _trusted_job_id(cls, job: Job) -> str:
         if not isinstance(job.job_id, str) or not job.job_id.strip():
             raise OpportunitySignalProviderError(
                 "Arbeitnow evidence is missing a stable job identifier."
             )
-        return job.job_id.strip()
+        return cls._evidence_text(job.job_id, "job identifier", maximum=1_000)
 
-    @staticmethod
-    def _company_name(job: Job) -> str | None:
+    @classmethod
+    def _company_name(cls, job: Job) -> str | None:
         """Return a trustworthy provider company name or discard anonymous evidence."""
         company = getattr(job.company, "name", None)
         if not isinstance(company, str):
@@ -211,4 +214,24 @@ class ArbeitnowOpportunitySignalProvider:
         normalized = company.strip()
         if not normalized or normalized.casefold() == "unknown company":
             return None
+        return cls._evidence_text(normalized, "company name", maximum=500)
+
+    @staticmethod
+    def _evidence_text(value: str, field: str, *, maximum: int) -> str:
+        """Validate provider evidence before exposing it through signal metadata."""
+        if not isinstance(value, str):
+            raise OpportunitySignalProviderError(f"Arbeitnow {field} must be text.")
+        normalized = value.strip()
+        if not normalized or len(normalized) > maximum:
+            raise OpportunitySignalProviderError(
+                f"Arbeitnow {field} is missing or exceeds its safe length."
+            )
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized):
+            raise OpportunitySignalProviderError(
+                f"Arbeitnow {field} contains forbidden control characters."
+            )
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+            raise OpportunitySignalProviderError(
+                f"Arbeitnow {field} contains invalid Unicode."
+            )
         return normalized
