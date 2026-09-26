@@ -91,6 +91,35 @@ def test_collect_builds_sourced_signals_and_deduplicates_jobs_across_queries():
     assert provider.calls == ["python", "backend"]
 
 
+def test_repeated_company_observations_keep_stable_signal_identity_as_evidence_changes():
+    class ChangingProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, query: str) -> tuple[Job, ...]:
+            self.calls += 1
+            if self.calls == 1:
+                return (job("arbeitnow:one", "Acme GmbH", "Engineer"),)
+            return (
+                job("arbeitnow:one", "Acme GmbH", "Engineer"),
+                job("arbeitnow:two", "Acme GmbH", "Developer"),
+            )
+
+    provider = ChangingProvider()
+    collector = ArbeitnowOpportunitySignalProvider(
+        provider,
+        clock=lambda: OBSERVED_AT,
+    )
+
+    first = collector.collect()[0]
+    second = collector.collect()[0]
+
+    assert first.signal_id == second.signal_id
+    assert first.metadata["evidence_fingerprint"] != second.metadata["evidence_fingerprint"]
+    assert first.metadata["evidence_count"] == 1
+    assert second.metadata["evidence_count"] == 2
+
+
 def test_collect_retries_transient_provider_failure_with_bounded_backoff():
     value = job("arbeitnow:one", "Acme GmbH", "Engineer")
 
