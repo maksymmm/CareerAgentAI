@@ -65,15 +65,18 @@ CREATED = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
 START = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
 
 
-def build_stack(path: str, *, with_schedule: bool = True):
+def build_stack(
+    path: str, *, with_schedule: bool = True, plain_company: bool = False
+):
     database = SQLiteDatabase(path)
 
     jobs = InMemoryJobRepository()
+    company = "Acme Logistics" if plain_company else Company("company-1", "Acme Logistics")
     jobs.add(
         Job.create(
             job_id="job-1",
             title="Logistics Coordinator",
-            company=Company("company-1", "Acme Logistics"),
+            company=company,
             location=Location("Germany", "Karlsruhe"),
             description="Warehouse logistics coordination",
             created_at=START,
@@ -142,7 +145,7 @@ def add_interview(scheduling: SchedulingService, application_id: str) -> None:
     scheduling.add_event(
         ScheduleEvent(
             event_id="interview-1",
-            candidate_id="candidate-1",
+            candidate_id="user-1",
             employer_name="Acme Logistics",
             event_type=ScheduleEventType.INTERVIEW,
             location="Hauptstrasse 1, Karlsruhe",
@@ -183,6 +186,10 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert started.human_action is not None
     assert started.human_action.kind == HumanActionKind.APPROVE_APPLICATION
     assert started.human_action.details["job_id"] == "job-1"
+    assert started.human_action.details["artifact_content"] == "Resume Agent executed."
+    assert started.human_action.details["artifact_sha256"] == sha256(
+        b"Resume Agent executed."
+    ).hexdigest()
     assert submission_provider.calls == []
     tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
     assert len(tracked) == 1
@@ -612,6 +619,93 @@ def test_unlinked_interview_for_another_candidate_is_rejected(tmp_path):
         schedule_event_id="interview-1",
     )
     assert loop.start(req, run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    result = loop.resume(run_id, approved=True)
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "different candidate" in (result.error or "")
+    assert calendar_provider.calls == []
+    database.close()
+
+
+def test_plain_string_company_uses_empty_aggregate_company_id(tmp_path):
+    path = str(tmp_path / "plain-company.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False, plain_company=True
+    )
+
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="plain-company",
+    )
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    tracked = applications.find(
+        ApplicationQuery(user_id="user-1", job_id="job-1")
+    )
+    assert len(tracked) == 1
+    assert tracked[0].company_id == ""
+    assert started.human_action is not None
+    assert started.human_action.details["company"] == "Acme Logistics"
+    assert submission_provider.calls == []
+    database.close()
+
+
+def test_application_artifact_survives_restart_and_is_bound_to_approval(tmp_path):
+    path = str(tmp_path / "artifact-restart.sqlite")
+    run_id = "artifact-restart"
+    first = build_stack(path, with_schedule=False)
+    database, loop, _, _, _, submission_provider, _, _ = first
+
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id=run_id,
+    )
+    assert started.human_action is not None
+    artifact = started.human_action.details["artifact_content"]
+    digest = started.human_action.details["artifact_sha256"]
+    assert digest == sha256(artifact.encode("utf-8")).hexdigest()
+    assert submission_provider.calls == []
+    database.close()
+
+    second = build_stack(path, with_schedule=False)
+    database, loop, _, _, _, submission_provider, _, _ = second
+    restored = loop.get(run_id)
+
+    assert restored.human_action is not None
+    assert restored.human_action.details["artifact_content"] == artifact
+    assert restored.human_action.details["artifact_sha256"] == digest
+
+    completed = loop.resume(run_id, approved=True)
+    assert completed.completed is True
+    assert len(submission_provider.calls) == 1
+    database.close()
+
+
+def test_linked_interview_for_another_candidate_is_rejected(tmp_path):
+    path = str(tmp_path / "foreign-linked-interview.sqlite")
+    run_id = "foreign-linked-interview"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    scheduling.add_event(
+        ScheduleEvent(
+            event_id="interview-1",
+            candidate_id="different-user",
+            employer_name="Acme Logistics",
+            event_type=ScheduleEventType.INTERVIEW,
+            location="Office",
+            start_at=START + timedelta(days=2),
+            end_at=START + timedelta(days=2, hours=1),
+            timezone_name="Europe/Berlin",
+            application_id=f"{run_id}:application",
+            created_at=CREATED,
+            updated_at=CREATED,
+        )
+    )
+
+    started = loop.start(request(), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    message_gate = loop.resume(run_id, approved=True)
+    assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     result = loop.resume(run_id, approved=True)
 
