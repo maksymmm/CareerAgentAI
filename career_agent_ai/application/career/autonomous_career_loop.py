@@ -96,7 +96,9 @@ class AutonomousCareerLoop:
             self._persist(state)
             return self._result(state)
 
-        kind = state.pending_human_action.kind
+        approved_action = state.pending_human_action
+        kind = approved_action.kind
+        state.approved_human_action = approved_action
         state.pending_human_action = None
         if kind == HumanActionKind.APPROVE_APPLICATION:
             state.phase = CareerLoopPhase.APPLICATION_SUBMIT
@@ -286,12 +288,31 @@ class AutonomousCareerLoop:
                 "job_title": state.selected_job_title,
                 "company": state.selected_company,
                 "application_id": state.application_id,
+                "application_version": tracked.version,
+                "application_status": tracked.status.value,
             },
         )
 
     def _submit_application(self, state: CareerLoopState) -> None:
         if state.application_id is None or state.selected_job_id is None:
             raise RuntimeError("Application submission state is incomplete.")
+        approved = self._require_approved_action(
+            state, HumanActionKind.APPROVE_APPLICATION
+        )
+        application = self._applications.get(state.application_id)
+        if application is None:
+            raise RuntimeError("Tracked application disappeared.")
+        if (
+            approved.details.get("application_id") != state.application_id
+            or approved.details.get("job_id") != state.selected_job_id
+            or approved.details.get("application_version") != application.version
+            or approved.details.get("application_status") != application.status.value
+            or application.status != JobApplicationStatus.SAVED
+            or application.job_id != state.selected_job_id
+        ):
+            raise RuntimeError(
+                "Approved application intent is stale; refusing external submission."
+            )
         operation_id = f"{state.application_id}:submit"
         result = self._submission.submit(
             operation_id,
@@ -303,7 +324,7 @@ class AutonomousCareerLoop:
             raise RuntimeError("Application submission did not reach a confirmed outcome.")
         application = self._applications.get(state.application_id)
         if application is None:
-            raise RuntimeError("Tracked application disappeared.")
+            raise RuntimeError("Tracked application disappeared after submission.")
         if application.status == JobApplicationStatus.SAVED:
             updated = application.transition(
                 JobApplicationStatus.APPLIED,
@@ -314,11 +335,13 @@ class AutonomousCareerLoop:
             self._applications.update(updated, expected_version=application.version)
         elif application.status != JobApplicationStatus.APPLIED:
             raise RuntimeError("Tracked application is in an incompatible state.")
+        state.approved_human_action = None
         state.phase = CareerLoopPhase.MESSAGE_PREPARE
 
     def _prepare_message(self, state: CareerLoopState) -> None:
         if not state.request.sender or not state.request.recipient:
-            state.phase = CareerLoopPhase.TRACK
+            state.approved_human_action = None
+        state.phase = CareerLoopPhase.TRACK
             return
         message_id = state.message_id or f"{state.run_id}:message"
         message = CommunicationMessage(
@@ -351,6 +374,20 @@ class AutonomousCareerLoop:
     def _send_message(self, state: CareerLoopState) -> None:
         if state.message_id is None:
             raise RuntimeError("Message send phase has no prepared message.")
+        approved = self._require_approved_action(
+            state, HumanActionKind.APPROVE_MESSAGE
+        )
+        persisted = self._communication.get_persisted(state.message_id)
+        if (
+            persisted is None
+            or approved.details.get("message_id") != state.message_id
+            or approved.details.get("recipient") != persisted.recipient
+            or approved.details.get("subject") != persisted.subject
+            or persisted.direction != MessageDirection.DRAFT
+        ):
+            raise RuntimeError(
+                "Approved message intent is stale; refusing external send."
+            )
         delivered = self._communication.send(
             f"{state.run_id}:message-send",
             state.message_id,
@@ -409,6 +446,25 @@ class AutonomousCareerLoop:
         event_id = state.request.schedule_event_id
         if event_id is None:
             raise RuntimeError("Interview approval has no scheduling event.")
+        approved = self._require_approved_action(
+            state, HumanActionKind.APPROVE_INTERVIEW
+        )
+        view = self._scheduling.human_view(event_id)
+        current_details = {
+            "event_id": view.event_id,
+            "employer": view.employer_name,
+            "event_type": view.event_type.value,
+            "location": view.location,
+            "local_date": view.local_date,
+            "local_start_time": view.local_start_time,
+            "timezone": view.timezone_name,
+            "utc_offset": view.utc_offset,
+            "status": view.status.value,
+        }
+        if dict(approved.details) != current_details:
+            raise RuntimeError(
+                "Approved interview intent is stale; refusing calendar response."
+            )
         accepted = self._scheduling.accept(
             f"{state.run_id}:interview-accept",
             event_id,
@@ -416,7 +472,17 @@ class AutonomousCareerLoop:
         )
         if accepted is None:
             raise RuntimeError("Interview acceptance did not reach a confirmed outcome.")
+        state.approved_human_action = None
         state.phase = CareerLoopPhase.COMPLETE
+
+    @staticmethod
+    def _require_approved_action(
+        state: CareerLoopState, kind: HumanActionKind
+    ) -> HumanActionEvent:
+        action = state.approved_human_action
+        if action is None or action.kind != kind:
+            raise RuntimeError("Career loop has no matching durable human approval.")
+        return action
 
     def _context(
         self, state: CareerLoopState, payload: dict[str, Any]
