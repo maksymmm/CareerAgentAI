@@ -193,7 +193,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
         "Job ID: job-1"
     )
     assert started.human_action.details["artifact_sha256"] == sha256(
-        "Candidate: user-1\\nRole: Logistics Coordinator\\nCompany: Acme Logistics\\nJob ID: job-1".encode("utf-8")
+        started.human_action.details["artifact_content"].encode("utf-8")
     ).hexdigest()
     assert submission_provider.calls == []
     tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
