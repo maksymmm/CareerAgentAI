@@ -379,29 +379,51 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved application intent is stale; refusing external submission."
             )
-        result = self._submission.submit(
+        claimed = self._applications.claim_submission(
+            state.application_id,
             operation_id,
-            job_id=state.selected_job_id,
-            application_id=state.application_id,
-            artifact_content=artifact_content,
-            artifact_sha256=artifact_digest,
-            human_approved=True,
+            expected_version=application.version,
         )
-        if result is None:
-            raise RuntimeError("Application submission did not reach a confirmed outcome.")
-        application = self._applications.get(state.application_id)
-        if application is None:
-            raise RuntimeError("Tracked application disappeared after submission.")
-        if application.status == JobApplicationStatus.SAVED:
-            updated = application.transition(
-                JobApplicationStatus.APPLIED,
-                operation_id=operation_id,
-                event_id=self._application_applied_event_id(state.application_id),
-                note="Submitted by autonomous career loop after human approval.",
+        try:
+            result = self._submission.submit(
+                operation_id,
+                job_id=state.selected_job_id,
+                application_id=state.application_id,
+                artifact_content=artifact_content,
+                artifact_sha256=artifact_digest,
+                human_approved=True,
             )
-            self._applications.update(updated, expected_version=application.version)
-        elif application.status != JobApplicationStatus.APPLIED:
-            raise RuntimeError("Tracked application is in an incompatible state.")
+        except Exception:
+            durable_operation = self._submission.get_operation(operation_id)
+            if durable_operation is None or durable_operation.status in {
+                ExternalActionStatus.PREPARED,
+                ExternalActionStatus.FAILED,
+            }:
+                self._applications.release_submission(
+                    state.application_id, operation_id
+                )
+            raise
+        if result is None:
+            durable_operation = self._submission.get_operation(operation_id)
+            if (
+                durable_operation is not None
+                and durable_operation.status == ExternalActionStatus.FAILED
+            ):
+                self._applications.release_submission(
+                    state.application_id, operation_id
+                )
+            raise RuntimeError("Application submission did not reach a confirmed outcome.")
+        updated = claimed.transition(
+            JobApplicationStatus.APPLIED,
+            operation_id=operation_id,
+            event_id=self._application_applied_event_id(state.application_id),
+            note="Submitted by autonomous career loop after human approval.",
+        )
+        self._applications.complete_submission(
+            updated,
+            operation_id,
+            expected_version=claimed.version,
+        )
         state.approved_human_action = None
         state.phase = CareerLoopPhase.MESSAGE_PREPARE
 
