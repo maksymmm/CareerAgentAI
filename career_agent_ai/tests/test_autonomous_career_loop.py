@@ -396,6 +396,7 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
     states = SQLiteCareerLoopRepository(database)
     state = states.get(run_id)
     assert state is not None and state.pending_human_action is not None
+    state.approved_human_action = state.pending_human_action
     state.pending_human_action = None
     state.phase = CareerLoopPhase.APPLICATION_SUBMIT
     state.touch()
@@ -414,6 +415,73 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
     database.close()
 
+
+
+def test_application_approval_becomes_stale_before_external_submission(tmp_path):
+    path = str(tmp_path / "stale-application-approval.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="stale-app",
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    application = applications.get("stale-app:application")
+    assert application is not None
+    withdrawn = application.transition(JobApplicationStatus.WITHDRAWN)
+    applications.update(withdrawn, expected_version=application.version)
+
+    result = loop.resume("stale-app", approved=True)
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "Approved application intent is stale" in (result.error or "")
+    assert submission_provider.calls == []
+    database.close()
+
+
+def test_interview_approval_is_bound_to_the_exact_displayed_slot(tmp_path):
+    path = str(tmp_path / "stale-interview-approval.sqlite")
+    run_id = "stale-interview"
+
+    first = build_stack(path)
+    database, loop, _, _, scheduling, _, _, _ = first
+    add_interview(scheduling, f"{run_id}:application")
+    started = loop.start(request(), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    database.close()
+
+    second = build_stack(path)
+    database, loop, _, _, _, _, _, _ = second
+    message_gate = loop.resume(run_id, approved=True)
+    assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
+    database.close()
+
+    third = build_stack(path)
+    database, loop, _, _, scheduling, _, _, calendar_provider = third
+    interview_gate = loop.resume(run_id, approved=True)
+    assert interview_gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    original_start = scheduling.get_event("interview-1").start_at
+    moved_start = original_start + timedelta(days=1)
+    changed = scheduling.reschedule(
+        "external-reschedule",
+        "interview-1",
+        start_at=moved_start,
+        end_at=moved_start + timedelta(hours=1),
+        timezone_name="Europe/Berlin",
+        human_approved=True,
+    )
+    assert changed is not None
+    provider_calls_before = list(calendar_provider.calls)
+
+    result = loop.resume(run_id, approved=True)
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "Approved interview intent is stale" in (result.error or "")
+    assert calendar_provider.calls == provider_calls_before
+    assert all(call[1] != f"{run_id}:interview-accept" for call in calendar_provider.calls)
+    database.close()
 
 def test_new_run_cannot_resubmit_a_job_that_is_already_applied(tmp_path):
     path = str(tmp_path / "cross-run-duplicate.sqlite")
