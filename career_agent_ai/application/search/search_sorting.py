@@ -18,6 +18,12 @@ class SearchSorting:
         if sort == JobSort.RELEVANCE:
             return tuple(jobs)
 
+    @staticmethod
+    def _company_name(value) -> str:
+        """Return a sortable company name for structured or plain-string values."""
+        name = getattr(value, "name", None)
+        return name if isinstance(name, str) else str(value or "")
+
         if sort == JobSort.TITLE:
             return tuple(
                 sorted(
@@ -32,11 +38,7 @@ class SearchSorting:
             return tuple(
                 sorted(
                     jobs,
-                    key=lambda job: (
-                        job.company.name
-                        if job.company is not None
-                        else ""
-                    ).lower(),
+                    key=lambda job: self._company_name(job.company).lower(),
                 )
             )
 
