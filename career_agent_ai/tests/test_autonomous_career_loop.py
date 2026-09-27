@@ -186,9 +186,14 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert started.human_action is not None
     assert started.human_action.kind == HumanActionKind.APPROVE_APPLICATION
     assert started.human_action.details["job_id"] == "job-1"
-    assert started.human_action.details["artifact_content"] == "Resume Agent executed."
+    assert started.human_action.details["artifact_content"] == (
+        "Candidate: user-1\n"
+        "Role: Logistics Coordinator\n"
+        "Company: Acme Logistics\n"
+        "Job ID: job-1"
+    )
     assert started.human_action.details["artifact_sha256"] == sha256(
-        b"Resume Agent executed."
+        "Candidate: user-1\\nRole: Logistics Coordinator\\nCompany: Acme Logistics\\nJob ID: job-1".encode("utf-8")
     ).hexdigest()
     assert submission_provider.calls == []
     tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
