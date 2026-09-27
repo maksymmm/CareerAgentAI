@@ -329,6 +329,14 @@ class AutonomousCareerLoop:
         application = self._applications.get(state.application_id)
         if application is None:
             raise RuntimeError("Tracked application disappeared.")
+        if not self._artifact_is_consistent(state):
+            raise RuntimeError(
+                "Application submission artifact is missing or corrupted."
+            )
+        artifact_content = state.application_artifact_content
+        artifact_digest = state.application_artifact_sha256
+        if not isinstance(artifact_content, str) or not isinstance(artifact_digest, str):
+            raise RuntimeError("Application submission artifact is incomplete.")
         operation_id = self._application_submission_operation_id(state.application_id)
         if (
             application.status == JobApplicationStatus.APPLIED
@@ -346,6 +354,8 @@ class AutonomousCareerLoop:
                 operation_id,
                 job_id=state.selected_job_id,
                 application_id=state.application_id,
+                artifact_content=artifact_content,
+                artifact_sha256=artifact_digest,
                 human_approved=True,
             )
             if replay is None:
@@ -373,6 +383,8 @@ class AutonomousCareerLoop:
             operation_id,
             job_id=state.selected_job_id,
             application_id=state.application_id,
+            artifact_content=artifact_content,
+            artifact_sha256=artifact_digest,
             human_approved=True,
         )
         if result is None:
