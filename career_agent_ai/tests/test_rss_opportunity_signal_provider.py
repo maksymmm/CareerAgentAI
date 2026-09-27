@@ -34,7 +34,7 @@ def feed(company: str = "Acme GmbH", url: str = "https://example.com/news.xml"):
     )
 
 
-def test_rss_provider_emits_source_backed_signal_with_publication_time(monkeypatch):
+def test_rss_provider_emits_source_backed_signal_with_observation_and_publication_times(monkeypatch):
     raw = b"""<?xml version="1.0"?>
     <rss><channel><item>
       <title>Acme raises Series B funding</title>
@@ -48,10 +48,11 @@ def test_rss_provider_emits_source_backed_signal_with_publication_time(monkeypat
         "career_agent_ai.application.career.rss_opportunity_signal_provider.urlopen",
         lambda request, timeout: FakeResponse(raw),
     )
+    fetched_at = datetime(2026, 9, 26, tzinfo=timezone.utc)
     provider = RSSOpportunitySignalProvider(
         (feed(),),
         min_interval_seconds=0,
-        now=lambda: datetime(2026, 9, 26, tzinfo=timezone.utc),
+        now=lambda: fetched_at,
     )
 
     signals = provider.collect()
@@ -59,9 +60,10 @@ def test_rss_provider_emits_source_backed_signal_with_publication_time(monkeypat
     funding = next(signal for signal in signals if signal.signal_type == "funding")
     assert funding.company == "Acme GmbH"
     assert funding.source == "https://example.com/news/series-b"
-    assert funding.observed_at == datetime(2026, 9, 25, 10, 30, tzinfo=timezone.utc)
+    assert funding.observed_at == fetched_at
     assert funding.metadata["feed_url"] == "https://example.com/news.xml"
     assert funding.metadata["external_id"] == "story-123"
+    assert funding.metadata["source_published_at"] == "2026-09-25T10:30:00+00:00"
     assert "series b" in funding.metadata["matched_keywords"]
     assert provider.last_errors == ()
 
@@ -213,6 +215,37 @@ def test_provider_bounds_response_size(monkeypatch):
     assert "size limit" in provider.last_errors[0].error
 
 
+
+
+def test_provider_falls_back_to_feed_provenance_for_unsafe_entry_link(monkeypatch):
+    raw = b"""<rss><channel><item>
+      <title>Acme launches new product</title>
+      <link>javascript:alert(1)</link>
+    </item></channel></rss>"""
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider.urlopen",
+        lambda request, timeout: FakeResponse(raw),
+    )
+    provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
+
+    signals = provider.collect()
+
+    assert signals[0].source == "https://example.com/news.xml"
+    assert len(signals[0].metadata["external_id"]) == 64
+
+
+def test_provider_rejects_doctype_and_entity_declarations(monkeypatch):
+    raw = b"""<!DOCTYPE rss [<!ENTITY xxe "unsafe">]>
+    <rss><channel><item><title>&xxe;</title></item></channel></rss>"""
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider.urlopen",
+        lambda request, timeout: FakeResponse(raw),
+    )
+    provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
+
+    assert provider.collect() == ()
+    assert "XML declarations" in provider.last_errors[0].error
+
 @pytest.mark.parametrize(
     "url",
     (
@@ -232,6 +265,10 @@ def test_feed_configuration_rejects_unsafe_urls(url):
 
 
 def test_rule_and_provider_configuration_validation():
+    with pytest.raises(TypeError):
+        NewsSignalRule(42, ("funding",), 0.8)
+    with pytest.raises(TypeError):
+        NewsSignalRule("funding", ("funding", 42), 0.8)
     with pytest.raises(ValueError):
         NewsSignalRule("funding", (), 0.8)
     with pytest.raises(ValueError):
