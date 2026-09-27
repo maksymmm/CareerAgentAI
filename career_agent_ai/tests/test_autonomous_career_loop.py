@@ -55,6 +55,7 @@ from career_agent_ai.application.storage.sqlite_scheduling_repository import (
 )
 
 
+CREATED = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
 START = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
 
 
@@ -143,8 +144,8 @@ def add_interview(scheduling: SchedulingService, application_id: str) -> None:
             end_at=START + timedelta(days=2, hours=1),
             timezone_name="Europe/Berlin",
             application_id=application_id,
-            created_at=START,
-            updated_at=START,
+            created_at=CREATED,
+            updated_at=CREATED,
         )
     )
 
@@ -359,7 +360,12 @@ def test_restart_before_message_phase_does_not_duplicate_application(tmp_path):
     first = build_stack(path, with_schedule=False)
     database, loop, applications, _, _, _, _, _ = first
 
-    started = loop.start(request(with_schedule=False), run_id=run_id)
+    minimal_request = CareerLoopRequest(
+        user_id="user-1",
+        keyword="Logistics",
+        location="Karlsruhe",
+    )
+    started = loop.start(minimal_request, run_id=run_id)
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
     assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
     database.close()
