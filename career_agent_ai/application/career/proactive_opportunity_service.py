@@ -32,20 +32,22 @@ class ProactiveOpportunityService:
     ) -> tuple[OpportunityScore, ...]:
         """Deduplicate, group by company, and return deterministic scores."""
         grouped: dict[str, list[OpportunitySignal]] = defaultdict(list)
+        company_names: dict[str, str] = {}
 
         for signal in self._deduplicator.deduplicate(signals):
-            grouped[signal.company].append(signal)
+            key = signal.company.casefold()
+            grouped[key].append(signal)
+            company_names.setdefault(key, signal.company)
 
         scored = [
-            self._score(company, tuple(company_signals))
-            for company, company_signals in grouped.items()
+            self._score(company_names[key], tuple(company_signals))
+            for key, company_signals in grouped.items()
         ]
 
         return tuple(
             sorted(
                 scored,
-                key=lambda item: item.score,
-                reverse=True,
+                key=lambda item: (-item.score, item.company.casefold()),
             )
         )
 
