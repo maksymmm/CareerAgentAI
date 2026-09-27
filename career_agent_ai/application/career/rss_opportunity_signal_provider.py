@@ -27,6 +27,12 @@ class NewsSignalRule:
     strength: float
 
     def __post_init__(self) -> None:
+        if not isinstance(self.signal_type, str):
+            raise TypeError("signal_type must be text.")
+        if not isinstance(self.keywords, tuple) or any(
+            not isinstance(keyword, str) for keyword in self.keywords
+        ):
+            raise TypeError("keywords must be a tuple of text values.")
         signal_type = self.signal_type.strip()
         keywords = tuple(
             keyword.strip().casefold()
@@ -52,13 +58,15 @@ class CompanyNewsFeed:
     rules: tuple[NewsSignalRule, ...]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.company, str):
+            raise TypeError("company must be text.")
         company = self.company.strip()
         if not company:
             raise ValueError("company must not be empty.")
         feed_url = _validate_feed_url(self.feed_url)
         rules = tuple(self.rules)
-        if not rules:
-            raise ValueError("rules must not be empty.")
+        if not rules or any(not isinstance(rule, NewsSignalRule) for rule in rules):
+            raise ValueError("rules must contain NewsSignalRule values.")
         object.__setattr__(self, "company", company)
         object.__setattr__(self, "feed_url", feed_url)
         object.__setattr__(self, "rules", rules)
@@ -211,13 +219,22 @@ class RSSOpportunitySignalProvider:
             text = f"{title} {summary}".casefold()
             if not text.strip():
                 continue
-            entry_url = entry.get("link", "").strip() or feed.feed_url
+            raw_link = entry.get("link", "").strip()
+            entry_url = self._provenance_url(raw_link, feed.feed_url)
+            published_at = self._entry_time(entry)
+            raw_external_id = entry.get("id", "").strip()
             external_id = (
-                entry.get("id", "").strip()
-                or entry_url
-                or hashlib.sha256(text.encode("utf-8")).hexdigest()
+                raw_external_id
+                or (raw_link if entry_url == raw_link else "")
+                or hashlib.sha256(
+                    (
+                        text
+                        + "|"
+                        + (entry.get("published") or entry.get("updated") or "")
+                    ).encode("utf-8")
+                ).hexdigest()
             )
-            observed_at = self._entry_time(entry) or fetched_at
+            observed_at = fetched_at
             for rule in feed.rules:
                 matched = tuple(
                     keyword for keyword in rule.keywords if keyword in text
@@ -238,6 +255,9 @@ class RSSOpportunitySignalProvider:
                             "title": title,
                             "matched_keywords": matched,
                             "observed_via_fetch_at": fetched_at.isoformat(),
+                            "source_published_at": (
+                                None if published_at is None else published_at.isoformat()
+                            ),
                         },
                     )
                 )
@@ -245,6 +265,9 @@ class RSSOpportunitySignalProvider:
 
     @staticmethod
     def _parse_entries(raw: bytes) -> tuple[dict[str, str], ...]:
+        lowered = raw.lower()
+        if b"<!doctype" in lowered or b"<!entity" in lowered:
+            raise RuntimeError("feed XML declarations are not allowed")
         try:
             root = ET.fromstring(raw)
         except ET.ParseError as exc:
@@ -286,6 +309,14 @@ class RSSOpportunitySignalProvider:
                         values[name] = value
             entries.append(values)
         return tuple(entries)
+
+    @staticmethod
+    def _provenance_url(value: str, fallback: str) -> str:
+        """Return a safe absolute HTTP(S) provenance URL or the configured feed URL."""
+        parsed = urlparse(value)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return value
+        return fallback
 
     @staticmethod
     def _entry_time(entry: dict[str, str]) -> datetime | None:
