@@ -259,7 +259,7 @@ def test_loop_without_message_or_interview_completes_after_application_approval(
 
     assert completed.completed is True
     assert submission_provider.calls == [
-        ("minimal:application-submit", "job-1", "minimal:application")
+        ("minimal:application:submit", "job-1", "minimal:application")
     ]
     tracked = applications.get("minimal:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
@@ -408,7 +408,7 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
 
     assert recovered.completed is True
     assert submission_provider.calls == [
-        (f"{run_id}:application-submit", "job-1", f"{run_id}:application")
+        (f"{run_id}:application:submit", "job-1", f"{run_id}:application")
     ]
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
