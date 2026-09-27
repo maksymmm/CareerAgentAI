@@ -120,6 +120,7 @@ class CareerLoopState:
     selected_job_id: str | None = None
     selected_job_title: str | None = None
     selected_company: str | None = None
+    selected_company_id: str | None = None
     application_id: str | None = None
     message_id: str | None = None
     iterations: int = 0
