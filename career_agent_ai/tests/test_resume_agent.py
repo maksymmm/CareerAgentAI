@@ -36,11 +36,27 @@ def test_resume_agent_supports():
 def test_resume_execute():
     agent = ResumeAgent()
 
-    result = agent.execute(make_context())
+    context = AgentContext(
+        user_id="user-1",
+        memory_snapshot=MemorySnapshot(),
+        payload={
+            "job_id": "job-1",
+            "job_title": "Logistics Coordinator",
+            "company": "Acme Logistics",
+        },
+    )
+    result = agent.execute(context)
 
     assert result.success is True
     assert result.agent_id == "resume"
     assert result.messages == ("Resume Agent executed.",)
+    assert result.metadata["application_artifact_type"] == "job_application_profile"
+    assert result.metadata["application_artifact"] == (
+        "Candidate: user-1\n"
+        "Role: Logistics Coordinator\n"
+        "Company: Acme Logistics\n"
+        "Job ID: job-1"
+    )
 
 
 def test_resume_snapshot():
