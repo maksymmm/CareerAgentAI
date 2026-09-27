@@ -217,6 +217,12 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
         == "Thank you for considering my application."
     )
     assert len(submission_provider.calls) == 1
+    submit_operation_id = submission_provider.calls[0][0]
+    submitted_content, submitted_digest = submission_provider.artifacts[
+        submit_operation_id
+    ]
+    assert submitted_content == started.human_action.details["artifact_content"]
+    assert submitted_digest == started.human_action.details["artifact_sha256"]
     tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
     assert len(tracked) == 1
     assert tracked[0].status == JobApplicationStatus.APPLIED
