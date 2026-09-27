@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import socket
 import time
@@ -13,7 +14,6 @@ from email.utils import parsedate_to_datetime
 from html import unescape
 from typing import Callable, Iterable
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .opportunity_signal import OpportunitySignal
 from .signal_deduplicator import OpportunitySignalDeduplicator
@@ -177,25 +177,15 @@ class RSSOpportunitySignalProvider:
         return self._deduplicator.deduplicate(signals)
 
     def _fetch(self, url: str) -> bytes:
-        self._validate_connection_target(url)
+        addresses = self._validated_connection_addresses(url)
         self._rate_limit()
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml",
-                "User-Agent": "CareerAgentAI/1.0",
-            },
-            method="GET",
-        )
         try:
-            with _open_feed(request, timeout=self._timeout) as response:
-                final_url = getattr(response, "geturl", lambda: url)()
-                if final_url != url:
-                    raise RuntimeError("feed redirects are not allowed")
-                status = getattr(response, "status", 200)
-                if status < 200 or status >= 300:
-                    raise RuntimeError(f"feed returned HTTP {status}")
-                body = response.read(self._max_response_bytes + 1)
+            body = _read_feed(
+                url,
+                addresses,
+                timeout=self._timeout,
+                max_response_bytes=self._max_response_bytes,
+            )
         except Exception as exc:
             raise RuntimeError("failed to fetch configured news feed") from exc
         finally:
@@ -205,8 +195,8 @@ class RSSOpportunitySignalProvider:
             raise RuntimeError("feed response exceeds configured size limit")
         return body
 
-    def _validate_connection_target(self, url: str) -> None:
-        """Reject feed hosts resolving to non-public network addresses."""
+    def _validated_connection_addresses(self, url: str) -> tuple[str, ...]:
+        """Resolve once and return only public addresses that may be connected."""
         parsed = urlparse(_validate_feed_url(url))
         host = parsed.hostname
         if host is None:
@@ -230,6 +220,7 @@ class RSSOpportunitySignalProvider:
                 raise RuntimeError(
                     "configured feed host resolved to a non-public network address"
                 )
+        return tuple(dict.fromkeys(addresses))
 
     def _rate_limit(self) -> None:
         if self._last_request_at is None:
@@ -423,16 +414,75 @@ def _resolve_host_addresses(host: str, port: int) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(row[4][0]) for row in rows))
 
 
-class _NoRedirectHandler(HTTPRedirectHandler):
-    """Reject redirects so every network target is validated before connection."""
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection pinned to one prevalidated IP while verifying the hostname."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        address: str,
+        *,
+        timeout: float,
+    ) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._address = address
+
+    def connect(self) -> None:
+        sock = socket.create_connection(
+            (self._address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
-_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
+def _read_feed(
+    url: str,
+    addresses: tuple[str, ...],
+    *,
+    timeout: float,
+    max_response_bytes: int,
+) -> bytes:
+    """GET one feed without redirects or a second DNS lookup."""
+    parsed = urlparse(_validate_feed_url(url))
+    host = parsed.hostname
+    if host is None:
+        raise ValueError("feed_url must contain a host.")
+    port = parsed.port or 443
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
 
+    last_network_error: Exception | None = None
+    for address in addresses:
+        connection = _PinnedHTTPSConnection(
+            host,
+            port,
+            address,
+            timeout=timeout,
+        )
+        try:
+            connection.request(
+                "GET",
+                path,
+                headers={
+                    "Accept": (
+                        "application/rss+xml, application/atom+xml, "
+                        "application/xml, text/xml"
+                    ),
+                    "User-Agent": "CareerAgentAI/1.0",
+                },
+            )
+            response = connection.getresponse()
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"feed returned HTTP {response.status}")
+            return response.read(max_response_bytes + 1)
+        except (OSError, TimeoutError, ConnectionError) as exc:
+            last_network_error = exc
+        finally:
+            connection.close()
 
-def _open_feed(request: Request, timeout: float):
-    """Open one validated feed request without automatic redirect following."""
-    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+    if last_network_error is not None:
+        raise RuntimeError("all validated feed addresses failed") from last_network_error
+    raise RuntimeError("configured feed host has no connectable public address")
