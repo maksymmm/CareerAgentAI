@@ -91,6 +91,65 @@ def test_atom_provider_supports_href_links_and_fetched_observation_time(monkeypa
     assert signal.metadata["observed_via_fetch_at"] == observed.isoformat()
 
 
+
+
+def test_atom_provider_prefers_alternate_link_over_self_or_enclosure(monkeypatch):
+    raw = b"""<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>Acme launches new product</title>
+        <link rel="self" href="https://example.com/feed/entry/1"/>
+        <link href="https://example.com/news/article"/>
+        <link rel="enclosure" href="https://example.com/media/video.mp4"/>
+        <id>article-1</id>
+      </entry>
+    </feed>"""
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
+    )
+    provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
+
+    signals = provider.collect()
+
+    signal = next(item for item in signals if item.signal_type == "new_product")
+    assert signal.source == "https://example.com/news/article"
+
+
+def test_provider_records_observation_after_fetch_completes(monkeypatch):
+    raw = b"""<rss><channel><item>
+      <title>Acme launches new product</title><guid>timed-1</guid>
+    </item></channel></rss>"""
+    times = iter(
+        (
+            datetime(2026, 9, 26, 10, 0, tzinfo=timezone.utc),
+            datetime(2026, 9, 26, 10, 0, 5, tzinfo=timezone.utc),
+        )
+    )
+
+    def delayed_read(url, addresses, timeout, max_response_bytes):
+        next(times)
+        return raw
+
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        delayed_read,
+    )
+    provider = RSSOpportunitySignalProvider(
+        (feed(),),
+        min_interval_seconds=0,
+        now=lambda: next(times),
+    )
+
+    signals = provider.collect()
+
+    assert signals[0].observed_at == datetime(
+        2026, 9, 26, 10, 0, 5, tzinfo=timezone.utc
+    )
+    assert signals[0].metadata["observed_via_fetch_at"] == (
+        "2026-09-26T10:00:05+00:00"
+    )
+
 def test_provider_does_not_fabricate_signal_without_explicit_keyword_match(monkeypatch):
     raw = b"""<rss><channel><item>
       <title>Acme publishes annual holiday calendar</title>
@@ -241,6 +300,22 @@ def test_provider_rejects_doctype_and_entity_declarations(monkeypatch):
     assert "XML declarations" in provider.last_errors[0].error
 
 
+
+
+
+def test_provider_rejects_utf16_doctype_and_entity_declarations(monkeypatch):
+    text = """<?xml version="1.0" encoding="UTF-16"?>
+    <!DOCTYPE rss [<!ENTITY xxe "unsafe">]>
+    <rss><channel><item><title>&xxe;</title></item></channel></rss>"""
+    raw = text.encode("utf-16")
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
+    )
+    provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
+
+    assert provider.collect() == ()
+    assert "XML declarations" in provider.last_errors[0].error
 
 def test_provider_passes_only_prevalidated_addresses_to_network_reader(monkeypatch):
     raw = b"""<rss><channel><item>
