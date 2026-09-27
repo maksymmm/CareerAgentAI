@@ -5,10 +5,13 @@ from typing import Iterable
 
 from career_agent_ai.application.career.opportunity_score import OpportunityScore
 from career_agent_ai.application.career.opportunity_signal import OpportunitySignal
+from career_agent_ai.application.career.signal_deduplicator import (
+    OpportunitySignalDeduplicator,
+)
 
 
 class ProactiveOpportunityService:
-    """Turns weak hiring signals into ranked, explainable opportunities."""
+    """Turns deduplicated hiring signals into ranked, explainable opportunities."""
 
     _WEIGHTS = {
         "hiring_growth": 0.30,
@@ -18,26 +21,33 @@ class ProactiveOpportunityService:
         "new_product": 0.10,
     }
 
+    def __init__(
+        self, deduplicator: OpportunitySignalDeduplicator | None = None
+    ) -> None:
+        self._deduplicator = deduplicator or OpportunitySignalDeduplicator()
+
     def rank(
         self,
         signals: Iterable[OpportunitySignal],
     ) -> tuple[OpportunityScore, ...]:
-        """Group signals by company and return scores in descending order."""
+        """Deduplicate, group by company, and return deterministic scores."""
         grouped: dict[str, list[OpportunitySignal]] = defaultdict(list)
+        company_names: dict[str, str] = {}
 
-        for signal in signals:
-            grouped[signal.company].append(signal)
+        for signal in self._deduplicator.deduplicate(signals):
+            key = signal.company.casefold()
+            grouped[key].append(signal)
+            company_names.setdefault(key, signal.company)
 
         scored = [
-            self._score(company, tuple(company_signals))
-            for company, company_signals in grouped.items()
+            self._score(company_names[key], tuple(company_signals))
+            for key, company_signals in grouped.items()
         ]
 
         return tuple(
             sorted(
                 scored,
-                key=lambda item: item.score,
-                reverse=True,
+                key=lambda item: (-item.score, item.company.casefold()),
             )
         )
 

@@ -137,17 +137,30 @@ Next priority: real signal-source adapters and employer intelligence.
 
 ## 6. Real signal-source adapters and employer intelligence
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: replace static-only proactive opportunity input with real provider adapters while keeping scoring deterministic and explainable.
 
 Acceptance criteria:
-- [ ] At least one production-capable signal provider boundary implementation.
-- [ ] Provenance and observation timestamps.
-- [ ] Rate/error handling.
-- [ ] Deduplication.
-- [ ] Employer intelligence aggregation.
-- [ ] No fabricated signals.
+- [x] At least one production-capable signal provider boundary implementation.
+- [x] Provenance and observation timestamps.
+- [x] Rate/error handling.
+- [x] Deduplication.
+- [x] Employer intelligence aggregation.
+- [x] No fabricated signals.
+
+Delivered: a production-capable HTTPS RSS/Atom opportunity-signal adapter for configured
+company-owned news feeds. Signals are emitted only from actual parsed feed entries that
+match explicit deterministic rules. Each signal retains an entry/feed provenance URL,
+provider-native external identity when available, publication/fetch observation time,
+and matched evidence keywords. Collection is request-rate-limited, response-size
+bounded, fail-soft across sources, and exposes sanitized per-source errors. Stable
+provider identities are deduplicated before employer aggregation and before opportunity
+scoring so repeated observations cannot inflate a score. Employer intelligence groups
+the retained evidence by company with latest observation time, signal types, and
+provenance sources. No synthetic signal is created when source evidence does not match.
+
+Next priority: end-to-end autonomous career loop.
 
 ## 7. End-to-end autonomous career loop
 
