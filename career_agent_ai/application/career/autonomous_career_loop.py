@@ -19,7 +19,9 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopState,
     HumanActionEvent,
     HumanActionKind,
+    validate_loop_identifier,
 )
+from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopRepository
 from career_agent_ai.application.communication import (
     CommunicationMessage,
     CommunicationService,
@@ -49,7 +51,7 @@ class AutonomousCareerLoop:
         submission_service: ApplicationSubmissionService,
         communication_service: CommunicationService,
         scheduling_service: SchedulingService,
-        state_repository: Any,
+        state_repository: CareerLoopRepository,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
     ) -> None:
         if not isinstance(max_iterations, int) or isinstance(max_iterations, bool) or max_iterations < 1:
@@ -69,9 +71,8 @@ class AutonomousCareerLoop:
         """Create one durable bounded run and continue until a human gate or terminal state."""
         if not isinstance(request, CareerLoopRequest):
             raise TypeError("request must be a CareerLoopRequest.")
-        identifier = (run_id or uuid4().hex).strip()
-        if not identifier or len(identifier) > 120:
-            raise ValueError("run_id must be a non-empty string of at most 120 characters.")
+        raw_identifier = run_id if run_id is not None else uuid4().hex
+        identifier = validate_loop_identifier(raw_identifier, "run_id", maximum=120)
         if self._states.get(identifier) is not None:
             raise ValueError("run_id already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
@@ -115,6 +116,21 @@ class AutonomousCareerLoop:
         if state is None:
             raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
         return self._result(state)
+
+    def continue_run(self, run_id: str) -> CareerLoopResult:
+        """Continue a persisted non-human phase after a process restart.
+
+        This is the recovery entry point for a crash that occurred after an explicit
+        approval was durably recorded but before the next phase completed.
+        """
+        state = self._states.get(run_id)
+        if state is None:
+            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        if state.pending_human_action is not None:
+            raise RuntimeError("Career loop is waiting for explicit human action.")
+        if state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
+            return self._result(state)
+        return self._continue(state)
 
     def _continue(self, state: CareerLoopState) -> CareerLoopResult:
         try:
@@ -183,8 +199,10 @@ class AutonomousCareerLoop:
         company = getattr(selected, "company", None)
         if not isinstance(job_id, str) or not job_id.strip():
             raise ValueError("Selected job has no stable identifier.")
-        state.selected_job_id = job_id.strip()
-        state.selected_job_title = str(title or "").strip() or "Unknown role"
+        state.selected_job_id = self._external_identifier(job_id, "job_id")
+        state.selected_job_title = self._external_text(
+            str(title or ""), "job_title", maximum=500, fallback="Unknown role"
+        )
         state.selected_company = self._company_name(company)
         state.phase = CareerLoopPhase.DECISION
 
@@ -250,6 +268,14 @@ class AutonomousCareerLoop:
                     if not matches:
                         raise
                     application_id = matches[0].application_id
+        tracked = self._applications.get(application_id)
+        if tracked is None:
+            raise RuntimeError("Prepared application disappeared.")
+        if tracked.status != JobApplicationStatus.SAVED:
+            raise RuntimeError(
+                "A tracked application for this job has already progressed beyond draft; "
+                "refusing duplicate submission."
+            )
         state.application_id = application_id
         state.phase = CareerLoopPhase.APPLICATION_APPROVAL
         state.pending_human_action = HumanActionEvent(
@@ -405,12 +431,43 @@ class AutonomousCareerLoop:
     def _persist(self, state: CareerLoopState) -> None:
         self._states.save(state)
 
-    @staticmethod
-    def _company_name(value: Any) -> str:
+    @classmethod
+    def _company_name(cls, value: Any) -> str:
         name = getattr(value, "name", None)
         candidate = name if isinstance(name, str) else str(value or "")
-        normalized = candidate.strip()
-        return normalized[:200] or "Unknown company"
+        return cls._external_text(
+            candidate, "company", maximum=200, fallback="Unknown company"
+        )
+
+    @staticmethod
+    def _external_identifier(value: str, field: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field} must be text.")
+        normalized = value.strip()
+        if not normalized or len(normalized) > 200:
+            raise ValueError(f"{field} must be a non-empty string of at most 200 characters.")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized):
+            raise ValueError(f"{field} contains forbidden control characters.")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+            raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
+        return normalized
+
+    @staticmethod
+    def _external_text(
+        value: str, field: str, *, maximum: int, fallback: str
+    ) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field} must be text.")
+        normalized = value.strip()
+        if not normalized:
+            return fallback
+        if len(normalized) > maximum:
+            normalized = normalized[:maximum]
+        if any(ord(ch) < 32 and ch not in "\n\t" for ch in normalized):
+            raise ValueError(f"{field} contains forbidden control characters.")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+            raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
+        return normalized
 
     @staticmethod
     def _result(state: CareerLoopState) -> CareerLoopResult:
