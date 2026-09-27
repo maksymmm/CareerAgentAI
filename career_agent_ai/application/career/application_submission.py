@@ -115,6 +115,8 @@ class ApplicationSubmissionService:
             raise ValueError(f"{field} must be a non-empty string of at most 200 characters.")
         if any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized):
             raise ValueError(f"{field} contains forbidden control characters.")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+            raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
         return normalized
 
 
