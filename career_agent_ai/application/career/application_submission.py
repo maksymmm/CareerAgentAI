@@ -6,6 +6,7 @@ from typing import Any, Mapping, Protocol
 
 from career_agent_ai.application.external_actions import (
     AmbiguousExternalActionError,
+    ExternalActionOperation,
     ExternalActionService,
     ExternalActionStatus,
 )
@@ -77,6 +78,11 @@ class ApplicationSubmissionService:
     def action_adapter(provider: ApplicationSubmissionAdapter) -> _SubmissionActionAdapter:
         """Build the external-action bridge for application submissions."""
         return _SubmissionActionAdapter(provider)
+
+    def get_operation(self, operation_id: str) -> ExternalActionOperation | None:
+        """Return durable submission-operation state without executing a provider call."""
+        operation_id = self._identifier(operation_id, "operation_id")
+        return self._external_actions.get(operation_id)
 
     def submit(
         self,
