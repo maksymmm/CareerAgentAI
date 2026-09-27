@@ -437,8 +437,11 @@ class AutonomousCareerLoop:
                 "location": view.location,
                 "local_date": view.local_date,
                 "local_start_time": view.local_start_time,
+                "local_end_date": view.local_end_date,
+                "local_end_time": view.local_end_time,
                 "timezone": view.timezone_name,
                 "utc_offset": view.utc_offset,
+                "end_utc_offset": view.end_utc_offset,
                 "status": view.status.value,
             },
         )
