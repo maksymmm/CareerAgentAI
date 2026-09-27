@@ -160,8 +160,8 @@ class RSSOpportunitySignalProvider:
         errors: list[SignalSourceError] = []
         for feed in self._feeds:
             try:
-                fetched_at = self._utc_now()
                 raw = self._fetch(feed.feed_url)
+                fetched_at = self._utc_now()
                 entries = self._parse_entries(raw)
                 signals.extend(
                     self._signals_from_entries(feed, entries, fetched_at)
@@ -289,8 +289,7 @@ class RSSOpportunitySignalProvider:
 
     @staticmethod
     def _parse_entries(raw: bytes) -> tuple[dict[str, str], ...]:
-        lowered = raw.lower()
-        if b"<!doctype" in lowered or b"<!entity" in lowered:
+        if _contains_forbidden_xml_declaration(raw):
             raise RuntimeError("feed XML declarations are not allowed")
         try:
             root = ET.fromstring(raw)
@@ -310,7 +309,12 @@ class RSSOpportunitySignalProvider:
                 if name == "link":
                     href = child.attrib.get("href", "").strip()
                     text = "".join(child.itertext()).strip()
-                    values["link"] = href or text
+                    if href:
+                        rel = child.attrib.get("rel", "alternate").strip().casefold()
+                        if rel in {"", "alternate"}:
+                            values.setdefault("link", href)
+                    elif text:
+                        values.setdefault("link", text)
                 elif name in {
                     "title",
                     "description",
@@ -368,6 +372,22 @@ class RSSOpportunitySignalProvider:
     def _safe_error(error: Exception) -> str:
         text = str(error).strip() or type(error).__name__
         return text[:500]
+
+
+def _contains_forbidden_xml_declaration(raw: bytes) -> bool:
+    """Detect DTD/entity declarations across supported XML Unicode encodings."""
+    if b"<!doctype" in raw.lower() or b"<!entity" in raw.lower():
+        return True
+
+    for encoding in ("utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"):
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        lowered = text.casefold()
+        if "<!doctype" in lowered or "<!entity" in lowered:
+            return True
+    return False
 
 
 def _validate_feed_url(value: str) -> str:
