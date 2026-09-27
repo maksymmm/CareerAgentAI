@@ -114,6 +114,10 @@ class CommunicationService:
         """Read, validate, and persist a provider message for restart continuation."""
         return self._repository.save(self._provider.read(message_id))
 
+    def get_persisted(self, message_id: str) -> CommunicationMessage | None:
+        """Return one locally persisted message without contacting the provider."""
+        return self._repository.get(message_id)
+
     def send(
         self, operation_id: str, message_id: str, *, human_approved: bool
     ) -> CommunicationMessage | None:
