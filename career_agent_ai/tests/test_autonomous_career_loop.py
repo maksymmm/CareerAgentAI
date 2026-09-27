@@ -1,0 +1,393 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from career_agent_ai.application.agents.agent_factory import AgentFactory
+from career_agent_ai.application.agents.agent_registry import AgentRegistry
+from career_agent_ai.application.agents.job_search.job_search_agent import JobSearchAgent
+from career_agent_ai.application.agents.resume.resume_agent import ResumeAgent
+from career_agent_ai.application.career.application_submission import (
+    ApplicationSubmissionService,
+    FakeApplicationSubmissionAdapter,
+)
+from career_agent_ai.application.career.autonomous_career_loop import AutonomousCareerLoop
+from career_agent_ai.application.career.autonomous_loop_models import (
+    CareerLoopPhase,
+    CareerLoopRequest,
+    HumanActionKind,
+)
+from career_agent_ai.application.communication import (
+    CommunicationService,
+    FakeCommunicationAdapter,
+)
+from career_agent_ai.application.external_actions import ExternalActionService
+from career_agent_ai.application.jobs.company import Company
+from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
+from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.jobs.job_application_repository import ApplicationQuery
+from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+from career_agent_ai.application.jobs.location import Location
+from career_agent_ai.application.scheduling import (
+    FakeCalendarAdapter,
+    ScheduleEvent,
+    ScheduleEventType,
+    ScheduleStatus,
+    SchedulingService,
+)
+from career_agent_ai.application.search.search_service import SearchService
+from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+    SQLiteCareerLoopRepository,
+)
+from career_agent_ai.application.storage.sqlite_communication_repository import (
+    SQLiteCommunicationRepository,
+)
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_external_action_repository import (
+    SQLiteExternalActionOperationRepository,
+)
+from career_agent_ai.application.storage.sqlite_job_application_repository import (
+    SQLiteJobApplicationRepository,
+)
+from career_agent_ai.application.storage.sqlite_scheduling_repository import (
+    SQLiteSchedulingRepository,
+)
+
+
+START = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
+
+
+def build_stack(path: str, *, with_schedule: bool = True):
+    database = SQLiteDatabase(path)
+
+    jobs = InMemoryJobRepository()
+    jobs.add(
+        Job.create(
+            job_id="job-1",
+            title="Logistics Coordinator",
+            company=Company("company-1", "Acme Logistics"),
+            location=Location("Germany", "Karlsruhe"),
+            description="Warehouse logistics coordination",
+            created_at=START,
+        )
+    )
+    search = SearchService(jobs)
+    registry = AgentRegistry()
+    registry.register(JobSearchAgent(search_service=search))
+    registry.register(ResumeAgent())
+    factory = AgentFactory(registry, search_service=search)
+
+    applications = SQLiteJobApplicationRepository(database)
+    operations = SQLiteExternalActionOperationRepository(database)
+
+    submission_provider = FakeApplicationSubmissionAdapter()
+    submission = ApplicationSubmissionService(
+        submission_provider,
+        ExternalActionService(
+            operations,
+            ApplicationSubmissionService.action_adapter(submission_provider),
+        ),
+    )
+
+    messages = SQLiteCommunicationRepository(database)
+    communication_provider = FakeCommunicationAdapter()
+    communication = CommunicationService(
+        messages,
+        communication_provider,
+        ExternalActionService(
+            operations,
+            CommunicationService.action_adapter(communication_provider, messages),
+        ),
+    )
+
+    schedules = SQLiteSchedulingRepository(database)
+    calendar_provider = FakeCalendarAdapter()
+    scheduling = SchedulingService(
+        schedules,
+        calendar_provider,
+        ExternalActionService(
+            operations,
+            SchedulingService.action_adapter(calendar_provider, schedules),
+        ),
+    )
+    if with_schedule and scheduling.get_event if False else False:
+        pass
+
+    loop = AutonomousCareerLoop(
+        agent_factory=factory,
+        application_repository=applications,
+        submission_service=submission,
+        communication_service=communication,
+        scheduling_service=scheduling,
+        state_repository=SQLiteCareerLoopRepository(database),
+    )
+    return (
+        database,
+        loop,
+        applications,
+        messages,
+        scheduling,
+        submission_provider,
+        communication_provider,
+        calendar_provider,
+    )
+
+
+def add_interview(scheduling: SchedulingService, application_id: str) -> None:
+    scheduling.add_event(
+        ScheduleEvent(
+            event_id="interview-1",
+            candidate_id="candidate-1",
+            employer_name="Acme Logistics",
+            event_type=ScheduleEventType.INTERVIEW,
+            location="Hauptstrasse 1, Karlsruhe",
+            start_at=START + timedelta(days=2),
+            end_at=START + timedelta(days=2, hours=1),
+            timezone_name="Europe/Berlin",
+            application_id=application_id,
+            created_at=START,
+            updated_at=START,
+        )
+    )
+
+
+def request(*, with_schedule: bool = True) -> CareerLoopRequest:
+    return CareerLoopRequest(
+        user_id="user-1",
+        keyword="Logistics",
+        location="Karlsruhe",
+        sender="candidate@example.test",
+        recipient="recruiter@example.test",
+        message_subject="Application follow-up",
+        message_body="Thank you for considering my application.",
+        schedule_event_id="interview-1" if with_schedule else None,
+    )
+
+
+def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path):
+    path = str(tmp_path / "career-loop.sqlite")
+    run_id = "loop-1"
+
+    first = build_stack(path)
+    database, loop, applications, _, scheduling, submission_provider, _, _ = first
+    add_interview(scheduling, f"{run_id}:application")
+
+    started = loop.start(request(), run_id=run_id)
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.human_action is not None
+    assert started.human_action.kind == HumanActionKind.APPROVE_APPLICATION
+    assert started.human_action.details["job_id"] == "job-1"
+    assert submission_provider.calls == []
+    tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
+    assert len(tracked) == 1
+    assert tracked[0].status == JobApplicationStatus.SAVED
+    database.close()
+
+    second = build_stack(path)
+    database, loop, applications, _, _, submission_provider, communication_provider, _ = second
+    after_application = loop.resume(run_id, approved=True)
+
+    assert after_application.phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert after_application.human_action is not None
+    assert after_application.human_action.kind == HumanActionKind.APPROVE_MESSAGE
+    assert len(submission_provider.calls) == 1
+    tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
+    assert len(tracked) == 1
+    assert tracked[0].status == JobApplicationStatus.APPLIED
+    assert communication_provider.calls == [
+        ("draft", f"{run_id}:message")
+    ]
+    database.close()
+
+    third = build_stack(path)
+    database, loop, applications, messages, _, submission_provider, communication_provider, _ = third
+    after_message = loop.resume(run_id, approved=True)
+
+    assert after_message.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert after_message.human_action is not None
+    assert after_message.human_action.kind == HumanActionKind.APPROVE_INTERVIEW
+    details = after_message.human_action.details
+    assert details["employer"] == "Acme Logistics"
+    assert details["location"] == "Hauptstrasse 1, Karlsruhe"
+    assert details["local_date"] == "2026-11-12"
+    assert details["local_start_time"] == "10:00:00"
+    assert details["timezone"] == "Europe/Berlin"
+    assert submission_provider.calls == []
+    assert [call for call in communication_provider.calls if call[0] == "send"] == [
+        ("send", f"{run_id}:message-send")
+    ]
+    assert messages.get(f"{run_id}:message").direction.value == "outbound"
+    assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
+    database.close()
+
+    fourth = build_stack(path)
+    database, loop, applications, messages, scheduling, submission_provider, communication_provider, calendar_provider = fourth
+    completed = loop.resume(run_id, approved=True)
+
+    assert completed.completed is True
+    assert completed.phase == CareerLoopPhase.COMPLETE
+    assert calendar_provider.calls == [
+        ("accept", f"{run_id}:interview-accept")
+    ]
+    assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+    assert submission_provider.calls == []
+    assert communication_provider.calls == []
+    assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
+    assert messages.get(f"{run_id}:message").direction.value == "outbound"
+
+    snapshot = loop.get(run_id)
+    assert snapshot.completed is True
+    assert snapshot.human_action is None
+    database.close()
+
+
+def test_loop_without_message_or_interview_completes_after_application_approval(tmp_path):
+    path = str(tmp_path / "minimal-loop.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    minimal = CareerLoopRequest(
+        user_id="user-1",
+        keyword="Logistics",
+        location="Karlsruhe",
+    )
+
+    started = loop.start(minimal, run_id="minimal")
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    completed = loop.resume("minimal", approved=True)
+
+    assert completed.completed is True
+    assert submission_provider.calls == [
+        ("minimal:application-submit", "job-1", "minimal:application")
+    ]
+    tracked = applications.get("minimal:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+
+def test_human_decline_stops_without_consequential_external_action(tmp_path):
+    path = str(tmp_path / "decline-loop.sqlite")
+    database, loop, applications, _, _, submission_provider, communication_provider, calendar_provider = build_stack(path)
+
+    started = loop.start(request(with_schedule=False), run_id="declined")
+    assert started.human_action is not None
+
+    stopped = loop.resume("declined", approved=False)
+
+    assert stopped.phase == CareerLoopPhase.FAILED
+    assert stopped.error == "human_declined:approve_application"
+    assert submission_provider.calls == []
+    assert communication_provider.calls == []
+    assert calendar_provider.calls == []
+    assert applications.get("declined:application").status == JobApplicationStatus.SAVED
+    database.close()
+
+
+def test_loop_is_globally_bounded_across_resumes(tmp_path):
+    path = str(tmp_path / "bounded-loop.sqlite")
+    database = SQLiteDatabase(path)
+    jobs = InMemoryJobRepository()
+    jobs.add(
+        Job.create(
+            job_id="job-1",
+            title="Logistics",
+            company=Company("company-1", "Acme"),
+            location=Location("Germany", "Karlsruhe"),
+            created_at=START,
+        )
+    )
+    search = SearchService(jobs)
+    registry = AgentRegistry()
+    registry.register(JobSearchAgent(search_service=search))
+    registry.register(ResumeAgent())
+    factory = AgentFactory(registry, search_service=search)
+    applications = SQLiteJobApplicationRepository(database)
+    operations = SQLiteExternalActionOperationRepository(database)
+    submission_provider = FakeApplicationSubmissionAdapter()
+    submission = ApplicationSubmissionService(
+        submission_provider,
+        ExternalActionService(
+            operations,
+            ApplicationSubmissionService.action_adapter(submission_provider),
+        ),
+    )
+    message_repo = SQLiteCommunicationRepository(database)
+    message_provider = FakeCommunicationAdapter()
+    communication = CommunicationService(
+        message_repo,
+        message_provider,
+        ExternalActionService(
+            operations,
+            CommunicationService.action_adapter(message_provider, message_repo),
+        ),
+    )
+    schedule_repo = SQLiteSchedulingRepository(database)
+    calendar_provider = FakeCalendarAdapter()
+    scheduling = SchedulingService(
+        schedule_repo,
+        calendar_provider,
+        ExternalActionService(
+            operations,
+            SchedulingService.action_adapter(calendar_provider, schedule_repo),
+        ),
+    )
+    loop = AutonomousCareerLoop(
+        agent_factory=factory,
+        application_repository=applications,
+        submission_service=submission,
+        communication_service=communication,
+        scheduling_service=scheduling,
+        state_repository=SQLiteCareerLoopRepository(database),
+        max_iterations=2,
+    )
+
+    result = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="bounded",
+    )
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert result.error == "max_iterations_reached"
+    assert result.iterations == 2
+    assert submission_provider.calls == []
+    database.close()
+
+
+def test_restart_before_message_phase_does_not_duplicate_application(tmp_path):
+    path = str(tmp_path / "duplicate-protection.sqlite")
+    run_id = "restart-safe"
+    first = build_stack(path, with_schedule=False)
+    database, loop, applications, _, _, _, _, _ = first
+
+    started = loop.start(request(with_schedule=False), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
+    database.close()
+
+    second = build_stack(path, with_schedule=False)
+    database, loop, applications, _, _, submission_provider, _, _ = second
+    completed = loop.resume(run_id, approved=True)
+
+    assert completed.completed is True
+    assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
+    assert len(submission_provider.calls) == 1
+    database.close()
+
+
+def test_repository_rejects_malformed_persisted_loop_json(tmp_path):
+    path = str(tmp_path / "malformed-loop.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerLoopRepository(database)
+    database.connection.execute(
+        "INSERT INTO autonomous_career_loops(run_id, payload_json, updated_at) VALUES (?, ?, ?)",
+        ("bad", "{not-json", START.isoformat()),
+    )
+    database.connection.commit()
+
+    with pytest.raises(ValueError, match="malformed"):
+        repository.get("bad")
+
+    database.close()
