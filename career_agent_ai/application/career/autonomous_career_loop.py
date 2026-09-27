@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timezone
+from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
@@ -199,6 +200,7 @@ class AutonomousCareerLoop:
         job_id = getattr(selected, "job_id", None)
         title = getattr(selected, "title", None)
         company = getattr(selected, "company", None)
+        company_id = getattr(company, "company_id", None)
         if not isinstance(job_id, str) or not job_id.strip():
             raise ValueError("Selected job has no stable identifier.")
         state.selected_job_id = self._external_identifier(job_id, "job_id")
@@ -206,6 +208,11 @@ class AutonomousCareerLoop:
             str(title or ""), "job_title", maximum=500, fallback="Unknown role"
         )
         state.selected_company = self._company_name(company)
+        state.selected_company_id = (
+            self._external_identifier(company_id, "company_id")
+            if isinstance(company_id, str) and company_id.strip()
+            else None
+        )
         state.phase = CareerLoopPhase.DECISION
 
     def _decide(self, state: CareerLoopState) -> None:
@@ -236,43 +243,54 @@ class AutonomousCareerLoop:
     def _prepare_application(self, state: CareerLoopState) -> None:
         if state.selected_job_id is None:
             raise RuntimeError("Application preparation requires a selected job.")
-        application_id = state.application_id or f"{state.run_id}:application"
-        existing = self._applications.get(application_id)
-        if existing is None:
-            matches = self._applications.find(
-                ApplicationQuery(
-                    user_id=state.request.user_id,
-                    job_id=state.selected_job_id,
-                )
+
+        matches = self._applications.find(
+            ApplicationQuery(
+                user_id=state.request.user_id,
+                job_id=state.selected_job_id,
             )
-            if matches:
-                existing = matches[0]
-                application_id = existing.application_id
-            else:
-                application = JobApplication(
-                    application_id=application_id,
-                    user_id=state.request.user_id,
-                    job_id=state.selected_job_id,
-                    company_id=(state.selected_company or "")[:200],
-                    status=JobApplicationStatus.SAVED,
-                    created_at=state.created_at.astimezone(timezone.utc),
-                    updated_at=state.created_at.astimezone(timezone.utc),
+        )
+        if matches:
+            tracked = matches[0]
+            application_id = tracked.application_id
+        else:
+            application_id = state.application_id or f"{state.run_id}:application"
+            collision = self._applications.get(application_id)
+            if collision is not None:
+                raise RuntimeError(
+                    "Derived application_id is already owned by another application."
                 )
-                try:
-                    self._applications.add(application)
-                except ApplicationConflictError:
-                    matches = self._applications.find(
-                        ApplicationQuery(
-                            user_id=state.request.user_id,
-                            job_id=state.selected_job_id,
-                        )
+            application = JobApplication(
+                application_id=application_id,
+                user_id=state.request.user_id,
+                job_id=state.selected_job_id,
+                company_id=state.selected_company_id,
+                status=JobApplicationStatus.SAVED,
+                created_at=state.created_at.astimezone(timezone.utc),
+                updated_at=state.created_at.astimezone(timezone.utc),
+            )
+            try:
+                self._applications.add(application)
+                tracked = application
+            except ApplicationConflictError:
+                matches = self._applications.find(
+                    ApplicationQuery(
+                        user_id=state.request.user_id,
+                        job_id=state.selected_job_id,
                     )
-                    if not matches:
-                        raise
-                    application_id = matches[0].application_id
-        tracked = self._applications.get(application_id)
-        if tracked is None:
-            raise RuntimeError("Prepared application disappeared.")
+                )
+                if not matches:
+                    raise
+                tracked = matches[0]
+                application_id = tracked.application_id
+
+        if (
+            tracked.user_id != state.request.user_id
+            or tracked.job_id != state.selected_job_id
+        ):
+            raise RuntimeError(
+                "Tracked application ownership does not match the current career loop."
+            )
         if tracked.status != JobApplicationStatus.SAVED:
             raise RuntimeError(
                 "A tracked application for this job has already progressed beyond draft; "
@@ -287,6 +305,7 @@ class AutonomousCareerLoop:
                 "job_id": state.selected_job_id,
                 "job_title": state.selected_job_title,
                 "company": state.selected_company,
+                "company_id": state.selected_company_id,
                 "application_id": state.application_id,
                 "application_version": tracked.version,
                 "application_status": tracked.status.value,
@@ -313,7 +332,7 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved application intent is stale; refusing external submission."
             )
-        operation_id = f"{state.application_id}:submit"
+        operation_id = self._application_submission_operation_id(state.application_id)
         result = self._submission.submit(
             operation_id,
             job_id=state.selected_job_id,
@@ -329,7 +348,7 @@ class AutonomousCareerLoop:
             updated = application.transition(
                 JobApplicationStatus.APPLIED,
                 operation_id=operation_id,
-                event_id=f"{state.application_id}:applied",
+                event_id=self._application_applied_event_id(state.application_id),
                 note="Submitted by autonomous career loop after human approval.",
             )
             self._applications.update(updated, expected_version=application.version)
@@ -366,8 +385,10 @@ class AutonomousCareerLoop:
             title="Approve recruiter/employer message",
             details={
                 "message_id": message_id,
+                "sender": state.request.sender,
                 "recipient": state.request.recipient,
                 "subject": state.request.message_subject,
+                "body": state.request.message_body,
             },
         )
 
@@ -381,8 +402,10 @@ class AutonomousCareerLoop:
         if (
             persisted is None
             or approved.details.get("message_id") != state.message_id
+            or approved.details.get("sender") != persisted.sender
             or approved.details.get("recipient") != persisted.recipient
             or approved.details.get("subject") != persisted.subject
+            or approved.details.get("body") != persisted.body
             or persisted.direction != MessageDirection.DRAFT
         ):
             raise RuntimeError(
@@ -503,6 +526,18 @@ class AutonomousCareerLoop:
 
     def _persist(self, state: CareerLoopState) -> None:
         self._states.save(state)
+
+    @staticmethod
+    def _application_submission_operation_id(application_id: str) -> str:
+        """Return a stable bounded provider idempotency key for one application."""
+        digest = sha256(application_id.encode("utf-8")).hexdigest()
+        return f"application-submit:{digest}"
+
+    @staticmethod
+    def _application_applied_event_id(application_id: str) -> str:
+        """Return a stable bounded timeline event ID for one submitted application."""
+        digest = sha256(application_id.encode("utf-8")).hexdigest()
+        return f"application-applied:{digest}"
 
     @classmethod
     def _company_name(cls, value: Any) -> str:
