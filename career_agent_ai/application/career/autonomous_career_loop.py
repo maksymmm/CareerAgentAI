@@ -592,21 +592,14 @@ class AutonomousCareerLoop:
     def _resume_artifact_content(result: Any) -> str:
         """Return the exact bounded text artifact produced for application approval."""
         metadata = getattr(result, "metadata", {})
-        candidate = None
-        if isinstance(metadata, dict) or hasattr(metadata, "get"):
-            for key in ("application_artifact", "resume_content", "content"):
-                value = metadata.get(key)
-                if isinstance(value, str) and value.strip():
-                    candidate = value
-                    break
-        if candidate is None:
-            messages = getattr(result, "messages", ())
-            if isinstance(messages, (tuple, list)):
-                candidate = "\n".join(
-                    item for item in messages if isinstance(item, str)
-                )
-        if not isinstance(candidate, str):
+        if not (isinstance(metadata, dict) or hasattr(metadata, "get")):
+            raise RuntimeError("Resume preparation produced no artifact metadata.")
+        candidate = metadata.get("application_artifact")
+        artifact_type = metadata.get("application_artifact_type")
+        if not isinstance(candidate, str) or not candidate.strip():
             raise RuntimeError("Resume preparation produced no inspectable application artifact.")
+        if artifact_type != "job_application_profile":
+            raise RuntimeError("Resume preparation produced an unsupported artifact type.")
         normalized = candidate.replace("\r\n", "\n").replace("\r", "\n").strip()
         if not normalized:
             raise RuntimeError("Resume preparation produced an empty application artifact.")
