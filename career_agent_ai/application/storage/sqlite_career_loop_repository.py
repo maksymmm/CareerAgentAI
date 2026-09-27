@@ -91,6 +91,7 @@ class SQLiteCareerLoopRepository:
     @classmethod
     def _serialize(cls, state: CareerLoopState) -> dict[str, Any]:
         action = state.pending_human_action
+        approved_action = state.approved_human_action
         return {
             "serialization_version": cls.SERIALIZATION_VERSION,
             "run_id": state.run_id,
@@ -111,15 +112,8 @@ class SQLiteCareerLoopRepository:
             "application_id": state.application_id,
             "message_id": state.message_id,
             "iterations": state.iterations,
-            "pending_human_action": (
-                None
-                if action is None
-                else {
-                    "kind": action.kind.value,
-                    "title": action.title,
-                    "details": dict(action.details),
-                }
-            ),
+            "pending_human_action": cls._serialize_human_action(action),
+            "approved_human_action": cls._serialize_human_action(approved_action),
             "last_error": state.last_error,
             "created_at": state.created_at.isoformat(),
             "updated_at": state.updated_at.isoformat(),
@@ -136,19 +130,10 @@ class SQLiteCareerLoopRepository:
             if not isinstance(request_data, dict):
                 raise ValueError("Persisted request must be an object.")
             request = CareerLoopRequest(**request_data)
-            action_data = value.get("pending_human_action")
-            action = None
-            if action_data is not None:
-                if not isinstance(action_data, dict):
-                    raise ValueError("Persisted human action must be an object.")
-                details = action_data["details"]
-                if not isinstance(details, dict):
-                    raise ValueError("Persisted human-action details must be an object.")
-                action = HumanActionEvent(
-                    kind=HumanActionKind(action_data["kind"]),
-                    title=action_data["title"],
-                    details=details,
-                )
+            action = cls._deserialize_human_action(value.get("pending_human_action"))
+            approved_action = cls._deserialize_human_action(
+                value.get("approved_human_action")
+            )
             created_at = datetime.fromisoformat(value["created_at"])
             updated_at = datetime.fromisoformat(value["updated_at"])
             if (
@@ -172,12 +157,38 @@ class SQLiteCareerLoopRepository:
                 message_id=cls._optional_text(value.get("message_id")),
                 iterations=iterations,
                 pending_human_action=action,
+                approved_human_action=approved_action,
                 last_error=cls._optional_text(value.get("last_error")),
                 created_at=created_at,
                 updated_at=updated_at,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("Persisted autonomous-loop state is malformed.") from exc
+
+    @staticmethod
+    def _serialize_human_action(action: HumanActionEvent | None) -> dict[str, Any] | None:
+        if action is None:
+            return None
+        return {
+            "kind": action.kind.value,
+            "title": action.title,
+            "details": dict(action.details),
+        }
+
+    @staticmethod
+    def _deserialize_human_action(value: Any) -> HumanActionEvent | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("Persisted human action must be an object.")
+        details = value.get("details")
+        if not isinstance(details, dict):
+            raise ValueError("Persisted human-action details must be an object.")
+        return HumanActionEvent(
+            kind=HumanActionKind(value["kind"]),
+            title=value["title"],
+            details=details,
+        )
 
     @staticmethod
     def _identifier(value: Any, field: str) -> str:
