@@ -183,6 +183,9 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 raise ApplicationConflictError(
                     "Application cannot be claimed for submission."
                 )
+            claimed = self.get(application_id)
+            if claimed is None:
+                raise ApplicationConflictError("Application disappeared before claim.")
             cursor = connection.execute(
                 """UPDATE job_applications
                    SET submission_claim_operation_id = ?
@@ -214,9 +217,6 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             if connection.in_transaction:
                 connection.rollback()
             raise
-        claimed = self.get(application_id)
-        if claimed is None:
-            raise ApplicationConflictError("Claimed application disappeared.")
         return claimed
 
     def release_submission(self, application_id: str, operation_id: str) -> None:
