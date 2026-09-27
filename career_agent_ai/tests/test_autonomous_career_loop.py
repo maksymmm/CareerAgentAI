@@ -475,7 +475,12 @@ def test_post_action_crash_after_application_success_recovers_without_resubmit(t
         ExternalActionOperation(
             operation_id=operation_id,
             action_type="application.submit",
-            payload={"job_id": "job-1", "application_id": application.application_id},
+            payload={
+                "job_id": "job-1",
+                "application_id": application.application_id,
+                "artifact_content": state.application_artifact_content,
+                "artifact_sha256": state.application_artifact_sha256,
+            },
         )
     )
     operations.transition(
@@ -491,6 +496,7 @@ def test_post_action_crash_after_application_success_recovers_without_resubmit(t
             "job_id": "job-1",
             "application_id": application.application_id,
             "provider_submission_id": "already-sent",
+            "artifact_sha256": state.application_artifact_sha256,
         },
     )
     applied = application.transition(
