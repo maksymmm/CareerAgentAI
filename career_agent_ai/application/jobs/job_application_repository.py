@@ -66,5 +66,29 @@ class JobApplicationRepository(ABC):
         """Return applications matching all supplied filters."""
 
     @abstractmethod
+    def claim_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        expected_version: int,
+    ) -> JobApplication:
+        """Atomically reserve one saved application version for provider submission."""
+
+    @abstractmethod
+    def release_submission(self, application_id: str, operation_id: str) -> None:
+        """Release a submission claim after a definite pre-provider failure."""
+
+    @abstractmethod
+    def complete_submission(
+        self,
+        application: JobApplication,
+        operation_id: str,
+        *,
+        expected_version: int,
+    ) -> None:
+        """Persist an applied transition only for the operation holding the claim."""
+
+    @abstractmethod
     def clear(self) -> None:
         """Remove all tracked applications."""
