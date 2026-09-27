@@ -5,8 +5,34 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from types import MappingProxyType
 from typing import Any, Mapping
+
+
+_INTERNAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$")
+
+
+def _safe_text(value: str, field: str, *, maximum: int, required: bool = False) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be text.")
+    normalized = value.strip()
+    if required and not normalized:
+        raise ValueError(f"{field} must not be empty.")
+    if len(normalized) > maximum:
+        raise ValueError(f"{field} must not exceed {maximum} characters.")
+    if any(ord(ch) < 32 and ch not in "\n\t" for ch in normalized):
+        raise ValueError(f"{field} contains forbidden control characters.")
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+        raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
+    return normalized
+
+
+def _internal_id(value: str, field: str) -> str:
+    normalized = _safe_text(value, field, maximum=200, required=True)
+    if not _INTERNAL_ID.fullmatch(normalized):
+        raise ValueError(f"{field} is malformed.")
+    return normalized
 
 
 class CareerLoopPhase(str, Enum):
@@ -68,20 +94,19 @@ class CareerLoopRequest:
     schedule_event_id: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("user_id", "keyword"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{name} must not be empty.")
-            object.__setattr__(self, name, value.strip())
-        for name in ("location", "sender", "recipient", "message_subject", "message_body"):
-            value = getattr(self, name)
-            if not isinstance(value, str):
-                raise TypeError(f"{name} must be text.")
-            object.__setattr__(self, name, value.strip())
+        object.__setattr__(self, "user_id", _internal_id(self.user_id, "user_id"))
+        object.__setattr__(self, "keyword", _safe_text(self.keyword, "keyword", maximum=500, required=True))
+        object.__setattr__(self, "location", _safe_text(self.location, "location", maximum=500))
+        object.__setattr__(self, "sender", _safe_text(self.sender, "sender", maximum=500))
+        object.__setattr__(self, "recipient", _safe_text(self.recipient, "recipient", maximum=500))
+        object.__setattr__(self, "message_subject", _safe_text(self.message_subject, "message_subject", maximum=500))
+        object.__setattr__(self, "message_body", _safe_text(self.message_body, "message_body", maximum=100_000))
         if self.schedule_event_id is not None:
-            if not isinstance(self.schedule_event_id, str) or not self.schedule_event_id.strip():
-                raise ValueError("schedule_event_id must not be empty.")
-            object.__setattr__(self, "schedule_event_id", self.schedule_event_id.strip())
+            object.__setattr__(
+                self,
+                "schedule_event_id",
+                _internal_id(self.schedule_event_id, "schedule_event_id"),
+            )
 
 
 @dataclass
