@@ -186,10 +186,15 @@ adapter and no-I/O fake, executes through the existing external-action coordinat
 and uses the stable application identity for idempotency rather than a transient run
 ID. Existing communication and scheduling services retain their own crash-safe
 idempotency and reconciliation contracts. Human-action events expose the precise
-decision being requested, including exact interview employer/location/local time.
-End-to-end fake-provider tests exercise process restarts and verify that tracked
-applications and outbound messages are not duplicated. A later run is prevented from
-resubmitting a user/job application that has already progressed beyond draft.
+decision being requested, including the exact typed application artifact and its
+SHA-256 digest before submission plus exact interview employer/location/local time.
+The approved application artifact is persisted in restart-safe loop state and copied
+into the crash-safe external-action intent so provider execution is cryptographically
+bound to the content the human saw. Interview coordination requires candidate
+ownership and compatible application linkage. End-to-end fake-provider tests exercise
+process restarts and verify that tracked applications and outbound messages are not
+duplicated. A later run is prevented from resubmitting a user/job application that has
+already progressed beyond draft.
 
 Next priority: production hardening.
 
