@@ -22,7 +22,7 @@ def current_correlation_id() -> str | None:
 @contextmanager
 def correlation_scope(correlation_id: str | None = None) -> Iterator[str]:
     """Bind a validated correlation ID for all logs emitted in the scope."""
-    identifier = correlation_id or uuid4().hex
+    identifier = uuid4().hex if correlation_id is None else correlation_id
     if not isinstance(identifier, str):
         raise TypeError("correlation_id must be text.")
     identifier = identifier.strip()
