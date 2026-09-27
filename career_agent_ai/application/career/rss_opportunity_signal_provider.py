@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import socket
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from email.utils import parsedate_to_datetime
 from html import unescape
 from typing import Callable, Iterable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .opportunity_signal import OpportunitySignal
 from .signal_deduplicator import OpportunitySignalDeduplicator
@@ -123,6 +124,7 @@ class RSSOpportunitySignalProvider:
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        resolver: Callable[[str, int], tuple[str, ...]] | None = None,
         deduplicator: OpportunitySignalDeduplicator | None = None,
     ) -> None:
         configured = tuple(feeds)
@@ -142,6 +144,7 @@ class RSSOpportunitySignalProvider:
         self._monotonic = monotonic
         self._sleeper = sleeper
         self._now = now
+        self._resolver = resolver or _resolve_host_addresses
         self._deduplicator = deduplicator or OpportunitySignalDeduplicator()
         self._last_request_at: float | None = None
         self._last_errors: tuple[SignalSourceError, ...] = ()
@@ -174,6 +177,7 @@ class RSSOpportunitySignalProvider:
         return self._deduplicator.deduplicate(signals)
 
     def _fetch(self, url: str) -> bytes:
+        self._validate_connection_target(url)
         self._rate_limit()
         request = Request(
             url,
@@ -184,7 +188,10 @@ class RSSOpportunitySignalProvider:
             method="GET",
         )
         try:
-            with urlopen(request, timeout=self._timeout) as response:
+            with _open_feed(request, timeout=self._timeout) as response:
+                final_url = getattr(response, "geturl", lambda: url)()
+                if final_url != url:
+                    raise RuntimeError("feed redirects are not allowed")
                 status = getattr(response, "status", 200)
                 if status < 200 or status >= 300:
                     raise RuntimeError(f"feed returned HTTP {status}")
@@ -197,6 +204,32 @@ class RSSOpportunitySignalProvider:
         if len(body) > self._max_response_bytes:
             raise RuntimeError("feed response exceeds configured size limit")
         return body
+
+    def _validate_connection_target(self, url: str) -> None:
+        """Reject feed hosts resolving to non-public network addresses."""
+        parsed = urlparse(_validate_feed_url(url))
+        host = parsed.hostname
+        if host is None:
+            raise ValueError("feed_url must contain a host.")
+        try:
+            port = parsed.port or 443
+        except ValueError as exc:
+            raise ValueError("feed_url contains an invalid port.") from exc
+        try:
+            addresses = tuple(self._resolver(host, port))
+        except Exception as exc:
+            raise RuntimeError("failed to resolve configured feed host") from exc
+        if not addresses:
+            raise RuntimeError("configured feed host resolved to no addresses")
+        for raw_address in addresses:
+            try:
+                address = ipaddress.ip_address(raw_address)
+            except ValueError as exc:
+                raise RuntimeError("configured feed host resolved to an invalid address") from exc
+            if not _is_public_address(address):
+                raise RuntimeError(
+                    "configured feed host resolved to a non-public network address"
+                )
 
     def _rate_limit(self) -> None:
         if self._last_request_at is None:
@@ -355,6 +388,12 @@ def _validate_feed_url(value: str) -> str:
     parsed = urlparse(normalized)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("feed_url must be an absolute HTTPS URL.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("feed_url must not contain embedded credentials.")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("feed_url contains an invalid port.") from exc
     host = parsed.hostname.casefold()
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError("feed_url must not target localhost.")
@@ -362,12 +401,38 @@ def _validate_feed_url(value: str) -> str:
         address = ipaddress.ip_address(host)
     except ValueError:
         address = None
-    if address is not None and (
+    if address is not None and not _is_public_address(address):
+        raise ValueError("feed_url must not target a non-public IP address.")
+    return normalized
+
+
+def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return not (
         address.is_private
         or address.is_loopback
         or address.is_link_local
         or address.is_multicast
         or address.is_reserved
-    ):
-        raise ValueError("feed_url must not target a non-public IP address.")
-    return normalized
+        or address.is_unspecified
+    )
+
+
+def _resolve_host_addresses(host: str, port: int) -> tuple[str, ...]:
+    """Resolve a feed host immediately before connecting."""
+    rows = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return tuple(dict.fromkeys(str(row[4][0]) for row in rows))
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects so every network target is validated before connection."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
+
+
+def _open_feed(request: Request, timeout: float):
+    """Open one validated feed request without automatic redirect following."""
+    return _NO_REDIRECT_OPENER.open(request, timeout=timeout)
