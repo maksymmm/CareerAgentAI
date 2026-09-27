@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 import json
 from datetime import datetime, timedelta, timezone
@@ -706,6 +707,39 @@ def test_reschedule_claim_reserves_current_and_target_slots():
             reservation_end=BASE_START + timedelta(minutes=45),
             enforce_conflicts=True,
         )
+
+
+def test_claim_action_does_not_depend_on_post_commit_repository_read():
+    database = SQLiteDatabase()
+    setup = SQLiteSchedulingRepository(database)
+    original = event()
+    setup.create(original)
+
+    class FailingGetRepository(SQLiteSchedulingRepository):
+        def get(self, event_id):
+            raise sqlite3.OperationalError("simulated transient read failure")
+
+    repository = FailingGetRepository(database)
+    claimed = repository.claim_action(
+        "event-1",
+        "accept:no-post-read",
+        (ScheduleStatus.PROPOSED,),
+        expected_version=1,
+        reservation_start=BASE_START,
+        reservation_end=BASE_START + timedelta(hours=1),
+        enforce_conflicts=True,
+    )
+
+    assert claimed == original
+    row = database.connection.execute(
+        """
+        SELECT active_action_operation_id
+        FROM scheduling_events
+        WHERE event_id = ?
+        """,
+        ("event-1",),
+    ).fetchone()
+    assert row == ("accept:no-post-read",)
 
 
 def test_prepared_acceptance_is_bound_to_original_event_version_and_slot():
