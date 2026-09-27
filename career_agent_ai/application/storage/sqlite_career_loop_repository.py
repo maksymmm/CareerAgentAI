@@ -57,7 +57,10 @@ class SQLiteCareerLoopRepository:
             value = json.loads(row[0])
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValueError("Persisted autonomous-loop JSON is malformed.") from exc
-        return self._deserialize(value)
+        state = self._deserialize(value)
+        if state.run_id != run_id:
+            raise ValueError("Persisted autonomous-loop run_id does not match its storage key.")
+        return state
 
     def delete(self, run_id: str) -> None:
         """Delete one terminal loop snapshot."""
