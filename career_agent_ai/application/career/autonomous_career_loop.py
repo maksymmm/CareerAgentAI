@@ -11,6 +11,7 @@ from career_agent_ai.application.brain.agent_context import AgentContext
 from career_agent_ai.application.career.application_submission import (
     ApplicationSubmissionService,
 )
+from career_agent_ai.application.career.career_decision_engine import CareerDecisionEngine
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
@@ -60,6 +61,7 @@ class AutonomousCareerLoop:
         self._scheduling = scheduling_service
         self._states = state_repository
         self._max_iterations = max_iterations
+        self._decision_engine = CareerDecisionEngine()
 
     def start(
         self, request: CareerLoopRequest, *, run_id: str | None = None
@@ -68,8 +70,8 @@ class AutonomousCareerLoop:
         if not isinstance(request, CareerLoopRequest):
             raise TypeError("request must be a CareerLoopRequest.")
         identifier = (run_id or uuid4().hex).strip()
-        if not identifier or len(identifier) > 200:
-            raise ValueError("run_id must be a non-empty string of at most 200 characters.")
+        if not identifier or len(identifier) > 120:
+            raise ValueError("run_id must be a non-empty string of at most 120 characters.")
         if self._states.get(identifier) is not None:
             raise ValueError("run_id already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
@@ -100,7 +102,7 @@ class AutonomousCareerLoop:
         elif kind == HumanActionKind.APPROVE_MESSAGE:
             state.phase = CareerLoopPhase.MESSAGE_SEND
         elif kind == HumanActionKind.APPROVE_INTERVIEW:
-            state.phase = CareerLoopPhase.INTERVIEW_COORDINATION
+            state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
         else:
             raise ValueError("Unsupported pending human action.")
         state.touch()
@@ -115,18 +117,16 @@ class AutonomousCareerLoop:
         return self._result(state)
 
     def _continue(self, state: CareerLoopState) -> CareerLoopResult:
-        segment_iterations = 0
         try:
             while state.phase not in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
                 if state.pending_human_action is not None:
                     break
-                if segment_iterations >= self._max_iterations:
+                if state.iterations >= self._max_iterations:
                     state.last_error = "max_iterations_reached"
                     state.phase = CareerLoopPhase.FAILED
                     state.touch()
                     self._persist(state)
                     break
-                segment_iterations += 1
                 state.iterations += 1
                 self._step(state)
                 state.touch()
@@ -141,6 +141,8 @@ class AutonomousCareerLoop:
     def _step(self, state: CareerLoopState) -> None:
         if state.phase == CareerLoopPhase.SEARCH:
             self._search(state)
+        elif state.phase == CareerLoopPhase.DECISION:
+            self._decide(state)
         elif state.phase == CareerLoopPhase.RESUME:
             self._resume_prepare(state)
         elif state.phase == CareerLoopPhase.APPLICATION_PREPARE:
@@ -155,6 +157,8 @@ class AutonomousCareerLoop:
             self._track(state)
         elif state.phase == CareerLoopPhase.INTERVIEW_COORDINATION:
             self._coordinate_interview(state)
+        elif state.phase == CareerLoopPhase.INTERVIEW_ACCEPT:
+            self._accept_interview(state)
         else:
             raise RuntimeError(f"Unsupported autonomous-loop phase: {state.phase.value}")
 
@@ -182,6 +186,16 @@ class AutonomousCareerLoop:
         state.selected_job_id = job_id.strip()
         state.selected_job_title = str(title or "").strip() or "Unknown role"
         state.selected_company = self._company_name(company)
+        state.phase = CareerLoopPhase.DECISION
+
+    def _decide(self, state: CareerLoopState) -> None:
+        decision = self._decision_engine.next_action(
+            "find a suitable job",
+            ("job_search",),
+            {"job_id": state.selected_job_id},
+        )
+        if decision.action != "resume":
+            raise RuntimeError("Career decision engine did not advance to resume preparation.")
         state.phase = CareerLoopPhase.RESUME
 
     def _resume_prepare(self, state: CareerLoopState) -> None:
@@ -291,7 +305,11 @@ class AutonomousCareerLoop:
             direction=MessageDirection.DRAFT,
             created_at=state.created_at,
         )
-        self._communication.create_draft(message)
+        persisted = self._communication.get_persisted(message_id)
+        if persisted is None:
+            self._communication.create_draft(message)
+        elif persisted != message:
+            raise RuntimeError("Persisted loop message does not match the prepared intent.")
         state.message_id = message_id
         state.phase = CareerLoopPhase.MESSAGE_APPROVAL
         state.pending_human_action = HumanActionEvent(
@@ -333,6 +351,8 @@ class AutonomousCareerLoop:
             state.phase = CareerLoopPhase.COMPLETE
             return
         event = self._scheduling.get_event(event_id)
+        if event.application_id not in (None, state.application_id):
+            raise RuntimeError("Interview event is linked to a different application.")
         if event.status == ScheduleStatus.ACCEPTED:
             state.phase = CareerLoopPhase.COMPLETE
             return
@@ -341,27 +361,28 @@ class AutonomousCareerLoop:
             ScheduleStatus.RESCHEDULE_REQUESTED,
         }:
             raise RuntimeError("Interview event is not awaiting acceptance.")
+        view = self._scheduling.human_view(event_id)
+        state.phase = CareerLoopPhase.INTERVIEW_APPROVAL
+        state.pending_human_action = HumanActionEvent(
+            kind=HumanActionKind.APPROVE_INTERVIEW,
+            title="Approve interview/trial-day calendar response",
+            details={
+                "event_id": view.event_id,
+                "employer": view.employer_name,
+                "event_type": view.event_type.value,
+                "location": view.location,
+                "local_date": view.local_date,
+                "local_start_time": view.local_start_time,
+                "timezone": view.timezone_name,
+                "utc_offset": view.utc_offset,
+                "status": view.status.value,
+            },
+        )
 
-        if state.phase == CareerLoopPhase.INTERVIEW_COORDINATION and state.pending_human_action is None:
-            view = self._scheduling.human_view(event_id)
-            state.phase = CareerLoopPhase.INTERVIEW_APPROVAL
-            state.pending_human_action = HumanActionEvent(
-                kind=HumanActionKind.APPROVE_INTERVIEW,
-                title="Approve interview/trial-day calendar response",
-                details={
-                    "event_id": view.event_id,
-                    "employer": view.employer_name,
-                    "event_type": view.event_type.value,
-                    "location": view.location,
-                    "local_date": view.local_date,
-                    "local_start_time": view.local_start_time,
-                    "timezone": view.timezone_name,
-                    "utc_offset": view.utc_offset,
-                    "status": view.status.value,
-                },
-            )
-            return
-
+    def _accept_interview(self, state: CareerLoopState) -> None:
+        event_id = state.request.schedule_event_id
+        if event_id is None:
+            raise RuntimeError("Interview approval has no scheduling event.")
         accepted = self._scheduling.accept(
             f"{state.run_id}:interview-accept",
             event_id,
