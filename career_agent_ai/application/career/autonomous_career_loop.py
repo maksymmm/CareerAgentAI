@@ -292,7 +292,7 @@ class AutonomousCareerLoop:
     def _submit_application(self, state: CareerLoopState) -> None:
         if state.application_id is None or state.selected_job_id is None:
             raise RuntimeError("Application submission state is incomplete.")
-        operation_id = f"{state.run_id}:application-submit"
+        operation_id = f"{state.application_id}:submit"
         result = self._submission.submit(
             operation_id,
             job_id=state.selected_job_id,
@@ -308,7 +308,7 @@ class AutonomousCareerLoop:
             updated = application.transition(
                 JobApplicationStatus.APPLIED,
                 operation_id=operation_id,
-                event_id=f"{state.run_id}:applied",
+                event_id=f"{state.application_id}:applied",
                 note="Submitted by autonomous career loop after human approval.",
             )
             self._applications.update(updated, expected_version=application.version)
