@@ -111,9 +111,6 @@ def build_stack(path: str, *, with_schedule: bool = True):
             SchedulingService.action_adapter(calendar_provider, schedules),
         ),
     )
-    if with_schedule and scheduling.get_event if False else False:
-        pass
-
     loop = AutonomousCareerLoop(
         agent_factory=factory,
         application_repository=applications,
