@@ -252,8 +252,17 @@ same tracked application again. Communication and interview responses reuse thei
 existing crash-safe adapters and persistence contracts.
 
 Human-action events are explicit for application submission, outbound messaging, and
-interview/trial-day calendar responses. A restart can recover both human-gated states
-and already-approved in-progress phases through the durable continuation entry point.
+interview/trial-day calendar responses. Before an application can be approved, the
+resume/application preparation step must emit an explicit typed artifact. The exact
+artifact text and SHA-256 digest are persisted in loop state, shown in the approval
+event, copied into the durable external-action intent, and passed unchanged through
+the submission-adapter contract. Reusing an operation ID with different artifact
+content is rejected, so the provider cannot silently submit something other than what
+the human approved.
+
+Interview coordination verifies both candidate ownership and application linkage before
+exposing an approval gate. A restart can recover both human-gated states and
+already-approved in-progress phases through the durable continuation entry point.
 Integration tests use only fake/no-I/O providers and verify that restarts do not create
 duplicate applications or messages.
 
