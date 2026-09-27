@@ -111,6 +111,8 @@ class SQLiteCareerLoopRepository:
             "selected_company": state.selected_company,
             "selected_company_id": state.selected_company_id,
             "application_id": state.application_id,
+            "application_artifact_content": state.application_artifact_content,
+            "application_artifact_sha256": state.application_artifact_sha256,
             "message_id": state.message_id,
             "iterations": state.iterations,
             "pending_human_action": cls._serialize_human_action(action),
@@ -156,6 +158,12 @@ class SQLiteCareerLoopRepository:
                 selected_company=cls._optional_text(value.get("selected_company")),
                 selected_company_id=cls._optional_text(value.get("selected_company_id")),
                 application_id=cls._optional_text(value.get("application_id")),
+                application_artifact_content=cls._optional_text(
+                    value.get("application_artifact_content")
+                ),
+                application_artifact_sha256=cls._optional_text(
+                    value.get("application_artifact_sha256")
+                ),
                 message_id=cls._optional_text(value.get("message_id")),
                 iterations=iterations,
                 pending_human_action=action,
