@@ -341,7 +341,7 @@ class AutonomousCareerLoop:
     def _prepare_message(self, state: CareerLoopState) -> None:
         if not state.request.sender or not state.request.recipient:
             state.approved_human_action = None
-        state.phase = CareerLoopPhase.TRACK
+            state.phase = CareerLoopPhase.TRACK
             return
         message_id = state.message_id or f"{state.run_id}:message"
         message = CommunicationMessage(
@@ -395,6 +395,7 @@ class AutonomousCareerLoop:
         )
         if delivered is None:
             raise RuntimeError("Message send did not reach a confirmed outcome.")
+        state.approved_human_action = None
         state.phase = CareerLoopPhase.TRACK
 
     def _track(self, state: CareerLoopState) -> None:
@@ -457,8 +458,11 @@ class AutonomousCareerLoop:
             "location": view.location,
             "local_date": view.local_date,
             "local_start_time": view.local_start_time,
+            "local_end_date": view.local_end_date,
+            "local_end_time": view.local_end_time,
             "timezone": view.timezone_name,
             "utc_offset": view.utc_offset,
+            "end_utc_offset": view.end_utc_offset,
             "status": view.status.value,
         }
         if dict(approved.details) != current_details:
