@@ -172,6 +172,34 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
     )
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"sender": "candidate@example.test", "recipient": ""},
+        {"sender": "", "recipient": "recruiter@example.test"},
+        {
+            "sender": "candidate@example.test",
+            "recipient": "recruiter@example.test",
+            "message_subject": "",
+        },
+        {
+            "sender": "candidate@example.test",
+            "recipient": "recruiter@example.test",
+            "message_body": "",
+        },
+    ],
+)
+def test_request_rejects_incomplete_enabled_messaging_before_run(changes):
+    values = {
+        "user_id": "user-1",
+        "keyword": "Logistics",
+    }
+    values.update(changes)
+
+    with pytest.raises(ValueError):
+        CareerLoopRequest(**values)
+
+
 def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path):
     path = str(tmp_path / "career-loop.sqlite")
     run_id = "loop-1"
