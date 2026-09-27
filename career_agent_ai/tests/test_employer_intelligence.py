@@ -91,6 +91,52 @@ def test_employer_intelligence_is_deterministically_ordered_by_latest_signal():
     assert tuple(item.company for item in result) == ("Beta", "Alpha")
 
 
+
+
+def test_deduplicator_scopes_external_ids_to_feed_namespace():
+    first = OpportunitySignal(
+        company="Acme",
+        signal_type="funding",
+        strength=1.0,
+        observed_at=NOW,
+        source="https://example.com/first",
+        metadata={
+            "external_id": "shared",
+            "feed_url": "https://example.com/feed-a.xml",
+        },
+    )
+    second = OpportunitySignal(
+        company="Acme",
+        signal_type="funding",
+        strength=1.0,
+        observed_at=NOW,
+        source="https://example.com/second",
+        metadata={
+            "external_id": "shared",
+            "feed_url": "https://example.com/feed-b.xml",
+        },
+    )
+
+    assert OpportunitySignalDeduplicator().deduplicate((first, second)) == (
+        first,
+        second,
+    )
+
+
+def test_proactive_scoring_groups_company_name_case_insensitively():
+    funding = signal(company="Acme", signal_type="funding", external_id="fund")
+    product = signal(
+        company="acme",
+        signal_type="new_product",
+        external_id="product",
+        source="https://example.com/product",
+    )
+
+    ranked = ProactiveOpportunityService().rank((funding, product))
+
+    assert len(ranked) == 1
+    assert ranked[0].metadata["signal_count"] == 2
+
 def test_proactive_scoring_does_not_double_count_duplicate_signal():
     duplicate = signal(strength=1.0)
 
