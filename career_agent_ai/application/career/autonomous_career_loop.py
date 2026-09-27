@@ -28,6 +28,7 @@ from career_agent_ai.application.communication import (
     CommunicationService,
     MessageDirection,
 )
+from career_agent_ai.application.external_actions import ExternalActionStatus
 from career_agent_ai.application.jobs.job_application import JobApplication
 from career_agent_ai.application.jobs.job_application_repository import (
     ApplicationConflictError,
@@ -326,6 +327,22 @@ class AutonomousCareerLoop:
             application.status == JobApplicationStatus.APPLIED
             and operation_id in application.external_action_operation_ids
         ):
+            durable_operation = self._submission.get_operation(operation_id)
+            if (
+                durable_operation is None
+                or durable_operation.status != ExternalActionStatus.SUCCEEDED
+            ):
+                raise RuntimeError(
+                    "Applied tracker state lacks a confirmed durable submission outcome."
+                )
+            replay = self._submission.submit(
+                operation_id,
+                job_id=state.selected_job_id,
+                application_id=state.application_id,
+                human_approved=True,
+            )
+            if replay is None:
+                raise RuntimeError("Confirmed application submission could not be replayed.")
             state.approved_human_action = None
             state.phase = CareerLoopPhase.MESSAGE_PREPARE
             return
