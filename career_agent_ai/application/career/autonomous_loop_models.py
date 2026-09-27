@@ -13,6 +13,7 @@ class CareerLoopPhase(str, Enum):
     """Bounded state-machine phases for one autonomous career loop."""
 
     SEARCH = "search"
+    DECISION = "decision"
     RESUME = "resume"
     APPLICATION_PREPARE = "application_prepare"
     APPLICATION_APPROVAL = "application_approval"
@@ -23,6 +24,7 @@ class CareerLoopPhase(str, Enum):
     TRACK = "track"
     INTERVIEW_COORDINATION = "interview_coordination"
     INTERVIEW_APPROVAL = "interview_approval"
+    INTERVIEW_ACCEPT = "interview_accept"
     COMPLETE = "complete"
     FAILED = "failed"
 
