@@ -28,8 +28,9 @@ def _safe_text(value: str, field: str, *, maximum: int, required: bool = False) 
     return normalized
 
 
-def _internal_id(value: str, field: str) -> str:
-    normalized = _safe_text(value, field, maximum=200, required=True)
+def validate_loop_identifier(value: str, field: str, *, maximum: int = 200) -> str:
+    """Validate one internal identifier used to derive stable loop operation IDs."""
+    normalized = _safe_text(value, field, maximum=maximum, required=True)
     if not _INTERNAL_ID.fullmatch(normalized):
         raise ValueError(f"{field} is malformed.")
     return normalized
@@ -94,7 +95,7 @@ class CareerLoopRequest:
     schedule_event_id: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "user_id", _internal_id(self.user_id, "user_id"))
+        object.__setattr__(self, "user_id", validate_loop_identifier(self.user_id, "user_id"))
         object.__setattr__(self, "keyword", _safe_text(self.keyword, "keyword", maximum=500, required=True))
         object.__setattr__(self, "location", _safe_text(self.location, "location", maximum=500))
         object.__setattr__(self, "sender", _safe_text(self.sender, "sender", maximum=500))
@@ -105,7 +106,7 @@ class CareerLoopRequest:
             object.__setattr__(
                 self,
                 "schedule_event_id",
-                _internal_id(self.schedule_event_id, "schedule_event_id"),
+                validate_loop_identifier(self.schedule_event_id, "schedule_event_id"),
             )
 
 
