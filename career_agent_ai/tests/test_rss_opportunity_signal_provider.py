@@ -11,21 +11,6 @@ from career_agent_ai.application.career.rss_opportunity_signal_provider import (
 )
 
 
-class FakeResponse:
-    def __init__(self, body: bytes, status: int = 200) -> None:
-        self._body = body
-        self.status = status
-
-    def read(self, size: int = -1) -> bytes:
-        return self._body if size < 0 else self._body[:size]
-
-    def __enter__(self) -> "FakeResponse":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-
 @pytest.fixture(autouse=True)
 def public_dns(monkeypatch):
     """Keep provider tests offline while exercising pre-connect DNS validation."""
@@ -54,8 +39,8 @@ def test_rss_provider_emits_source_backed_signal_with_observation_and_publicatio
     </item></channel></rss>"""
 
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     fetched_at = datetime(2026, 9, 26, tzinfo=timezone.utc)
     provider = RSSOpportunitySignalProvider(
@@ -89,8 +74,8 @@ def test_atom_provider_supports_href_links_and_fetched_observation_time(monkeypa
     </feed>"""
     observed = datetime(2026, 9, 26, 11, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     provider = RSSOpportunitySignalProvider(
         (feed(),),
@@ -113,8 +98,8 @@ def test_provider_does_not_fabricate_signal_without_explicit_keyword_match(monke
       <guid>calendar-1</guid>
     </item></channel></rss>"""
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
 
     provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
@@ -130,8 +115,8 @@ def test_provider_deduplicates_duplicate_feed_entries(monkeypatch):
         <link>https://example.com/news/product</link><guid>same-story</guid></item>
     </channel></rss>"""
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
 
@@ -159,8 +144,8 @@ def test_provider_rate_limits_between_configured_sources(monkeypatch):
 
     clock = Clock()
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     provider = RSSOpportunitySignalProvider(
         (
@@ -182,14 +167,14 @@ def test_provider_is_fail_soft_and_reports_sanitized_source_error(monkeypatch):
       <title>Beta launches new product</title><guid>beta-1</guid>
     </item></channel></rss>"""
 
-    def fake_urlopen(request, timeout):
-        if "alpha.example.com" in request.full_url:
+    def fake_read_feed(url, addresses, timeout, max_response_bytes):
+        if "alpha.example.com" in url:
             raise OSError("network unavailable")
-        return FakeResponse(raw)
+        return raw
 
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        fake_urlopen,
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        fake_read_feed,
     )
     provider = RSSOpportunitySignalProvider(
         (
@@ -211,8 +196,8 @@ def test_provider_is_fail_soft_and_reports_sanitized_source_error(monkeypatch):
 def test_provider_bounds_response_size(monkeypatch):
     raw = b"x" * 101
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     provider = RSSOpportunitySignalProvider(
         (feed(),),
@@ -232,8 +217,8 @@ def test_provider_falls_back_to_feed_provenance_for_unsafe_entry_link(monkeypatc
       <link>javascript:alert(1)</link>
     </item></channel></rss>"""
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
 
@@ -247,8 +232,8 @@ def test_provider_rejects_doctype_and_entity_declarations(monkeypatch):
     raw = b"""<!DOCTYPE rss [<!ENTITY xxe "unsafe">]>
     <rss><channel><item><title>&xxe;</title></item></channel></rss>"""
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
-        lambda request, timeout: FakeResponse(raw),
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        lambda url, addresses, timeout, max_response_bytes: raw,
     )
     provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
 
@@ -257,20 +242,49 @@ def test_provider_rejects_doctype_and_entity_declarations(monkeypatch):
 
 
 
+def test_provider_passes_only_prevalidated_addresses_to_network_reader(monkeypatch):
+    raw = b"""<rss><channel><item>
+      <title>Acme launches new product</title><guid>one</guid>
+    </item></channel></rss>"""
+    seen: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._resolve_host_addresses",
+        lambda host, port: ("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"),
+    )
+
+    def fake_read(url, addresses, timeout, max_response_bytes):
+        seen.append(addresses)
+        return raw
+
+    monkeypatch.setattr(
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
+        fake_read,
+    )
+    provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
+
+    signals = provider.collect()
+
+    assert len(signals) == 1
+    assert seen == [
+        ("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946")
+    ]
+
+
 def test_provider_rejects_private_dns_target_before_opening_connection(monkeypatch):
     opened = False
 
-    def must_not_open(request, timeout):
+    def must_not_open(url, addresses, timeout, max_response_bytes):
         nonlocal opened
         opened = True
-        return FakeResponse(b"<rss/>")
+        return b"<rss/>"
 
     monkeypatch.setattr(
         "career_agent_ai.application.career.rss_opportunity_signal_provider._resolve_host_addresses",
         lambda host, port: ("10.0.0.5",),
     )
     monkeypatch.setattr(
-        "career_agent_ai.application.career.rss_opportunity_signal_provider._open_feed",
+        "career_agent_ai.application.career.rss_opportunity_signal_provider._read_feed",
         must_not_open,
     )
     provider = RSSOpportunitySignalProvider((feed(),), min_interval_seconds=0)
