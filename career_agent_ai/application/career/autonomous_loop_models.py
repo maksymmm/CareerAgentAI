@@ -122,6 +122,8 @@ class CareerLoopState:
     selected_company: str | None = None
     selected_company_id: str | None = None
     application_id: str | None = None
+    application_artifact_content: str | None = None
+    application_artifact_sha256: str | None = None
     message_id: str | None = None
     iterations: int = 0
     pending_human_action: HumanActionEvent | None = None
