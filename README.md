@@ -131,7 +131,9 @@ The current implementation deliberately stops at `prepare_outreach`.
 
 It does **not** send messages, contact employers, or perform other external communication.
 
-Signals enter through an explicit `OpportunitySignalProvider` boundary. The included static provider is deterministic and is intended for supplied data and tests; it does not pretend to discover live hiring signals.
+Signals enter through an explicit `OpportunitySignalProvider` boundary. The static provider remains deterministic for supplied data and tests. A production-capable RSS/Atom adapter can also collect real company-owned news feeds over HTTPS. It emits signals only when configured deterministic rules match actual feed entries, retains the entry/feed provenance and observation time, rate-limits requests, bounds response size, reports source failures without fabricating results, and deduplicates provider-native entry identities.
+
+`EmployerIntelligenceService` aggregates those deduplicated source-backed signals by employer while preserving the underlying evidence, latest observation timestamp, signal types, and provenance sources. The same deduplicator is applied before opportunity scoring so repeated provider observations do not inflate a company's score.
 
 ---
 
@@ -304,13 +306,14 @@ Implemented foundations:
 - Pre-vacancy opportunity scoring
 - Bounded pre-vacancy action policy
 - Unsent proactive outreach drafting
+- Production-capable HTTPS RSS/Atom opportunity-signal collection with provenance and rate/error handling
+- Deterministic signal deduplication and employer intelligence aggregation
 - Continuous integration workflow
 
 Next architectural steps:
 
-- real signal-source adapters
-- employer intelligence
-- long-running autonomous execution
+- end-to-end autonomous career loop
+- production hardening
 
 ---
 
