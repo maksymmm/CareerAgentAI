@@ -380,6 +380,129 @@ def test_restart_before_message_phase_does_not_duplicate_application(tmp_path):
     database.close()
 
 
+
+def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
+    path = str(tmp_path / "approved-crash.sqlite")
+    run_id = "approved-crash"
+
+    first = build_stack(path, with_schedule=False)
+    database, loop, _, _, _, _, _, _ = first
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    states = SQLiteCareerLoopRepository(database)
+    state = states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.APPLICATION_SUBMIT
+    state.touch()
+    states.save(state)
+    database.close()
+
+    second = build_stack(path, with_schedule=False)
+    database, loop, applications, _, _, submission_provider, _, _ = second
+    recovered = loop.continue_run(run_id)
+
+    assert recovered.completed is True
+    assert submission_provider.calls == [
+        (f"{run_id}:application-submit", "job-1", f"{run_id}:application")
+    ]
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+
+def test_new_run_cannot_resubmit_a_job_that_is_already_applied(tmp_path):
+    path = str(tmp_path / "cross-run-duplicate.sqlite")
+
+    first = build_stack(path, with_schedule=False)
+    database, loop, applications, _, _, first_submission, _, _ = first
+    initial = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="first-run",
+    )
+    assert initial.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    completed = loop.resume("first-run", approved=True)
+    assert completed.completed is True
+    assert len(first_submission.calls) == 1
+    database.close()
+
+    second = build_stack(path, with_schedule=False)
+    database, loop, applications, _, _, second_submission, _, _ = second
+    duplicate = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="second-run",
+    )
+
+    assert duplicate.phase == CareerLoopPhase.FAILED
+    assert "refusing duplicate submission" in (duplicate.error or "")
+    assert second_submission.calls == []
+    matches = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
+    assert len(matches) == 1
+    assert matches[0].status == JobApplicationStatus.APPLIED
+    database.close()
+
+
+@pytest.mark.parametrize("bad_run_id", ["has space", "../path", "\ud800bad"])
+def test_start_rejects_run_ids_that_cannot_derive_safe_operation_ids(tmp_path, bad_run_id):
+    path = str(tmp_path / "bad-run-id.sqlite")
+    database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+
+    with pytest.raises(ValueError):
+        loop.start(
+            CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+            run_id=bad_run_id,
+        )
+
+    database.close()
+
+
+def test_repository_rejects_payload_run_id_mismatch(tmp_path):
+    path = str(tmp_path / "mismatched-run.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerLoopRepository(database)
+    state = repository._deserialize(
+        {
+            "serialization_version": 1,
+            "run_id": "payload-run",
+            "request": {
+                "user_id": "user-1",
+                "keyword": "Logistics",
+                "location": "",
+                "sender": "",
+                "recipient": "",
+                "message_subject": "Application follow-up",
+                "message_body": "I am interested in this opportunity.",
+                "schedule_event_id": None,
+            },
+            "phase": "search",
+            "selected_job_id": None,
+            "selected_job_title": None,
+            "selected_company": None,
+            "application_id": None,
+            "message_id": None,
+            "iterations": 0,
+            "pending_human_action": None,
+            "last_error": None,
+            "created_at": CREATED.isoformat(),
+            "updated_at": CREATED.isoformat(),
+        }
+    )
+    repository.save(state)
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET run_id = ? WHERE run_id = ?",
+        ("storage-run", "payload-run"),
+    )
+    database.connection.commit()
+
+    with pytest.raises(ValueError, match="storage key"):
+        repository.get("storage-run")
+
+    database.close()
+
 def test_repository_rejects_malformed_persisted_loop_json(tmp_path):
     path = str(tmp_path / "malformed-loop.sqlite")
     database = SQLiteDatabase(path)
