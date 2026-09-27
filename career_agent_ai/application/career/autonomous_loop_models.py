@@ -98,10 +98,35 @@ class CareerLoopRequest:
         object.__setattr__(self, "user_id", validate_loop_identifier(self.user_id, "user_id"))
         object.__setattr__(self, "keyword", _safe_text(self.keyword, "keyword", maximum=500, required=True))
         object.__setattr__(self, "location", _safe_text(self.location, "location", maximum=500))
-        object.__setattr__(self, "sender", _safe_text(self.sender, "sender", maximum=500))
-        object.__setattr__(self, "recipient", _safe_text(self.recipient, "recipient", maximum=500))
-        object.__setattr__(self, "message_subject", _safe_text(self.message_subject, "message_subject", maximum=500))
-        object.__setattr__(self, "message_body", _safe_text(self.message_body, "message_body", maximum=100_000))
+        sender = _safe_text(self.sender, "sender", maximum=500)
+        recipient = _safe_text(self.recipient, "recipient", maximum=500)
+        if bool(sender) != bool(recipient):
+            raise ValueError(
+                "sender and recipient must either both be provided or both be empty."
+            )
+        messaging_enabled = bool(sender and recipient)
+        object.__setattr__(self, "sender", sender)
+        object.__setattr__(self, "recipient", recipient)
+        object.__setattr__(
+            self,
+            "message_subject",
+            _safe_text(
+                self.message_subject,
+                "message_subject",
+                maximum=500,
+                required=messaging_enabled,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "message_body",
+            _safe_text(
+                self.message_body,
+                "message_body",
+                maximum=100_000,
+                required=messaging_enabled,
+            ),
+        )
         if self.schedule_event_id is not None:
             object.__setattr__(
                 self,
