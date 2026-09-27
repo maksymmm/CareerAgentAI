@@ -5,10 +5,13 @@ from typing import Iterable
 
 from career_agent_ai.application.career.opportunity_score import OpportunityScore
 from career_agent_ai.application.career.opportunity_signal import OpportunitySignal
+from career_agent_ai.application.career.signal_deduplicator import (
+    OpportunitySignalDeduplicator,
+)
 
 
 class ProactiveOpportunityService:
-    """Turns weak hiring signals into ranked, explainable opportunities."""
+    """Turns deduplicated hiring signals into ranked, explainable opportunities."""
 
     _WEIGHTS = {
         "hiring_growth": 0.30,
@@ -18,14 +21,19 @@ class ProactiveOpportunityService:
         "new_product": 0.10,
     }
 
+    def __init__(
+        self, deduplicator: OpportunitySignalDeduplicator | None = None
+    ) -> None:
+        self._deduplicator = deduplicator or OpportunitySignalDeduplicator()
+
     def rank(
         self,
         signals: Iterable[OpportunitySignal],
     ) -> tuple[OpportunityScore, ...]:
-        """Group signals by company and return scores in descending order."""
+        """Deduplicate, group by company, and return deterministic scores."""
         grouped: dict[str, list[OpportunitySignal]] = defaultdict(list)
 
-        for signal in signals:
+        for signal in self._deduplicator.deduplicate(signals):
             grouped[signal.company].append(signal)
 
         scored = [
