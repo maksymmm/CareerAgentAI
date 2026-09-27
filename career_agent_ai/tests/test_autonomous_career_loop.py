@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 
 import pytest
 
@@ -26,6 +27,7 @@ from career_agent_ai.application.external_actions import ExternalActionService
 from career_agent_ai.application.jobs.company import Company
 from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.jobs.job_application import JobApplication
 from career_agent_ai.application.jobs.job_application_repository import ApplicationQuery
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.jobs.location import Location
@@ -181,6 +183,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
     assert len(tracked) == 1
     assert tracked[0].status == JobApplicationStatus.SAVED
+    assert applications.find(ApplicationQuery(company_id="company-1")) == tracked
     database.close()
 
     second = build_stack(path)
@@ -190,6 +193,13 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert after_application.phase == CareerLoopPhase.MESSAGE_APPROVAL
     assert after_application.human_action is not None
     assert after_application.human_action.kind == HumanActionKind.APPROVE_MESSAGE
+    assert after_application.human_action.details["sender"] == "candidate@example.test"
+    assert after_application.human_action.details["recipient"] == "recruiter@example.test"
+    assert after_application.human_action.details["subject"] == "Application follow-up"
+    assert (
+        after_application.human_action.details["body"]
+        == "Thank you for considering my application."
+    )
     assert len(submission_provider.calls) == 1
     tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
     assert len(tracked) == 1
@@ -259,7 +269,11 @@ def test_loop_without_message_or_interview_completes_after_application_approval(
 
     assert completed.completed is True
     assert submission_provider.calls == [
-        ("minimal:application:submit", "job-1", "minimal:application")
+        (
+            f"application-submit:{sha256('minimal:application'.encode('utf-8')).hexdigest()}",
+            "job-1",
+            "minimal:application",
+        )
     ]
     tracked = applications.get("minimal:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
@@ -409,7 +423,11 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
 
     assert recovered.completed is True
     assert submission_provider.calls == [
-        (f"{run_id}:application:submit", "job-1", f"{run_id}:application")
+        (
+            f"application-submit:{sha256(f'{run_id}:application'.encode('utf-8')).hexdigest()}",
+            "job-1",
+            f"{run_id}:application",
+        )
     ]
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
@@ -527,6 +545,74 @@ def test_start_rejects_run_ids_that_cannot_derive_safe_operation_ids(tmp_path, b
 
     database.close()
 
+
+
+def test_derived_application_id_collision_cannot_cross_user_ownership(tmp_path):
+    path = str(tmp_path / "application-ownership.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    applications.add(
+        JobApplication(
+            application_id="collision:application",
+            user_id="other-user",
+            job_id="job-1",
+            company_id="company-1",
+            status=JobApplicationStatus.SAVED,
+            created_at=CREATED,
+            updated_at=CREATED,
+        )
+    )
+
+    result = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="collision",
+    )
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "already owned" in (result.error or "")
+    assert submission_provider.calls == []
+    assert applications.get("collision:application").user_id == "other-user"
+    database.close()
+
+
+def test_long_existing_application_id_uses_bounded_stable_submission_key(tmp_path):
+    path = str(tmp_path / "long-application-id.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    application_id = "a" * 200
+    applications.add(
+        JobApplication(
+            application_id=application_id,
+            user_id="user-1",
+            job_id="job-1",
+            company_id="company-1",
+            status=JobApplicationStatus.SAVED,
+            created_at=CREATED,
+            updated_at=CREATED,
+        )
+    )
+
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id="long-id",
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.application_id == application_id
+
+    completed = loop.resume("long-id", approved=True)
+
+    assert completed.completed is True
+    assert len(submission_provider.calls) == 1
+    operation_id, job_id, submitted_application_id = submission_provider.calls[0]
+    assert operation_id == (
+        f"application-submit:{sha256(application_id.encode('utf-8')).hexdigest()}"
+    )
+    assert len(operation_id) <= 200
+    assert job_id == "job-1"
+    assert submitted_application_id == application_id
+    database.close()
 
 def test_repository_rejects_payload_run_id_mismatch(tmp_path):
     path = str(tmp_path / "mismatched-run.sqlite")
