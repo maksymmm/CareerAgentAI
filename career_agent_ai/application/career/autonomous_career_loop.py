@@ -321,6 +321,14 @@ class AutonomousCareerLoop:
         application = self._applications.get(state.application_id)
         if application is None:
             raise RuntimeError("Tracked application disappeared.")
+        operation_id = self._application_submission_operation_id(state.application_id)
+        if (
+            application.status == JobApplicationStatus.APPLIED
+            and operation_id in application.external_action_operation_ids
+        ):
+            state.approved_human_action = None
+            state.phase = CareerLoopPhase.MESSAGE_PREPARE
+            return
         if (
             approved.details.get("application_id") != state.application_id
             or approved.details.get("job_id") != state.selected_job_id
@@ -332,7 +340,6 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved application intent is stale; refusing external submission."
             )
-        operation_id = self._application_submission_operation_id(state.application_id)
         result = self._submission.submit(
             operation_id,
             job_id=state.selected_job_id,
@@ -406,7 +413,8 @@ class AutonomousCareerLoop:
             or approved.details.get("recipient") != persisted.recipient
             or approved.details.get("subject") != persisted.subject
             or approved.details.get("body") != persisted.body
-            or persisted.direction != MessageDirection.DRAFT
+            or persisted.direction
+            not in {MessageDirection.DRAFT, MessageDirection.OUTBOUND}
         ):
             raise RuntimeError(
                 "Approved message intent is stale; refusing external send."
@@ -438,8 +446,11 @@ class AutonomousCareerLoop:
             state.phase = CareerLoopPhase.COMPLETE
             return
         event = self._scheduling.get_event(event_id)
-        if event.application_id not in (None, state.application_id):
-            raise RuntimeError("Interview event is linked to a different application.")
+        if event.application_id is not None:
+            if event.application_id != state.application_id:
+                raise RuntimeError("Interview event is linked to a different application.")
+        elif event.candidate_id != state.request.user_id:
+            raise RuntimeError("Unlinked interview event belongs to a different candidate.")
         if event.status == ScheduleStatus.ACCEPTED:
             state.phase = CareerLoopPhase.COMPLETE
             return
@@ -491,7 +502,17 @@ class AutonomousCareerLoop:
             "end_utc_offset": view.end_utc_offset,
             "status": view.status.value,
         }
-        if dict(approved.details) != current_details:
+        approved_details = dict(approved.details)
+        if view.status == ScheduleStatus.ACCEPTED:
+            current_without_status = dict(current_details)
+            approved_without_status = dict(approved_details)
+            current_without_status.pop("status", None)
+            approved_without_status.pop("status", None)
+            if current_without_status != approved_without_status:
+                raise RuntimeError(
+                    "Approved interview intent is stale; refusing calendar response."
+                )
+        elif approved_details != current_details:
             raise RuntimeError(
                 "Approved interview intent is stale; refusing calendar response."
             )
