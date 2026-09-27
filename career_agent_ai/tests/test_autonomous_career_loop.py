@@ -23,7 +23,11 @@ from career_agent_ai.application.communication import (
     CommunicationService,
     FakeCommunicationAdapter,
 )
-from career_agent_ai.application.external_actions import ExternalActionService
+from career_agent_ai.application.external_actions import (
+    ExternalActionOperation,
+    ExternalActionService,
+    ExternalActionStatus,
+)
 from career_agent_ai.application.jobs.company import Company
 from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.jobs.job import Job
@@ -434,6 +438,187 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
     database.close()
 
 
+
+
+def test_post_action_crash_after_application_success_recovers_without_resubmit(tmp_path):
+    path = str(tmp_path / "post-submit-crash.sqlite")
+    run_id = "post-submit-crash"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    states = SQLiteCareerLoopRepository(database)
+    state = states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    state.approved_human_action = state.pending_human_action
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.APPLICATION_SUBMIT
+    states.save(state)
+
+    application = applications.get(f"{run_id}:application")
+    assert application is not None
+    operation_id = loop._application_submission_operation_id(application.application_id)
+    operations = SQLiteExternalActionOperationRepository(database)
+    operations.create(
+        ExternalActionOperation(
+            operation_id=operation_id,
+            action_type="application.submit",
+            payload={"job_id": "job-1", "application_id": application.application_id},
+        )
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.SUCCEEDED,
+        result={
+            "job_id": "job-1",
+            "application_id": application.application_id,
+            "provider_submission_id": "already-sent",
+        },
+    )
+    applied = application.transition(
+        JobApplicationStatus.APPLIED,
+        operation_id=operation_id,
+        event_id=loop._application_applied_event_id(application.application_id),
+    )
+    applications.update(applied, expected_version=application.version)
+    database.close()
+
+    restarted = build_stack(path, with_schedule=False)
+    database, loop, applications, _, _, submission_provider, _, _ = restarted
+    recovered = loop.continue_run(run_id)
+
+    assert recovered.completed is True
+    assert submission_provider.calls == []
+    assert applications.get(f"{run_id}:application").status == JobApplicationStatus.APPLIED
+    database.close()
+
+
+def test_post_action_crash_after_message_send_replays_without_duplicate(tmp_path):
+    path = str(tmp_path / "post-message-crash.sqlite")
+    run_id = "post-message-crash"
+    first = build_stack(path, with_schedule=False)
+    database, loop, _, messages, _, _, communication_provider, _ = first
+    started = loop.start(request(with_schedule=False), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    message_gate = loop.resume(run_id, approved=True)
+    assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    states = SQLiteCareerLoopRepository(database)
+    state = states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    state.approved_human_action = state.pending_human_action
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.MESSAGE_SEND
+    states.save(state)
+
+    operations = SQLiteExternalActionOperationRepository(database)
+    communication = CommunicationService(
+        messages,
+        communication_provider,
+        ExternalActionService(
+            operations,
+            CommunicationService.action_adapter(communication_provider, messages),
+        ),
+    )
+    delivered = communication.send(
+        f"{run_id}:message-send",
+        f"{run_id}:message",
+        human_approved=True,
+    )
+    assert delivered is not None
+    assert communication_provider.calls.count(("send", f"{run_id}:message-send")) == 1
+    database.close()
+
+    second = build_stack(path, with_schedule=False)
+    database, loop, _, messages, _, _, restarted_provider, _ = second
+    recovered = loop.continue_run(run_id)
+
+    assert recovered.completed is True
+    assert restarted_provider.calls == []
+    assert messages.get(f"{run_id}:message").direction.value == "outbound"
+    database.close()
+
+
+def test_post_action_crash_after_interview_accept_replays_without_duplicate(tmp_path):
+    path = str(tmp_path / "post-interview-crash.sqlite")
+    run_id = "post-interview-crash"
+    first = build_stack(path)
+    database, loop, _, _, scheduling, _, _, _ = first
+    add_interview(scheduling, f"{run_id}:application")
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    gate = loop.resume(run_id, approved=True)
+    assert gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    states = SQLiteCareerLoopRepository(database)
+    state = states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    state.approved_human_action = state.pending_human_action
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
+    states.save(state)
+
+    accepted = scheduling.accept(
+        f"{run_id}:interview-accept",
+        "interview-1",
+        human_approved=True,
+    )
+    assert accepted is not None and accepted.status == ScheduleStatus.ACCEPTED
+    database.close()
+
+    second = build_stack(path)
+    database, loop, _, _, scheduling, _, _, calendar_provider = second
+    recovered = loop.continue_run(run_id)
+
+    assert recovered.completed is True
+    assert calendar_provider.calls == []
+    assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+    database.close()
+
+
+def test_unlinked_interview_for_another_candidate_is_rejected(tmp_path):
+    path = str(tmp_path / "foreign-interview.sqlite")
+    run_id = "foreign-interview"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    scheduling.add_event(
+        ScheduleEvent(
+            event_id="interview-1",
+            candidate_id="different-user",
+            employer_name="Acme Logistics",
+            event_type=ScheduleEventType.INTERVIEW,
+            location="Office",
+            start_at=START + timedelta(days=2),
+            end_at=START + timedelta(days=2, hours=1),
+            timezone_name="Europe/Berlin",
+            application_id=None,
+            created_at=CREATED,
+            updated_at=CREATED,
+        )
+    )
+    req = CareerLoopRequest(
+        user_id="user-1",
+        keyword="Logistics",
+        schedule_event_id="interview-1",
+    )
+    assert loop.start(req, run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    result = loop.resume(run_id, approved=True)
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "different candidate" in (result.error or "")
+    assert calendar_provider.calls == []
+    database.close()
 
 def test_application_approval_becomes_stale_before_external_submission(tmp_path):
     path = str(tmp_path / "stale-application-approval.sqlite")
