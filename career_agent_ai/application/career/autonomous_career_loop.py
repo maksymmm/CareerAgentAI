@@ -239,6 +239,11 @@ class AutonomousCareerLoop:
         )
         if not result.success:
             raise RuntimeError("Resume preparation failed.")
+        artifact_content = self._resume_artifact_content(result)
+        state.application_artifact_content = artifact_content
+        state.application_artifact_sha256 = sha256(
+            artifact_content.encode("utf-8")
+        ).hexdigest()
         state.phase = CareerLoopPhase.APPLICATION_PREPARE
 
     def _prepare_application(self, state: CareerLoopState) -> None:
@@ -265,7 +270,7 @@ class AutonomousCareerLoop:
                 application_id=application_id,
                 user_id=state.request.user_id,
                 job_id=state.selected_job_id,
-                company_id=state.selected_company_id,
+                company_id=state.selected_company_id or "",
                 status=JobApplicationStatus.SAVED,
                 created_at=state.created_at.astimezone(timezone.utc),
                 updated_at=state.created_at.astimezone(timezone.utc),
@@ -310,6 +315,8 @@ class AutonomousCareerLoop:
                 "application_id": state.application_id,
                 "application_version": tracked.version,
                 "application_status": tracked.status.value,
+                "artifact_content": state.application_artifact_content,
+                "artifact_sha256": state.application_artifact_sha256,
             },
         )
 
@@ -351,6 +358,11 @@ class AutonomousCareerLoop:
             or approved.details.get("job_id") != state.selected_job_id
             or approved.details.get("application_version") != application.version
             or approved.details.get("application_status") != application.status.value
+            or approved.details.get("artifact_content")
+            != state.application_artifact_content
+            or approved.details.get("artifact_sha256")
+            != state.application_artifact_sha256
+            or not self._artifact_is_consistent(state)
             or application.status != JobApplicationStatus.SAVED
             or application.job_id != state.selected_job_id
         ):
@@ -463,11 +475,10 @@ class AutonomousCareerLoop:
             state.phase = CareerLoopPhase.COMPLETE
             return
         event = self._scheduling.get_event(event_id)
-        if event.application_id is not None:
-            if event.application_id != state.application_id:
-                raise RuntimeError("Interview event is linked to a different application.")
-        elif event.candidate_id != state.request.user_id:
-            raise RuntimeError("Unlinked interview event belongs to a different candidate.")
+        if event.candidate_id != state.request.user_id:
+            raise RuntimeError("Interview event belongs to a different candidate.")
+        if event.application_id is not None and event.application_id != state.application_id:
+            raise RuntimeError("Interview event is linked to a different application.")
         if event.status == ScheduleStatus.ACCEPTED:
             state.phase = CareerLoopPhase.COMPLETE
             return
@@ -564,6 +575,46 @@ class AutonomousCareerLoop:
 
     def _persist(self, state: CareerLoopState) -> None:
         self._states.save(state)
+
+    @staticmethod
+    def _resume_artifact_content(result: Any) -> str:
+        """Return the exact bounded text artifact produced for application approval."""
+        metadata = getattr(result, "metadata", {})
+        candidate = None
+        if isinstance(metadata, dict) or hasattr(metadata, "get"):
+            for key in ("application_artifact", "resume_content", "content"):
+                value = metadata.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidate = value
+                    break
+        if candidate is None:
+            messages = getattr(result, "messages", ())
+            if isinstance(messages, (tuple, list)):
+                candidate = "\n".join(
+                    item for item in messages if isinstance(item, str)
+                )
+        if not isinstance(candidate, str):
+            raise RuntimeError("Resume preparation produced no inspectable application artifact.")
+        normalized = candidate.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise RuntimeError("Resume preparation produced an empty application artifact.")
+        if len(normalized) > 100_000:
+            raise ValueError("Application artifact exceeds 100000 characters.")
+        if any(ord(ch) < 32 and ch not in "\n\t" for ch in normalized):
+            raise ValueError("Application artifact contains forbidden control characters.")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+            raise ValueError("Application artifact contains a forbidden Unicode surrogate.")
+        return normalized
+
+    @staticmethod
+    def _artifact_is_consistent(state: CareerLoopState) -> bool:
+        content = state.application_artifact_content
+        digest = state.application_artifact_sha256
+        return (
+            isinstance(content, str)
+            and isinstance(digest, str)
+            and sha256(content.encode("utf-8")).hexdigest() == digest
+        )
 
     @staticmethod
     def _application_submission_operation_id(application_id: str) -> str:
