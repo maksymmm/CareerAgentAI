@@ -68,35 +68,7 @@ class SQLiteSchedulingRepository:
         ).fetchone()
         if row is None:
             return None
-        try:
-            event = ScheduleEvent(
-                event_id=row[0],
-                candidate_id=row[1],
-                employer_name=row[2],
-                event_type=ScheduleEventType(row[3]),
-                location=row[4],
-                start_at=datetime.fromisoformat(row[5]),
-                end_at=None if row[7] is None else datetime.fromisoformat(row[7]),
-                timezone_name=row[9],
-                status=ScheduleStatus(row[10]),
-                provider_event_id=row[11],
-                application_id=row[12],
-                version=row[13],
-                created_at=datetime.fromisoformat(row[14]),
-                updated_at=datetime.fromisoformat(row[15]),
-            )
-            if row[6] != self._epoch_microseconds(event.start_at):
-                raise ValueError("Persisted start timestamp index is inconsistent.")
-            expected_end = (
-                None
-                if event.end_at is None
-                else self._epoch_microseconds(event.end_at)
-            )
-            if row[8] != expected_end:
-                raise ValueError("Persisted end timestamp index is inconsistent.")
-            return event
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Persisted scheduling event is malformed.") from exc
+        return self._event_from_row(row)
 
     def list_candidate(self, candidate_id: str) -> tuple[ScheduleEvent, ...]:
         """Return a candidate's events in exact chronological order."""
@@ -182,15 +154,21 @@ class SQLiteSchedulingRepository:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
-                SELECT candidate_id, status, active_action_operation_id, version
+                SELECT event_id, candidate_id, employer_name, event_type, location,
+                       start_at, start_epoch_us, end_at, end_epoch_us, timezone_name,
+                       status, provider_event_id, application_id, version,
+                       created_at, updated_at, active_action_operation_id
                 FROM scheduling_events WHERE event_id = ?
                 """,
                 (event_id,),
             ).fetchone()
             if row is None:
                 raise SchedulingOperationConflict("Scheduling event no longer exists.")
-            candidate_id, raw_status, active_operation, current_version = row
-            current_status = ScheduleStatus(raw_status)
+            claimed_event = self._event_from_row(row[:16])
+            candidate_id = claimed_event.candidate_id
+            current_status = claimed_event.status
+            current_version = claimed_event.version
+            active_operation = row[16]
             if current_version != expected_version:
                 raise SchedulingOperationConflict(
                     "Prepared scheduling intent is stale for the current event version."
@@ -277,10 +255,7 @@ class SQLiteSchedulingRepository:
                 connection.rollback()
             raise
 
-        event = self.get(event_id)
-        if event is None:
-            raise SchedulingOperationConflict("Claimed event disappeared.")
-        return event
+        return claimed_event
 
     def release_action(self, event_id: str, operation_id: str) -> None:
         """Release a durable claim after a definite pre-provider failure."""
@@ -431,6 +406,39 @@ class SQLiteSchedulingRepository:
                ON scheduling_events(candidate_id, reservation_start_epoch_us)"""
         )
         connection.commit()
+
+    @classmethod
+    def _event_from_row(cls, row: Sequence[object]) -> ScheduleEvent:
+        """Deserialize and validate one persisted scheduling-event row."""
+        try:
+            event = ScheduleEvent(
+                event_id=row[0],
+                candidate_id=row[1],
+                employer_name=row[2],
+                event_type=ScheduleEventType(row[3]),
+                location=row[4],
+                start_at=datetime.fromisoformat(row[5]),
+                end_at=None if row[7] is None else datetime.fromisoformat(row[7]),
+                timezone_name=row[9],
+                status=ScheduleStatus(row[10]),
+                provider_event_id=row[11],
+                application_id=row[12],
+                version=row[13],
+                created_at=datetime.fromisoformat(row[14]),
+                updated_at=datetime.fromisoformat(row[15]),
+            )
+            if row[6] != cls._epoch_microseconds(event.start_at):
+                raise ValueError("Persisted start timestamp index is inconsistent.")
+            expected_end = (
+                None
+                if event.end_at is None
+                else cls._epoch_microseconds(event.end_at)
+            )
+            if row[8] != expected_end:
+                raise ValueError("Persisted end timestamp index is inconsistent.")
+            return event
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("Persisted scheduling event is malformed.") from exc
 
     @staticmethod
     def _insert_values(event: ScheduleEvent) -> tuple[object, ...]:
