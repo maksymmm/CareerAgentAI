@@ -8,6 +8,7 @@ import ipaddress
 import socket
 import time
 import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -289,8 +290,7 @@ class RSSOpportunitySignalProvider:
 
     @staticmethod
     def _parse_entries(raw: bytes) -> tuple[dict[str, str], ...]:
-        if _contains_forbidden_xml_declaration(raw):
-            raise RuntimeError("feed XML declarations are not allowed")
+        _validate_xml_without_dtd(raw)
         try:
             root = ET.fromstring(raw)
         except ET.ParseError as exc:
@@ -374,20 +374,26 @@ class RSSOpportunitySignalProvider:
         return text[:500]
 
 
-def _contains_forbidden_xml_declaration(raw: bytes) -> bool:
-    """Detect DTD/entity declarations across supported XML Unicode encodings."""
-    if b"<!doctype" in raw.lower() or b"<!entity" in raw.lower():
-        return True
+class _ForbiddenXMLDeclaration(RuntimeError):
+    """Internal sentinel raised before any DTD/entity can be processed."""
 
-    for encoding in ("utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"):
-        try:
-            text = raw.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-        lowered = text.casefold()
-        if "<!doctype" in lowered or "<!entity" in lowered:
-            return True
-    return False
+
+def _validate_xml_without_dtd(raw: bytes) -> None:
+    """Parse XML defensively and reject DTD/entity declarations before expansion."""
+    parser = expat.ParserCreate()
+
+    def reject_declaration(*args) -> None:
+        raise _ForbiddenXMLDeclaration("feed XML declarations are not allowed")
+
+    parser.StartDoctypeDeclHandler = reject_declaration
+    parser.EntityDeclHandler = reject_declaration
+    parser.ExternalEntityRefHandler = lambda *args: 0
+    try:
+        parser.Parse(raw, True)
+    except _ForbiddenXMLDeclaration as exc:
+        raise RuntimeError("feed XML declarations are not allowed") from exc
+    except expat.ExpatError as exc:
+        raise RuntimeError("feed returned malformed XML") from exc
 
 
 def _validate_feed_url(value: str) -> str:
