@@ -124,6 +124,7 @@ class CareerLoopState:
     message_id: str | None = None
     iterations: int = 0
     pending_human_action: HumanActionEvent | None = None
+    approved_human_action: HumanActionEvent | None = None
     last_error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
