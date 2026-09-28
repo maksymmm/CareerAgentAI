@@ -162,6 +162,14 @@ class AutonomousCareerLoop:
             raise RuntimeError("Career loop is not waiting for human action.")
         if not isinstance(approved, bool):
             raise TypeError("approved must be a boolean.")
+        if state.pending_human_action.kind in {
+            HumanActionKind.RECONCILE_APPLICATION_SUBMISSION,
+            HumanActionKind.RECONCILE_MESSAGE_DELIVERY,
+            HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
+        }:
+            raise RuntimeError(
+                "Use the dedicated reconciliation resolver for ambiguous external outcomes."
+            )
         if not approved:
             state.last_error = f"human_declined:{state.pending_human_action.kind.value}"
             state.pending_human_action = None
@@ -172,14 +180,6 @@ class AutonomousCareerLoop:
 
         approved_action = state.pending_human_action
         kind = approved_action.kind
-        if kind in {
-            HumanActionKind.RECONCILE_APPLICATION_SUBMISSION,
-            HumanActionKind.RECONCILE_MESSAGE_DELIVERY,
-            HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
-        }:
-            raise RuntimeError(
-                "Use the dedicated reconciliation resolver for ambiguous external outcomes."
-            )
         state.approved_human_action = approved_action
         state.pending_human_action = None
         if kind == HumanActionKind.APPROVE_APPLICATION:
