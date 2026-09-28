@@ -472,6 +472,43 @@ def test_submission_claim_blocks_competing_transition_and_completes_owner(
     assert repository.get(original.application_id) == applied
 
 
+
+@pytest.mark.parametrize(
+    "repository_factory",
+    [
+        InMemoryJobApplicationRepository,
+        lambda: SQLiteJobApplicationRepository(SQLiteDatabase()),
+    ],
+)
+def test_submission_claim_reentry_requires_same_durable_owner(repository_factory):
+    repository = repository_factory()
+    original = application()
+    repository.add(original)
+
+    first = repository.claim_submission(
+        original.application_id,
+        "submit:shared",
+        expected_version=original.version,
+        claim_owner_id="run:first",
+    )
+    assert first == original
+
+    with pytest.raises(ApplicationConflictError):
+        repository.claim_submission(
+            original.application_id,
+            "submit:shared",
+            expected_version=original.version,
+            claim_owner_id="run:second",
+        )
+
+    replay = repository.claim_submission(
+        original.application_id,
+        "submit:shared",
+        expected_version=original.version,
+        claim_owner_id="run:first",
+    )
+    assert replay == original
+
 @pytest.mark.parametrize(
     "repository_factory",
     [
