@@ -339,6 +339,55 @@ class SQLiteSchedulingRepository:
             raise SchedulingOperationConflict("Completed scheduling event disappeared.")
         return persisted
 
+    def attach_provider_event_id(
+        self,
+        event_id: str,
+        provider_event_id: str,
+        *,
+        expected_version: int,
+    ) -> ScheduleEvent:
+        """Persist a verified provider ID with optimistic concurrency."""
+        event_id = validate_schedule_identifier(event_id, "event_id")
+        if not isinstance(provider_event_id, str) or not provider_event_id:
+            raise ValueError("provider_event_id must not be empty.")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
+            raise ValueError("expected_version must be a positive integer.")
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            cursor = self._database.connection.execute(
+                """
+                UPDATE scheduling_events
+                SET provider_event_id = ?, version = version + 1, updated_at = ?
+                WHERE event_id = ? AND version = ?
+                  AND provider_event_id IS NULL
+                  AND active_action_operation_id IS NULL
+                """,
+                (provider_event_id, now, event_id, expected_version),
+            )
+            self._database.connection.commit()
+        except sqlite3.IntegrityError as exc:
+            self._database.connection.rollback()
+            raise SchedulingOperationConflict(
+                "Provider event identity conflicts with another scheduling event."
+            ) from exc
+        if cursor.rowcount != 1:
+            current = self.get(event_id)
+            if (
+                current is not None
+                and current.version == expected_version
+                and current.provider_event_id == provider_event_id
+            ):
+                return current
+            raise SchedulingOperationConflict(
+                "Scheduling event changed before provider identity could be attached."
+            )
+        persisted = self.get(event_id)
+        if persisted is None:
+            raise SchedulingOperationConflict(
+                "Scheduling event disappeared after provider identity attachment."
+            )
+        return persisted
+
     def _create_schema(self) -> None:
         connection = self._database.connection
         connection.execute(
