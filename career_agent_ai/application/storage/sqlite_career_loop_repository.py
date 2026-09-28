@@ -173,6 +173,58 @@ class SQLiteCareerLoopRepository:
                 connection.rollback()
             raise
 
+    def renew_execution(
+        self,
+        run_id: str,
+        owner_id: str,
+        *,
+        lease_seconds: int,
+    ) -> None:
+        """Extend an unexpired execution lease without touching snapshot version.
+
+        File-backed SQLite uses a short-lived independent connection so a heartbeat
+        thread never shares the worker's SQLite connection. In-memory repositories
+        are process-local and cannot be safely renewed from another thread; their
+        initial lease remains sufficient for unit-test/local single-worker execution.
+        """
+        run_id = self._identifier(run_id, "run_id")
+        owner_id = self._identifier(owner_id, "owner_id")
+        if (
+            not isinstance(lease_seconds, int)
+            or isinstance(lease_seconds, bool)
+            or lease_seconds < 1
+            or lease_seconds > 3600
+        ):
+            raise ValueError("lease_seconds must be between 1 and 3600.")
+        if self._database.path == ":memory:":
+            return
+
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=lease_seconds)
+        connection = sqlite3.connect(self._database.path, timeout=5)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """UPDATE autonomous_career_loops
+                   SET execution_claim_expires_at = ?
+                   WHERE run_id = ?
+                     AND execution_claim_owner = ?
+                     AND execution_claim_expires_at IS NOT NULL
+                     AND execution_claim_expires_at > ?""",
+                (expires_at.isoformat(), run_id, owner_id, now.isoformat()),
+            )
+            if cursor.rowcount != 1:
+                raise CareerLoopConflictError(
+                    "Autonomous-loop execution lease expired or changed owner."
+                )
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def release_execution(self, run_id: str, owner_id: str) -> None:
         """Release only the execution lease owned by owner_id."""
         run_id = self._identifier(run_id, "run_id")
