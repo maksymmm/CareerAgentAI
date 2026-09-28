@@ -160,17 +160,22 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         operation_id: str,
         *,
         expected_version: int,
+        claim_owner_id: str | None = None,
     ) -> JobApplication:
-        """Atomically reserve one saved application version for provider submission."""
+        """Atomically reserve one saved application version for one durable owner."""
         application_id = self._required_filter(application_id, "application_id")
         operation_id = self._required_filter(operation_id, "operation_id")
+        owner_id = self._required_filter(
+            claim_owner_id or operation_id, "claim_owner_id"
+        )
         if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
             raise ApplicationConflictError("expected_version must be a positive integer.")
         connection = self._database.connection
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                """SELECT status, version, submission_claim_operation_id
+                """SELECT status, version, submission_claim_operation_id,
+                          submission_claim_owner_id
                    FROM job_applications WHERE application_id = ?""",
                 (application_id,),
             ).fetchone()
@@ -178,7 +183,10 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 row is None
                 or row[0] != JobApplicationStatus.SAVED.value
                 or row[1] != expected_version
-                or row[2] not in (None, operation_id)
+                or (
+                    row[2] is not None
+                    and (row[2] != operation_id or row[3] != owner_id)
+                )
             ):
                 raise ApplicationConflictError(
                     "Application cannot be claimed for submission."
@@ -188,18 +196,25 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 raise ApplicationConflictError("Application disappeared before claim.")
             cursor = connection.execute(
                 """UPDATE job_applications
-                   SET submission_claim_operation_id = ?
+                   SET submission_claim_operation_id = ?,
+                       submission_claim_owner_id = ?
                    WHERE application_id = ? AND status = ? AND version = ?
                      AND (
-                         submission_claim_operation_id IS NULL
-                         OR submission_claim_operation_id = ?
+                         (submission_claim_operation_id IS NULL
+                          AND submission_claim_owner_id IS NULL)
+                         OR (
+                            submission_claim_operation_id = ?
+                            AND submission_claim_owner_id = ?
+                         )
                      )""",
                 (
                     operation_id,
+                    owner_id,
                     application_id,
                     JobApplicationStatus.SAVED.value,
                     expected_version,
                     operation_id,
+                    owner_id,
                 ),
             )
             if cursor.rowcount != 1:
@@ -219,15 +234,27 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             raise
         return claimed
 
-    def release_submission(self, application_id: str, operation_id: str) -> None:
-        """Release a matching claim after a definite pre-provider failure."""
+    def release_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Release a matching submission claim after a definite pre-provider failure."""
         application_id = self._required_filter(application_id, "application_id")
         operation_id = self._required_filter(operation_id, "operation_id")
+        owner_id = self._required_filter(
+            claim_owner_id or operation_id, "claim_owner_id"
+        )
         cursor = self._database.connection.execute(
             """UPDATE job_applications
-               SET submission_claim_operation_id = NULL
-               WHERE application_id = ? AND submission_claim_operation_id = ?""",
-            (application_id, operation_id),
+               SET submission_claim_operation_id = NULL,
+                   submission_claim_owner_id = NULL
+               WHERE application_id = ?
+                 AND submission_claim_operation_id = ?
+                 AND submission_claim_owner_id = ?""",
+            (application_id, operation_id, owner_id),
         )
         self._database.connection.commit()
         if cursor.rowcount != 1:
@@ -239,9 +266,13 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         operation_id: str,
         *,
         expected_version: int,
+        claim_owner_id: str | None = None,
     ) -> None:
-        """Persist the claimed saved-to-applied transition and clear its claim."""
+        """Persist the matching owner's saved-to-applied transition and clear its claim."""
         operation_id = self._required_filter(operation_id, "operation_id")
+        owner_id = self._required_filter(
+            claim_owner_id or operation_id, "claim_owner_id"
+        )
         if (
             application.version != expected_version + 1
             or application.status != JobApplicationStatus.APPLIED
@@ -255,7 +286,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
                 """SELECT user_id, job_id, created_at, status, version,
-                          submission_claim_operation_id
+                          submission_claim_operation_id, submission_claim_owner_id
                    FROM job_applications WHERE application_id = ?""",
                 (application.application_id,),
             ).fetchone()
@@ -264,6 +295,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 or current[3] != JobApplicationStatus.SAVED.value
                 or current[4] != expected_version
                 or current[5] != operation_id
+                or current[6] != owner_id
             ):
                 raise ApplicationConflictError(
                     "Application changed or lost its submission claim."
@@ -279,9 +311,11 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             cursor = connection.execute(
                 """UPDATE job_applications
                    SET company_id = ?, status = ?, updated_at = ?, version = ?,
-                       submission_claim_operation_id = NULL
+                       submission_claim_operation_id = NULL,
+                       submission_claim_owner_id = NULL
                    WHERE application_id = ? AND version = ?
-                     AND submission_claim_operation_id = ?""",
+                     AND submission_claim_operation_id = ?
+                     AND submission_claim_owner_id = ?""",
                 (
                     application.company_id,
                     application.status.value,
@@ -290,6 +324,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                     application.application_id,
                     expected_version,
                     operation_id,
+                    owner_id,
                 ),
             )
             if cursor.rowcount != 1:
@@ -399,6 +434,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 version INTEGER NOT NULL CHECK(version > 0),
                 serialization_version INTEGER NOT NULL,
                 submission_claim_operation_id TEXT,
+                submission_claim_owner_id TEXT,
                 UNIQUE(user_id, job_id)
             );
             CREATE INDEX IF NOT EXISTS idx_applications_user_status
@@ -430,6 +466,16 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             connection.execute(
                 "ALTER TABLE job_applications "
                 "ADD COLUMN submission_claim_operation_id TEXT"
+            )
+        if "submission_claim_owner_id" not in application_columns:
+            connection.execute(
+                "ALTER TABLE job_applications "
+                "ADD COLUMN submission_claim_owner_id TEXT"
+            )
+            connection.execute(
+                """UPDATE job_applications
+                   SET submission_claim_owner_id = submission_claim_operation_id
+                   WHERE submission_claim_operation_id IS NOT NULL"""
             )
         connection.execute(
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_application_submission_claim
