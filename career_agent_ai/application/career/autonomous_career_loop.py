@@ -172,9 +172,13 @@ class AutonomousCareerLoop:
 
         approved_action = state.pending_human_action
         kind = approved_action.kind
-        if kind == HumanActionKind.RECONCILE_APPLICATION_SUBMISSION:
+        if kind in {
+            HumanActionKind.RECONCILE_APPLICATION_SUBMISSION,
+            HumanActionKind.RECONCILE_MESSAGE_DELIVERY,
+            HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
+        }:
             raise RuntimeError(
-                "Use resolve_application_reconciliation() for ambiguous submission outcomes."
+                "Use the dedicated reconciliation resolver for ambiguous external outcomes."
             )
         state.approved_human_action = approved_action
         state.pending_human_action = None
@@ -231,6 +235,70 @@ class AutonomousCareerLoop:
         state.pending_human_action = None
         state.last_error = None
         state.phase = CareerLoopPhase.APPLICATION_SUBMIT
+        state.touch()
+        self._persist(state)
+        return self._continue(state)
+
+    def resolve_message_reconciliation(
+        self,
+        run_id: str,
+        *,
+        delivered: bool,
+    ) -> CareerLoopResult:
+        """Resolve a verified ambiguous recruiter/employer message outcome."""
+        state = self._states.get(run_id)
+        if state is None:
+            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        action = state.pending_human_action
+        if (
+            state.phase != CareerLoopPhase.MESSAGE_RECONCILIATION
+            or action is None
+            or action.kind != HumanActionKind.RECONCILE_MESSAGE_DELIVERY
+        ):
+            raise RuntimeError("Career loop is not awaiting message reconciliation.")
+        operation_id = action.details.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise RuntimeError("Message reconciliation action has no valid operation_id.")
+        self._communication.resolve_reconciliation(
+            operation_id,
+            delivered=delivered,
+        )
+        state.pending_human_action = None
+        state.last_error = None
+        state.phase = CareerLoopPhase.MESSAGE_SEND
+        state.touch()
+        self._persist(state)
+        return self._continue(state)
+
+    def resolve_interview_reconciliation(
+        self,
+        run_id: str,
+        *,
+        completed: bool,
+        provider_event_id: str | None = None,
+    ) -> CareerLoopResult:
+        """Resolve a verified ambiguous interview/calendar response outcome."""
+        state = self._states.get(run_id)
+        if state is None:
+            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        action = state.pending_human_action
+        if (
+            state.phase != CareerLoopPhase.INTERVIEW_RECONCILIATION
+            or action is None
+            or action.kind != HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
+        ):
+            raise RuntimeError("Career loop is not awaiting interview reconciliation.")
+        operation_id = action.details.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise RuntimeError("Interview reconciliation action has no valid operation_id.")
+        self._scheduling.resolve_reconciliation(
+            operation_id,
+            completed=completed,
+            provider_event_id=provider_event_id,
+        )
+        state.pending_human_action = None
+        state.last_error = None
+        state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
         state.touch()
         self._persist(state)
         return self._continue(state)
@@ -366,12 +434,20 @@ class AutonomousCareerLoop:
             self._prepare_message(state)
         elif state.phase == CareerLoopPhase.MESSAGE_SEND:
             self._send_message(state)
+        elif state.phase == CareerLoopPhase.MESSAGE_RECONCILIATION:
+            raise RuntimeError(
+                "Message reconciliation requires an explicit human resolution."
+            )
         elif state.phase == CareerLoopPhase.TRACK:
             self._track(state)
         elif state.phase == CareerLoopPhase.INTERVIEW_COORDINATION:
             self._coordinate_interview(state)
         elif state.phase == CareerLoopPhase.INTERVIEW_ACCEPT:
             self._accept_interview(state)
+        elif state.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION:
+            raise RuntimeError(
+                "Interview reconciliation requires an explicit human resolution."
+            )
         else:
             raise RuntimeError(f"Unsupported autonomous-loop phase: {state.phase.value}")
 
@@ -731,12 +807,36 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved message intent is stale; refusing external send."
             )
+        operation_id = f"{state.run_id}:message-send"
         delivered = self._communication.send(
-            f"{state.run_id}:message-send",
+            operation_id,
             state.message_id,
             human_approved=True,
         )
         if delivered is None:
+            durable_operation = self._communication.get_operation(operation_id)
+            if (
+                durable_operation is not None
+                and durable_operation.status
+                == ExternalActionStatus.RECONCILIATION_REQUIRED
+            ):
+                state.phase = CareerLoopPhase.MESSAGE_RECONCILIATION
+                state.pending_human_action = HumanActionEvent(
+                    kind=HumanActionKind.RECONCILE_MESSAGE_DELIVERY,
+                    title="Reconcile ambiguous recruiter/employer message delivery",
+                    details={
+                        "operation_id": operation_id,
+                        "message_id": state.message_id,
+                        "recipient": persisted.recipient,
+                        "subject": persisted.subject,
+                        "instruction": (
+                            "Verify with the communication provider whether this exact "
+                            "message was delivered before continuing."
+                        ),
+                    },
+                )
+                state.last_error = "message_delivery_outcome_requires_reconciliation"
+                return
             raise RuntimeError("Message send did not reach a confirmed outcome.")
         state.approved_human_action = None
         state.phase = CareerLoopPhase.TRACK
@@ -842,12 +942,38 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved interview intent is stale; refusing calendar response."
             )
+        operation_id = f"{state.run_id}:interview-accept"
         accepted = self._scheduling.accept(
-            f"{state.run_id}:interview-accept",
+            operation_id,
             event_id,
             human_approved=True,
         )
         if accepted is None:
+            durable_operation = self._scheduling.get_operation(operation_id)
+            if (
+                durable_operation is not None
+                and durable_operation.status
+                == ExternalActionStatus.RECONCILIATION_REQUIRED
+            ):
+                state.phase = CareerLoopPhase.INTERVIEW_RECONCILIATION
+                state.pending_human_action = HumanActionEvent(
+                    kind=HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
+                    title="Reconcile ambiguous interview/calendar response",
+                    details={
+                        "operation_id": operation_id,
+                        "event_id": event_id,
+                        "employer": view.employer_name,
+                        "local_date": view.local_date,
+                        "local_start_time": view.local_start_time,
+                        "timezone": view.timezone_name,
+                        "instruction": (
+                            "Verify with the calendar provider whether the interview "
+                            "acceptance was recorded before continuing."
+                        ),
+                    },
+                )
+                state.last_error = "interview_response_outcome_requires_reconciliation"
+                return
             raise RuntimeError("Interview acceptance did not reach a confirmed outcome.")
         state.approved_human_action = None
         state.phase = CareerLoopPhase.COMPLETE
