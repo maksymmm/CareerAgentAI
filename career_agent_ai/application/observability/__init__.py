@@ -9,6 +9,7 @@ from .structured_logging import (
     current_correlation_id,
     log_event,
     redact_mapping,
+    redact_text,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "current_correlation_id",
     "log_event",
     "redact_mapping",
+    "redact_text",
 ]
