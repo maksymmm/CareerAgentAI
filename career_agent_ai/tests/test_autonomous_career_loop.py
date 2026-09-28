@@ -1560,6 +1560,8 @@ def test_ambiguous_application_submission_enters_explicit_reconciliation_and_can
         == HumanActionKind.RECONCILE_APPLICATION_SUBMISSION
     )
     operation_id = ambiguous.human_action.details["operation_id"]
+    assert ambiguous.human_action.details["artifact_content"] == started.human_action.details["artifact_content"]
+    assert ambiguous.human_action.details["artifact_sha256"] == started.human_action.details["artifact_sha256"]
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
     assert calls["count"] == 1
@@ -1664,6 +1666,18 @@ def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_succes
     assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
     assert ambiguous.human_action is not None
     assert ambiguous.human_action.kind == HumanActionKind.RECONCILE_MESSAGE_DELIVERY
+    assert ambiguous.human_action.details["sender"] == "candidate@example.test"
+    assert ambiguous.human_action.details["recipient"] == "recruiter@example.test"
+    assert ambiguous.human_action.details["body"] == "Thank you for considering my application."
+    expected_message_digest = sha256(
+        (
+            "candidate@example.test\n"
+            "recruiter@example.test\n"
+            "Application follow-up\n"
+            "Thank you for considering my application."
+        ).encode("utf-8")
+    ).hexdigest()
+    assert ambiguous.human_action.details["content_sha256"] == expected_message_digest
     assert calls["count"] == 1
 
     completed = loop.resolve_message_reconciliation(run_id, delivered=True)
