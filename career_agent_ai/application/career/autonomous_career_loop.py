@@ -398,6 +398,7 @@ class AutonomousCareerLoop:
             state.application_id,
             operation_id,
             expected_version=application.version,
+            claim_owner_id=state.run_id,
         )
         try:
             result = self._submission.submit(
@@ -415,7 +416,9 @@ class AutonomousCareerLoop:
                 ExternalActionStatus.FAILED,
             }:
                 self._applications.release_submission(
-                    state.application_id, operation_id
+                    state.application_id,
+                    operation_id,
+                    claim_owner_id=state.run_id,
                 )
             raise
         if result is None:
@@ -425,7 +428,9 @@ class AutonomousCareerLoop:
                 and durable_operation.status == ExternalActionStatus.FAILED
             ):
                 self._applications.release_submission(
-                    state.application_id, operation_id
+                    state.application_id,
+                    operation_id,
+                    claim_owner_id=state.run_id,
                 )
             raise RuntimeError("Application submission did not reach a confirmed outcome.")
         updated = claimed.transition(
@@ -439,6 +444,7 @@ class AutonomousCareerLoop:
                 updated,
                 operation_id,
                 expected_version=claimed.version,
+                claim_owner_id=state.run_id,
             )
         except Exception as exc:
             durable_operation = self._submission.get_operation(operation_id)
