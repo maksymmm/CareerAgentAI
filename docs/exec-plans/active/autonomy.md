@@ -201,6 +201,9 @@ after already-completed external actions remain resumable, and ambiguous applica
 submission outcomes enter an explicit reconciliation gate. Provider-verified success
 is finalized without another submit call; provider-verified no-effect outcomes reopen
 the same stable idempotency operation for a deliberate retry.
+The same explicit reconciliation pattern covers ambiguous recruiter-message delivery
+and interview/calendar responses, preventing uncertain external effects from becoming
+terminal loop failures.
 
 Next priority: production hardening.
 
