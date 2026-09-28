@@ -40,6 +40,10 @@ from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
 from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
 
 
+class _RecoverableCareerLoopError(RuntimeError):
+    """Signal a durable partial outcome that should be retried after restart."""
+
+
 class AutonomousCareerLoop:
     """Connect career discovery through interview coordination with durable gates."""
 
@@ -151,6 +155,10 @@ class AutonomousCareerLoop:
                 self._step(state)
                 state.touch()
                 self._persist(state)
+        except _RecoverableCareerLoopError as exc:
+            state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
+            state.touch()
+            self._persist(state)
         except Exception as exc:
             state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
             state.phase = CareerLoopPhase.FAILED
@@ -419,11 +427,23 @@ class AutonomousCareerLoop:
             event_id=self._application_applied_event_id(state.application_id),
             note="Submitted by autonomous career loop after human approval.",
         )
-        self._applications.complete_submission(
-            updated,
-            operation_id,
-            expected_version=claimed.version,
-        )
+        try:
+            self._applications.complete_submission(
+                updated,
+                operation_id,
+                expected_version=claimed.version,
+            )
+        except Exception as exc:
+            durable_operation = self._submission.get_operation(operation_id)
+            if (
+                durable_operation is not None
+                and durable_operation.status == ExternalActionStatus.SUCCEEDED
+            ):
+                raise _RecoverableCareerLoopError(
+                    "Application was durably submitted, but tracker completion must be retried."
+                ) from exc
+            raise
+        state.last_error = None
         state.approved_human_action = None
         state.phase = CareerLoopPhase.MESSAGE_PREPARE
 
