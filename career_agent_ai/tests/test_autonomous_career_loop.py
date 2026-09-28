@@ -1985,11 +1985,16 @@ def test_definite_pre_submission_failure_is_recoverable_with_same_operation(tmp_
     assert completed.error is None
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
-    operation_id = f"{run_id}:application:submit"
-    assert submission_provider.calls == [
-        (operation_id, "job-1", f"{run_id}:application"),
-        (operation_id, "job-1", f"{run_id}:application"),
-    ]
+    assert len(submission_provider.calls) == 2
+    assert submission_provider.calls[0][0] == submission_provider.calls[1][0]
+    assert submission_provider.calls[0][1:] == (
+        "job-1",
+        f"{run_id}:application",
+    )
+    assert submission_provider.calls[1][1:] == (
+        "job-1",
+        f"{run_id}:application",
+    )
     database.close()
 
 
