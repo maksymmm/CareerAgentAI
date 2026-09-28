@@ -32,14 +32,24 @@ class ResumeAgent(Agent):
         job_title = self._text(context.payload.get("job_title"), "Unknown role")
         company = self._text(context.payload.get("company"), "Unknown company")
         candidate = self._text(context.user_id, "Unknown candidate")
-        profile = self._profile(context.payload.get("candidate_profile"))
-        artifact = (
-            f"Candidate: {candidate}\n"
-            f"Target role: {job_title}\n"
-            f"Company: {company}\n"
-            f"Job ID: {job_id}\n\n"
-            f"Candidate profile:\n{profile}"
-        )
+        raw_profile = context.payload.get("candidate_profile")
+        if raw_profile is None or (isinstance(raw_profile, str) and not raw_profile.strip()):
+            profile = None
+            artifact = (
+                f"Candidate: {candidate}\n"
+                f"Target role: {job_title}\n"
+                f"Company: {company}\n"
+                f"Job ID: {job_id}"
+            )
+        else:
+            profile = self._profile(raw_profile)
+            artifact = (
+                f"Candidate: {candidate}\n"
+                f"Target role: {job_title}\n"
+                f"Company: {company}\n"
+                f"Job ID: {job_id}\n\n"
+                f"Candidate profile:\n{profile}"
+            )
         return AgentResult(
             success=True,
             agent_id=self.id,
@@ -47,6 +57,7 @@ class ResumeAgent(Agent):
             metadata={
                 "application_artifact": artifact,
                 "application_artifact_type": "job_application_profile",
+                "candidate_profile_included": profile is not None,
             },
         )
 
