@@ -1792,3 +1792,141 @@ def test_ambiguous_interview_response_confirmed_no_effect_retries_same_operation
     ) == 1
     assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
     database.close()
+
+
+def test_generic_decline_cannot_terminalize_application_reconciliation(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "reconciliation-generic-decline.sqlite")
+    run_id = "reconcile-generic-decline"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+
+    def ambiguous_submit(*args, **kwargs):
+        raise RuntimeError("ambiguous provider outcome")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    ambiguous = loop.resume(run_id, approved=True)
+    assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+
+    with pytest.raises(RuntimeError, match="dedicated reconciliation resolver"):
+        loop.resume(run_id, approved=False)
+
+    still_waiting = loop.get(run_id)
+    assert still_waiting.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert still_waiting.human_action is not None
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
+    database.close()
+
+
+def test_application_reconciliation_resolution_survives_snapshot_failure(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "reconciliation-resolution-restart.sqlite")
+    run_id = "reconcile-resolution-restart"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+
+    def ambiguous_submit(*args, **kwargs):
+        raise RuntimeError("ambiguous provider outcome")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    ambiguous = loop.resume(run_id, approved=True)
+    assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+
+    original_save = loop._states.save
+    failed_once = {"value": False}
+
+    def fail_resolution_snapshot_once(state):
+        if state.phase == CareerLoopPhase.APPLICATION_SUBMIT and not failed_once["value"]:
+            failed_once["value"] = True
+            raise sqlite3.OperationalError("snapshot unavailable after reconciliation")
+        return original_save(state)
+
+    monkeypatch.setattr(loop._states, "save", fail_resolution_snapshot_once)
+    with pytest.raises(sqlite3.OperationalError):
+        loop.resolve_application_reconciliation(
+            run_id,
+            submitted=True,
+            provider_submission_id="provider-confirmed-after-crash",
+        )
+
+    persisted_gate = loop.get(run_id)
+    assert persisted_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+
+    completed = loop.resolve_application_reconciliation(
+        run_id,
+        submitted=True,
+        provider_submission_id="provider-confirmed-after-crash",
+    )
+
+    assert completed.completed is True
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+
+def test_message_reconciliation_resolution_survives_snapshot_failure(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "message-reconciliation-resolution-restart.sqlite")
+    run_id = "message-reconcile-resolution-restart"
+    database, loop, _, messages, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    )
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    def ambiguous_send(*args, **kwargs):
+        raise RuntimeError("ambiguous message outcome")
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_send)
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+
+    original_save = loop._states.save
+    failed_once = {"value": False}
+
+    def fail_resolution_snapshot_once(state):
+        if state.phase == CareerLoopPhase.MESSAGE_SEND and not failed_once["value"]:
+            failed_once["value"] = True
+            raise sqlite3.OperationalError("snapshot unavailable after reconciliation")
+        return original_save(state)
+
+    monkeypatch.setattr(loop._states, "save", fail_resolution_snapshot_once)
+    with pytest.raises(sqlite3.OperationalError):
+        loop.resolve_message_reconciliation(run_id, delivered=True)
+
+    assert loop.get(run_id).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    completed = loop.resolve_message_reconciliation(run_id, delivered=True)
+
+    assert completed.completed is True
+    assert messages.get(f"{run_id}:message").direction.value == "outbound"
+    database.close()
