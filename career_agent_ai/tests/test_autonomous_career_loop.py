@@ -1564,7 +1564,7 @@ def test_ambiguous_application_submission_enters_explicit_reconciliation_and_can
     assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
     assert calls["count"] == 1
 
-    with pytest.raises(RuntimeError, match="resolve_application_reconciliation"):
+    with pytest.raises(RuntimeError, match="dedicated reconciliation resolver"):
         loop.resume(run_id, approved=True)
 
     completed = loop.resolve_application_reconciliation(
