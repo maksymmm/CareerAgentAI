@@ -63,6 +63,10 @@ from career_agent_ai.application.storage.sqlite_scheduling_repository import (
 
 CREATED = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
 START = datetime(2026, 11, 10, 9, 0, tzinfo=timezone.utc)
+PROFILE = (
+    "Logistics professional with warehouse picking, packing, inventory control, "
+    "new-employee onboarding, and daily workflow coordination experience."
+)
 
 
 def build_stack(
@@ -163,6 +167,7 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
     return CareerLoopRequest(
         user_id="user-1",
         keyword="Logistics",
+        candidate_profile=PROFILE,
         location="Karlsruhe",
         sender="candidate@example.test",
         recipient="recruiter@example.test",
@@ -201,12 +206,22 @@ def test_request_rejects_incomplete_enabled_messaging_before_run(changes):
     values = {
         "user_id": "user-1",
         "keyword": "Logistics",
+        "candidate_profile": PROFILE,
     }
     values.update(changes)
 
     with pytest.raises(ValueError):
         CareerLoopRequest(**values)
 
+
+
+def test_request_requires_real_candidate_profile_before_run():
+    with pytest.raises(ValueError, match="candidate_profile"):
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile="",
+        )
 
 def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path):
     path = str(tmp_path / "career-loop.sqlite")
@@ -224,9 +239,10 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert started.human_action.details["job_id"] == "job-1"
     assert started.human_action.details["artifact_content"] == (
         "Candidate: user-1\n"
-        "Role: Logistics Coordinator\n"
+        "Target role: Logistics Coordinator\n"
         "Company: Acme Logistics\n"
-        "Job ID: job-1"
+        "Job ID: job-1\n\n"
+        f"Candidate profile:\n{PROFILE}"
     )
     assert started.human_action.details["artifact_sha256"] == sha256(
         started.human_action.details["artifact_content"].encode("utf-8")
@@ -415,7 +431,7 @@ def test_loop_is_globally_bounded_across_resumes(tmp_path):
     )
 
     result = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="bounded",
     )
 
@@ -460,7 +476,7 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
     first = build_stack(path, with_schedule=False)
     database, loop, _, _, _, _, _, _ = first
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id=run_id,
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -504,7 +520,7 @@ def test_tracker_completion_failure_after_durable_submit_remains_recoverable(
         path, with_schedule=False
     )
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id=run_id,
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -554,7 +570,7 @@ def test_post_action_crash_after_application_success_recovers_without_resubmit(t
         path, with_schedule=False
     )
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id=run_id,
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -722,6 +738,7 @@ def test_unlinked_interview_for_another_candidate_is_rejected(tmp_path):
     req = CareerLoopRequest(
         user_id="user-1",
         keyword="Logistics",
+        candidate_profile=PROFILE,
         schedule_event_id="interview-1",
     )
     assert loop.start(req, run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -741,7 +758,7 @@ def test_plain_string_company_uses_empty_aggregate_company_id(tmp_path):
     )
 
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="plain-company",
     )
 
@@ -764,7 +781,7 @@ def test_application_artifact_survives_restart_and_is_bound_to_approval(tmp_path
     database, loop, _, _, _, submission_provider, _, _ = first
 
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id=run_id,
     )
     assert started.human_action is not None
@@ -826,7 +843,7 @@ def test_application_approval_becomes_stale_before_external_submission(tmp_path)
         path, with_schedule=False
     )
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="stale-app",
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -892,7 +909,7 @@ def test_new_run_cannot_resubmit_a_job_that_is_already_applied(tmp_path):
     first = build_stack(path, with_schedule=False)
     database, loop, applications, _, _, first_submission, _, _ = first
     initial = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="first-run",
     )
     assert initial.phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -904,7 +921,7 @@ def test_new_run_cannot_resubmit_a_job_that_is_already_applied(tmp_path):
     second = build_stack(path, with_schedule=False)
     database, loop, applications, _, _, second_submission, _, _ = second
     duplicate = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="second-run",
     )
 
@@ -924,7 +941,7 @@ def test_start_rejects_run_ids_that_cannot_derive_safe_operation_ids(tmp_path, b
 
     with pytest.raises(ValueError):
         loop.start(
-            CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+            CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
             run_id=bad_run_id,
         )
 
@@ -950,7 +967,7 @@ def test_derived_application_id_collision_cannot_cross_user_ownership(tmp_path):
     )
 
     result = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="collision",
     )
 
@@ -980,7 +997,7 @@ def test_long_existing_application_id_uses_bounded_stable_submission_key(tmp_pat
     )
 
     started = loop.start(
-        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
         run_id="long-id",
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
@@ -1010,6 +1027,7 @@ def test_repository_rejects_payload_run_id_mismatch(tmp_path):
             "request": {
                 "user_id": "user-1",
                 "keyword": "Logistics",
+                "candidate_profile": PROFILE,
                 "location": "",
                 "sender": "",
                 "recipient": "",
