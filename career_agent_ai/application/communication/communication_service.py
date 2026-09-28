@@ -149,6 +149,10 @@ class CommunicationService:
                 raise ValueError("Resolved communication outcome is inconsistent.")
             return operation
         if not delivered and operation.status == ExternalActionStatus.PREPARED:
+            if message.direction != MessageDirection.DRAFT:
+                raise ValueError(
+                    "Prepared retry requires the persisted message to be a draft."
+                )
             return operation
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Communication operation is not awaiting reconciliation.")
@@ -163,6 +167,10 @@ class CommunicationService:
                     "thread_id": persisted.thread_id,
                 },
             )
+        self._repository.restore_delivery_for_retry(
+            message.message_id,
+            operation_id,
+        )
         return self._external_actions.resolve_reconciliation(
             operation_id,
             confirmed_succeeded=False,
