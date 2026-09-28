@@ -34,6 +34,15 @@ class CareerLoopRepository(Protocol):
     ) -> None:
         """Acquire one expiring per-run execution lease for the expected snapshot."""
 
+    def renew_execution(
+        self,
+        run_id: str,
+        owner_id: str,
+        *,
+        lease_seconds: int,
+    ) -> None:
+        """Extend an execution lease only while owner_id still owns it."""
+
     def release_execution(self, run_id: str, owner_id: str) -> None:
         """Release the matching per-run execution lease."""
 
