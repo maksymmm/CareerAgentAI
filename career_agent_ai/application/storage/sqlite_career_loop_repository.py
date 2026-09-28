@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 from typing import Any
 
@@ -13,6 +14,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     HumanActionEvent,
     HumanActionKind,
 )
+from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopConflictError
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -26,29 +28,66 @@ class SQLiteCareerLoopRepository:
         self._create_schema()
 
     def save(self, state: CareerLoopState) -> None:
-        """Create or replace one validated active-loop snapshot."""
-        payload = self._serialize(state)
-        self._database.connection.execute(
-            """
-            INSERT INTO autonomous_career_loops (run_id, payload_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                payload_json = excluded.payload_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                state.run_id,
-                json.dumps(payload, sort_keys=True, separators=(",", ":")),
-                state.updated_at.isoformat(),
-            ),
-        )
-        self._database.connection.commit()
+        """Create or compare-and-swap one validated active-loop snapshot."""
+        if not isinstance(state.version, int) or isinstance(state.version, bool) or state.version < 0:
+            raise ValueError("state.version must be a non-negative integer.")
+        current_version = state.version
+        next_version = current_version + 1
+        payload = self._serialize(state, version=next_version)
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        connection = self._database.connection
+        try:
+            if current_version == 0:
+                connection.execute(
+                    """
+                    INSERT INTO autonomous_career_loops (
+                        run_id, payload_json, updated_at, version
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        state.run_id,
+                        serialized,
+                        state.updated_at.isoformat(),
+                        next_version,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE autonomous_career_loops
+                    SET payload_json = ?, updated_at = ?, version = ?
+                    WHERE run_id = ? AND version = ?
+                    """,
+                    (
+                        serialized,
+                        state.updated_at.isoformat(),
+                        next_version,
+                        state.run_id,
+                        current_version,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise CareerLoopConflictError(
+                        "Autonomous-loop snapshot is stale and cannot overwrite newer state."
+                    )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            if connection.in_transaction:
+                connection.rollback()
+            raise CareerLoopConflictError(
+                "Autonomous-loop run already exists or changed concurrently."
+            ) from exc
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        state.version = next_version
 
     def get(self, run_id: str) -> CareerLoopState | None:
         """Return one persisted active loop or None."""
         run_id = self._identifier(run_id, "run_id")
         row = self._database.connection.execute(
-            "SELECT payload_json FROM autonomous_career_loops WHERE run_id = ?",
+            "SELECT payload_json, version FROM autonomous_career_loops WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         if row is None:
@@ -57,7 +96,7 @@ class SQLiteCareerLoopRepository:
             value = json.loads(row[0])
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValueError("Persisted autonomous-loop JSON is malformed.") from exc
-        state = self._deserialize(value)
+        state = self._deserialize(value, storage_version=row[1])
         if state.run_id != run_id:
             raise ValueError("Persisted autonomous-loop run_id does not match its storage key.")
         return state
@@ -76,10 +115,22 @@ class SQLiteCareerLoopRepository:
             CREATE TABLE IF NOT EXISTS autonomous_career_loops (
                 run_id TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                version INTEGER NOT NULL CHECK(version >= 1)
             )
             """
         )
+        columns = {
+            row[1]
+            for row in self._database.connection.execute(
+                "PRAGMA table_info(autonomous_career_loops)"
+            ).fetchall()
+        }
+        if "version" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE autonomous_career_loops "
+                "ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+            )
         self._database.connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_autonomous_loop_updated
@@ -89,12 +140,15 @@ class SQLiteCareerLoopRepository:
         self._database.connection.commit()
 
     @classmethod
-    def _serialize(cls, state: CareerLoopState) -> dict[str, Any]:
+    def _serialize(
+        cls, state: CareerLoopState, *, version: int | None = None
+    ) -> dict[str, Any]:
         action = state.pending_human_action
         approved_action = state.approved_human_action
         return {
             "serialization_version": cls.SERIALIZATION_VERSION,
             "run_id": state.run_id,
+            "version": state.version if version is None else version,
             "request": {
                 "user_id": state.request.user_id,
                 "keyword": state.request.keyword,
@@ -124,7 +178,9 @@ class SQLiteCareerLoopRepository:
         }
 
     @classmethod
-    def _deserialize(cls, value: Any) -> CareerLoopState:
+    def _deserialize(
+        cls, value: Any, *, storage_version: int | None = None
+    ) -> CareerLoopState:
         if not isinstance(value, dict):
             raise ValueError("Persisted autonomous-loop payload must be an object.")
         if value.get("serialization_version") != cls.SERIALIZATION_VERSION:
@@ -147,6 +203,14 @@ class SQLiteCareerLoopRepository:
                 or updated_at.utcoffset() is None
             ):
                 raise ValueError("Persisted loop timestamps must be timezone-aware.")
+            version = value.get("version", storage_version)
+            if (
+                not isinstance(version, int)
+                or isinstance(version, bool)
+                or version < 1
+                or (storage_version is not None and version != storage_version)
+            ):
+                raise ValueError("Persisted loop version is malformed.")
             iterations = value["iterations"]
             if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 0:
                 raise ValueError("Persisted iterations must be a non-negative integer.")
@@ -166,6 +230,7 @@ class SQLiteCareerLoopRepository:
                     value.get("application_artifact_sha256")
                 ),
                 message_id=cls._optional_text(value.get("message_id")),
+                version=version,
                 iterations=iterations,
                 pending_human_action=action,
                 approved_human_action=approved_action,
