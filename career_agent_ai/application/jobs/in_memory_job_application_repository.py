@@ -12,7 +12,7 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
 
     def __init__(self) -> None:
         self._items: dict[str, JobApplication] = {}
-        self._submission_claims: dict[str, str] = {}
+        self._submission_claims: dict[str, tuple[str, str]] = {}
 
     def add(
         self,
@@ -76,36 +76,55 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
         operation_id: str,
         *,
         expected_version: int,
+        claim_owner_id: str | None = None,
     ) -> JobApplication:
-        """Atomically reserve a saved application version for submission."""
+        """Atomically reserve a saved application version for one durable owner."""
         normalized_id = self._required_identifier(application_id, "application_id")
         normalized_operation = self._required_identifier(operation_id, "operation_id")
+        normalized_owner = self._required_identifier(
+            claim_owner_id or normalized_operation, "claim_owner_id"
+        )
         current = self._items.get(normalized_id)
         existing_claim = self._submission_claims.get(normalized_id)
         if (
             current is None
             or current.version != expected_version
             or current.status.value != "saved"
-            or existing_claim not in (None, normalized_operation)
+            or existing_claim not in (None, (normalized_operation, normalized_owner))
         ):
             raise ApplicationConflictError(
                 "Application cannot be claimed for submission."
             )
         if any(
             claimed_operation == normalized_operation and claimed_id != normalized_id
-            for claimed_id, claimed_operation in self._submission_claims.items()
+            for claimed_id, (claimed_operation, _) in self._submission_claims.items()
         ):
             raise ApplicationConflictError(
                 "Submission operation is already bound to another application."
             )
-        self._submission_claims[normalized_id] = normalized_operation
+        self._submission_claims[normalized_id] = (
+            normalized_operation,
+            normalized_owner,
+        )
         return current
 
-    def release_submission(self, application_id: str, operation_id: str) -> None:
-        """Release a matching submission claim."""
+    def release_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Release a matching submission owner claim."""
         normalized_id = self._required_identifier(application_id, "application_id")
         normalized_operation = self._required_identifier(operation_id, "operation_id")
-        if self._submission_claims.get(normalized_id) != normalized_operation:
+        normalized_owner = self._required_identifier(
+            claim_owner_id or normalized_operation, "claim_owner_id"
+        )
+        if self._submission_claims.get(normalized_id) != (
+            normalized_operation,
+            normalized_owner,
+        ):
             raise ApplicationConflictError("Submission claim is no longer releasable.")
         del self._submission_claims[normalized_id]
 
@@ -115,16 +134,20 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
         operation_id: str,
         *,
         expected_version: int,
+        claim_owner_id: str | None = None,
     ) -> None:
-        """Apply the claimed saved-to-applied transition atomically."""
+        """Apply the matching owner's saved-to-applied transition atomically."""
         normalized_operation = self._required_identifier(operation_id, "operation_id")
+        normalized_owner = self._required_identifier(
+            claim_owner_id or normalized_operation, "claim_owner_id"
+        )
         current = self._items.get(application.application_id)
         if (
             current is None
             or current.version != expected_version
             or current.status.value != "saved"
             or self._submission_claims.get(application.application_id)
-            != normalized_operation
+            != (normalized_operation, normalized_owner)
             or application.version != expected_version + 1
             or application.status.value != "applied"
             or normalized_operation not in application.external_action_operation_ids
