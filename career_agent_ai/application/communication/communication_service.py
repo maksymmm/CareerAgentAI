@@ -138,10 +138,20 @@ class CommunicationService:
             raise KeyError(f"Unknown communication operation: {operation_id!r}")
         if operation.action_type not in {"communication.send", "communication.reply"}:
             raise ValueError("Operation is not a communication delivery.")
-        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
-            raise ValueError("Communication operation is not awaiting reconciliation.")
         message_id = str(operation.payload.get("message_id", ""))
         message = self._require_message(message_id)
+        if delivered and operation.status == ExternalActionStatus.SUCCEEDED:
+            if (
+                operation.result is None
+                or operation.result.get("message_id") != message.message_id
+                or message.direction != MessageDirection.OUTBOUND
+            ):
+                raise ValueError("Resolved communication outcome is inconsistent.")
+            return operation
+        if not delivered and operation.status == ExternalActionStatus.PREPARED:
+            return operation
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Communication operation is not awaiting reconciliation.")
         if delivered:
             outbound = replace(message, direction=MessageDirection.OUTBOUND)
             persisted = self._repository.save(outbound)
