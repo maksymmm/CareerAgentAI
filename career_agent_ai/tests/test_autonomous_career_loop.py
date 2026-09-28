@@ -1629,3 +1629,166 @@ def test_ambiguous_application_submission_confirmed_no_effect_retries_same_opera
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
     database.close()
+
+
+def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_success(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "message-reconciliation-success.sqlite")
+    run_id = "reconcile-message-delivered"
+    database, loop, _, messages, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    calls = {"count": 0}
+
+    def ambiguous_send(*args, **kwargs):
+        calls["count"] += 1
+        raise RuntimeError("connection lost after message may have been delivered")
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_send)
+    ambiguous = loop.resume(run_id, approved=True)
+
+    assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    assert ambiguous.human_action is not None
+    assert ambiguous.human_action.kind == HumanActionKind.RECONCILE_MESSAGE_DELIVERY
+    assert calls["count"] == 1
+
+    completed = loop.resolve_message_reconciliation(run_id, delivered=True)
+
+    assert completed.completed is True
+    assert calls["count"] == 1
+    assert messages.get(f"{run_id}:message").direction.value == "outbound"
+    database.close()
+
+
+def test_ambiguous_message_delivery_confirmed_no_effect_retries_same_operation(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "message-reconciliation-no-effect.sqlite")
+    run_id = "reconcile-message-not-delivered"
+    database, loop, _, _, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    )
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    original_send = communication_provider.send
+    attempts = {"count": 0}
+
+    def ambiguous_once(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("unknown message outcome")
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_once)
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+
+    completed = loop.resolve_message_reconciliation(run_id, delivered=False)
+
+    assert completed.completed is True
+    assert attempts["count"] == 2
+    assert communication_provider.calls.count(
+        ("send", f"{run_id}:message-send")
+    ) == 1
+    database.close()
+
+
+def test_ambiguous_interview_response_enters_reconciliation_and_can_confirm_success(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-reconciliation-success.sqlite")
+    run_id = "reconcile-interview-accepted"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    calls = {"count": 0}
+
+    def ambiguous_accept(*args, **kwargs):
+        calls["count"] += 1
+        raise RuntimeError("calendar response outcome unknown")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    ambiguous = loop.resume(run_id, approved=True)
+
+    assert ambiguous.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    assert ambiguous.human_action is not None
+    assert (
+        ambiguous.human_action.kind
+        == HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
+    )
+    assert calls["count"] == 1
+
+    completed = loop.resolve_interview_reconciliation(
+        run_id,
+        completed=True,
+        provider_event_id="provider-confirmed-interview-1",
+    )
+
+    assert completed.completed is True
+    assert calls["count"] == 1
+    accepted = scheduling.get_event("interview-1")
+    assert accepted.status == ScheduleStatus.ACCEPTED
+    assert accepted.provider_event_id == "provider-confirmed-interview-1"
+    database.close()
+
+
+def test_ambiguous_interview_response_confirmed_no_effect_retries_same_operation(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-reconciliation-no-effect.sqlite")
+    run_id = "reconcile-interview-not-accepted"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    loop.start(request(), run_id=run_id)
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    original_accept = calendar_provider.accept
+    attempts = {"count": 0}
+
+    def ambiguous_once(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("unknown calendar outcome")
+        return original_accept(*args, **kwargs)
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_once)
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+
+    completed = loop.resolve_interview_reconciliation(run_id, completed=False)
+
+    assert completed.completed is True
+    assert attempts["count"] == 2
+    assert calendar_provider.calls.count(
+        ("accept", f"{run_id}:interview-accept")
+    ) == 1
+    assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+    database.close()
