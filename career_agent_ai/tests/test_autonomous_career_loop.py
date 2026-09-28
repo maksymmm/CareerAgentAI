@@ -1951,3 +1951,105 @@ def test_message_reconciliation_resolution_survives_snapshot_failure(
     assert completed.completed is True
     assert messages.get(f"{run_id}:message").direction.value == "outbound"
     database.close()
+
+
+def test_definite_pre_submission_failure_is_recoverable_with_same_operation(tmp_path):
+    path = str(tmp_path / "definite-submission-retry.sqlite")
+    run_id = "definite-submission-retry"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    submission_provider.failure = RuntimeError("provider unavailable before submission")
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.APPLICATION_SUBMIT
+    assert partial.completed is False
+    assert "can be retried deliberately" in (partial.error or "")
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
+
+    submission_provider.failure = None
+    completed = loop.continue_run(run_id)
+
+    assert completed.completed is True
+    assert completed.error is None
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    operation_id = f"{run_id}:application:submit"
+    assert submission_provider.calls == [
+        (operation_id, "job-1", f"{run_id}:application"),
+        (operation_id, "job-1", f"{run_id}:application"),
+    ]
+    database.close()
+
+
+def test_submission_terminal_success_write_failure_enters_reconciliation(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "submission-success-write-reconciliation.sqlite")
+    run_id = "submission-success-write-reconciliation"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    repository = loop._submission._external_actions._repository
+    original_transition = repository.transition
+    failed_once = {"value": False}
+
+    def fail_success_write_once(
+        operation_id,
+        expected_status,
+        status,
+        *,
+        result=None,
+        error=None,
+    ):
+        if status == ExternalActionStatus.SUCCEEDED and not failed_once["value"]:
+            failed_once["value"] = True
+            raise sqlite3.OperationalError("success row temporarily unavailable")
+        return original_transition(
+            operation_id,
+            expected_status,
+            status,
+            result=result,
+            error=error,
+        )
+
+    monkeypatch.setattr(repository, "transition", fail_success_write_once)
+    ambiguous = loop.resume(run_id, approved=True)
+
+    assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert ambiguous.human_action is not None
+    assert (
+        ambiguous.human_action.kind
+        == HumanActionKind.RECONCILE_APPLICATION_SUBMISSION
+    )
+    operation_id = ambiguous.human_action.details["operation_id"]
+    durable = loop._submission.get_operation(operation_id)
+    assert durable is not None
+    assert durable.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert submission_provider.calls == [
+        (operation_id, "job-1", f"{run_id}:application")
+    ]
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
+    database.close()
