@@ -639,10 +639,15 @@ class AutonomousCareerLoop:
             raise RuntimeError("Resume preparation produced no artifact metadata.")
         candidate = metadata.get("application_artifact")
         artifact_type = metadata.get("application_artifact_type")
+        profile_included = metadata.get("candidate_profile_included")
         if not isinstance(candidate, str) or not candidate.strip():
             raise RuntimeError("Resume preparation produced no inspectable application artifact.")
         if artifact_type != "job_application_profile":
             raise RuntimeError("Resume preparation produced an unsupported artifact type.")
+        if profile_included is not True:
+            raise RuntimeError(
+                "Resume preparation did not include real candidate profile data."
+            )
         normalized = candidate.replace("\r\n", "\n").replace("\r", "\n").strip()
         if not normalized:
             raise RuntimeError("Resume preparation produced an empty application artifact.")
