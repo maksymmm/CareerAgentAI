@@ -32,11 +32,13 @@ class ResumeAgent(Agent):
         job_title = self._text(context.payload.get("job_title"), "Unknown role")
         company = self._text(context.payload.get("company"), "Unknown company")
         candidate = self._text(context.user_id, "Unknown candidate")
+        profile = self._profile(context.payload.get("candidate_profile"))
         artifact = (
             f"Candidate: {candidate}\n"
-            f"Role: {job_title}\n"
+            f"Target role: {job_title}\n"
             f"Company: {company}\n"
-            f"Job ID: {job_id}"
+            f"Job ID: {job_id}\n\n"
+            f"Candidate profile:\n{profile}"
         )
         return AgentResult(
             success=True,
@@ -59,6 +61,22 @@ class ResumeAgent(Agent):
             success=True,
             agent_id=self.id,
         )
+
+    @staticmethod
+    def _profile(value) -> str:
+        """Return validated candidate-supplied resume/profile text without fabrication."""
+        if not isinstance(value, str):
+            raise TypeError("candidate_profile must be text.")
+        candidate = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not candidate:
+            raise ValueError("candidate_profile must not be empty.")
+        if len(candidate) > 50_000:
+            raise ValueError("candidate_profile must not exceed 50000 characters.")
+        if any(ord(ch) < 32 and ch not in "\n\t" for ch in candidate):
+            raise ValueError("candidate_profile contains forbidden control characters.")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in candidate):
+            raise ValueError("candidate_profile contains a forbidden Unicode surrogate.")
+        return candidate
 
     @staticmethod
     def _text(value, fallback: str) -> str:
