@@ -333,6 +333,7 @@ def test_loop_without_message_or_interview_completes_after_application_approval(
     minimal = CareerLoopRequest(
         user_id="user-1",
         keyword="Logistics",
+        candidate_profile=PROFILE,
         location="Karlsruhe",
     )
 
@@ -451,6 +452,7 @@ def test_restart_before_message_phase_does_not_duplicate_application(tmp_path):
     minimal_request = CareerLoopRequest(
         user_id="user-1",
         keyword="Logistics",
+        candidate_profile=PROFILE,
         location="Karlsruhe",
     )
     started = loop.start(minimal_request, run_id=run_id)
