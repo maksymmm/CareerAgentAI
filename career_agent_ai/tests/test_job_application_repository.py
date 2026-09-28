@@ -5,6 +5,10 @@ from career_agent_ai.application.jobs.job_application import JobApplication
 from career_agent_ai.application.jobs.job_application_status import (
     JobApplicationStatus,
 )
+from career_agent_ai.application.jobs.job_application_repository import (
+    ApplicationQuery,
+    JobApplicationRepository,
+)
 
 
 def make_application(app_id: str) -> JobApplication:
