@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Mapping
 
 from career_agent_ai.application.external_actions import (
     AmbiguousExternalActionError,
+    ExternalActionOperation,
     ExternalActionService,
     ExternalActionStatus,
 )
@@ -117,6 +119,44 @@ class CommunicationService:
     def get_persisted(self, message_id: str) -> CommunicationMessage | None:
         """Return one locally persisted message without contacting the provider."""
         return self._repository.get(message_id)
+
+    def get_operation(self, operation_id: str) -> ExternalActionOperation | None:
+        """Return durable communication operation state without executing it."""
+        return self._external_actions.get(operation_id)
+
+    def resolve_reconciliation(
+        self,
+        operation_id: str,
+        *,
+        delivered: bool,
+    ) -> ExternalActionOperation:
+        """Resolve a verified ambiguous send/reply outcome without blind retry."""
+        if not isinstance(delivered, bool):
+            raise TypeError("delivered must be a boolean.")
+        operation = self._external_actions.get(operation_id)
+        if operation is None:
+            raise KeyError(f"Unknown communication operation: {operation_id!r}")
+        if operation.action_type not in {"communication.send", "communication.reply"}:
+            raise ValueError("Operation is not a communication delivery.")
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Communication operation is not awaiting reconciliation.")
+        message_id = str(operation.payload.get("message_id", ""))
+        message = self._require_message(message_id)
+        if delivered:
+            outbound = replace(message, direction=MessageDirection.OUTBOUND)
+            persisted = self._repository.save(outbound)
+            return self._external_actions.resolve_reconciliation(
+                operation_id,
+                confirmed_succeeded=True,
+                result={
+                    "message_id": persisted.message_id,
+                    "thread_id": persisted.thread_id,
+                },
+            )
+        return self._external_actions.resolve_reconciliation(
+            operation_id,
+            confirmed_succeeded=False,
+        )
 
     def send(
         self, operation_id: str, message_id: str, *, human_approved: bool
