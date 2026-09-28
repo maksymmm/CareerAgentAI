@@ -11,6 +11,7 @@ from career_agent_ai.application.scheduling.models import (
     ScheduleEventType,
     ScheduleStatus,
     normalize_aware_datetime,
+    validate_provider_identifier,
     validate_schedule_identifier,
 )
 from career_agent_ai.application.scheduling.scheduling_repository import (
@@ -348,8 +349,9 @@ class SQLiteSchedulingRepository:
     ) -> ScheduleEvent:
         """Persist a verified provider ID with optimistic concurrency."""
         event_id = validate_schedule_identifier(event_id, "event_id")
-        if not isinstance(provider_event_id, str) or not provider_event_id:
-            raise ValueError("provider_event_id must not be empty.")
+        provider_event_id = validate_provider_identifier(
+            provider_event_id, "provider_event_id"
+        )
         if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
             raise ValueError("expected_version must be a positive integer.")
         now = datetime.now(timezone.utc).isoformat()
