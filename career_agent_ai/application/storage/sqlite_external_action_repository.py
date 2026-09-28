@@ -185,6 +185,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             (ExternalActionStatus.IN_PROGRESS, ExternalActionStatus.RECONCILIATION_REQUIRED),
             (ExternalActionStatus.RECONCILIATION_REQUIRED, ExternalActionStatus.SUCCEEDED),
             (ExternalActionStatus.RECONCILIATION_REQUIRED, ExternalActionStatus.PREPARED),
+            (ExternalActionStatus.FAILED, ExternalActionStatus.PREPARED),
         }
         if (expected, status) not in allowed:
             raise ValueError(f"Invalid external-action transition: {expected} -> {status}.")
