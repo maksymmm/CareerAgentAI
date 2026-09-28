@@ -145,32 +145,64 @@ class AutonomousCareerLoop:
         return self._continue(state)
 
     def _continue(self, state: CareerLoopState) -> CareerLoopResult:
+        execution_owner = f"worker:{uuid4().hex}"
+        self._states.claim_execution(
+            state.run_id,
+            execution_owner,
+            expected_version=state.version,
+            lease_seconds=900,
+        )
         try:
-            while state.phase not in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
-                if state.pending_human_action is not None:
-                    break
-                if state.iterations >= self._max_iterations:
-                    state.last_error = "max_iterations_reached"
-                    state.phase = CareerLoopPhase.FAILED
+            try:
+                while state.phase not in {
+                    CareerLoopPhase.COMPLETE,
+                    CareerLoopPhase.FAILED,
+                }:
+                    if state.pending_human_action is not None:
+                        break
+                    if state.iterations >= self._max_iterations:
+                        state.last_error = "max_iterations_reached"
+                        state.phase = CareerLoopPhase.FAILED
+                        state.touch()
+                        self._persist(state)
+                        break
+                    state.iterations += 1
+                    self._step(state)
+                    state.last_error = None
                     state.touch()
                     self._persist(state)
-                    break
-                state.iterations += 1
-                self._step(state)
+                    if (
+                        state.phase not in {
+                            CareerLoopPhase.COMPLETE,
+                            CareerLoopPhase.FAILED,
+                        }
+                        and state.pending_human_action is None
+                    ):
+                        self._states.claim_execution(
+                            state.run_id,
+                            execution_owner,
+                            expected_version=state.version,
+                            lease_seconds=900,
+                        )
+            except CareerLoopConflictError:
+                raise
+            except _RecoverableCareerLoopError as exc:
+                state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
                 state.touch()
                 self._persist(state)
-        except CareerLoopConflictError:
-            raise
-        except _RecoverableCareerLoopError as exc:
-            state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
-            state.touch()
-            self._persist(state)
-        except Exception as exc:
-            state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
-            state.phase = CareerLoopPhase.FAILED
-            state.touch()
-            self._persist(state)
-        return self._result(state)
+            except Exception as exc:
+                state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
+                state.phase = CareerLoopPhase.FAILED
+                state.touch()
+                self._persist(state)
+            return self._result(state)
+        finally:
+            try:
+                self._states.release_execution(state.run_id, execution_owner)
+            except CareerLoopConflictError:
+                # An expired lease may have been recovered by another worker. Never
+                # clear a lease we no longer own.
+                pass
 
     def _step(self, state: CareerLoopState) -> None:
         if state.phase == CareerLoopPhase.SEARCH:
