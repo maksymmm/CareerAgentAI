@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import timezone
 from hashlib import sha256
 from typing import Any
@@ -22,7 +23,10 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     HumanActionKind,
     validate_loop_identifier,
 )
-from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopRepository
+from career_agent_ai.application.career.autonomous_loop_repository import (
+    CareerLoopConflictError,
+    CareerLoopRepository,
+)
 from career_agent_ai.application.communication import (
     CommunicationMessage,
     CommunicationService,
@@ -155,6 +159,8 @@ class AutonomousCareerLoop:
                 self._step(state)
                 state.touch()
                 self._persist(state)
+        except CareerLoopConflictError:
+            raise
         except _RecoverableCareerLoopError as exc:
             state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
             state.touch()
@@ -464,9 +470,19 @@ class AutonomousCareerLoop:
             direction=MessageDirection.DRAFT,
             created_at=state.created_at,
         )
-        persisted = self._communication.get_persisted(message_id)
+        try:
+            persisted = self._communication.get_persisted(message_id)
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Message preparation storage is temporarily unavailable."
+            ) from exc
         if persisted is None:
-            self._communication.create_draft(message)
+            try:
+                self._communication.create_draft(message)
+            except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+                raise _RecoverableCareerLoopError(
+                    "Message draft persistence is temporarily unavailable."
+                ) from exc
         elif persisted != message:
             raise RuntimeError("Persisted loop message does not match the prepared intent.")
         state.message_id = message_id
@@ -516,7 +532,12 @@ class AutonomousCareerLoop:
     def _track(self, state: CareerLoopState) -> None:
         if state.application_id is None:
             raise RuntimeError("Tracking requires an application.")
-        application = self._applications.get(state.application_id)
+        try:
+            application = self._applications.get(state.application_id)
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Application tracker is temporarily unavailable."
+            ) from exc
         if application is None or application.status != JobApplicationStatus.APPLIED:
             raise RuntimeError("Application tracker is not in applied state.")
         if state.request.schedule_event_id:
@@ -529,7 +550,12 @@ class AutonomousCareerLoop:
         if event_id is None:
             state.phase = CareerLoopPhase.COMPLETE
             return
-        event = self._scheduling.get_event(event_id)
+        try:
+            event = self._scheduling.get_event(event_id)
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Interview scheduling storage is temporarily unavailable."
+            ) from exc
         if event.candidate_id != state.request.user_id:
             raise RuntimeError("Interview event belongs to a different candidate.")
         if event.application_id is not None and event.application_id != state.application_id:
@@ -542,7 +568,12 @@ class AutonomousCareerLoop:
             ScheduleStatus.RESCHEDULE_REQUESTED,
         }:
             raise RuntimeError("Interview event is not awaiting acceptance.")
-        view = self._scheduling.human_view(event_id)
+        try:
+            view = self._scheduling.human_view(event_id)
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Interview scheduling view is temporarily unavailable."
+            ) from exc
         state.phase = CareerLoopPhase.INTERVIEW_APPROVAL
         state.pending_human_action = HumanActionEvent(
             kind=HumanActionKind.APPROVE_INTERVIEW,
