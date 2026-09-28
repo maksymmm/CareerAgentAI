@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any, Mapping
 
 import pytest
@@ -195,3 +196,60 @@ def test_unknown_operation_and_invalid_identifiers_are_rejected():
         service.prepare("", "application", {})
     with pytest.raises(ValueError):
         service.prepare("operation-1", "", {})
+
+
+def test_provider_success_write_failure_moves_operation_to_reconciliation():
+    class FailingSuccessRepository(SQLiteExternalActionOperationRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self.failed_once = False
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if status == ExternalActionStatus.SUCCEEDED and not self.failed_once:
+                self.failed_once = True
+                raise sqlite3.OperationalError("terminal success write unavailable")
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase()
+    repository = FailingSuccessRepository(database)
+    adapter = RecordingAdapter()
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-success-write", "application", {"job": "1"})
+
+    result = service.execute("operation-success-write", human_approved=True)
+
+    assert result.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert "Provider returned success" in result.error
+    assert len(adapter.calls) == 1
+
+
+def test_failed_operation_can_be_explicitly_reopened_for_safe_retry():
+    adapter = RecordingAdapter(RuntimeError("definite pre-provider failure"))
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-retry", "application", {"job": "1"})
+    failed = service.execute("operation-retry", human_approved=True)
+    assert failed.status == ExternalActionStatus.FAILED
+
+    reopened = service.reopen_failed("operation-retry")
+    assert reopened.status == ExternalActionStatus.PREPARED
+    assert reopened.error is None
+
+    adapter.error = None
+    succeeded = service.execute("operation-retry", human_approved=True)
+    assert succeeded.status == ExternalActionStatus.SUCCEEDED
+    assert repository.get("operation-retry") == succeeded
+    assert len(adapter.calls) == 2
