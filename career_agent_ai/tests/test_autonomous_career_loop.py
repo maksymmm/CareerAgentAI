@@ -187,6 +187,14 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
             "recipient": "recruiter@example.test",
             "message_body": "",
         },
+        {
+            "sender": "candidate name@example.test",
+            "recipient": "recruiter@example.test",
+        },
+        {
+            "sender": "candidate@example.test",
+            "recipient": "r" * 201,
+        },
     ],
 )
 def test_request_rejects_incomplete_enabled_messaging_before_run(changes):
@@ -485,6 +493,59 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
 
 
 
+
+
+def test_tracker_completion_failure_after_durable_submit_remains_recoverable(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "tracker-reconcile.sqlite")
+    run_id = "tracker-reconcile"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics"),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    original_complete = applications.complete_submission
+    attempts = {"count": 0}
+
+    def fail_once(application, operation_id, *, expected_version):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("temporary tracker write failure")
+        return original_complete(
+            application,
+            operation_id,
+            expected_version=expected_version,
+        )
+
+    monkeypatch.setattr(applications, "complete_submission", fail_once)
+
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.APPLICATION_SUBMIT
+    assert partial.completed is False
+    assert "must be retried" in (partial.error or "")
+    assert len(submission_provider.calls) == 1
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.SAVED
+    database.close()
+
+    database, restarted_loop, applications, _, _, restarted_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    recovered = restarted_loop.continue_run(run_id)
+
+    assert recovered.completed is True
+    assert restarted_provider.calls == []
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.APPLIED
+    database.close()
 
 def test_post_action_crash_after_application_success_recovers_without_resubmit(tmp_path):
     path = str(tmp_path / "post-submit-crash.sqlite")
