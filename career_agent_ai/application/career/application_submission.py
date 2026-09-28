@@ -203,6 +203,59 @@ class ApplicationSubmissionService:
             raise ValueError("Successful application submission has no durable result.")
         return dict(operation.result)
 
+    def resolve_reconciliation(
+        self,
+        operation_id: str,
+        *,
+        submitted: bool,
+        provider_submission_id: str | None = None,
+    ) -> ExternalActionOperation:
+        """Resolve an ambiguous submission after explicit provider-side verification."""
+        operation_id = self._identifier(operation_id, "operation_id")
+        if not isinstance(submitted, bool):
+            raise TypeError("submitted must be a boolean.")
+        operation = self._external_actions.get(operation_id)
+        if operation is None:
+            raise KeyError(f"Unknown application submission operation: {operation_id!r}")
+        if operation.action_type != "application.submit":
+            raise ValueError("Operation is not an application submission.")
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Application submission is not awaiting reconciliation.")
+        if submitted:
+            payload = dict(operation.payload)
+            artifact_content, artifact_digest = _validated_artifact(
+                payload.get("artifact_content"),
+                payload.get("artifact_sha256"),
+            )
+            del artifact_content
+            job_id = self._identifier(payload.get("job_id"), "job_id")
+            application_id = self._identifier(
+                payload.get("application_id"), "application_id"
+            )
+            provider_id = _provider_result_identifier(
+                provider_submission_id,
+                "provider_submission_id",
+                maximum=1_000,
+            )
+            return self._external_actions.resolve_reconciliation(
+                operation_id,
+                confirmed_succeeded=True,
+                result={
+                    "job_id": job_id,
+                    "application_id": application_id,
+                    "provider_submission_id": provider_id,
+                    "artifact_sha256": artifact_digest,
+                },
+            )
+        if provider_submission_id is not None:
+            raise ValueError(
+                "provider_submission_id must be omitted when no submission occurred."
+            )
+        return self._external_actions.resolve_reconciliation(
+            operation_id,
+            confirmed_succeeded=False,
+        )
+
     @staticmethod
     def _identifier(value: str, field: str) -> str:
         if not isinstance(value, str):
