@@ -52,6 +52,7 @@ def test_resume_execute():
     assert result.agent_id == "resume"
     assert result.messages == ("Resume Agent executed.",)
     assert result.metadata["application_artifact_type"] == "job_application_profile"
+    assert result.metadata["candidate_profile_included"] is True
     assert result.metadata["application_artifact"] == (
         "Candidate: user-1\n"
         "Target role: Logistics Coordinator\n"
@@ -89,7 +90,7 @@ def test_response_is_immutable():
     with pytest.raises(FrozenInstanceError):
         response.content = "Changed"
 
-def test_resume_execute_rejects_missing_candidate_profile():
+def test_resume_execute_without_profile_is_marked_non_submittable():
     agent = ResumeAgent()
     context = AgentContext(
         user_id="user-1",
@@ -101,5 +102,8 @@ def test_resume_execute_rejects_missing_candidate_profile():
         },
     )
 
-    with pytest.raises((TypeError, ValueError)):
-        agent.execute(context)
+    result = agent.execute(context)
+
+    assert result.success is True
+    assert result.metadata["candidate_profile_included"] is False
+    assert "Candidate profile:" not in result.metadata["application_artifact"]
