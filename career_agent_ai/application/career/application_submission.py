@@ -192,6 +192,11 @@ class ApplicationSubmissionService:
         if existing is not None:
             if existing.action_type != "application.submit" or dict(existing.payload) != payload:
                 raise ValueError("operation_id is already bound to another submission intent.")
+            if existing.status == ExternalActionStatus.FAILED and human_approved:
+                # Submission adapters only expose FAILED for outcomes that are known
+                # to have produced no provider-side effect, so the same stable
+                # idempotency key can be deliberately retried after approval.
+                existing = self._external_actions.reopen_failed(operation_id)
         else:
             self._external_actions.prepare(operation_id, "application.submit", payload)
         operation = self._external_actions.execute(
@@ -219,6 +224,11 @@ class ApplicationSubmissionService:
             raise KeyError(f"Unknown application submission operation: {operation_id!r}")
         if operation.action_type != "application.submit":
             raise ValueError("Operation is not an application submission.")
+        if operation.status == ExternalActionStatus.IN_PROGRESS:
+            operation = self._external_actions.execute(
+                operation_id,
+                human_approved=True,
+            )
         if submitted and operation.status == ExternalActionStatus.SUCCEEDED:
             if operation.result is None:
                 raise ValueError("Resolved submission has no durable result.")
