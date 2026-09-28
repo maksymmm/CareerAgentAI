@@ -1045,20 +1045,25 @@ def test_loop_execution_lease_blocks_concurrent_recovered_worker(
     states.save(state)
     database.close()
 
-    first_db, first_loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
     entered_send = Event()
     release_send = Event()
-    original_send = first_loop._communication.send
-
-    def blocking_send(*args, **kwargs):
-        entered_send.set()
-        assert release_send.wait(timeout=5)
-        return original_send(*args, **kwargs)
-
-    monkeypatch.setattr(first_loop._communication, "send", blocking_send)
 
     def continue_first():
-        return first_loop.continue_run(run_id)
+        first_db, first_loop, _, _, _, _, _, _ = build_stack(
+            path, with_schedule=False
+        )
+        original_send = first_loop._communication.send
+
+        def blocking_send(*args, **kwargs):
+            entered_send.set()
+            assert release_send.wait(timeout=5)
+            return original_send(*args, **kwargs)
+
+        first_loop._communication.send = blocking_send
+        try:
+            return first_loop.continue_run(run_id)
+        finally:
+            first_db.close()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(continue_first)
@@ -1076,7 +1081,6 @@ def test_loop_execution_lease_blocks_concurrent_recovered_worker(
         completed = future.result(timeout=5)
 
     assert completed.completed is True
-    first_db.close()
 
 
 def test_expired_loop_execution_lease_can_be_recovered(tmp_path):
