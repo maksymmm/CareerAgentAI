@@ -687,8 +687,9 @@ class AutonomousCareerLoop:
                     operation_id,
                     claim_owner_id=state.run_id,
                 )
-                raise RuntimeError(
-                    "Application submission failed before a confirmed outcome."
+                raise _RecoverableCareerLoopError(
+                    "Application submission failed before any provider effect; "
+                    "the approved operation can be retried deliberately."
                 )
             if (
                 durable_operation is not None
