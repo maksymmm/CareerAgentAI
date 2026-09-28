@@ -36,12 +36,14 @@ def _validated_artifact(content: Any, digest: Any) -> tuple[str, str]:
     return normalized, normalized_digest
 
 
-def _provider_result_identifier(value: Any, field: str) -> str:
+def _provider_result_identifier(
+    value: Any, field: str, *, maximum: int = 200
+) -> str:
     """Validate a provider-returned identifier before durable serialization."""
     if not isinstance(value, str):
         raise ValueError(f"Provider {field} must be text.")
     normalized = value.strip()
-    if not normalized or len(normalized) > 200:
+    if not normalized or len(normalized) > maximum:
         raise ValueError(f"Provider {field} is malformed.")
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized):
         raise ValueError(f"Provider {field} contains forbidden control characters.")
@@ -116,7 +118,9 @@ class _SubmissionActionAdapter:
                 result.get("artifact_sha256"), "artifact_sha256"
             ).lower()
             provider_submission_id = _provider_result_identifier(
-                result.get("provider_submission_id"), "provider_submission_id"
+                result.get("provider_submission_id"),
+                "provider_submission_id",
+                maximum=1_000,
             )
         except ValueError as exc:
             raise AmbiguousExternalActionError(
