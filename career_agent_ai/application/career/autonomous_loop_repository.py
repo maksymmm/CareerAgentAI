@@ -24,5 +24,18 @@ class CareerLoopRepository(Protocol):
     def get(self, run_id: str) -> CareerLoopState | None:
         """Return one durable state snapshot or None."""
 
+    def claim_execution(
+        self,
+        run_id: str,
+        owner_id: str,
+        *,
+        expected_version: int,
+        lease_seconds: int,
+    ) -> None:
+        """Acquire one expiring per-run execution lease for the expected snapshot."""
+
+    def release_execution(self, run_id: str, owner_id: str) -> None:
+        """Release the matching per-run execution lease."""
+
     def delete(self, run_id: str) -> None:
         """Remove one durable state snapshot."""
