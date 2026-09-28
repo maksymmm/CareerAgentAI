@@ -520,6 +520,65 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
 
 
 
+
+def test_submission_provider_extras_are_not_persisted_in_external_action_result():
+    provider = FakeApplicationSubmissionAdapter()
+
+    class ExtraResultProvider(FakeApplicationSubmissionAdapter):
+        def submit(
+            self,
+            operation_id,
+            job_id,
+            application_id,
+            artifact_content,
+            artifact_sha256,
+        ):
+            result = dict(
+                super().submit(
+                    operation_id,
+                    job_id,
+                    application_id,
+                    artifact_content,
+                    artifact_sha256,
+                )
+            )
+            result["provider_debug_timestamp"] = CREATED
+            return result
+
+    provider = ExtraResultProvider()
+    database = SQLiteDatabase()
+    operations = SQLiteExternalActionOperationRepository(database)
+    submission = ApplicationSubmissionService(
+        provider,
+        ExternalActionService(
+            operations,
+            ApplicationSubmissionService.action_adapter(provider),
+        ),
+    )
+    artifact = "Candidate profile content"
+    digest = sha256(artifact.encode("utf-8")).hexdigest()
+
+    result = submission.submit(
+        "submission:normalized",
+        job_id="job-1",
+        application_id="application-1",
+        artifact_content=artifact,
+        artifact_sha256=digest,
+        human_approved=True,
+    )
+
+    assert result == {
+        "job_id": "job-1",
+        "application_id": "application-1",
+        "provider_submission_id": "fake:application-1",
+        "artifact_sha256": digest,
+    }
+    durable = operations.get("submission:normalized")
+    assert durable is not None
+    assert durable.status == ExternalActionStatus.SUCCEEDED
+    assert "provider_debug_timestamp" not in durable.result
+    database.close()
+
 def test_tracker_completion_failure_after_durable_submit_remains_recoverable(
     tmp_path, monkeypatch
 ):
