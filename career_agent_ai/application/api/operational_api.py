@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
@@ -61,8 +62,15 @@ class OperationalApiService:
 class OperationalWSGIApp:
     """Serve the read-only operational API using the standard WSGI contract."""
 
-    def __init__(self, service: OperationalApiService) -> None:
+    def __init__(self, service: OperationalApiService, *, bearer_token: str) -> None:
+        if not isinstance(bearer_token, str):
+            raise TypeError("bearer_token must be text.")
+        if len(bearer_token) < 32 or len(bearer_token) > 4096:
+            raise ValueError("bearer_token must contain 32 to 4096 characters.")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in bearer_token):
+            raise ValueError("bearer_token contains forbidden control characters.")
         self._service = service
+        self._bearer_token = bearer_token
 
     def __call__(
         self,
@@ -82,6 +90,19 @@ class OperationalWSGIApp:
             if path == "/healthz":
                 return self._respond(start_response, "200 OK", self._service.health())
             if path == "/v1/operational/issues":
+                authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
+                supplied = (
+                    authorization[7:]
+                    if authorization.startswith("Bearer ")
+                    else ""
+                )
+                if not hmac.compare_digest(supplied, self._bearer_token):
+                    return self._respond(
+                        start_response,
+                        "401 Unauthorized",
+                        {"error": "unauthorized"},
+                        extra_headers=[("WWW-Authenticate", "Bearer")],
+                    )
                 query = parse_qs(
                     str(environ.get("QUERY_STRING", "")),
                     keep_blank_values=True,
@@ -157,6 +178,14 @@ def openapi_document() -> dict[str, Any]:
             "title": "CareerAgentAI Operational API",
             "version": "1.0.0",
         },
+        "components": {
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                }
+            }
+        },
         "paths": {
             "/healthz": {
                 "get": {
@@ -183,6 +212,7 @@ def openapi_document() -> dict[str, Any]:
             "/v1/operational/issues": {
                 "get": {
                     "operationId": "listOperationalIssues",
+                    "security": [{"bearerAuth": []}],
                     "parameters": [
                         {
                             "name": "stale_after_seconds",
@@ -220,6 +250,7 @@ def openapi_document() -> dict[str, Any]:
                             },
                         },
                         "400": {"description": "Invalid query input"},
+                        "401": {"description": "Missing or invalid bearer token"},
                     },
                 }
             },
