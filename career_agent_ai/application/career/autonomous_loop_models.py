@@ -47,6 +47,7 @@ class CareerLoopPhase(str, Enum):
     APPLICATION_PREPARE = "application_prepare"
     APPLICATION_APPROVAL = "application_approval"
     APPLICATION_SUBMIT = "application_submit"
+    APPLICATION_RECONCILIATION = "application_reconciliation"
     MESSAGE_PREPARE = "message_prepare"
     MESSAGE_APPROVAL = "message_approval"
     MESSAGE_SEND = "message_send"
@@ -62,6 +63,7 @@ class HumanActionKind(str, Enum):
     """Human decisions that the autonomous loop must never make implicitly."""
 
     APPROVE_APPLICATION = "approve_application"
+    RECONCILE_APPLICATION_SUBMISSION = "reconcile_application_submission"
     APPROVE_MESSAGE = "approve_message"
     APPROVE_INTERVIEW = "approve_interview"
 
