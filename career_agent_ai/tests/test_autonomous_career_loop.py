@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from hashlib import sha256
 
 import pytest
@@ -1024,6 +1026,97 @@ def test_long_existing_application_id_uses_bounded_stable_submission_key(tmp_pat
     database.close()
 
 
+
+def test_loop_execution_lease_blocks_concurrent_recovered_worker(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "loop-execution-lease.sqlite")
+    run_id = "lease-run"
+    database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+    assert loop.start(request(with_schedule=False), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    states = SQLiteCareerLoopRepository(database)
+    state = states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    state.approved_human_action = state.pending_human_action
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.MESSAGE_SEND
+    states.save(state)
+    database.close()
+
+    first_db, first_loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+    entered_send = Event()
+    release_send = Event()
+    original_send = first_loop._communication.send
+
+    def blocking_send(*args, **kwargs):
+        entered_send.set()
+        assert release_send.wait(timeout=5)
+        return original_send(*args, **kwargs)
+
+    monkeypatch.setattr(first_loop._communication, "send", blocking_send)
+
+    def continue_first():
+        return first_loop.continue_run(run_id)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(continue_first)
+        assert entered_send.wait(timeout=5)
+
+        second_db, second_loop, _, _, _, _, second_message_provider, _ = build_stack(
+            path, with_schedule=False
+        )
+        with pytest.raises(CareerLoopConflictError, match="already executing"):
+            second_loop.continue_run(run_id)
+        assert second_message_provider.calls == []
+        second_db.close()
+
+        release_send.set()
+        completed = future.result(timeout=5)
+
+    assert completed.completed is True
+    first_db.close()
+
+
+def test_expired_loop_execution_lease_can_be_recovered(tmp_path):
+    path = str(tmp_path / "expired-execution-lease.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerLoopRepository(database)
+    state = CareerLoopState(
+        run_id="expired-lease",
+        request=CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+    )
+    repository.save(state)
+    repository.claim_execution(
+        state.run_id,
+        "worker:old",
+        expected_version=state.version,
+        lease_seconds=900,
+    )
+    database.connection.execute(
+        """UPDATE autonomous_career_loops
+           SET execution_claim_expires_at = ?
+           WHERE run_id = ?""",
+        ((CREATED - timedelta(minutes=1)).isoformat(), state.run_id),
+    )
+    database.connection.commit()
+
+    repository.claim_execution(
+        state.run_id,
+        "worker:new",
+        expected_version=state.version,
+        lease_seconds=900,
+    )
+    with pytest.raises(CareerLoopConflictError):
+        repository.release_execution(state.run_id, "worker:old")
+    repository.release_execution(state.run_id, "worker:new")
+    database.close()
+
 def test_loop_repository_compare_and_swap_rejects_stale_snapshot(tmp_path):
     path = str(tmp_path / "loop-cas.sqlite")
     first_db = SQLiteDatabase(path)
@@ -1099,6 +1192,7 @@ def test_transient_message_prepare_failure_after_submission_is_resumable(
     recovered = restarted_loop.continue_run(run_id)
 
     assert recovered.phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert recovered.error is None
     assert restarted_submission.calls == []
     database.close()
 
@@ -1140,6 +1234,7 @@ def test_transient_interview_read_after_submission_and_message_is_resumable(
     recovered = restarted_loop.continue_run(run_id)
 
     assert recovered.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert recovered.error is None
     assert restarted_submission.calls == []
     assert restarted_message.calls == []
     database.close()
