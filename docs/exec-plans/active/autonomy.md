@@ -195,6 +195,12 @@ ownership and compatible application linkage. End-to-end fake-provider tests exe
 process restarts and verify that tracked applications and outbound messages are not
 duplicated. A later run is prevented from resubmitting a user/job application that has
 already progressed beyond draft.
+Durable execution leases are heartbeat-renewed during long-running steps so a second
+worker cannot reclaim an active run mid-provider-call. Snapshot persistence failures
+after already-completed external actions remain resumable, and ambiguous application
+submission outcomes enter an explicit reconciliation gate. Provider-verified success
+is finalized without another submit call; provider-verified no-effect outcomes reopen
+the same stable idempotency operation for a deliberate retry.
 
 Next priority: production hardening.
 
