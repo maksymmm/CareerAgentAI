@@ -172,6 +172,10 @@ class AutonomousCareerLoop:
 
         approved_action = state.pending_human_action
         kind = approved_action.kind
+        if kind == HumanActionKind.RECONCILE_APPLICATION_SUBMISSION:
+            raise RuntimeError(
+                "Use resolve_application_reconciliation() for ambiguous submission outcomes."
+            )
         state.approved_human_action = approved_action
         state.pending_human_action = None
         if kind == HumanActionKind.APPROVE_APPLICATION:
@@ -182,6 +186,51 @@ class AutonomousCareerLoop:
             state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
         else:
             raise ValueError("Unsupported pending human action.")
+        state.touch()
+        self._persist(state)
+        return self._continue(state)
+
+    def resolve_application_reconciliation(
+        self,
+        run_id: str,
+        *,
+        submitted: bool,
+        provider_submission_id: str | None = None,
+    ) -> CareerLoopResult:
+        """Resolve a provider-verified ambiguous application submission outcome.
+
+        submitted=True confirms that the provider accepted the application and
+        requires its provider submission identifier. submitted=False confirms
+        that no external effect occurred and safely reopens the same idempotent
+        operation for retry under the already approved application intent.
+        """
+        state = self._states.get(run_id)
+        if state is None:
+            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        action = state.pending_human_action
+        if (
+            state.phase != CareerLoopPhase.APPLICATION_RECONCILIATION
+            or action is None
+            or action.kind != HumanActionKind.RECONCILE_APPLICATION_SUBMISSION
+        ):
+            raise RuntimeError("Career loop is not awaiting application reconciliation.")
+        if not isinstance(submitted, bool):
+            raise TypeError("submitted must be a boolean.")
+        operation_id = action.details.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise RuntimeError("Reconciliation action has no valid operation_id.")
+        expected_application = action.details.get("application_id")
+        if expected_application != state.application_id:
+            raise RuntimeError("Reconciliation action does not match the tracked application.")
+
+        self._submission.resolve_reconciliation(
+            operation_id,
+            submitted=submitted,
+            provider_submission_id=provider_submission_id,
+        )
+        state.pending_human_action = None
+        state.last_error = None
+        state.phase = CareerLoopPhase.APPLICATION_SUBMIT
         state.touch()
         self._persist(state)
         return self._continue(state)
@@ -309,6 +358,10 @@ class AutonomousCareerLoop:
             self._prepare_application(state)
         elif state.phase == CareerLoopPhase.APPLICATION_SUBMIT:
             self._submit_application(state)
+        elif state.phase == CareerLoopPhase.APPLICATION_RECONCILIATION:
+            raise RuntimeError(
+                "Application reconciliation requires an explicit human resolution."
+            )
         elif state.phase == CareerLoopPhase.MESSAGE_PREPARE:
             self._prepare_message(state)
         elif state.phase == CareerLoopPhase.MESSAGE_SEND:
@@ -558,6 +611,33 @@ class AutonomousCareerLoop:
                     operation_id,
                     claim_owner_id=state.run_id,
                 )
+                raise RuntimeError(
+                    "Application submission failed before a confirmed outcome."
+                )
+            if (
+                durable_operation is not None
+                and durable_operation.status
+                == ExternalActionStatus.RECONCILIATION_REQUIRED
+            ):
+                state.phase = CareerLoopPhase.APPLICATION_RECONCILIATION
+                state.pending_human_action = HumanActionEvent(
+                    kind=HumanActionKind.RECONCILE_APPLICATION_SUBMISSION,
+                    title="Reconcile ambiguous application submission",
+                    details={
+                        "operation_id": operation_id,
+                        "application_id": state.application_id,
+                        "job_id": state.selected_job_id,
+                        "company": state.selected_company,
+                        "instruction": (
+                            "Verify with the application provider whether the exact "
+                            "approved application was submitted before continuing."
+                        ),
+                    },
+                )
+                state.last_error = (
+                    "application_submission_outcome_requires_reconciliation"
+                )
+                return
             raise RuntimeError("Application submission did not reach a confirmed outcome.")
         updated = claimed.transition(
             JobApplicationStatus.APPLIED,
