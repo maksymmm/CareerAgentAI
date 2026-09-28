@@ -72,12 +72,19 @@ class JobApplicationRepository(ABC):
         operation_id: str,
         *,
         expected_version: int,
+        claim_owner_id: str | None = None,
     ) -> JobApplication:
-        """Atomically reserve one saved application version for provider submission."""
+        """Atomically reserve one saved version for one operation and owner."""
 
     @abstractmethod
-    def release_submission(self, application_id: str, operation_id: str) -> None:
-        """Release a submission claim after a definite pre-provider failure."""
+    def release_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Release a matching owner claim after a definite pre-provider failure."""
 
     @abstractmethod
     def complete_submission(
@@ -86,8 +93,9 @@ class JobApplicationRepository(ABC):
         operation_id: str,
         *,
         expected_version: int,
+        claim_owner_id: str | None = None,
     ) -> None:
-        """Persist an applied transition only for the operation holding the claim."""
+        """Persist an applied transition only for the matching operation owner."""
 
     @abstractmethod
     def clear(self) -> None:
