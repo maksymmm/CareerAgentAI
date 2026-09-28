@@ -89,6 +89,7 @@ class CareerLoopRequest:
 
     user_id: str
     keyword: str
+    candidate_profile: str
     location: str = ""
     sender: str = ""
     recipient: str = ""
@@ -99,6 +100,16 @@ class CareerLoopRequest:
     def __post_init__(self) -> None:
         object.__setattr__(self, "user_id", validate_loop_identifier(self.user_id, "user_id"))
         object.__setattr__(self, "keyword", _safe_text(self.keyword, "keyword", maximum=500, required=True))
+        object.__setattr__(
+            self,
+            "candidate_profile",
+            _safe_text(
+                self.candidate_profile,
+                "candidate_profile",
+                maximum=50_000,
+                required=True,
+            ),
+        )
         object.__setattr__(self, "location", _safe_text(self.location, "location", maximum=500))
         sender = _safe_text(self.sender, "sender", maximum=200)
         recipient = _safe_text(self.recipient, "recipient", maximum=200)
