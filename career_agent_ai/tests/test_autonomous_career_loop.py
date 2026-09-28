@@ -1523,3 +1523,109 @@ def test_post_interview_accept_snapshot_failure_replays_without_duplicate_calend
     assert restarted_calendar.calls == []
     assert restarted_scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
     database.close()
+
+
+def test_ambiguous_application_submission_enters_explicit_reconciliation_and_can_confirm_success(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "application-reconciliation-success.sqlite")
+    run_id = "reconcile-submitted"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    calls = {"count": 0}
+
+    def ambiguous_submit(*args, **kwargs):
+        calls["count"] += 1
+        raise RuntimeError("connection lost after provider may have accepted submission")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    ambiguous = loop.resume(run_id, approved=True)
+
+    assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert ambiguous.completed is False
+    assert ambiguous.human_action is not None
+    assert (
+        ambiguous.human_action.kind
+        == HumanActionKind.RECONCILE_APPLICATION_SUBMISSION
+    )
+    operation_id = ambiguous.human_action.details["operation_id"]
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
+    assert calls["count"] == 1
+
+    with pytest.raises(RuntimeError, match="resolve_application_reconciliation"):
+        loop.resume(run_id, approved=True)
+
+    completed = loop.resolve_application_reconciliation(
+        run_id,
+        submitted=True,
+        provider_submission_id="provider/confirmed=123",
+    )
+
+    assert completed.completed is True
+    assert completed.error is None
+    assert calls["count"] == 1
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    assert operation_id in tracked.external_action_operation_ids
+    database.close()
+
+
+def test_ambiguous_application_submission_confirmed_no_effect_retries_same_operation_once(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "application-reconciliation-no-effect.sqlite")
+    run_id = "reconcile-not-submitted"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    original_submit = submission_provider.submit
+    attempts = {"count": 0}
+
+    def ambiguous_once(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("request outcome unknown")
+        return original_submit(*args, **kwargs)
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_once)
+    ambiguous = loop.resume(run_id, approved=True)
+
+    assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    operation_id = ambiguous.human_action.details["operation_id"]
+
+    completed = loop.resolve_application_reconciliation(
+        run_id,
+        submitted=False,
+    )
+
+    assert completed.completed is True
+    assert completed.error is None
+    assert attempts["count"] == 2
+    assert submission_provider.calls == [
+        (operation_id, "job-1", f"{run_id}:application")
+    ]
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
