@@ -51,10 +51,12 @@ class CareerLoopPhase(str, Enum):
     MESSAGE_PREPARE = "message_prepare"
     MESSAGE_APPROVAL = "message_approval"
     MESSAGE_SEND = "message_send"
+    MESSAGE_RECONCILIATION = "message_reconciliation"
     TRACK = "track"
     INTERVIEW_COORDINATION = "interview_coordination"
     INTERVIEW_APPROVAL = "interview_approval"
     INTERVIEW_ACCEPT = "interview_accept"
+    INTERVIEW_RECONCILIATION = "interview_reconciliation"
     COMPLETE = "complete"
     FAILED = "failed"
 
@@ -65,7 +67,9 @@ class HumanActionKind(str, Enum):
     APPROVE_APPLICATION = "approve_application"
     RECONCILE_APPLICATION_SUBMISSION = "reconcile_application_submission"
     APPROVE_MESSAGE = "approve_message"
+    RECONCILE_MESSAGE_DELIVERY = "reconcile_message_delivery"
     APPROVE_INTERVIEW = "approve_interview"
+    RECONCILE_INTERVIEW_RESPONSE = "reconcile_interview_response"
 
 
 @dataclass(frozen=True)
