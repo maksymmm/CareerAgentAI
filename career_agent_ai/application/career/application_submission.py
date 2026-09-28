@@ -219,6 +219,25 @@ class ApplicationSubmissionService:
             raise KeyError(f"Unknown application submission operation: {operation_id!r}")
         if operation.action_type != "application.submit":
             raise ValueError("Operation is not an application submission.")
+        if submitted and operation.status == ExternalActionStatus.SUCCEEDED:
+            if operation.result is None:
+                raise ValueError("Resolved submission has no durable result.")
+            expected_provider = _provider_result_identifier(
+                provider_submission_id,
+                "provider_submission_id",
+                maximum=1_000,
+            )
+            if operation.result.get("provider_submission_id") != expected_provider:
+                raise ValueError(
+                    "Resolved submission does not match provider_submission_id."
+                )
+            return operation
+        if not submitted and operation.status == ExternalActionStatus.PREPARED:
+            if provider_submission_id is not None:
+                raise ValueError(
+                    "provider_submission_id must be omitted when no submission occurred."
+                )
+            return operation
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Application submission is not awaiting reconciliation.")
         if submitted:
