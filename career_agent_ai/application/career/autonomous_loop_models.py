@@ -9,6 +9,8 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from career_agent_ai.application.communication.models import validate_identifier as validate_communication_identifier
+
 
 _INTERNAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$")
 
@@ -98,13 +100,16 @@ class CareerLoopRequest:
         object.__setattr__(self, "user_id", validate_loop_identifier(self.user_id, "user_id"))
         object.__setattr__(self, "keyword", _safe_text(self.keyword, "keyword", maximum=500, required=True))
         object.__setattr__(self, "location", _safe_text(self.location, "location", maximum=500))
-        sender = _safe_text(self.sender, "sender", maximum=500)
-        recipient = _safe_text(self.recipient, "recipient", maximum=500)
+        sender = _safe_text(self.sender, "sender", maximum=200)
+        recipient = _safe_text(self.recipient, "recipient", maximum=200)
         if bool(sender) != bool(recipient):
             raise ValueError(
                 "sender and recipient must either both be provided or both be empty."
             )
         messaging_enabled = bool(sender and recipient)
+        if messaging_enabled:
+            sender = validate_communication_identifier(sender, "sender")
+            recipient = validate_communication_identifier(recipient, "recipient")
         object.__setattr__(self, "sender", sender)
         object.__setattr__(self, "recipient", recipient)
         object.__setattr__(
