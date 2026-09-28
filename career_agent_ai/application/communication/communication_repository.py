@@ -24,3 +24,6 @@ class CommunicationRepository(Protocol):
 
     def release_delivery(self, message_id: str, operation_id: str) -> None:
         """Release a claim only after a definite failure before delivery."""
+
+    def restore_delivery_for_retry(self, message_id: str, operation_id: str) -> None:
+        """Restore the exact claimed message to draft after verified no delivery."""
