@@ -112,6 +112,39 @@ class ExternalActionService:
             result=result,
         )
 
+    def resolve_reconciliation(
+        self,
+        operation_id: str,
+        *,
+        confirmed_succeeded: bool,
+        result: Mapping[str, Any] | None = None,
+    ) -> ExternalActionOperation:
+        """Resolve an ambiguous provider outcome after explicit external verification.
+
+        A confirmed success becomes terminal succeeded with a durable result.
+        A confirmed no-effect outcome returns to prepared so the same stable
+        idempotency key can be deliberately retried without creating a new intent.
+        """
+        operation = self._require_operation(operation_id)
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Operation is not awaiting reconciliation.")
+        if confirmed_succeeded:
+            if result is None:
+                raise ValueError("Confirmed success requires a durable result.")
+            return self._repository.transition(
+                operation.operation_id,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+                ExternalActionStatus.SUCCEEDED,
+                result=result,
+            )
+        if result is not None:
+            raise ValueError("Confirmed no-effect reconciliation must not include a result.")
+        return self._repository.transition(
+            operation.operation_id,
+            ExternalActionStatus.RECONCILIATION_REQUIRED,
+            ExternalActionStatus.PREPARED,
+        )
+
     def _require_operation(self, operation_id: str) -> ExternalActionOperation:
         operation = self._repository.get(operation_id)
         if operation is None:
