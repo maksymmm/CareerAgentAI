@@ -49,6 +49,10 @@ class _RecoverableCareerLoopError(RuntimeError):
     """Signal a durable partial outcome that should be retried after restart."""
 
 
+class _PostStepPersistenceError(RuntimeError):
+    """Signal that work finished but the advanced loop snapshot was not confirmed."""
+
+
 class _ExecutionLeaseHeartbeat:
     """Renew one durable execution lease while a potentially slow step is running."""
 
@@ -244,7 +248,7 @@ class AutonomousCareerLoop:
                     except CareerLoopConflictError:
                         raise
                     except Exception as exc:
-                        raise _RecoverableCareerLoopError(
+                        raise _PostStepPersistenceError(
                             "Post-step snapshot persistence is temporarily unavailable."
                         ) from exc
                     heartbeat.raise_if_failed()
@@ -263,6 +267,18 @@ class AutonomousCareerLoop:
                         )
             except CareerLoopConflictError:
                 raise
+            except _PostStepPersistenceError as exc:
+                # Never convert a completed external action into a terminal loop failure
+                # merely because its subsequent loop snapshot write was unavailable.
+                # Reload whatever snapshot is durably visible and let a future
+                # continue_run() replay the idempotent phase if necessary.
+                try:
+                    durable = self._states.get(state.run_id)
+                except Exception:
+                    durable = None
+                if durable is not None:
+                    state = durable
+                state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
             except _RecoverableCareerLoopError as exc:
                 state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
                 state.touch()
