@@ -704,6 +704,8 @@ class AutonomousCareerLoop:
                         "application_id": state.application_id,
                         "job_id": state.selected_job_id,
                         "company": state.selected_company,
+                        "artifact_content": artifact_content,
+                        "artifact_sha256": artifact_digest,
                         "instruction": (
                             "Verify with the application provider whether the exact "
                             "approved application was submitted before continuing."
@@ -827,8 +829,21 @@ class AutonomousCareerLoop:
                     details={
                         "operation_id": operation_id,
                         "message_id": state.message_id,
+                        "sender": persisted.sender,
                         "recipient": persisted.recipient,
                         "subject": persisted.subject,
+                        "body": persisted.body,
+                        "content_sha256": sha256(
+                            (
+                                persisted.sender
+                                + "\n"
+                                + persisted.recipient
+                                + "\n"
+                                + persisted.subject
+                                + "\n"
+                                + persisted.body
+                            ).encode("utf-8")
+                        ).hexdigest(),
                         "instruction": (
                             "Verify with the communication provider whether this exact "
                             "message was delivered before continuing."
