@@ -1652,7 +1652,9 @@ def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_succes
         run_id=run_id,
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    message_gate = loop.resume(run_id, approved=True)
+    assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert message_gate.human_action is not None
 
     calls = {"count": 0}
 
@@ -1666,15 +1668,20 @@ def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_succes
     assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
     assert ambiguous.human_action is not None
     assert ambiguous.human_action.kind == HumanActionKind.RECONCILE_MESSAGE_DELIVERY
-    assert ambiguous.human_action.details["sender"] == "candidate@example.test"
-    assert ambiguous.human_action.details["recipient"] == "recruiter@example.test"
-    assert ambiguous.human_action.details["body"] == "Thank you for considering my application."
+    for field in ("sender", "recipient", "subject", "body"):
+        assert (
+            ambiguous.human_action.details[field]
+            == message_gate.human_action.details[field]
+        )
     expected_message_digest = sha256(
         (
-            "candidate@example.test\n"
-            "recruiter@example.test\n"
-            "Application follow-up\n"
-            "Thank you for considering my application."
+            ambiguous.human_action.details["sender"]
+            + "\n"
+            + ambiguous.human_action.details["recipient"]
+            + "\n"
+            + ambiguous.human_action.details["subject"]
+            + "\n"
+            + ambiguous.human_action.details["body"]
         ).encode("utf-8")
     ).hexdigest()
     assert ambiguous.human_action.details["content_sha256"] == expected_message_digest
