@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
@@ -17,7 +18,11 @@ from career_agent_ai.application.career.autonomous_career_loop import Autonomous
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
+    CareerLoopState,
     HumanActionKind,
+)
+from career_agent_ai.application.career.autonomous_loop_repository import (
+    CareerLoopConflictError,
 )
 from career_agent_ai.application.communication import (
     CommunicationService,
@@ -1016,6 +1021,127 @@ def test_long_existing_application_id_uses_bounded_stable_submission_key(tmp_pat
     assert len(operation_id) <= 200
     assert job_id == "job-1"
     assert submitted_application_id == application_id
+    database.close()
+
+
+def test_loop_repository_compare_and_swap_rejects_stale_snapshot(tmp_path):
+    path = str(tmp_path / "loop-cas.sqlite")
+    first_db = SQLiteDatabase(path)
+    first_repo = SQLiteCareerLoopRepository(first_db)
+    state = CareerLoopState(
+        run_id="cas-run",
+        request=CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+    )
+    first_repo.save(state)
+    assert state.version == 1
+
+    second_db = SQLiteDatabase(path)
+    second_repo = SQLiteCareerLoopRepository(second_db)
+    first_snapshot = first_repo.get("cas-run")
+    stale_snapshot = second_repo.get("cas-run")
+    assert first_snapshot is not None and stale_snapshot is not None
+    assert first_snapshot.version == stale_snapshot.version == 1
+
+    first_snapshot.phase = CareerLoopPhase.DECISION
+    first_repo.save(first_snapshot)
+    assert first_snapshot.version == 2
+
+    stale_snapshot.phase = CareerLoopPhase.FAILED
+    with pytest.raises(CareerLoopConflictError):
+        second_repo.save(stale_snapshot)
+
+    durable = first_repo.get("cas-run")
+    assert durable is not None
+    assert durable.phase == CareerLoopPhase.DECISION
+    assert durable.version == 2
+    first_db.close()
+    second_db.close()
+
+
+def test_transient_message_prepare_failure_after_submission_is_resumable(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "message-prepare-retry.sqlite")
+    run_id = "message-prepare-retry"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(request(with_schedule=False), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    original_create_draft = loop._communication.create_draft
+    attempts = {"count": 0}
+
+    def fail_once(message):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise sqlite3.OperationalError("temporary message database outage")
+        return original_create_draft(message)
+
+    monkeypatch.setattr(loop._communication, "create_draft", fail_once)
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.MESSAGE_PREPARE
+    assert partial.completed is False
+    assert "temporarily unavailable" in (partial.error or "")
+    assert len(submission_provider.calls) == 1
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+    database, restarted_loop, _, _, _, restarted_submission, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    recovered = restarted_loop.continue_run(run_id)
+
+    assert recovered.phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert restarted_submission.calls == []
+    database.close()
+
+
+def test_transient_interview_read_after_submission_and_message_is_resumable(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-read-retry.sqlite")
+    run_id = "interview-read-retry"
+    database, loop, _, _, scheduling, submission_provider, communication_provider, _ = build_stack(
+        path
+    )
+    add_interview(scheduling, f"{run_id}:application")
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    original_get_event = scheduling.get_event
+    attempts = {"count": 0}
+
+    def fail_once(event_id):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise sqlite3.OperationalError("temporary scheduling database outage")
+        return original_get_event(event_id)
+
+    monkeypatch.setattr(scheduling, "get_event", fail_once)
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.INTERVIEW_COORDINATION
+    assert partial.completed is False
+    assert "temporarily unavailable" in (partial.error or "")
+    assert len(submission_provider.calls) == 1
+    assert communication_provider.calls.count(("send", f"{run_id}:message-send")) == 1
+    database.close()
+
+    database, restarted_loop, _, _, _, restarted_submission, restarted_message, _ = build_stack(
+        path
+    )
+    recovered = restarted_loop.continue_run(run_id)
+
+    assert recovered.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert restarted_submission.calls == []
+    assert restarted_message.calls == []
     database.close()
 
 def test_repository_rejects_payload_run_id_mismatch(tmp_path):
