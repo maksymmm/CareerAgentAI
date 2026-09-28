@@ -396,12 +396,30 @@ class SchedulingService:
             "calendar.reschedule",
         }:
             raise ValueError("Operation is not a calendar action.")
-        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
-            raise ValueError("Calendar operation is not awaiting reconciliation.")
         if provider_event_id is not None:
             provider_event_id = validate_schedule_identifier(
                 provider_event_id, "provider_event_id"
             )
+        if completed and operation.status == ExternalActionStatus.SUCCEEDED:
+            if operation.result is None:
+                raise ValueError("Resolved calendar operation has no durable result.")
+            persisted_provider = operation.result.get("provider_event_id")
+            if (
+                provider_event_id is not None
+                and persisted_provider not in {None, provider_event_id}
+            ):
+                raise ValueError(
+                    "Resolved calendar operation does not match provider_event_id."
+                )
+            return operation
+        if not completed and operation.status == ExternalActionStatus.PREPARED:
+            if provider_event_id is not None:
+                raise ValueError(
+                    "provider_event_id must be omitted when no calendar effect occurred."
+                )
+            return operation
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Calendar operation is not awaiting reconciliation.")
         if not completed:
             if provider_event_id is not None:
                 raise ValueError(
