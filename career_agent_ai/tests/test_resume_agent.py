@@ -43,6 +43,7 @@ def test_resume_execute():
             "job_id": "job-1",
             "job_title": "Logistics Coordinator",
             "company": "Acme Logistics",
+            "candidate_profile": "Warehouse specialist with 8 years of logistics experience.",
         },
     )
     result = agent.execute(context)
@@ -53,9 +54,11 @@ def test_resume_execute():
     assert result.metadata["application_artifact_type"] == "job_application_profile"
     assert result.metadata["application_artifact"] == (
         "Candidate: user-1\n"
-        "Role: Logistics Coordinator\n"
+        "Target role: Logistics Coordinator\n"
         "Company: Acme Logistics\n"
-        "Job ID: job-1"
+        "Job ID: job-1\n\n"
+        "Candidate profile:\n"
+        "Warehouse specialist with 8 years of logistics experience."
     )
 
 
@@ -85,3 +88,18 @@ def test_response_is_immutable():
 
     with pytest.raises(FrozenInstanceError):
         response.content = "Changed"
+
+def test_resume_execute_rejects_missing_candidate_profile():
+    agent = ResumeAgent()
+    context = AgentContext(
+        user_id="user-1",
+        memory_snapshot=MemorySnapshot(),
+        payload={
+            "job_id": "job-1",
+            "job_title": "Logistics Coordinator",
+            "company": "Acme Logistics",
+        },
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        agent.execute(context)
