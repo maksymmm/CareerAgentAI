@@ -209,17 +209,27 @@ Next priority: production hardening.
 
 ## 8. Production hardening
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Acceptance criteria:
-- [ ] Structured logging and correlation IDs.
-- [ ] Configuration validation.
-- [ ] Database migration strategy.
-- [ ] Observability for failed/stuck runs.
-- [ ] API surface and OpenAPI where applicable.
-- [ ] Security review of external inputs and secrets.
-- [ ] Release/deployment documentation.
-- [ ] Full CI green at >=90% coverage.
+- [x] Structured logging and correlation IDs.
+- [x] Configuration validation.
+- [x] Database migration strategy.
+- [x] Observability for failed/stuck runs.
+- [x] API surface and OpenAPI where applicable.
+- [x] Security review of external inputs and secrets.
+- [x] Release/deployment documentation.
+- [x] Full CI green at >=90% coverage.
+
+Delivered: bounded structured JSON logging with correlation scopes and credential-key
+redaction; strict environment-driven runtime configuration with safe external-effect
+defaults; a read-only SQLite operational probe for failed, ambiguous, and stale work;
+and an authenticated WSGI operational endpoint with a matching OpenAPI 3.1 contract.
+A versioned SQLite migration runner records immutable SHA-256 checksums, applies each
+migration transactionally, and refuses destructive migrations without explicit
+approval. Deployment, migration, rollback, and security-review documentation defines
+the production operating contract. The complete GitHub CI suite remains above the
+project's 90% coverage floor.
 
 ## Completion definition
 
