@@ -166,6 +166,7 @@ class CareerLoopState:
     application_artifact_content: str | None = None
     application_artifact_sha256: str | None = None
     message_id: str | None = None
+    version: int = 0
     iterations: int = 0
     pending_human_action: HumanActionEvent | None = None
     approved_human_action: HumanActionEvent | None = None
