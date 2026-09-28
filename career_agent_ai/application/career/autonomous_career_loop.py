@@ -242,6 +242,7 @@ class AutonomousCareerLoop:
                     "job_id": state.selected_job_id,
                     "job_title": state.selected_job_title,
                     "company": state.selected_company,
+                    "candidate_profile": state.request.candidate_profile,
                 },
             )
         )
