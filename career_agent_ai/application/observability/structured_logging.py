@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -12,6 +13,11 @@ from uuid import uuid4
 
 _correlation_id: ContextVar[str | None] = ContextVar("career_agent_correlation_id", default=None)
 _SENSITIVE_TOKENS = ("password", "secret", "token", "api_key", "apikey", "authorization", "cookie")
+_BEARER_PATTERN = re.compile(r"(?i)\\bbearer\\s+[^\\s,;]+")
+_SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\\b(password|secret|token|api[_-]?key|apikey|authorization|cookie)"
+    r"\\b\\s*[:=]\\s*[^,;\\r\\n]+"
+)
 
 
 def current_correlation_id() -> str | None:
@@ -45,7 +51,7 @@ class JsonLogFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact_text(record.getMessage()),
             "correlation_id": current_correlation_id(),
         }
         event = getattr(record, "event", None)
@@ -92,6 +98,19 @@ def log_event(
     )
 
 
+def redact_text(value: str) -> str:
+    """Redact common credential patterns from bounded diagnostic text."""
+    if not isinstance(value, str):
+        raise TypeError("diagnostic text must be text.")
+    sanitized = value.replace("\\r", "\\\\r").replace("\\n", "\\\\n")
+    sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", sanitized)
+    sanitized = _SENSITIVE_ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        sanitized,
+    )
+    return sanitized[:2_000]
+
+
 def redact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe mapping with likely credential values redacted."""
     result: dict[str, Any] = {}
@@ -109,8 +128,7 @@ def _safe_value(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        sanitized = value.replace("\r", "\\r").replace("\n", "\\n")
-        return sanitized[:2_000]
+        return redact_text(value)
     if isinstance(value, Mapping):
         return redact_mapping(value)
     if isinstance(value, (tuple, list)):
