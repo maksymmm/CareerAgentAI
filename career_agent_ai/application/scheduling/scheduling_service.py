@@ -19,6 +19,7 @@ from .models import (
     ScheduleEventType,
     ScheduleStatus,
     normalize_aware_datetime,
+    validate_provider_identifier,
     validate_schedule_identifier,
     validate_timezone_name,
 )
@@ -397,7 +398,7 @@ class SchedulingService:
         }:
             raise ValueError("Operation is not a calendar action.")
         if provider_event_id is not None:
-            provider_event_id = validate_schedule_identifier(
+            provider_event_id = validate_provider_identifier(
                 provider_event_id, "provider_event_id"
             )
         if completed and operation.status == ExternalActionStatus.SUCCEEDED:
@@ -420,20 +421,23 @@ class SchedulingService:
             return operation
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Calendar operation is not awaiting reconciliation.")
+        event_id = validate_schedule_identifier(
+            str(operation.payload.get("event_id", "")), "event_id"
+        )
+        current = self.get_event(event_id)
         if not completed:
             if provider_event_id is not None:
                 raise ValueError(
                     "provider_event_id must be omitted when no calendar effect occurred."
                 )
+            _CalendarActionAdapter._validate_prepared_source(
+                current,
+                operation.payload,
+            )
             return self._external_actions.resolve_reconciliation(
                 operation_id,
                 confirmed_succeeded=False,
             )
-
-        event_id = validate_schedule_identifier(
-            str(operation.payload.get("event_id", "")), "event_id"
-        )
-        current = self.get_event(event_id)
         source_version = _CalendarActionAdapter._prepared_version(operation.payload)
         action_type = operation.action_type
         if action_type == "calendar.accept":
@@ -489,6 +493,12 @@ class SchedulingService:
             and current.provider_event_id not in {None, provider_event_id}
         ):
             raise ValueError("Verified provider_event_id conflicts with persisted event.")
+        elif provider_event_id is not None and current.provider_event_id is None:
+            current = self._repository.attach_provider_event_id(
+                current.event_id,
+                provider_event_id,
+                expected_version=current.version,
+            )
 
         return self._external_actions.resolve_reconciliation(
             operation_id,
