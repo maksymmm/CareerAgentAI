@@ -4,6 +4,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event
+from time import sleep
 from hashlib import sha256
 
 import pytest
@@ -1360,3 +1361,120 @@ def test_repository_rejects_malformed_persisted_loop_json(tmp_path):
         repository.get("bad")
 
     database.close()
+
+
+def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_send(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "post-send-snapshot-failure.sqlite")
+    run_id = "post-send-save-recovery"
+    database, loop, _, _, _, _, message_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    assert loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    ).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    original_save = loop._states.save
+    failed_once = {"value": False}
+
+    def fail_once_after_send(state):
+        if state.phase == CareerLoopPhase.TRACK and not failed_once["value"]:
+            failed_once["value"] = True
+            raise sqlite3.OperationalError("temporary state database outage")
+        return original_save(state)
+
+    monkeypatch.setattr(loop._states, "save", fail_once_after_send)
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.TRACK
+    assert partial.completed is False
+    assert "Post-step snapshot persistence" in (partial.error or "")
+    assert message_provider.calls.count(("send", f"{run_id}:message-send")) == 1
+    database.close()
+
+    database, restarted, _, _, _, _, restarted_messages, _ = build_stack(
+        path, with_schedule=False
+    )
+    completed = restarted.continue_run(run_id)
+
+    assert completed.completed is True
+    assert completed.error is None
+    assert restarted_messages.calls == []
+    database.close()
+
+
+def test_execution_lease_heartbeat_blocks_reclaim_during_long_provider_call(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "heartbeat-long-step.sqlite")
+    run_id = "heartbeat-long-step"
+    database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+    assert loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    ).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    states = SQLiteCareerLoopRepository(database)
+    state = states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    state.approved_human_action = state.pending_human_action
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.MESSAGE_SEND
+    states.save(state)
+    database.close()
+
+    monkeypatch.setattr(AutonomousCareerLoop, "EXECUTION_LEASE_SECONDS", 2)
+    monkeypatch.setattr(AutonomousCareerLoop, "EXECUTION_HEARTBEAT_SECONDS", 1)
+    entered = Event()
+    release = Event()
+
+    def run_first():
+        first_db, first_loop, _, _, _, _, _, _ = build_stack(
+            path, with_schedule=False
+        )
+        original_send = first_loop._communication.send
+
+        def blocking_send(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=6)
+            return original_send(*args, **kwargs)
+
+        first_loop._communication.send = blocking_send
+        try:
+            return first_loop.continue_run(run_id)
+        finally:
+            first_db.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(run_first)
+        assert entered.wait(timeout=5)
+        sleep(2.4)
+
+        second_db, second_loop, _, _, _, _, second_provider, _ = build_stack(
+            path, with_schedule=False
+        )
+        with pytest.raises(CareerLoopConflictError, match="already executing"):
+            second_loop.continue_run(run_id)
+        assert second_provider.calls == []
+        second_db.close()
+
+        release.set()
+        completed = future.result(timeout=6)
+
+    assert completed.completed is True
