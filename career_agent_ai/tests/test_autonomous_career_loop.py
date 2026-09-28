@@ -1395,7 +1395,7 @@ def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_
     monkeypatch.setattr(loop._states, "save", fail_once_after_send)
     partial = loop.resume(run_id, approved=True)
 
-    assert partial.phase == CareerLoopPhase.TRACK
+    assert partial.phase == CareerLoopPhase.MESSAGE_SEND
     assert partial.completed is False
     assert "Post-step snapshot persistence" in (partial.error or "")
     assert message_provider.calls.count(("send", f"{run_id}:message-send")) == 1
@@ -1478,3 +1478,48 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_provider_call(
         completed = future.result(timeout=6)
 
     assert completed.completed is True
+
+
+def test_post_interview_accept_snapshot_failure_replays_without_duplicate_calendar_action(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "post-interview-save-failure.sqlite")
+    run_id = "post-interview-save-recovery"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    original_save = loop._states.save
+    failed_once = {"value": False}
+
+    def fail_once_after_accept(state):
+        if state.phase == CareerLoopPhase.COMPLETE and not failed_once["value"]:
+            failed_once["value"] = True
+            raise sqlite3.OperationalError("temporary state database outage")
+        return original_save(state)
+
+    monkeypatch.setattr(loop._states, "save", fail_once_after_accept)
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.INTERVIEW_ACCEPT
+    assert partial.completed is False
+    assert "Post-step snapshot persistence" in (partial.error or "")
+    assert calendar_provider.calls.count(
+        ("accept", f"{run_id}:interview-accept")
+    ) == 1
+    assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+    database.close()
+
+    database, restarted, _, _, restarted_scheduling, _, _, restarted_calendar = build_stack(
+        path
+    )
+    completed = restarted.continue_run(run_id)
+
+    assert completed.completed is True
+    assert completed.error is None
+    assert restarted_calendar.calls == []
+    assert restarted_scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+    database.close()
