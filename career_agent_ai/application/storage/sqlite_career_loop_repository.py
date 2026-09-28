@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from career_agent_ai.application.career.autonomous_loop_models import (
@@ -101,6 +101,94 @@ class SQLiteCareerLoopRepository:
             raise ValueError("Persisted autonomous-loop run_id does not match its storage key.")
         return state
 
+    def claim_execution(
+        self,
+        run_id: str,
+        owner_id: str,
+        *,
+        expected_version: int,
+        lease_seconds: int,
+    ) -> None:
+        """Acquire an expiring execution lease without changing snapshot version."""
+        run_id = self._identifier(run_id, "run_id")
+        owner_id = self._identifier(owner_id, "owner_id")
+        if (
+            not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)
+            or expected_version < 1
+        ):
+            raise ValueError("expected_version must be a positive integer.")
+        if (
+            not isinstance(lease_seconds, int)
+            or isinstance(lease_seconds, bool)
+            or lease_seconds < 1
+            or lease_seconds > 3600
+        ):
+            raise ValueError("lease_seconds must be between 1 and 3600.")
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=lease_seconds)
+        connection = self._database.connection
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT version, execution_claim_owner, execution_claim_expires_at
+                   FROM autonomous_career_loops WHERE run_id = ?""",
+                (run_id,),
+            ).fetchone()
+            if row is None or row[0] != expected_version:
+                raise CareerLoopConflictError(
+                    "Autonomous-loop snapshot changed before execution claim."
+                )
+            active_owner = row[1]
+            active_expiry = (
+                None if row[2] is None else datetime.fromisoformat(row[2])
+            )
+            if (
+                active_expiry is not None
+                and (active_expiry.tzinfo is None or active_expiry.utcoffset() is None)
+            ):
+                raise ValueError("Persisted execution lease timestamp is malformed.")
+            if (
+                active_owner is not None
+                and active_owner != owner_id
+                and active_expiry is not None
+                and active_expiry > now
+            ):
+                raise CareerLoopConflictError(
+                    "Autonomous-loop run is already executing in another worker."
+                )
+            cursor = connection.execute(
+                """UPDATE autonomous_career_loops
+                   SET execution_claim_owner = ?, execution_claim_expires_at = ?
+                   WHERE run_id = ? AND version = ?""",
+                (owner_id, expires_at.isoformat(), run_id, expected_version),
+            )
+            if cursor.rowcount != 1:
+                raise CareerLoopConflictError(
+                    "Autonomous-loop execution claim lost its snapshot race."
+                )
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+    def release_execution(self, run_id: str, owner_id: str) -> None:
+        """Release only the execution lease owned by owner_id."""
+        run_id = self._identifier(run_id, "run_id")
+        owner_id = self._identifier(owner_id, "owner_id")
+        cursor = self._database.connection.execute(
+            """UPDATE autonomous_career_loops
+               SET execution_claim_owner = NULL, execution_claim_expires_at = NULL
+               WHERE run_id = ? AND execution_claim_owner = ?""",
+            (run_id, owner_id),
+        )
+        self._database.connection.commit()
+        if cursor.rowcount != 1:
+            raise CareerLoopConflictError(
+                "Autonomous-loop execution lease is no longer owned by this worker."
+            )
+
     def delete(self, run_id: str) -> None:
         """Delete one terminal loop snapshot."""
         run_id = self._identifier(run_id, "run_id")
@@ -116,7 +204,9 @@ class SQLiteCareerLoopRepository:
                 run_id TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1)
+                version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+                execution_claim_owner TEXT,
+                execution_claim_expires_at TEXT
             )
             """
         )
@@ -130,6 +220,16 @@ class SQLiteCareerLoopRepository:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops "
                 "ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+            )
+        if "execution_claim_owner" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE autonomous_career_loops "
+                "ADD COLUMN execution_claim_owner TEXT"
+            )
+        if "execution_claim_expires_at" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE autonomous_career_loops "
+                "ADD COLUMN execution_claim_expires_at TEXT"
             )
         self._database.connection.execute(
             """
