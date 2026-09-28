@@ -98,6 +98,7 @@ class SQLiteCareerLoopRepository:
             "request": {
                 "user_id": state.request.user_id,
                 "keyword": state.request.keyword,
+                "candidate_profile": state.request.candidate_profile,
                 "location": state.request.location,
                 "sender": state.request.sender,
                 "recipient": state.request.recipient,
