@@ -105,11 +105,51 @@ class ExternalActionService:
                 ExternalActionStatus.FAILED,
                 error=self._safe_error(exc),
             )
+        try:
+            return self._repository.transition(
+                operation.operation_id,
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.SUCCEEDED,
+                result=result,
+            )
+        except Exception as persistence_error:
+            # The provider has already returned success. If the terminal write did
+            # not become durable, never classify the action as safely retryable.
+            current = self._repository.get(operation.operation_id)
+            if current is not None and current.status == ExternalActionStatus.SUCCEEDED:
+                return current
+            if current is not None and current.status == ExternalActionStatus.RECONCILIATION_REQUIRED:
+                return current
+            if current is not None and current.status == ExternalActionStatus.IN_PROGRESS:
+                try:
+                    return self._repository.transition(
+                        operation.operation_id,
+                        ExternalActionStatus.IN_PROGRESS,
+                        ExternalActionStatus.RECONCILIATION_REQUIRED,
+                        error=(
+                            "Provider returned success but the durable success write "
+                            f"failed: {self._safe_error(persistence_error)}"
+                        )[:1000],
+                    )
+                except Exception:
+                    pass
+            raise
+
+    def reopen_failed(self, operation_id: str) -> ExternalActionOperation:
+        """Reopen a definite no-effect failure for a deliberate retry.
+
+        Callers must use this only when their adapter contract guarantees that a
+        FAILED outcome means no external side effect occurred.
+        """
+        operation = self._require_operation(operation_id)
+        if operation.status == ExternalActionStatus.PREPARED:
+            return operation
+        if operation.status != ExternalActionStatus.FAILED:
+            raise ValueError("Only a failed operation can be reopened for retry.")
         return self._repository.transition(
             operation.operation_id,
-            ExternalActionStatus.IN_PROGRESS,
-            ExternalActionStatus.SUCCEEDED,
-            result=result,
+            ExternalActionStatus.FAILED,
+            ExternalActionStatus.PREPARED,
         )
 
     def resolve_reconciliation(
