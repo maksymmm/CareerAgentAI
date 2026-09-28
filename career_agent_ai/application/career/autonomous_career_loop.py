@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import timezone
 from hashlib import sha256
+from threading import Event, Thread
 from typing import Any
 from uuid import uuid4
 
@@ -48,10 +49,69 @@ class _RecoverableCareerLoopError(RuntimeError):
     """Signal a durable partial outcome that should be retried after restart."""
 
 
+class _ExecutionLeaseHeartbeat:
+    """Renew one durable execution lease while a potentially slow step is running."""
+
+    def __init__(
+        self,
+        repository: CareerLoopRepository,
+        run_id: str,
+        owner_id: str,
+        *,
+        lease_seconds: int,
+        interval_seconds: int,
+    ) -> None:
+        if interval_seconds < 1 or interval_seconds >= lease_seconds:
+            raise ValueError("Heartbeat interval must be shorter than the execution lease.")
+        self._repository = repository
+        self._run_id = run_id
+        self._owner_id = owner_id
+        self._lease_seconds = lease_seconds
+        self._interval_seconds = interval_seconds
+        self._stop = Event()
+        self._error: Exception | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"career-loop-heartbeat:{run_id}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        """Start periodic lease renewal."""
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop renewal and wait briefly for the daemon thread to exit."""
+        self._stop.set()
+        self._thread.join(timeout=max(1, self._interval_seconds + 1))
+
+    def raise_if_failed(self) -> None:
+        """Raise when lease ownership could no longer be renewed safely."""
+        if self._error is not None:
+            raise CareerLoopConflictError(
+                "Autonomous-loop execution lease heartbeat failed."
+            ) from self._error
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            try:
+                self._repository.renew_execution(
+                    self._run_id,
+                    self._owner_id,
+                    lease_seconds=self._lease_seconds,
+                )
+            except Exception as exc:
+                self._error = exc
+                self._stop.set()
+                return
+
+
 class AutonomousCareerLoop:
     """Connect career discovery through interview coordination with durable gates."""
 
     DEFAULT_MAX_ITERATIONS = 16
+    EXECUTION_LEASE_SECONDS = 900
+    EXECUTION_HEARTBEAT_SECONDS = 60
 
     def __init__(
         self,
@@ -150,8 +210,16 @@ class AutonomousCareerLoop:
             state.run_id,
             execution_owner,
             expected_version=state.version,
-            lease_seconds=900,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
+        heartbeat = _ExecutionLeaseHeartbeat(
+            self._states,
+            state.run_id,
+            execution_owner,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
+            interval_seconds=self.EXECUTION_HEARTBEAT_SECONDS,
+        )
+        heartbeat.start()
         try:
             try:
                 while state.phase not in {
@@ -168,9 +236,18 @@ class AutonomousCareerLoop:
                         break
                     state.iterations += 1
                     self._step(state)
+                    heartbeat.raise_if_failed()
                     state.last_error = None
                     state.touch()
-                    self._persist(state)
+                    try:
+                        self._persist(state)
+                    except CareerLoopConflictError:
+                        raise
+                    except Exception as exc:
+                        raise _RecoverableCareerLoopError(
+                            "Post-step snapshot persistence is temporarily unavailable."
+                        ) from exc
+                    heartbeat.raise_if_failed()
                     if (
                         state.phase not in {
                             CareerLoopPhase.COMPLETE,
@@ -182,7 +259,7 @@ class AutonomousCareerLoop:
                             state.run_id,
                             execution_owner,
                             expected_version=state.version,
-                            lease_seconds=900,
+                            lease_seconds=self.EXECUTION_LEASE_SECONDS,
                         )
             except CareerLoopConflictError:
                 raise
@@ -197,6 +274,7 @@ class AutonomousCareerLoop:
                 self._persist(state)
             return self._result(state)
         finally:
+            heartbeat.stop()
             try:
                 self._states.release_execution(state.run_id, execution_owner)
             except CareerLoopConflictError:
