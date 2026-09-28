@@ -36,6 +36,20 @@ def _validated_artifact(content: Any, digest: Any) -> tuple[str, str]:
     return normalized, normalized_digest
 
 
+def _provider_result_identifier(value: Any, field: str) -> str:
+    """Validate a provider-returned identifier before durable serialization."""
+    if not isinstance(value, str):
+        raise ValueError(f"Provider {field} must be text.")
+    normalized = value.strip()
+    if not normalized or len(normalized) > 200:
+        raise ValueError(f"Provider {field} is malformed.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized):
+        raise ValueError(f"Provider {field} contains forbidden control characters.")
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized):
+        raise ValueError(f"Provider {field} contains a forbidden Unicode surrogate.")
+    return normalized
+
+
 class PreSubmissionError(RuntimeError):
     """Signal that submission failed before any external effect was attempted."""
 
@@ -93,9 +107,21 @@ class _SubmissionActionAdapter:
             raise AmbiguousExternalActionError(
                 "Application provider returned malformed submission data."
             )
-        returned_application = str(result.get("application_id", "")).strip()
-        returned_job = str(result.get("job_id", "")).strip()
-        returned_digest = str(result.get("artifact_sha256", "")).strip()
+        try:
+            returned_application = _provider_result_identifier(
+                result.get("application_id"), "application_id"
+            )
+            returned_job = _provider_result_identifier(result.get("job_id"), "job_id")
+            returned_digest = _provider_result_identifier(
+                result.get("artifact_sha256"), "artifact_sha256"
+            ).lower()
+            provider_submission_id = _provider_result_identifier(
+                result.get("provider_submission_id"), "provider_submission_id"
+            )
+        except ValueError as exc:
+            raise AmbiguousExternalActionError(
+                "Application provider returned malformed submission data."
+            ) from exc
         if (
             returned_application != application_id
             or returned_job != job_id
@@ -104,7 +130,14 @@ class _SubmissionActionAdapter:
             raise AmbiguousExternalActionError(
                 "Application provider result does not match the prepared intent."
             )
-        return dict(result)
+        # Persist only the validated, JSON-safe contract. Provider-specific extras
+        # may contain arbitrary objects and are deliberately excluded.
+        return {
+            "job_id": returned_job,
+            "application_id": returned_application,
+            "provider_submission_id": provider_submission_id,
+            "artifact_sha256": returned_digest,
+        }
 
 
 class ApplicationSubmissionService:
