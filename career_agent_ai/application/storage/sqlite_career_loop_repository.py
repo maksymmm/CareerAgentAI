@@ -116,7 +116,7 @@ class SQLiteCareerLoopRepository:
                 run_id TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                version INTEGER NOT NULL CHECK(version >= 1)
+                version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1)
             )
             """
         )
@@ -203,11 +203,15 @@ class SQLiteCareerLoopRepository:
                 or updated_at.utcoffset() is None
             ):
                 raise ValueError("Persisted loop timestamps must be timezone-aware.")
-            version = value.get("version", storage_version)
+            version = value.get(
+                "version",
+                0 if storage_version is None else storage_version,
+            )
+            minimum_version = 0 if storage_version is None else 1
             if (
                 not isinstance(version, int)
                 or isinstance(version, bool)
-                or version < 1
+                or version < minimum_version
                 or (storage_version is not None and version != storage_version)
             ):
                 raise ValueError("Persisted loop version is malformed.")
