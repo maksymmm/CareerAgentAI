@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from career_agent_ai.application.external_actions import (
     AmbiguousExternalActionError,
+    ExternalActionOperation,
     ExternalActionService,
     ExternalActionStatus,
 )
@@ -370,6 +371,116 @@ class SchedulingService:
             event.start_at,
             event.end_at,
             exclude_event_id=event.event_id,
+        )
+
+    def get_operation(self, operation_id: str) -> ExternalActionOperation | None:
+        """Return durable calendar operation state without executing it."""
+        return self._external_actions.get(operation_id)
+
+    def resolve_reconciliation(
+        self,
+        operation_id: str,
+        *,
+        completed: bool,
+        provider_event_id: str | None = None,
+    ) -> ExternalActionOperation:
+        """Resolve a provider-verified ambiguous calendar outcome safely."""
+        if not isinstance(completed, bool):
+            raise TypeError("completed must be a boolean.")
+        operation = self._external_actions.get(operation_id)
+        if operation is None:
+            raise KeyError(f"Unknown calendar operation: {operation_id!r}")
+        if operation.action_type not in {
+            "calendar.accept",
+            "calendar.decline",
+            "calendar.reschedule",
+        }:
+            raise ValueError("Operation is not a calendar action.")
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Calendar operation is not awaiting reconciliation.")
+        if provider_event_id is not None:
+            provider_event_id = validate_schedule_identifier(
+                provider_event_id, "provider_event_id"
+            )
+        if not completed:
+            if provider_event_id is not None:
+                raise ValueError(
+                    "provider_event_id must be omitted when no calendar effect occurred."
+                )
+            return self._external_actions.resolve_reconciliation(
+                operation_id,
+                confirmed_succeeded=False,
+            )
+
+        event_id = validate_schedule_identifier(
+            str(operation.payload.get("event_id", "")), "event_id"
+        )
+        current = self.get_event(event_id)
+        source_version = _CalendarActionAdapter._prepared_version(operation.payload)
+        action_type = operation.action_type
+        if action_type == "calendar.accept":
+            expected_status = ScheduleStatus.ACCEPTED
+            target_start, target_end, target_timezone = (
+                _CalendarActionAdapter._prepared_source_slot(operation.payload)
+            )
+        elif action_type == "calendar.decline":
+            expected_status = ScheduleStatus.DECLINED
+            target_start, target_end, target_timezone = (
+                _CalendarActionAdapter._prepared_source_slot(operation.payload)
+            )
+        else:
+            expected_status = ScheduleStatus.RESCHEDULE_REQUESTED
+            target_start = normalize_aware_datetime(
+                datetime.fromisoformat(str(operation.payload["start_at"])), "start_at"
+            )
+            raw_end = operation.payload.get("end_at")
+            target_end = (
+                None
+                if raw_end is None
+                else normalize_aware_datetime(
+                    datetime.fromisoformat(str(raw_end)), "end_at"
+                )
+            )
+            target_timezone = validate_timezone_name(
+                str(operation.payload["timezone_name"])
+            )
+
+        already_completed = (
+            current.status == expected_status
+            and current.start_at == target_start
+            and current.end_at == target_end
+            and current.timezone_name == target_timezone
+        )
+        if not already_completed:
+            _CalendarActionAdapter._validate_prepared_source(current, operation.payload)
+            updated = current.transition(
+                expected_status,
+                start_at=target_start,
+                end_at=target_end,
+                clear_end=(action_type == "calendar.reschedule" and target_end is None),
+                timezone_name=target_timezone,
+                provider_event_id=provider_event_id or current.provider_event_id,
+            )
+            current = self._repository.complete_action(
+                updated,
+                operation_id,
+                expected_version=source_version,
+            )
+        elif (
+            provider_event_id is not None
+            and current.provider_event_id not in {None, provider_event_id}
+        ):
+            raise ValueError("Verified provider_event_id conflicts with persisted event.")
+
+        return self._external_actions.resolve_reconciliation(
+            operation_id,
+            confirmed_succeeded=True,
+            result={
+                "event_id": current.event_id,
+                "status": current.status.value,
+                "provider_event_id": current.provider_event_id,
+                "event_snapshot": _serialize_schedule_event(current),
+            },
         )
 
     def accept(
