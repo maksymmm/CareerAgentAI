@@ -32,3 +32,12 @@ class ExternalActionOperationRepository(ABC):
         error: str | None = None,
     ) -> ExternalActionOperation:
         """Atomically change an operation from the expected lifecycle state."""
+
+
+    def replace_succeeded_result(
+        self,
+        operation_id: str,
+        result: Mapping[str, Any],
+    ) -> ExternalActionOperation:
+        """Replace the result of a succeeded operation when reconciliation adds facts."""
+        raise NotImplementedError
