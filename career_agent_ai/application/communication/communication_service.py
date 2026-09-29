@@ -187,6 +187,16 @@ class CommunicationService:
         self._external_actions.prepare(
             operation_id, "communication.send", {"message_id": message.message_id}
         )
+        if (
+            existing_operation is not None
+            and existing_operation.status == ExternalActionStatus.FAILED
+            and human_approved
+        ):
+            if message.direction != MessageDirection.DRAFT:
+                raise ValueError(
+                    "A failed communication operation can only retry a persisted draft."
+                )
+            self._external_actions.reopen_failed(operation_id)
         return self._execute(operation_id, human_approved)
 
     def reply(
