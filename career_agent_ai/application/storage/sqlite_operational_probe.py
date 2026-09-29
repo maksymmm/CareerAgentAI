@@ -9,6 +9,7 @@ from career_agent_ai.application.observability.models import (
     OperationalIssue,
     OperationalSeverity,
 )
+from career_agent_ai.application.observability.structured_logging import redact_text
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -36,7 +37,7 @@ class SQLiteOperationalProbe:
         cutoff = now_utc - timedelta(seconds=stale_after_seconds)
         issues = [
             *self._external_action_issues(cutoff),
-            *self._career_loop_issues(cutoff),
+            *self._career_loop_issues(cutoff, now_utc),
         ]
         return tuple(
             sorted(
@@ -92,25 +93,38 @@ class SQLiteOperationalProbe:
                     details={
                         "action_type": str(action_type),
                         "status": str(status),
-                        "error": None if error is None else str(error)[:1000],
+                        "error": None if error is None else redact_text(str(error))[:1000],
                     },
                 )
             )
         return issues
 
-    def _career_loop_issues(self, cutoff: datetime) -> list[OperationalIssue]:
+    def _career_loop_issues(
+        self, cutoff: datetime, now: datetime
+    ) -> list[OperationalIssue]:
         if not self._table_exists("autonomous_career_loops"):
             return []
         rows = self._database.connection.execute(
             """
-            SELECT run_id, payload_json, updated_at
+            SELECT run_id, payload_json, updated_at,
+                   execution_claim_owner, execution_claim_expires_at
             FROM autonomous_career_loops
             ORDER BY updated_at, run_id
             """
         ).fetchall()
         issues: list[OperationalIssue] = []
-        for run_id, raw_payload, raw_updated in rows:
+        for run_id, raw_payload, raw_updated, claim_owner, raw_claim_expiry in rows:
             updated = self._parse_timestamp(raw_updated, "career loop")
+            claim_expiry = (
+                None
+                if raw_claim_expiry is None
+                else self._parse_timestamp(raw_claim_expiry, "career loop execution lease")
+            )
+            active_claim = (
+                claim_owner is not None
+                and claim_expiry is not None
+                and claim_expiry > now
+            )
             try:
                 payload = json.loads(raw_payload)
             except (TypeError, json.JSONDecodeError) as exc:
@@ -130,11 +144,20 @@ class SQLiteOperationalProbe:
                         updated_at=updated,
                         details={
                             "phase": phase,
-                            "error": payload.get("last_error"),
+                            "error": (
+                                None
+                                if payload.get("last_error") is None
+                                else redact_text(str(payload.get("last_error")))[:1000]
+                            ),
                         },
                     )
                 )
-            elif phase != "complete" and pending is None and updated < cutoff:
+            elif (
+                phase != "complete"
+                and pending is None
+                and updated < cutoff
+                and not active_claim
+            ):
                 issues.append(
                     OperationalIssue(
                         issue_type="career_loop_stuck",
