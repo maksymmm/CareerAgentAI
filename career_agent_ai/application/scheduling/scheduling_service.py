@@ -412,6 +412,30 @@ class SchedulingService:
                 raise ValueError(
                     "Resolved calendar operation does not match provider_event_id."
                 )
+            if provider_event_id is not None and persisted_provider is None:
+                event_id = validate_schedule_identifier(
+                    str(operation.payload.get("event_id", "")), "event_id"
+                )
+                current = self.get_event(event_id)
+                if current.provider_event_id not in {None, provider_event_id}:
+                    raise ValueError(
+                        "Verified provider_event_id conflicts with persisted event."
+                    )
+                if current.provider_event_id is None:
+                    current = self._repository.attach_provider_event_id(
+                        current.event_id,
+                        provider_event_id,
+                        expected_version=current.version,
+                    )
+                enriched_result = dict(operation.result)
+                enriched_result["event_id"] = current.event_id
+                enriched_result["status"] = current.status.value
+                enriched_result["provider_event_id"] = current.provider_event_id
+                enriched_result["event_snapshot"] = _serialize_schedule_event(current)
+                return self._external_actions.replace_succeeded_result(
+                    operation_id,
+                    enriched_result,
+                )
             return operation
         if not completed and operation.status == ExternalActionStatus.PREPARED:
             if provider_event_id is not None:
