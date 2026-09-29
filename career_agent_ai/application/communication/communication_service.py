@@ -124,6 +124,21 @@ class CommunicationService:
         """Return durable communication operation state without executing it."""
         return self._external_actions.get(operation_id)
 
+    def reopen_failed_send(self, operation_id: str, message_id: str) -> ExternalActionOperation:
+        """Reopen one definite no-effect send failure for deliberate retry."""
+        message = self._require_message(message_id)
+        if message.direction != MessageDirection.DRAFT:
+            raise ValueError("A failed send can only retry a persisted draft.")
+        operation = self._external_actions.get(operation_id)
+        if operation is None:
+            raise KeyError(f"Unknown communication operation: {operation_id!r}")
+        if (
+            operation.action_type != "communication.send"
+            or operation.payload.get("message_id") != message.message_id
+        ):
+            raise ValueError("Operation does not match the requested message send.")
+        return self._external_actions.reopen_failed(operation_id)
+
     def resolve_reconciliation(
         self,
         operation_id: str,
@@ -187,16 +202,6 @@ class CommunicationService:
         self._external_actions.prepare(
             operation_id, "communication.send", {"message_id": message.message_id}
         )
-        if (
-            existing_operation is not None
-            and existing_operation.status == ExternalActionStatus.FAILED
-            and human_approved
-        ):
-            if message.direction != MessageDirection.DRAFT:
-                raise ValueError(
-                    "A failed communication operation can only retry a persisted draft."
-                )
-            self._external_actions.reopen_failed(operation_id)
         return self._execute(operation_id, human_approved)
 
     def reply(
