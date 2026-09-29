@@ -13,6 +13,7 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     OperationConflictError,
 )
 from career_agent_ai.application.external_actions.external_action_service import (
+    AmbiguousExternalActionError,
     ExternalActionService,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
@@ -253,3 +254,54 @@ def test_failed_operation_can_be_explicitly_reopened_for_safe_retry():
     assert succeeded.status == ExternalActionStatus.SUCCEEDED
     assert repository.get("operation-retry") == succeeded
     assert len(adapter.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "adapter_error,failed_target",
+    [
+        (RuntimeError("definite provider failure"), ExternalActionStatus.FAILED),
+        (
+            AmbiguousExternalActionError("ambiguous provider outcome"),
+            ExternalActionStatus.RECONCILIATION_REQUIRED,
+        ),
+    ],
+)
+def test_provider_failure_write_failure_falls_back_to_reconciliation(
+    adapter_error, failed_target
+):
+    class FailingOutcomeRepository(SQLiteExternalActionOperationRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self.failed_once = False
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if status == failed_target and not self.failed_once:
+                self.failed_once = True
+                raise sqlite3.OperationalError("terminal failure write unavailable")
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase()
+    repository = FailingOutcomeRepository(database)
+    adapter = RecordingAdapter(adapter_error)
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-failure-write", "application", {"job": "1"})
+
+    result = service.execute("operation-failure-write", human_approved=True)
+
+    assert result.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert repository.get("operation-failure-write") == result
+    assert len(adapter.calls) == 1
