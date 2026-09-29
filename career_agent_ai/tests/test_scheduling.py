@@ -963,3 +963,36 @@ def test_calendar_completed_reconciliation_persists_opaque_provider_id():
     assert persisted is not None
     assert persisted.provider_event_id == opaque_id
     assert resolved.result["provider_event_id"] == opaque_id
+
+
+def test_succeeded_calendar_reconciliation_replay_enriches_missing_provider_id():
+    database = SQLiteDatabase()
+    service, repository, operations, _ = stack(database)
+    _persist_ambiguous_completed_accept(
+        service,
+        repository,
+        operations,
+        provider_event_id=None,
+    )
+
+    first = service.resolve_reconciliation(
+        "accept:reconcile",
+        completed=True,
+        provider_event_id=None,
+    )
+    assert first.status == ExternalActionStatus.SUCCEEDED
+    assert first.result["provider_event_id"] is None
+
+    opaque_id = "provider/event id = replay/42"
+    replay = service.resolve_reconciliation(
+        "accept:reconcile",
+        completed=True,
+        provider_event_id=opaque_id,
+    )
+
+    assert replay.status == ExternalActionStatus.SUCCEEDED
+    assert replay.result["provider_event_id"] == opaque_id
+    persisted = repository.get("event-1")
+    assert persisted is not None
+    assert persisted.provider_event_id == opaque_id
+    assert replay.result["event_snapshot"]["provider_event_id"] == opaque_id
