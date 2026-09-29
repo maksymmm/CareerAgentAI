@@ -13,10 +13,10 @@ from uuid import uuid4
 
 _correlation_id: ContextVar[str | None] = ContextVar("career_agent_correlation_id", default=None)
 _SENSITIVE_TOKENS = ("password", "secret", "token", "api_key", "apikey", "authorization", "cookie")
-_BEARER_PATTERN = re.compile(r"(?i)\\bbearer\\s+[^\\s,;]+")
+_BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\\b(password|secret|token|api[_-]?key|apikey|authorization|cookie)"
-    r"\\b\\s*[:=]\\s*[^,;\\r\\n]+"
+    r"(?i)\b(password|secret|token|api[_-]?key|apikey|authorization|cookie)"
+    r"\b\s*[:=]\s*[^,;\r\n]+"
 )
 
 
