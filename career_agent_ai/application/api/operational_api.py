@@ -69,8 +69,12 @@ class OperationalWSGIApp:
             raise ValueError("bearer_token must contain 32 to 4096 characters.")
         if any(ord(ch) < 32 or ord(ch) == 127 for ch in bearer_token):
             raise ValueError("bearer_token contains forbidden control characters.")
+        try:
+            token_bytes = bearer_token.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise ValueError("bearer_token must contain ASCII characters only.") from exc
         self._service = service
-        self._bearer_token = bearer_token
+        self._bearer_token = token_bytes
 
     def __call__(
         self,
@@ -96,7 +100,11 @@ class OperationalWSGIApp:
                     if authorization.startswith("Bearer ")
                     else ""
                 )
-                if not hmac.compare_digest(supplied, self._bearer_token):
+                try:
+                    supplied_bytes = supplied.encode("ascii")
+                except UnicodeEncodeError:
+                    supplied_bytes = b""
+                if not hmac.compare_digest(supplied_bytes, self._bearer_token):
                     return self._respond(
                         start_response,
                         "401 Unauthorized",
