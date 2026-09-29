@@ -92,18 +92,16 @@ class ExternalActionService:
                 operation.payload,
             )
         except AmbiguousExternalActionError as exc:
-            return self._repository.transition(
+            return self._persist_failure_outcome(
                 operation.operation_id,
-                ExternalActionStatus.IN_PROGRESS,
                 ExternalActionStatus.RECONCILIATION_REQUIRED,
-                error=self._safe_error(exc),
+                exc,
             )
         except Exception as exc:
-            return self._repository.transition(
+            return self._persist_failure_outcome(
                 operation.operation_id,
-                ExternalActionStatus.IN_PROGRESS,
                 ExternalActionStatus.FAILED,
-                error=self._safe_error(exc),
+                exc,
             )
         try:
             return self._repository.transition(
@@ -134,6 +132,60 @@ class ExternalActionService:
                 except Exception:
                     pass
             raise
+
+    def _persist_failure_outcome(
+        self,
+        operation_id: str,
+        target_status: ExternalActionStatus,
+        error: Exception,
+    ) -> ExternalActionOperation:
+        """Persist a provider failure without stranding an in-progress action.
+
+        If the intended terminal write fails, the action is conservatively moved to
+        reconciliation_required. This prevents a transient local persistence failure
+        from making an externally ambiguous action look safely retryable or terminal.
+        """
+        if target_status not in {
+            ExternalActionStatus.FAILED,
+            ExternalActionStatus.RECONCILIATION_REQUIRED,
+        }:
+            raise ValueError("target_status must represent a provider failure outcome.")
+        safe_error = self._safe_error(error)
+        try:
+            return self._repository.transition(
+                operation_id,
+                ExternalActionStatus.IN_PROGRESS,
+                target_status,
+                error=safe_error,
+            )
+        except Exception as persistence_error:
+            current = self._repository.get(operation_id)
+            if current is not None and current.status == target_status:
+                return current
+            if (
+                current is not None
+                and current.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+            ):
+                return current
+            if current is not None and current.status == ExternalActionStatus.IN_PROGRESS:
+                return self._repository.transition(
+                    operation_id,
+                    ExternalActionStatus.IN_PROGRESS,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED,
+                    error=(
+                        "Provider failure outcome could not be durably classified: "
+                        f"{self._safe_error(persistence_error)}"
+                    )[:1000],
+                )
+            raise
+
+    def replace_succeeded_result(
+        self,
+        operation_id: str,
+        result: Mapping[str, Any],
+    ) -> ExternalActionOperation:
+        """Replace the durable result of an already-succeeded operation."""
+        return self._repository.replace_succeeded_result(operation_id, result)
 
     def reopen_failed(self, operation_id: str) -> ExternalActionOperation:
         """Reopen a definite no-effect failure for a deliberate retry.
