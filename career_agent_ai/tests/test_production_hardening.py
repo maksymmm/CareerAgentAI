@@ -3,7 +3,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Barrier
 
 import pytest
 
@@ -305,6 +307,100 @@ def test_operational_probe_surfaces_failed_and_stuck_loops_but_not_human_waits()
     assert "waiting-loop" not in by_id
 
 
+
+def test_operational_probe_redacts_persisted_errors_before_exposure():
+    database = SQLiteDatabase()
+    actions = SQLiteExternalActionOperationRepository(database)
+    old = NOW - timedelta(hours=2)
+    _create_operation(actions, "failed-secret", ExternalActionStatus.FAILED, updated_at=old)
+    database.connection.execute(
+        "UPDATE external_action_operations SET error = ? WHERE operation_id = ?",
+        ("Authorization: Bearer super-secret-token", "failed-secret"),
+    )
+
+    loops = SQLiteCareerLoopRepository(database)
+    failed = CareerLoopState(
+        run_id="failed-secret-loop",
+        request=request(),
+        phase=CareerLoopPhase.FAILED,
+        last_error="api_key=very-secret-value",
+        created_at=old,
+        updated_at=old,
+    )
+    loops.save(failed)
+    database.connection.commit()
+
+    issues = SQLiteOperationalProbe(database).inspect(
+        now=NOW,
+        stale_after_seconds=3600,
+    )
+    by_id = {issue.entity_id: issue for issue in issues}
+
+    assert "super-secret-token" not in str(by_id["failed-secret"].details)
+    assert "[REDACTED]" in str(by_id["failed-secret"].details)
+    assert "very-secret-value" not in str(by_id["failed-secret-loop"].details)
+    assert "[REDACTED]" in str(by_id["failed-secret-loop"].details)
+
+
+def test_operational_probe_does_not_flag_loop_with_live_execution_lease():
+    database = SQLiteDatabase()
+    loops = SQLiteCareerLoopRepository(database)
+    old = NOW - timedelta(hours=2)
+    state = CareerLoopState(
+        run_id="leased-loop",
+        request=request(),
+        phase=CareerLoopPhase.APPLICATION_SUBMIT,
+        created_at=old,
+        updated_at=old,
+    )
+    loops.save(state)
+    database.connection.execute(
+        """
+        UPDATE autonomous_career_loops
+        SET execution_claim_owner = ?, execution_claim_expires_at = ?
+        WHERE run_id = ?
+        """,
+        ("worker-1", (NOW + timedelta(minutes=30)).isoformat(), "leased-loop"),
+    )
+    database.connection.commit()
+
+    issues = SQLiteOperationalProbe(database).inspect(
+        now=NOW,
+        stale_after_seconds=3600,
+    )
+
+    assert "leased-loop" not in {issue.entity_id for issue in issues}
+
+
+def test_operational_probe_reports_loop_after_execution_lease_expires():
+    database = SQLiteDatabase()
+    loops = SQLiteCareerLoopRepository(database)
+    old = NOW - timedelta(hours=2)
+    state = CareerLoopState(
+        run_id="expired-lease-loop",
+        request=request(),
+        phase=CareerLoopPhase.APPLICATION_SUBMIT,
+        created_at=old,
+        updated_at=old,
+    )
+    loops.save(state)
+    database.connection.execute(
+        """
+        UPDATE autonomous_career_loops
+        SET execution_claim_owner = ?, execution_claim_expires_at = ?
+        WHERE run_id = ?
+        """,
+        ("worker-1", (NOW - timedelta(minutes=1)).isoformat(), "expired-lease-loop"),
+    )
+    database.connection.commit()
+
+    issues = SQLiteOperationalProbe(database).inspect(
+        now=NOW,
+        stale_after_seconds=3600,
+    )
+
+    assert "expired-lease-loop" in {issue.entity_id for issue in issues}
+
 def test_operational_probe_is_safe_before_optional_tables_exist():
     issues = SQLiteOperationalProbe(SQLiteDatabase()).inspect(
         now=NOW,
@@ -384,6 +480,40 @@ def test_migration_runner_rolls_back_failure_and_requires_destructive_approval()
         runner.apply((destructive,))
     assert runner.apply((destructive,), allow_destructive=True) == (2,)
 
+
+
+def test_migration_runner_converges_under_concurrent_deployers(tmp_path):
+    path = str(tmp_path / "migration-race.sqlite")
+    setup = SQLiteDatabase(path)
+    SQLiteMigrationRunner(setup)
+    setup.close()
+    barrier = Barrier(2)
+    migration = SQLiteMigration(
+        version=1,
+        name="create_race_table",
+        statements=("CREATE TABLE race_table(id TEXT PRIMARY KEY)",),
+    )
+
+    def apply_once():
+        database = SQLiteDatabase(path)
+        runner = SQLiteMigrationRunner(database)
+        try:
+            barrier.wait(timeout=5)
+            return runner.apply((migration,))
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _: apply_once(), range(2)))
+
+    assert sorted(results, key=len) == [(), (1,)]
+    verify = SQLiteDatabase(path)
+    runner = SQLiteMigrationRunner(verify)
+    assert runner.applied_versions() == (1,)
+    assert verify.connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='race_table'"
+    ).fetchone() is not None
+    verify.close()
 
 @pytest.mark.parametrize(
     "migration",
