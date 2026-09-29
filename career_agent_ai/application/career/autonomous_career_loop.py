@@ -227,16 +227,29 @@ class AutonomousCareerLoop:
         if expected_application != state.application_id:
             raise RuntimeError("Reconciliation action does not match the tracked application.")
 
-        self._submission.resolve_reconciliation(
-            operation_id,
-            submitted=submitted,
-            provider_submission_id=provider_submission_id,
+        resolution_owner = f"resolution:{uuid4().hex}"
+        self._states.claim_execution(
+            state.run_id,
+            resolution_owner,
+            expected_version=state.version,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
-        state.pending_human_action = None
-        state.last_error = None
-        state.phase = CareerLoopPhase.APPLICATION_SUBMIT
-        state.touch()
-        self._persist(state)
+        try:
+            self._submission.resolve_reconciliation(
+                operation_id,
+                submitted=submitted,
+                provider_submission_id=provider_submission_id,
+            )
+            state.pending_human_action = None
+            state.last_error = None
+            state.phase = CareerLoopPhase.APPLICATION_SUBMIT
+            state.touch()
+            self._persist(state)
+        finally:
+            try:
+                self._states.release_execution(state.run_id, resolution_owner)
+            except CareerLoopConflictError:
+                pass
         return self._continue(state)
 
     def resolve_message_reconciliation(
@@ -259,15 +272,28 @@ class AutonomousCareerLoop:
         operation_id = action.details.get("operation_id")
         if not isinstance(operation_id, str) or not operation_id:
             raise RuntimeError("Message reconciliation action has no valid operation_id.")
-        self._communication.resolve_reconciliation(
-            operation_id,
-            delivered=delivered,
+        resolution_owner = f"resolution:{uuid4().hex}"
+        self._states.claim_execution(
+            state.run_id,
+            resolution_owner,
+            expected_version=state.version,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
-        state.pending_human_action = None
-        state.last_error = None
-        state.phase = CareerLoopPhase.MESSAGE_SEND
-        state.touch()
-        self._persist(state)
+        try:
+            self._communication.resolve_reconciliation(
+                operation_id,
+                delivered=delivered,
+            )
+            state.pending_human_action = None
+            state.last_error = None
+            state.phase = CareerLoopPhase.MESSAGE_SEND
+            state.touch()
+            self._persist(state)
+        finally:
+            try:
+                self._states.release_execution(state.run_id, resolution_owner)
+            except CareerLoopConflictError:
+                pass
         return self._continue(state)
 
     def resolve_interview_reconciliation(
@@ -291,16 +317,29 @@ class AutonomousCareerLoop:
         operation_id = action.details.get("operation_id")
         if not isinstance(operation_id, str) or not operation_id:
             raise RuntimeError("Interview reconciliation action has no valid operation_id.")
-        self._scheduling.resolve_reconciliation(
-            operation_id,
-            completed=completed,
-            provider_event_id=provider_event_id,
+        resolution_owner = f"resolution:{uuid4().hex}"
+        self._states.claim_execution(
+            state.run_id,
+            resolution_owner,
+            expected_version=state.version,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
-        state.pending_human_action = None
-        state.last_error = None
-        state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
-        state.touch()
-        self._persist(state)
+        try:
+            self._scheduling.resolve_reconciliation(
+                operation_id,
+                completed=completed,
+                provider_event_id=provider_event_id,
+            )
+            state.pending_human_action = None
+            state.last_error = None
+            state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
+            state.touch()
+            self._persist(state)
+        finally:
+            try:
+                self._states.release_execution(state.run_id, resolution_owner)
+            except CareerLoopConflictError:
+                pass
         return self._continue(state)
 
     def get(self, run_id: str) -> CareerLoopResult:
@@ -820,6 +859,14 @@ class AutonomousCareerLoop:
             durable_operation = self._communication.get_operation(operation_id)
             if (
                 durable_operation is not None
+                and durable_operation.status == ExternalActionStatus.FAILED
+            ):
+                raise _RecoverableCareerLoopError(
+                    "Message delivery failed before any provider effect; "
+                    "the approved operation can be retried deliberately."
+                )
+            if (
+                durable_operation is not None
                 and durable_operation.status
                 == ExternalActionStatus.RECONCILIATION_REQUIRED
             ):
@@ -958,6 +1005,10 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved interview intent is stale; refusing calendar response."
             )
+        if view.status == ScheduleStatus.ACCEPTED:
+            state.approved_human_action = None
+            state.phase = CareerLoopPhase.COMPLETE
+            return
         operation_id = f"{state.run_id}:interview-accept"
         accepted = self._scheduling.accept(
             operation_id,
@@ -966,6 +1017,14 @@ class AutonomousCareerLoop:
         )
         if accepted is None:
             durable_operation = self._scheduling.get_operation(operation_id)
+            if (
+                durable_operation is not None
+                and durable_operation.status == ExternalActionStatus.FAILED
+            ):
+                raise _RecoverableCareerLoopError(
+                    "Interview response failed before any provider effect; "
+                    "the approved operation can be retried deliberately."
+                )
             if (
                 durable_operation is not None
                 and durable_operation.status
