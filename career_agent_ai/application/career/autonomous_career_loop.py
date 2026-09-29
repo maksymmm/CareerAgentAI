@@ -1012,6 +1012,7 @@ class AutonomousCareerLoop:
                 "Approved interview intent is stale; refusing calendar response."
             )
         if view.status == ScheduleStatus.ACCEPTED:
+            self._record_interview_status(state, event_id)
             state.approved_human_action = None
             state.phase = CareerLoopPhase.COMPLETE
             return
@@ -1056,8 +1057,55 @@ class AutonomousCareerLoop:
                 state.last_error = "interview_response_outcome_requires_reconciliation"
                 return
             raise RuntimeError("Interview acceptance did not reach a confirmed outcome.")
+        self._record_interview_status(state, event_id)
         state.approved_human_action = None
         state.phase = CareerLoopPhase.COMPLETE
+
+    def _record_interview_status(
+        self, state: CareerLoopState, event_id: str
+    ) -> None:
+        """Persist an accepted interview in the application lifecycle exactly once."""
+        if state.application_id is None:
+            raise RuntimeError("Interview tracking requires an application.")
+        try:
+            application = self._applications.get(state.application_id)
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Application tracker is temporarily unavailable after interview acceptance."
+            ) from exc
+        if application is None:
+            raise RuntimeError("Tracked application disappeared before interview update.")
+        if application.status in {
+            JobApplicationStatus.INTERVIEW,
+            JobApplicationStatus.OFFER,
+        }:
+            return
+        if application.status != JobApplicationStatus.APPLIED:
+            raise RuntimeError(
+                "Accepted interview cannot be recorded from the current application status."
+            )
+        event_digest = sha256(
+            f"{application.application_id}\n{event_id}".encode("utf-8")
+        ).hexdigest()[:40]
+        updated = application.transition(
+            JobApplicationStatus.INTERVIEW,
+            event_id=f"interview-{event_digest}",
+            note="Interview accepted by autonomous career loop after human approval.",
+        )
+        try:
+            self._applications.update(updated, expected_version=application.version)
+        except ApplicationConflictError:
+            current = self._applications.get(state.application_id)
+            if current is not None and current.status in {
+                JobApplicationStatus.INTERVIEW,
+                JobApplicationStatus.OFFER,
+            }:
+                return
+            raise
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Accepted interview is durable, but tracker update must be retried."
+            ) from exc
 
     @staticmethod
     def _require_approved_action(
