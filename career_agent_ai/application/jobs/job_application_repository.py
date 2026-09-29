@@ -65,6 +65,42 @@ class JobApplicationRepository(ABC):
     def find(self, query: ApplicationQuery) -> tuple[JobApplication, ...]:
         """Return applications matching all supplied filters."""
 
+    def claim_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        expected_version: int,
+        claim_owner_id: str | None = None,
+    ) -> JobApplication:
+        """Atomically reserve one saved version for one operation and owner.
+
+        Legacy repository adapters may omit submission coordination; autonomous
+        submission requires an adapter that overrides this method.
+        """
+        raise NotImplementedError("Repository does not support submission coordination.")
+
+    def release_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Release a matching owner claim after a definite pre-provider failure."""
+        raise NotImplementedError("Repository does not support submission coordination.")
+
+    def complete_submission(
+        self,
+        application: JobApplication,
+        operation_id: str,
+        *,
+        expected_version: int,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Persist an applied transition only for the matching operation owner."""
+        raise NotImplementedError("Repository does not support submission coordination.")
+
     @abstractmethod
     def clear(self) -> None:
         """Remove all tracked applications."""

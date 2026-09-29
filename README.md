@@ -237,6 +237,37 @@ deserialization is used.
 
 ---
 
+## End-to-End Autonomous Career Loop
+
+The end-to-end loop now connects ranked job discovery, deterministic career decision
+progression, resume preparation, durable application preparation, explicit human
+approval, crash-safe application submission, optional recruiter/employer messaging,
+application tracking, and interview coordination.
+
+The loop is a bounded state machine with a restart-safe SQLite state repository.
+Every consequential external action uses a stable idempotency key and the existing
+`ExternalActionService`. Application submission is scoped to the durable application
+identity rather than an individual run, so a later run cannot silently submit the
+same tracked application again. Communication and interview responses reuse their
+existing crash-safe adapters and persistence contracts.
+
+Human-action events are explicit for application submission, outbound messaging, and
+interview/trial-day calendar responses. Before an application can be approved, the
+resume/application preparation step must emit an explicit typed artifact. The exact
+artifact text and SHA-256 digest are persisted in loop state, shown in the approval
+event, copied into the durable external-action intent, and passed unchanged through
+the submission-adapter contract. Reusing an operation ID with different artifact
+content is rejected, so the provider cannot silently submit something other than what
+the human approved.
+
+Interview coordination verifies both candidate ownership and application linkage before
+exposing an approval gate. A restart can recover both human-gated states and
+already-approved in-progress phases through the durable continuation entry point.
+Integration tests use only fake/no-I/O providers and verify that restarts do not create
+duplicate applications or messages.
+
+---
+
 ## Workflow Engine
 
 Responsible for deterministic workflow lifecycle management.
@@ -308,11 +339,12 @@ Implemented foundations:
 - Unsent proactive outreach drafting
 - Production-capable HTTPS RSS/Atom opportunity-signal collection with provenance and rate/error handling
 - Deterministic signal deduplication and employer intelligence aggregation
+- Restart-safe end-to-end autonomous career loop with explicit human-action events
+- Crash-safe, application-scoped submission idempotency and cross-run duplicate prevention
 - Continuous integration workflow
 
 Next architectural steps:
 
-- end-to-end autonomous career loop
 - production hardening
 
 ---

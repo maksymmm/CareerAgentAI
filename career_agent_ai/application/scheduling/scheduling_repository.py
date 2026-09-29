@@ -62,3 +62,12 @@ class SchedulingRepository(Protocol):
         expected_version: int,
     ) -> ScheduleEvent:
         """Persist one provider-confirmed transition and release its claim atomically."""
+
+    def attach_provider_event_id(
+        self,
+        event_id: str,
+        provider_event_id: str,
+        *,
+        expected_version: int,
+    ) -> ScheduleEvent:
+        """Attach a verified provider identity to an already-completed event."""

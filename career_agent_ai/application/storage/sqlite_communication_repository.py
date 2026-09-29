@@ -140,6 +140,26 @@ class SQLiteCommunicationRepository:
                 "Delivery claim is no longer releasable by this operation."
             )
 
+    def restore_delivery_for_retry(self, message_id: str, operation_id: str) -> None:
+        """Restore a claimed draft/outbound row after verified provider no-delivery."""
+        normalized_message = validate_identifier(message_id, "message_id")
+        normalized_operation = validate_identifier(operation_id, "operation_id")
+        cursor = self._database.connection.execute(
+            """
+            UPDATE communication_messages
+            SET direction = 'draft'
+            WHERE message_id = ?
+              AND delivery_operation_id = ?
+              AND direction IN ('draft', 'outbound')
+            """,
+            (normalized_message, normalized_operation),
+        )
+        self._database.connection.commit()
+        if cursor.rowcount != 1:
+            raise OperationConflictError(
+                "Message cannot be restored for retry by this delivery operation."
+            )
+
     def _create_schema(self) -> None:
         self._database.connection.execute(
             """

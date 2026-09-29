@@ -428,3 +428,110 @@ def test_sqlite_migrates_existing_timeline_rows_to_stable_sequence_order():
            ORDER BY sequence"""
     ).fetchall()
     assert rows == [("z-first", 0), ("a-second", 1)]
+
+
+@pytest.mark.parametrize(
+    "repository_factory",
+    [
+        InMemoryJobApplicationRepository,
+        lambda: SQLiteJobApplicationRepository(SQLiteDatabase()),
+    ],
+)
+def test_submission_claim_blocks_competing_transition_and_completes_owner(
+    repository_factory,
+):
+    repository = repository_factory()
+    original = application()
+    repository.add(original)
+
+    claimed = repository.claim_submission(
+        original.application_id,
+        "submit:1",
+        expected_version=original.version,
+    )
+    competing = original.transition(
+        JobApplicationStatus.WITHDRAWN,
+        occurred_at=NOW + timedelta(minutes=1),
+        event_id="withdraw",
+    )
+    with pytest.raises(ApplicationConflictError):
+        repository.update(competing, expected_version=original.version)
+
+    applied = claimed.transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=NOW + timedelta(minutes=2),
+        operation_id="submit:1",
+        event_id="applied",
+    )
+    repository.complete_submission(
+        applied,
+        "submit:1",
+        expected_version=claimed.version,
+    )
+
+    assert repository.get(original.application_id) == applied
+
+
+
+@pytest.mark.parametrize(
+    "repository_factory",
+    [
+        InMemoryJobApplicationRepository,
+        lambda: SQLiteJobApplicationRepository(SQLiteDatabase()),
+    ],
+)
+def test_submission_claim_reentry_requires_same_durable_owner(repository_factory):
+    repository = repository_factory()
+    original = application()
+    repository.add(original)
+
+    first = repository.claim_submission(
+        original.application_id,
+        "submit:shared",
+        expected_version=original.version,
+        claim_owner_id="run:first",
+    )
+    assert first == original
+
+    with pytest.raises(ApplicationConflictError):
+        repository.claim_submission(
+            original.application_id,
+            "submit:shared",
+            expected_version=original.version,
+            claim_owner_id="run:second",
+        )
+
+    replay = repository.claim_submission(
+        original.application_id,
+        "submit:shared",
+        expected_version=original.version,
+        claim_owner_id="run:first",
+    )
+    assert replay == original
+
+@pytest.mark.parametrize(
+    "repository_factory",
+    [
+        InMemoryJobApplicationRepository,
+        lambda: SQLiteJobApplicationRepository(SQLiteDatabase()),
+    ],
+)
+def test_definite_submission_failure_can_release_claim(repository_factory):
+    repository = repository_factory()
+    original = application()
+    repository.add(original)
+    repository.claim_submission(
+        original.application_id,
+        "submit:failed",
+        expected_version=original.version,
+    )
+
+    repository.release_submission(original.application_id, "submit:failed")
+    withdrawn = original.transition(
+        JobApplicationStatus.WITHDRAWN,
+        occurred_at=NOW + timedelta(minutes=1),
+        event_id="withdraw-after-release",
+    )
+    repository.update(withdrawn, expected_version=original.version)
+
+    assert repository.get(original.application_id) == withdrawn

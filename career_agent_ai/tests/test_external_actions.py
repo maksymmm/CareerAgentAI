@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any, Mapping
 
 import pytest
@@ -12,6 +13,7 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     OperationConflictError,
 )
 from career_agent_ai.application.external_actions.external_action_service import (
+    AmbiguousExternalActionError,
     ExternalActionService,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
@@ -195,3 +197,111 @@ def test_unknown_operation_and_invalid_identifiers_are_rejected():
         service.prepare("", "application", {})
     with pytest.raises(ValueError):
         service.prepare("operation-1", "", {})
+
+
+def test_provider_success_write_failure_moves_operation_to_reconciliation():
+    class FailingSuccessRepository(SQLiteExternalActionOperationRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self.failed_once = False
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if status == ExternalActionStatus.SUCCEEDED and not self.failed_once:
+                self.failed_once = True
+                raise sqlite3.OperationalError("terminal success write unavailable")
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase()
+    repository = FailingSuccessRepository(database)
+    adapter = RecordingAdapter()
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-success-write", "application", {"job": "1"})
+
+    result = service.execute("operation-success-write", human_approved=True)
+
+    assert result.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert "Provider returned success" in result.error
+    assert len(adapter.calls) == 1
+
+
+def test_failed_operation_can_be_explicitly_reopened_for_safe_retry():
+    adapter = RecordingAdapter(RuntimeError("definite pre-provider failure"))
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-retry", "application", {"job": "1"})
+    failed = service.execute("operation-retry", human_approved=True)
+    assert failed.status == ExternalActionStatus.FAILED
+
+    reopened = service.reopen_failed("operation-retry")
+    assert reopened.status == ExternalActionStatus.PREPARED
+    assert reopened.error is None
+
+    adapter.error = None
+    succeeded = service.execute("operation-retry", human_approved=True)
+    assert succeeded.status == ExternalActionStatus.SUCCEEDED
+    assert repository.get("operation-retry") == succeeded
+    assert len(adapter.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "adapter_error,failed_target",
+    [
+        (RuntimeError("definite provider failure"), ExternalActionStatus.FAILED),
+        (
+            AmbiguousExternalActionError("ambiguous provider outcome"),
+            ExternalActionStatus.RECONCILIATION_REQUIRED,
+        ),
+    ],
+)
+def test_provider_failure_write_failure_falls_back_to_reconciliation(
+    adapter_error, failed_target
+):
+    class FailingOutcomeRepository(SQLiteExternalActionOperationRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self.failed_once = False
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if status == failed_target and not self.failed_once:
+                self.failed_once = True
+                raise sqlite3.OperationalError("terminal failure write unavailable")
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase()
+    repository = FailingOutcomeRepository(database)
+    adapter = RecordingAdapter(adapter_error)
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-failure-write", "application", {"job": "1"})
+
+    result = service.execute("operation-failure-write", human_approved=True)
+
+    assert result.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert repository.get("operation-failure-write") == result
+    assert len(adapter.calls) == 1

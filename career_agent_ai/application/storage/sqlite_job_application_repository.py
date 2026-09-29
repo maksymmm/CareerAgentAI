@@ -74,12 +74,17 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         try:
             connection.execute("BEGIN")
             current = connection.execute(
-                """SELECT user_id, job_id, created_at, version
+                """SELECT user_id, job_id, created_at, version,
+                          submission_claim_operation_id
                    FROM job_applications WHERE application_id = ?""",
                 (application.application_id,),
             ).fetchone()
             if current is None or current[3] != expected_version:
                 raise ApplicationConflictError("Application is missing or has changed.")
+            if current[4] is not None:
+                raise ApplicationConflictError(
+                    "Application is reserved for an in-flight submission."
+                )
             if application.user_id != current[0] or application.job_id != current[1]:
                 raise ApplicationConflictError("Application identity cannot be changed.")
             try:
@@ -148,6 +153,198 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             tuple(parameters),
         ).fetchall()
         return tuple(self._load(row) for row in rows)
+
+    def claim_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        expected_version: int,
+        claim_owner_id: str | None = None,
+    ) -> JobApplication:
+        """Atomically reserve one saved application version for one durable owner."""
+        application_id = self._required_filter(application_id, "application_id")
+        operation_id = self._required_filter(operation_id, "operation_id")
+        owner_id = self._required_filter(
+            claim_owner_id or operation_id, "claim_owner_id"
+        )
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
+            raise ApplicationConflictError("expected_version must be a positive integer.")
+        connection = self._database.connection
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT status, version, submission_claim_operation_id,
+                          submission_claim_owner_id
+                   FROM job_applications WHERE application_id = ?""",
+                (application_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row[0] != JobApplicationStatus.SAVED.value
+                or row[1] != expected_version
+                or (
+                    row[2] is not None
+                    and (row[2] != operation_id or row[3] != owner_id)
+                )
+            ):
+                raise ApplicationConflictError(
+                    "Application cannot be claimed for submission."
+                )
+            claimed = self.get(application_id)
+            if claimed is None:
+                raise ApplicationConflictError("Application disappeared before claim.")
+            cursor = connection.execute(
+                """UPDATE job_applications
+                   SET submission_claim_operation_id = ?,
+                       submission_claim_owner_id = ?
+                   WHERE application_id = ? AND status = ? AND version = ?
+                     AND (
+                         (submission_claim_operation_id IS NULL
+                          AND submission_claim_owner_id IS NULL)
+                         OR (
+                            submission_claim_operation_id = ?
+                            AND submission_claim_owner_id = ?
+                         )
+                     )""",
+                (
+                    operation_id,
+                    owner_id,
+                    application_id,
+                    JobApplicationStatus.SAVED.value,
+                    expected_version,
+                    operation_id,
+                    owner_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ApplicationConflictError(
+                    "Application lost its submission claim race."
+                )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            if connection.in_transaction:
+                connection.rollback()
+            raise ApplicationConflictError(
+                "Submission operation is already bound to another application."
+            ) from exc
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        return claimed
+
+    def release_submission(
+        self,
+        application_id: str,
+        operation_id: str,
+        *,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Release a matching submission claim after a definite pre-provider failure."""
+        application_id = self._required_filter(application_id, "application_id")
+        operation_id = self._required_filter(operation_id, "operation_id")
+        owner_id = self._required_filter(
+            claim_owner_id or operation_id, "claim_owner_id"
+        )
+        cursor = self._database.connection.execute(
+            """UPDATE job_applications
+               SET submission_claim_operation_id = NULL,
+                   submission_claim_owner_id = NULL
+               WHERE application_id = ?
+                 AND submission_claim_operation_id = ?
+                 AND submission_claim_owner_id = ?""",
+            (application_id, operation_id, owner_id),
+        )
+        self._database.connection.commit()
+        if cursor.rowcount != 1:
+            raise ApplicationConflictError("Submission claim is no longer releasable.")
+
+    def complete_submission(
+        self,
+        application: JobApplication,
+        operation_id: str,
+        *,
+        expected_version: int,
+        claim_owner_id: str | None = None,
+    ) -> None:
+        """Persist the matching owner's saved-to-applied transition and clear its claim."""
+        operation_id = self._required_filter(operation_id, "operation_id")
+        owner_id = self._required_filter(
+            claim_owner_id or operation_id, "claim_owner_id"
+        )
+        if (
+            application.version != expected_version + 1
+            or application.status != JobApplicationStatus.APPLIED
+            or operation_id not in application.external_action_operation_ids
+        ):
+            raise ApplicationConflictError(
+                "Completed submission does not match the claimed transition."
+            )
+        connection = self._database.connection
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                """SELECT user_id, job_id, created_at, status, version,
+                          submission_claim_operation_id, submission_claim_owner_id
+                   FROM job_applications WHERE application_id = ?""",
+                (application.application_id,),
+            ).fetchone()
+            if (
+                current is None
+                or current[3] != JobApplicationStatus.SAVED.value
+                or current[4] != expected_version
+                or current[5] != operation_id
+                or current[6] != owner_id
+            ):
+                raise ApplicationConflictError(
+                    "Application changed or lost its submission claim."
+                )
+            if application.user_id != current[0] or application.job_id != current[1]:
+                raise ApplicationConflictError("Application identity cannot be changed.")
+            try:
+                persisted_created_at = datetime.fromisoformat(current[2])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Persisted job application is malformed.") from exc
+            if application.created_at != persisted_created_at:
+                raise ApplicationConflictError("Application created_at cannot be changed.")
+            cursor = connection.execute(
+                """UPDATE job_applications
+                   SET company_id = ?, status = ?, updated_at = ?, version = ?,
+                       submission_claim_operation_id = NULL,
+                       submission_claim_owner_id = NULL
+                   WHERE application_id = ? AND version = ?
+                     AND submission_claim_operation_id = ?
+                     AND submission_claim_owner_id = ?""",
+                (
+                    application.company_id,
+                    application.status.value,
+                    self._timestamp(application.updated_at),
+                    application.version,
+                    application.application_id,
+                    expected_version,
+                    operation_id,
+                    owner_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ApplicationConflictError(
+                    "Application changed while completing submission."
+                )
+            connection.execute(
+                "DELETE FROM application_external_actions WHERE application_id = ?",
+                (application.application_id,),
+            )
+            connection.execute(
+                "DELETE FROM application_timeline WHERE application_id = ?",
+                (application.application_id,),
+            )
+            self._insert_children(application)
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
 
     def clear(self) -> None:
         """Delete every application; foreign-key cascades delete its history."""
@@ -234,7 +431,10 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 company_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN
                 ('saved','applied','interview','offer','rejected','withdrawn')),
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                version INTEGER NOT NULL CHECK(version > 0), serialization_version INTEGER NOT NULL,
+                version INTEGER NOT NULL CHECK(version > 0),
+                serialization_version INTEGER NOT NULL,
+                submission_claim_operation_id TEXT,
+                submission_claim_owner_id TEXT,
                 UNIQUE(user_id, job_id)
             );
             CREATE INDEX IF NOT EXISTS idx_applications_user_status
@@ -256,6 +456,33 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             );
             """
         )
+        application_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(job_applications)"
+            ).fetchall()
+        }
+        if "submission_claim_operation_id" not in application_columns:
+            connection.execute(
+                "ALTER TABLE job_applications "
+                "ADD COLUMN submission_claim_operation_id TEXT"
+            )
+        if "submission_claim_owner_id" not in application_columns:
+            connection.execute(
+                "ALTER TABLE job_applications "
+                "ADD COLUMN submission_claim_owner_id TEXT"
+            )
+            connection.execute(
+                """UPDATE job_applications
+                   SET submission_claim_owner_id = submission_claim_operation_id
+                   WHERE submission_claim_operation_id IS NOT NULL"""
+            )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_application_submission_claim
+               ON job_applications(submission_claim_operation_id)
+               WHERE submission_claim_operation_id IS NOT NULL"""
+        )
+
         columns = {
             row[1]
             for row in connection.execute(

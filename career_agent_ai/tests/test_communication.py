@@ -606,3 +606,47 @@ def test_concurrent_conflicting_message_saves_reject_the_loser(tmp_path, conflic
     errors = [result for result in results if isinstance(result, ValueError)]
     assert len(errors) == 1
     assert "different message content" in str(errors[0]) or "direction" in str(errors[0])
+
+
+def test_no_delivery_reconciliation_restores_outbound_message_before_retry():
+    database = SQLiteDatabase()
+    service, repository, operations, provider = stack(database)
+    original = message()
+    repository.save(original)
+    operations.create(
+        ExternalActionOperation(
+            "send:reconcile",
+            "communication.send",
+            {"message_id": original.message_id},
+        )
+    )
+    operations.transition(
+        "send:reconcile",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    repository.claim_delivery(original.message_id, "send:reconcile")
+    repository.save(replace(original, direction=MessageDirection.OUTBOUND))
+    operations.transition(
+        "send:reconcile",
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.RECONCILIATION_REQUIRED,
+        error="provider outcome unknown",
+    )
+
+    reopened = service.resolve_reconciliation(
+        "send:reconcile",
+        delivered=False,
+    )
+
+    assert reopened.status == ExternalActionStatus.PREPARED
+    assert repository.get(original.message_id).direction == MessageDirection.DRAFT
+
+    delivered = service.send(
+        "send:reconcile",
+        original.message_id,
+        human_approved=True,
+    )
+    assert delivered is not None
+    assert delivered.direction == MessageDirection.OUTBOUND
+    assert provider.calls.count(("send", "send:reconcile")) == 1

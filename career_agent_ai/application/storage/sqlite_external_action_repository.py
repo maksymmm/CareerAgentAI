@@ -128,6 +128,38 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             raise OperationConflictError("Operation disappeared after transition.")
         return operation
 
+    def replace_succeeded_result(
+        self,
+        operation_id: str,
+        result: Mapping[str, Any],
+    ) -> ExternalActionOperation:
+        """Atomically replace the durable result of a succeeded operation."""
+        if not isinstance(result, Mapping):
+            raise TypeError("result must be a mapping.")
+        result_json = self._dump(result)
+        cursor = self._database.connection.execute(
+            """
+            UPDATE external_action_operations
+            SET result_json = ?, updated_at = ?
+            WHERE operation_id = ? AND status = ?
+            """,
+            (
+                result_json,
+                datetime.now(timezone.utc).isoformat(),
+                operation_id,
+                ExternalActionStatus.SUCCEEDED.value,
+            ),
+        )
+        self._database.connection.commit()
+        if cursor.rowcount != 1:
+            raise OperationConflictError(
+                "Operation is missing or is not in succeeded status."
+            )
+        operation = self.get(operation_id)
+        if operation is None:
+            raise OperationConflictError("Operation disappeared after result update.")
+        return operation
+
     def _create_schema(self) -> None:
         connection = self._database.connection
         connection.execute(
@@ -183,6 +215,9 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             (ExternalActionStatus.IN_PROGRESS, ExternalActionStatus.SUCCEEDED),
             (ExternalActionStatus.IN_PROGRESS, ExternalActionStatus.FAILED),
             (ExternalActionStatus.IN_PROGRESS, ExternalActionStatus.RECONCILIATION_REQUIRED),
+            (ExternalActionStatus.RECONCILIATION_REQUIRED, ExternalActionStatus.SUCCEEDED),
+            (ExternalActionStatus.RECONCILIATION_REQUIRED, ExternalActionStatus.PREPARED),
+            (ExternalActionStatus.FAILED, ExternalActionStatus.PREPARED),
         }
         if (expected, status) not in allowed:
             raise ValueError(f"Invalid external-action transition: {expected} -> {status}.")

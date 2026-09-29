@@ -873,3 +873,126 @@ def test_malformed_persisted_epoch_index_is_rejected():
 
     with pytest.raises(ValueError, match="malformed"):
         repository.get("event-1")
+
+
+def _persist_ambiguous_completed_accept(
+    service: SchedulingService,
+    repository: SQLiteSchedulingRepository,
+    operations: SQLiteExternalActionOperationRepository,
+    *,
+    provider_event_id: str | None,
+) -> None:
+    service.add_event(event())
+    with pytest.raises(PermissionError):
+        service.accept("accept:reconcile", "event-1", human_approved=False)
+    operation = operations.get("accept:reconcile")
+    assert operation is not None
+    operations.transition(
+        "accept:reconcile",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    claimed = repository.claim_action(
+        "event-1",
+        "accept:reconcile",
+        (ScheduleStatus.PROPOSED, ScheduleStatus.RESCHEDULE_REQUESTED),
+        expected_version=1,
+        reservation_start=BASE_START,
+        reservation_end=BASE_START + timedelta(hours=1),
+        enforce_conflicts=True,
+    )
+    completed = claimed.transition(
+        ScheduleStatus.ACCEPTED,
+        provider_event_id=provider_event_id,
+    )
+    repository.complete_action(
+        completed,
+        "accept:reconcile",
+        expected_version=claimed.version,
+    )
+    operations.transition(
+        "accept:reconcile",
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.RECONCILIATION_REQUIRED,
+        error="provider outcome unknown after local event persistence",
+    )
+
+
+def test_calendar_no_effect_reconciliation_refuses_reopen_after_local_completion():
+    database = SQLiteDatabase()
+    service, repository, operations, _ = stack(database)
+    _persist_ambiguous_completed_accept(
+        service,
+        repository,
+        operations,
+        provider_event_id=None,
+    )
+
+    with pytest.raises(ValueError, match="Prepared scheduling intent"):
+        service.resolve_reconciliation(
+            "accept:reconcile",
+            completed=False,
+        )
+
+    assert (
+        operations.get("accept:reconcile").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+    assert repository.get("event-1").status == ScheduleStatus.ACCEPTED
+
+
+def test_calendar_completed_reconciliation_persists_opaque_provider_id():
+    database = SQLiteDatabase()
+    service, repository, operations, _ = stack(database)
+    _persist_ambiguous_completed_accept(
+        service,
+        repository,
+        operations,
+        provider_event_id=None,
+    )
+    opaque_id = "provider/event id = 42/segment"
+
+    resolved = service.resolve_reconciliation(
+        "accept:reconcile",
+        completed=True,
+        provider_event_id=opaque_id,
+    )
+
+    assert resolved.status == ExternalActionStatus.SUCCEEDED
+    persisted = repository.get("event-1")
+    assert persisted is not None
+    assert persisted.provider_event_id == opaque_id
+    assert resolved.result["provider_event_id"] == opaque_id
+
+
+def test_succeeded_calendar_reconciliation_replay_enriches_missing_provider_id():
+    database = SQLiteDatabase()
+    service, repository, operations, _ = stack(database)
+    _persist_ambiguous_completed_accept(
+        service,
+        repository,
+        operations,
+        provider_event_id=None,
+    )
+
+    first = service.resolve_reconciliation(
+        "accept:reconcile",
+        completed=True,
+        provider_event_id=None,
+    )
+    assert first.status == ExternalActionStatus.SUCCEEDED
+    assert first.result["provider_event_id"] is None
+
+    opaque_id = "provider/event id = replay/42"
+    replay = service.resolve_reconciliation(
+        "accept:reconcile",
+        completed=True,
+        provider_event_id=opaque_id,
+    )
+
+    assert replay.status == ExternalActionStatus.SUCCEEDED
+    assert replay.result["provider_event_id"] == opaque_id
+    persisted = repository.get("event-1")
+    assert persisted is not None
+    assert persisted.provider_event_id == opaque_id
+    assert replay.result["event_snapshot"]["provider_event_id"] == opaque_id

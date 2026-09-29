@@ -164,17 +164,48 @@ Next priority: end-to-end autonomous career loop.
 
 ## 7. End-to-end autonomous career loop
 
-Status: **PENDING**
+Status: **COMPLETED**
 
 Goal: connect search -> decision -> resume/application preparation -> approval -> communication -> tracking -> interview coordination.
 
 Acceptance criteria:
-- [ ] Bounded long-running loop.
-- [ ] Durable recovery.
-- [ ] Idempotent external actions.
-- [ ] Clear human-action events.
-- [ ] End-to-end integration tests with fake providers.
-- [ ] No duplicate application/message after restart.
+- [x] Bounded long-running loop.
+- [x] Durable recovery.
+- [x] Idempotent external actions.
+- [x] Clear human-action events.
+- [x] End-to-end integration tests with fake providers.
+- [x] No duplicate application/message after restart.
+
+Delivered: a bounded durable state machine connects ranked search, deterministic
+career decision progression, resume preparation, application preparation, explicit
+human approval, crash-safe application submission, optional outbound communication,
+application tracking, and interview coordination. Active loop state uses versioned
+strict JSON in SQLite and can recover both human-gated states and already-approved
+nonterminal phases after restart. Application submission has its own provider-neutral
+adapter and no-I/O fake, executes through the existing external-action coordinator,
+and uses the stable application identity for idempotency rather than a transient run
+ID. Existing communication and scheduling services retain their own crash-safe
+idempotency and reconciliation contracts. Human-action events expose the precise
+decision being requested, including the exact typed application artifact and its
+SHA-256 digest before submission plus exact interview employer/location/local time.
+The approved application artifact is persisted in restart-safe loop state and copied
+into the crash-safe external-action intent so provider execution is cryptographically
+bound to the content the human saw. Interview coordination requires candidate
+ownership and compatible application linkage. End-to-end fake-provider tests exercise
+process restarts and verify that tracked applications and outbound messages are not
+duplicated. A later run is prevented from resubmitting a user/job application that has
+already progressed beyond draft.
+Durable execution leases are heartbeat-renewed during long-running steps so a second
+worker cannot reclaim an active run mid-provider-call. Snapshot persistence failures
+after already-completed external actions remain resumable, and ambiguous application
+submission outcomes enter an explicit reconciliation gate. Provider-verified success
+is finalized without another submit call; provider-verified no-effect outcomes reopen
+the same stable idempotency operation for a deliberate retry.
+The same explicit reconciliation pattern covers ambiguous recruiter-message delivery
+and interview/calendar responses, preventing uncertain external effects from becoming
+terminal loop failures.
+
+Next priority: production hardening.
 
 ## 8. Production hardening
 
