@@ -66,6 +66,7 @@ class RuntimeConfig:
             path = Path(database_path).expanduser()
             if path.exists() and path.is_dir():
                 raise ValueError("CAREER_AGENT_DB_PATH must reference a file, not a directory.")
+            database_path = str(path)
 
         return cls(
             environment=environment,
