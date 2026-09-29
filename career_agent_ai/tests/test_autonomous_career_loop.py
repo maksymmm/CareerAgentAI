@@ -2058,3 +2058,137 @@ def test_submission_terminal_success_write_failure_enters_reconciliation(
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
     database.close()
+
+
+def test_definite_pre_delivery_message_failure_is_recoverable(tmp_path):
+    path = str(tmp_path / "message-definite-retry.sqlite")
+    run_id = "message-definite-retry"
+    database, loop, _, _, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    assert loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    ).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    communication_provider.failure = RuntimeError("provider unavailable before delivery")
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.MESSAGE_SEND
+    assert partial.completed is False
+    assert "retried deliberately" in (partial.error or "")
+
+    communication_provider.failure = None
+    completed = loop.continue_run(run_id)
+
+    assert completed.completed is True
+    assert communication_provider.calls.count(("send", f"{run_id}:message-send")) == 2
+    database.close()
+
+
+def test_definite_pre_calendar_failure_is_recoverable(tmp_path):
+    path = str(tmp_path / "calendar-definite-retry.sqlite")
+    run_id = "calendar-definite-retry"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    calendar_provider.failure = RuntimeError("calendar unavailable before response")
+    partial = loop.resume(run_id, approved=True)
+
+    assert partial.phase == CareerLoopPhase.INTERVIEW_ACCEPT
+    assert partial.completed is False
+    assert "retried deliberately" in (partial.error or "")
+
+    calendar_provider.failure = None
+    completed = loop.continue_run(run_id)
+
+    assert completed.completed is True
+    assert calendar_provider.calls.count(
+        ("accept", f"{run_id}:interview-accept")
+    ) == 2
+    database.close()
+
+
+def test_approved_interview_already_accepted_completes_without_duplicate(tmp_path):
+    path = str(tmp_path / "interview-already-accepted.sqlite")
+    run_id = "interview-already-accepted"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    gate = loop.resume(run_id, approved=True)
+    assert gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    externally_accepted = scheduling.accept(
+        "external:accept",
+        "interview-1",
+        human_approved=True,
+    )
+    assert externally_accepted is not None
+    assert externally_accepted.status == ScheduleStatus.ACCEPTED
+    assert calendar_provider.calls == [("accept", "external:accept")]
+
+    completed = loop.resume(run_id, approved=True)
+
+    assert completed.completed is True
+    assert calendar_provider.calls == [("accept", "external:accept")]
+    database.close()
+
+
+def test_reconciliation_resolution_respects_execution_lease(tmp_path, monkeypatch):
+    path = str(tmp_path / "reconciliation-lease.sqlite")
+    run_id = "reconciliation-lease"
+    database, loop, _, messages, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    )
+    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    def ambiguous_send(*args, **kwargs):
+        raise RuntimeError("unknown provider outcome")
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_send)
+    ambiguous = loop.resume(run_id, approved=True)
+    assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+
+    state = loop._states.get(run_id)
+    assert state is not None
+    loop._states.claim_execution(
+        run_id,
+        "competing-resolver",
+        expected_version=state.version,
+        lease_seconds=60,
+    )
+    try:
+        with pytest.raises(CareerLoopConflictError):
+            loop.resolve_message_reconciliation(run_id, delivered=True)
+        persisted = loop.get(run_id)
+        assert persisted.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+        assert messages.get(f"{run_id}:message").direction.value == "draft"
+    finally:
+        loop._states.release_execution(run_id, "competing-resolver")
+
+    completed = loop.resolve_message_reconciliation(run_id, delivered=True)
+    assert completed.completed is True
+    database.close()
