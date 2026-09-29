@@ -850,6 +850,12 @@ class AutonomousCareerLoop:
                 "Approved message intent is stale; refusing external send."
             )
         operation_id = f"{state.run_id}:message-send"
+        durable_before_send = self._communication.get_operation(operation_id)
+        if (
+            durable_before_send is not None
+            and durable_before_send.status == ExternalActionStatus.FAILED
+        ):
+            self._communication.reopen_failed_send(operation_id, state.message_id)
         delivered = self._communication.send(
             operation_id,
             state.message_id,
