@@ -15,8 +15,18 @@ _correlation_id: ContextVar[str | None] = ContextVar("career_agent_correlation_i
 _SENSITIVE_TOKENS = ("password", "secret", "token", "api_key", "apikey", "authorization", "cookie")
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(password|secret|token|api[_-]?key|apikey|authorization|cookie)"
-    r"\b\s*[:=]\s*[^,;\r\n]+"
+    r"""(?ix)
+    (
+        ["']?
+        [a-z0-9_-]*
+        (?:password|secret|token|api[_-]?key|apikey|authorization|cookie)
+        [a-z0-9_-]*
+        ["']?
+        \s*[:=]\s*
+        ["']?
+    )
+    [^"'\s,;}]*
+    """
 )
 
 
@@ -105,7 +115,7 @@ def redact_text(value: str) -> str:
     sanitized = value.replace("\\r", "\\\\r").replace("\\n", "\\\\n")
     sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", sanitized)
     sanitized = _SENSITIVE_ASSIGNMENT_PATTERN.sub(
-        lambda match: f"{match.group(1)}=[REDACTED]",
+        lambda match: f"{match.group(1)}[REDACTED]",
         sanitized,
     )
     return sanitized[:2_000]
