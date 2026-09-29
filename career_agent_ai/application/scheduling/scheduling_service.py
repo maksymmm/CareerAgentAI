@@ -525,6 +525,9 @@ class SchedulingService:
         existing = self._external_actions.get(operation_id)
         if existing is not None:
             self._validate_existing_operation(existing.action_type, existing.payload, "calendar.accept", event_id)
+            if existing.status == ExternalActionStatus.FAILED and human_approved:
+                self._validate_prepared_source(event, existing.payload)
+                self._external_actions.reopen_failed(operation_id)
             return self._execute(operation_id, human_approved)
         if event.status not in {
             ScheduleStatus.PROPOSED,
@@ -555,6 +558,9 @@ class SchedulingService:
         existing = self._external_actions.get(operation_id)
         if existing is not None:
             self._validate_existing_operation(existing.action_type, existing.payload, "calendar.decline", event_id)
+            if existing.status == ExternalActionStatus.FAILED and human_approved:
+                self._validate_prepared_source(event, existing.payload)
+                self._external_actions.reopen_failed(operation_id)
             return self._execute(operation_id, human_approved)
         if event.status not in {
             ScheduleStatus.PROPOSED,
@@ -601,6 +607,9 @@ class SchedulingService:
                 target_end=target_end,
                 target_timezone=target_timezone,
             )
+            if existing.status == ExternalActionStatus.FAILED and human_approved:
+                self._validate_prepared_source(event, existing.payload)
+                self._external_actions.reopen_failed(operation_id)
             return self._execute(operation_id, human_approved)
         if event.status not in {
             ScheduleStatus.PROPOSED,
