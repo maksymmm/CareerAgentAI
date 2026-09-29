@@ -324,7 +324,10 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
     assert submission_provider.calls == []
     assert communication_provider.calls == []
-    assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
+    tracked = applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))
+    assert len(tracked) == 1
+    assert tracked[0].status == JobApplicationStatus.INTERVIEW
+    assert tracked[0].timeline[-1].to_status == JobApplicationStatus.INTERVIEW
     assert messages.get(f"{run_id}:message").direction.value == "outbound"
 
     snapshot = loop.get(run_id)
@@ -776,12 +779,16 @@ def test_post_action_crash_after_interview_accept_replays_without_duplicate(tmp_
     database.close()
 
     second = build_stack(path)
-    database, loop, _, _, scheduling, _, _, calendar_provider = second
+    database, loop, applications, _, scheduling, _, _, calendar_provider = second
     recovered = loop.continue_run(run_id)
 
     assert recovered.completed is True
     assert calendar_provider.calls == []
     assert scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.INTERVIEW
+    assert tracked.timeline[-1].to_status == JobApplicationStatus.INTERVIEW
     database.close()
 
 
