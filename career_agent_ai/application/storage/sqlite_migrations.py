@@ -82,8 +82,8 @@ class SQLiteMigrationRunner:
                 raise PermissionError(
                     f"destructive migration {migration.version} requires explicit approval."
                 )
-            self._apply_one(migration)
-            applied.append(migration.version)
+            if self._apply_one(migration):
+                applied.append(migration.version)
         return tuple(applied)
 
     def applied_versions(self) -> tuple[int, ...]:
@@ -113,10 +113,27 @@ class SQLiteMigrationRunner:
         ).fetchone()
         return None if row is None else (str(row[0]), str(row[1]))
 
-    def _apply_one(self, migration: SQLiteMigration) -> None:
+    def _apply_one(self, migration: SQLiteMigration) -> bool:
+        """Apply one migration while holding the SQLite writer lock.
+
+        The registry is re-read after BEGIN IMMEDIATE so concurrent deployment
+        processes converge on one exactly-once application.
+        """
         connection = self._database.connection
         try:
             connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT name, checksum FROM schema_migrations WHERE version = ?",
+                (migration.version,),
+            ).fetchone()
+            if row is not None:
+                name, checksum = str(row[0]), str(row[1])
+                if name != migration.name or checksum != migration.checksum:
+                    raise ValueError(
+                        f"migration {migration.version} differs from the applied migration."
+                    )
+                connection.commit()
+                return False
             for statement in migration.statements:
                 connection.execute(statement)
             connection.execute(
@@ -132,6 +149,7 @@ class SQLiteMigrationRunner:
                 ),
             )
             connection.commit()
+            return True
         except Exception:
             if connection.in_transaction:
                 connection.rollback()
