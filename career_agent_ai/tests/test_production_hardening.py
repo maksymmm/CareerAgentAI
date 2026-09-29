@@ -72,6 +72,14 @@ def test_runtime_config_defaults_are_safe():
     assert config.allow_consequential_actions is False
 
 
+
+def test_runtime_config_expands_home_relative_database_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    config = RuntimeConfig.from_env({"CAREER_AGENT_DB_PATH": "~/career.sqlite"})
+
+    assert config.database_path == str(tmp_path / "career.sqlite")
+
 def test_runtime_config_production_requires_durable_database():
     with pytest.raises(ValueError, match="durable"):
         RuntimeConfig.from_env({"CAREER_AGENT_ENV": "production"})
@@ -143,12 +151,20 @@ def test_redaction_bounds_untrusted_log_values():
         {
             "body": "x" * 5000,
             "authorization_header": "Bearer top-secret",
+            "diagnostic": (
+                '{"api_key":"very-secret-value"} '
+                "client_secret=client-value access_token=access-value"
+            ),
             "items": list(range(150)),
         }
     )
 
     assert len(result["body"]) == 2000
     assert result["authorization_header"] == "[REDACTED]"
+    assert "very-secret-value" not in result["diagnostic"]
+    assert "client-value" not in result["diagnostic"]
+    assert "access-value" not in result["diagnostic"]
+    assert result["diagnostic"].count("[REDACTED]") == 3
     assert len(result["items"]) == 100
 
 
@@ -587,6 +603,30 @@ def test_operational_api_is_authenticated_read_only_and_openapi_matches():
     assert "/healthz" in spec["paths"]
     assert "/v1/operational/issues" in spec["paths"]
 
+
+
+def test_operational_wsgi_non_ascii_request_token_is_unauthorized():
+    service = OperationalApiService(
+        SQLiteOperationalProbe(SQLiteDatabase()),
+        clock=lambda: NOW,
+    )
+    app = OperationalWSGIApp(service, bearer_token="a" * 40)
+
+    meta, body = _wsgi_call(
+        app,
+        "/v1/operational/issues",
+        token="ä" * 40,
+    )
+
+    assert meta["status"] == "401 Unauthorized"
+    assert body["error"] == "unauthorized"
+
+
+def test_operational_wsgi_rejects_non_ascii_configured_token():
+    service = OperationalApiService(SQLiteOperationalProbe(SQLiteDatabase()))
+
+    with pytest.raises(ValueError, match="ASCII"):
+        OperationalWSGIApp(service, bearer_token="ä" * 40)
 
 @pytest.mark.parametrize(
     "path,query,method,expected",
