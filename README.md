@@ -268,6 +268,31 @@ duplicate applications or messages.
 
 ---
 
+## Production Hardening
+
+Production runtime behavior is now explicit rather than implicit. `RuntimeConfig` validates
+environment, durable database path, logging level, network-provider permission, and
+consequential-action permission from `CAREER_AGENT_*` environment variables. Safe
+defaults keep network providers and consequential external actions disabled.
+
+Operational logs can be emitted as compact JSON with a correlation ID propagated
+through `correlation_scope()`. Structured fields use bounded JSON-safe serialization
+and redact credential-like keys before formatting.
+
+`SQLiteOperationalProbe` provides a read-only view of failed, ambiguous, and stale
+external actions plus failed or non-human-gated stuck autonomous loops. A minimal WSGI
+adapter exposes public liveness at `GET /healthz` and bearer-authenticated operational
+issues at `GET /v1/operational/issues`. `openapi_document()` publishes the matching
+OpenAPI 3.1 contract. The operational endpoint is read-only and returns `no-store`
+responses.
+
+Coordinated schema changes use `SQLiteMigrationRunner`. Migration versions are
+ordered, transactionally applied, and recorded with immutable SHA-256 checksums.
+Destructive migrations fail closed unless the caller explicitly opts in. Deployment,
+migration, rollback, and security-review guidance lives under `docs/operations/`.
+
+---
+
 ## Workflow Engine
 
 Responsible for deterministic workflow lifecycle management.
@@ -341,11 +366,13 @@ Implemented foundations:
 - Deterministic signal deduplication and employer intelligence aggregation
 - Restart-safe end-to-end autonomous career loop with explicit human-action events
 - Crash-safe, application-scoped submission idempotency and cross-run duplicate prevention
+- Structured production logging with correlation IDs and secret redaction
+- Validated runtime configuration with safe external-effect defaults
+- Read-only operational observability API with OpenAPI 3.1
+- Versioned checksum-verified SQLite migration runner and deployment/security runbooks
 - Continuous integration workflow
 
-Next architectural steps:
-
-- production hardening
+Roadmap implementation is complete on the integration branch; release/deployment remains an explicit operator decision.
 
 ---
 
