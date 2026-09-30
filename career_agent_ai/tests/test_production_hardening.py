@@ -254,6 +254,21 @@ def test_redaction_bounds_untrusted_log_values():
     assert len(result["items"]) == 100
 
 
+
+def test_redaction_sanitizes_fallback_object_representations():
+    result = redact_mapping(
+        {
+            "provider_error": RuntimeError(
+                "api_key=super-secret Bearer provider-token"
+            )
+        }
+    )
+
+    rendered = result["provider_error"]
+    assert "super-secret" not in rendered
+    assert "provider-token" not in rendered
+    assert rendered.count("[REDACTED]") == 2
+
 @pytest.mark.parametrize("correlation_id", ["", "x" * 201, "bad\nvalue"])
 def test_correlation_scope_rejects_malformed_ids(correlation_id):
     with pytest.raises(ValueError):
@@ -583,6 +598,25 @@ def test_migration_runner_rolls_back_failure_and_requires_destructive_approval()
     assert runner.apply((destructive,), allow_destructive=True) == (2,)
 
 
+
+
+def test_migration_runner_rejects_truthy_non_boolean_destructive_approval():
+    database = SQLiteDatabase()
+    runner = SQLiteMigrationRunner(database)
+    destructive = SQLiteMigration(
+        version=1,
+        name="destructive_guard",
+        statements=("CREATE TABLE destructive_guard(id TEXT PRIMARY KEY)",),
+        destructive=True,
+    )
+
+    with pytest.raises(TypeError, match="allow_destructive must be a boolean"):
+        runner.apply((destructive,), allow_destructive="false")
+
+    assert runner.applied_versions() == ()
+    assert database.connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='destructive_guard'"
+    ).fetchone() is None
 
 def test_migration_runner_converges_under_concurrent_deployers(tmp_path):
     path = str(tmp_path / "migration-race.sqlite")
