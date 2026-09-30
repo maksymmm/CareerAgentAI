@@ -143,4 +143,4 @@ def _safe_value(value: Any) -> Any:
         return redact_mapping(value)
     if isinstance(value, (tuple, list)):
         return [_safe_value(item) for item in value[:100]]
-    return str(value)[:2_000]
+    return redact_text(str(value))
