@@ -64,6 +64,8 @@ class SQLiteMigrationRunner:
         migrations require an explicit caller opt-in so production automation cannot
         silently cross a destructive schema boundary.
         """
+        if not isinstance(allow_destructive, bool):
+            raise TypeError("allow_destructive must be a boolean.")
         ordered = tuple(migrations)
         versions = [migration.version for migration in ordered]
         if versions != sorted(versions) or len(set(versions)) != len(versions):
@@ -78,7 +80,7 @@ class SQLiteMigrationRunner:
                         f"migration {migration.version} differs from the applied migration."
                     )
                 continue
-            if migration.destructive and not allow_destructive:
+            if migration.destructive and allow_destructive is not True:
                 raise PermissionError(
                     f"destructive migration {migration.version} requires explicit approval."
                 )
