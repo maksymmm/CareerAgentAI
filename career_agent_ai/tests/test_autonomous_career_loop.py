@@ -1490,7 +1490,7 @@ def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_
         if state.phase == CareerLoopPhase.TRACK and not failed_once["value"]:
             failed_once["value"] = True
             raise sqlite3.OperationalError("temporary state database outage")
-        return original_save(state)
+        return original_save(state, **kwargs)
 
     monkeypatch.setattr(loop._states, "save", fail_once_after_send)
     partial = loop.resume(run_id, approved=True)
@@ -1599,7 +1599,7 @@ def test_post_interview_accept_snapshot_failure_replays_without_duplicate_calend
         if state.phase == CareerLoopPhase.COMPLETE and not failed_once["value"]:
             failed_once["value"] = True
             raise sqlite3.OperationalError("temporary state database outage")
-        return original_save(state)
+        return original_save(state, **kwargs)
 
     monkeypatch.setattr(loop._states, "save", fail_once_after_accept)
     partial = loop.resume(run_id, approved=True)
@@ -1981,7 +1981,7 @@ def test_application_reconciliation_resolution_survives_snapshot_failure(
         if state.phase == CareerLoopPhase.APPLICATION_SUBMIT and not failed_once["value"]:
             failed_once["value"] = True
             raise sqlite3.OperationalError("snapshot unavailable after reconciliation")
-        return original_save(state)
+        return original_save(state, **kwargs)
 
     monkeypatch.setattr(loop._states, "save", fail_resolution_snapshot_once)
     with pytest.raises(sqlite3.OperationalError):
@@ -2039,7 +2039,7 @@ def test_message_reconciliation_resolution_survives_snapshot_failure(
         if state.phase == CareerLoopPhase.MESSAGE_SEND and not failed_once["value"]:
             failed_once["value"] = True
             raise sqlite3.OperationalError("snapshot unavailable after reconciliation")
-        return original_save(state)
+        return original_save(state, **kwargs)
 
     monkeypatch.setattr(loop._states, "save", fail_resolution_snapshot_once)
     with pytest.raises(sqlite3.OperationalError):
