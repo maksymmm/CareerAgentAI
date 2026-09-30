@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import date, datetime
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -191,17 +194,35 @@ class CareerOrchestrator:
                 stopped_reason = "agent_exception"
                 break
 
+            try:
+                durable_metadata = self._json_safe(
+                    {
+                        **dict(result.metadata),
+                        "decision": decision.action,
+                        "decision_reason": decision.reason,
+                        "decision_confidence": decision.confidence,
+                    }
+                )
+            except (TypeError, ValueError) as exc:
+                step_result = CareerStepResult(
+                    step_id=step.id,
+                    action=step.action,
+                    success=False,
+                    messages=(f"Agent metadata is not durably serializable: {exc}",),
+                    metadata={"exception_type": type(exc).__name__},
+                )
+                state.add_step(step_result)
+                engine.fail_step()
+                self._persist_state(state)
+                stopped_reason = "invalid_agent_metadata"
+                break
+
             step_result = CareerStepResult(
                 step_id=step.id,
                 action=step.action,
                 success=result.success,
                 messages=result.messages,
-                metadata={
-                    **dict(result.metadata),
-                    "decision": decision.action,
-                    "decision_reason": decision.reason,
-                    "decision_confidence": decision.confidence,
-                },
+                metadata=durable_metadata,
             )
             state.add_step(step_result)
 
@@ -282,6 +303,30 @@ class CareerOrchestrator:
                 user_id=user_id,
                 memory_type="career_run",
             )
+        )
+
+    @classmethod
+    def _json_safe(cls, value: Any) -> Any:
+        """Convert supported agent metadata into deterministic JSON-safe values."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Enum):
+            return cls._json_safe(value.value)
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if is_dataclass(value) and not isinstance(value, type):
+            return cls._json_safe(asdict(value))
+        if isinstance(value, Mapping):
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError("Agent metadata mapping keys must be strings.")
+                normalized[key] = cls._json_safe(item)
+            return normalized
+        if isinstance(value, (list, tuple)):
+            return [cls._json_safe(item) for item in value]
+        raise TypeError(
+            f"Unsupported agent metadata type: {type(value).__name__}."
         )
 
     @staticmethod
