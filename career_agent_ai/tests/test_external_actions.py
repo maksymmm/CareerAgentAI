@@ -305,3 +305,46 @@ def test_provider_failure_write_failure_falls_back_to_reconciliation(
     assert result.status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert repository.get("operation-failure-write") == result
     assert len(adapter.calls) == 1
+
+
+def test_failed_terminal_commit_rolls_back_before_reconciliation(tmp_path):
+    class FailSecondCommitConnection:
+        def __init__(self, inner):
+            self._inner = inner
+            self._commits = 0
+            self.rollback_calls = 0
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def commit(self):
+            self._commits += 1
+            if self._commits == 2:
+                raise sqlite3.OperationalError("simulated terminal commit failure")
+            return self._inner.commit()
+
+        def rollback(self):
+            self.rollback_calls += 1
+            return self._inner.rollback()
+
+    path = str(tmp_path / "terminal-commit.sqlite")
+    database = SQLiteDatabase(path)
+    adapter = RecordingAdapter()
+    service, repository = make_service(database, adapter)
+    service.prepare("operation-commit-failure", "application", {"job": "1"})
+
+    wrapped = FailSecondCommitConnection(database.connection)
+    database._connection = wrapped
+    result = service.execute("operation-commit-failure", human_approved=True)
+
+    assert result.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert wrapped.rollback_calls >= 1
+    assert len(adapter.calls) == 1
+    database.close()
+
+    restarted = SQLiteDatabase(path)
+    restarted_repository = SQLiteExternalActionOperationRepository(restarted)
+    durable = restarted_repository.get("operation-commit-failure")
+    assert durable is not None
+    assert durable.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    restarted.close()
