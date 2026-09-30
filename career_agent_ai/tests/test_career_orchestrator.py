@@ -8,6 +8,7 @@ from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.agents.agent_result import AgentResult
 from career_agent_ai.application.career.career_orchestrator import CareerOrchestrator
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
+from career_agent_ai.application.memory.memory_record import MemoryRecord
 from career_agent_ai.application.storage.sqlite_career_run_repository import (
     SQLiteCareerRunRepository,
 )
@@ -159,7 +160,45 @@ def test_run_persists_summary_in_memory():
     assert record is not None
     assert record.value["run_id"] == result.run_id
     assert record.value["success"] is True
+    assert record.user_id == "user-1"
+    assert record.memory_type == "career_run"
 
+
+
+def test_agent_context_memory_snapshot_is_scoped_to_run_user():
+    memory = MemoryEngine()
+    memory.save(
+        MemoryRecord(
+            key="user-1:private",
+            value="one",
+            user_id="user-1",
+            memory_type="note",
+        )
+    )
+    memory.save(
+        MemoryRecord(
+            key="user-2:private",
+            value="two",
+            user_id="user-2",
+            memory_type="note",
+        )
+    )
+    search_agent = FakeAgent("job_search")
+    registry = AgentRegistry()
+    registry.register(search_agent)
+    orchestrator = CareerOrchestrator(
+        memory_engine=memory,
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+    )
+
+    result = orchestrator.run("user-2", "Find a job")
+
+    assert result.success is True
+    snapshot = search_agent.last_context.memory_snapshot
+    assert snapshot.size() == 1
+    assert snapshot.get("user-2:private") == "two"
+    assert snapshot.contains("user-1:private") is False
 
 def test_human_gated_run_can_be_resumed():
     application = FakeAgent(
@@ -257,6 +296,45 @@ def test_invalid_max_steps_is_rejected():
     with pytest.raises(ValueError):
         make_orchestrator(max_steps=0)
 
+
+
+def test_resume_persists_approval_before_next_agent_execution(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "resume-boundary.sqlite"))
+    repository = SQLiteCareerRunRepository(database)
+    gated_application = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    crash_after_approval = FakeAgent("resume", error=SystemExit("simulated process death"))
+    registry = AgentRegistry()
+    registry.register(gated_application)
+    registry.register(crash_after_approval)
+    orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+    paused = orchestrator.run(
+        "user-1",
+        "Apply to selected job",
+        {"actions": ["job_application", "resume"]},
+    )
+
+    with pytest.raises(SystemExit, match="simulated process death"):
+        orchestrator.resume(paused.run_id, human_result={"approved": True})
+
+    durable = repository.get(paused.run_id)
+    assert durable is not None
+    assert durable.payload["human_result"] == {"approved": True}
+    assert durable.workflow_engine.workflow is not None
+    assert durable.workflow_engine.workflow.status == WorkflowState.RUNNING
+    assert durable.workflow_engine.workflow.current_step == 1
+    database.close()
 
 def test_paused_run_survives_process_restart(tmp_path):
     database_path = str(tmp_path / "career-runs.sqlite")
