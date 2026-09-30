@@ -844,6 +844,36 @@ def test_post_action_crash_after_message_send_replays_without_duplicate(tmp_path
     database.close()
 
 
+
+def test_preaccepted_interview_updates_application_lifecycle(tmp_path):
+    path = str(tmp_path / "preaccepted-interview.sqlite")
+    run_id = "preaccepted-interview"
+    database, loop, applications, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    accepted = scheduling.accept(
+        "external-interview-accept",
+        "interview-1",
+        human_approved=True,
+    )
+    assert accepted is not None
+    assert accepted.status == ScheduleStatus.ACCEPTED
+    calls_before_loop = list(calendar_provider.calls)
+
+    started = loop.start(request(), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    message_gate = loop.resume(run_id, approved=True)
+    assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    completed = loop.resume(run_id, approved=True)
+
+    assert completed.completed is True
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.INTERVIEW
+    assert tracked.timeline[-1].to_status == JobApplicationStatus.INTERVIEW
+    assert calendar_provider.calls == calls_before_loop
+    database.close()
+
 def test_post_action_crash_after_interview_accept_replays_without_duplicate(tmp_path):
     path = str(tmp_path / "post-interview-crash.sqlite")
     run_id = "post-interview-crash"
