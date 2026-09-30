@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from career_agent_ai.application.agents.agent import Agent
@@ -7,6 +9,7 @@ from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.agents.agent_result import AgentResult
 from career_agent_ai.application.career.career_orchestrator import CareerOrchestrator
+from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
 from career_agent_ai.application.memory.memory_record import MemoryRecord
 from career_agent_ai.application.storage.sqlite_career_run_repository import (
@@ -403,4 +406,85 @@ def test_sqlite_run_repository_rejects_empty_run_id():
     with pytest.raises(ValueError, match="run_id"):
         repository.delete("   ")
 
+    database.close()
+
+
+def test_durable_run_normalizes_dataclass_agent_metadata(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "metadata-normalization.sqlite"))
+    repository = SQLiteCareerRunRepository(database)
+    job = Job(
+        job_id="job-1",
+        title="Python Developer",
+        company="Acme GmbH",
+        location="Karlsruhe",
+        salary=None,
+        employment_type="full_time",
+        source="test",
+        user_id="user-1",
+        url="https://example.test/jobs/1",
+        description="Role",
+        created_at=datetime(2026, 9, 30, 8, 15, tzinfo=timezone.utc),
+    )
+    agent = FakeAgent(
+        "job_search",
+        result=AgentResult(
+            success=True,
+            agent_id="job_search",
+            metadata={"jobs": (job,), "count": 1},
+        ),
+    )
+    registry = AgentRegistry()
+    registry.register(agent)
+    orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+
+    result = orchestrator.run(
+        "user-1",
+        "Find a job",
+        {"actions": ["job_search"]},
+    )
+
+    assert result.success is True
+    jobs = result.steps[0].metadata["jobs"]
+    assert isinstance(jobs, list)
+    assert jobs[0]["job_id"] == "job-1"
+    assert jobs[0]["created_at"] == "2026-09-30T08:15:00+00:00"
+    assert repository.get(result.run_id) is None
+    database.close()
+
+
+def test_unsupported_agent_metadata_fails_cleanly_without_breaking_checkpoint(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "metadata-invalid.sqlite"))
+    repository = SQLiteCareerRunRepository(database)
+    agent = FakeAgent(
+        "job_search",
+        result=AgentResult(
+            success=True,
+            agent_id="job_search",
+            metadata={"unsupported": object()},
+        ),
+    )
+    registry = AgentRegistry()
+    registry.register(agent)
+    orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+
+    result = orchestrator.run(
+        "user-1",
+        "Find a job",
+        {"actions": ["job_search"]},
+    )
+
+    assert result.success is False
+    assert result.stopped_reason == "invalid_agent_metadata"
+    assert result.steps[0].success is False
+    assert "not durably serializable" in result.steps[0].messages[0]
     database.close()
