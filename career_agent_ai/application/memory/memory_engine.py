@@ -74,20 +74,16 @@ class MemoryEngine:
             state=self._state.value,
         )
 
-    def load_snapshot(self) -> MemorySnapshot:
-        """
-        Returns an immutable snapshot.
-        """
+    def load_snapshot(self, *, user_id: str | None = None) -> MemorySnapshot:
+        """Return an immutable snapshot optionally scoped to one user."""
         return MemorySnapshot(
             records={
                 key: record.value
-                for record in self._repository.find()
+                for record in self._repository.find(user_id=user_id)
                 for key in (record.key,)
             }
         )
 
-    def snapshot(self) -> MemorySnapshot:
-        """
-        Alias for load_snapshot().
-        """
-        return self.load_snapshot()
+    def snapshot(self, *, user_id: str | None = None) -> MemorySnapshot:
+        """Alias for load_snapshot with the same optional user scope."""
+        return self.load_snapshot(user_id=user_id)
