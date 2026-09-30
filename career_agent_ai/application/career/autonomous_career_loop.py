@@ -954,6 +954,7 @@ class AutonomousCareerLoop:
         if event.application_id is not None and event.application_id != state.application_id:
             raise RuntimeError("Interview event is linked to a different application.")
         if event.status == ScheduleStatus.ACCEPTED:
+            self._record_interview_status(state, event_id)
             state.phase = CareerLoopPhase.COMPLETE
             return
         if event.status not in {
