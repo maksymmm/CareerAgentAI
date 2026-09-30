@@ -123,10 +123,22 @@ class OperationalWSGIApp:
                     stale = int(values[0])
                 except (TypeError, ValueError) as exc:
                     raise ValueError("stale_after_seconds must be an integer.") from exc
+                if stale < 1 or stale > 604_800:
+                    raise ValueError(
+                        "stale_after_seconds must be between 1 and 604800."
+                    )
+                try:
+                    payload = self._service.issues(stale_after_seconds=stale)
+                except Exception:
+                    return self._respond(
+                        start_response,
+                        "500 Internal Server Error",
+                        {"error": "internal_error"},
+                    )
                 return self._respond(
                     start_response,
                     "200 OK",
-                    self._service.issues(stale_after_seconds=stale),
+                    payload,
                 )
             return self._respond(
                 start_response,
