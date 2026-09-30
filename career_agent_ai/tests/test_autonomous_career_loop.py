@@ -191,32 +191,6 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
     )
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"sender": "candidate@example.test", "recipient": ""},
-        {"sender": "", "recipient": "recruiter@example.test"},
-        {
-            "sender": "candidate@example.test",
-            "recipient": "recruiter@example.test",
-            "message_subject": "",
-        },
-        {
-            "sender": "candidate@example.test",
-            "recipient": "recruiter@example.test",
-            "message_body": "",
-        },
-        {
-            "sender": "candidate name@example.test",
-            "recipient": "recruiter@example.test",
-        },
-        {
-            "sender": "candidate@example.test",
-            "recipient": "r" * 201,
-        },
-    ],
-)
-
 def test_post_effect_recovery_remains_resumable_after_iteration_budget(tmp_path, monkeypatch):
     path = str(tmp_path / "post-effect-recovery.sqlite")
     database, loop, *_ = build_stack(path, with_schedule=False, max_iterations=1)
@@ -254,6 +228,32 @@ def test_post_effect_recovery_remains_resumable_after_iteration_budget(tmp_path,
     assert second.iterations == 3
     assert calls == 2
     database.close()
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"sender": "candidate@example.test", "recipient": ""},
+        {"sender": "", "recipient": "recruiter@example.test"},
+        {
+            "sender": "candidate@example.test",
+            "recipient": "recruiter@example.test",
+            "message_subject": "",
+        },
+        {
+            "sender": "candidate@example.test",
+            "recipient": "recruiter@example.test",
+            "message_body": "",
+        },
+        {
+            "sender": "candidate name@example.test",
+            "recipient": "recruiter@example.test",
+        },
+        {
+            "sender": "candidate@example.test",
+            "recipient": "r" * 201,
+        },
+    ],
+)
 
 def test_request_rejects_incomplete_enabled_messaging_before_run(changes):
     values = {
