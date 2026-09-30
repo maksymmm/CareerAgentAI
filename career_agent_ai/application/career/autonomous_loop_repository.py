@@ -14,11 +14,15 @@ class CareerLoopConflictError(RuntimeError):
 class CareerLoopRepository(Protocol):
     """Store and restore active or terminal end-to-end career-loop snapshots."""
 
-    def save(self, state: CareerLoopState) -> None:
+    def save(
+        self, state: CareerLoopState, *, expected_owner_id: str | None = None
+    ) -> None:
         """Create or compare-and-swap one durable state snapshot.
 
-        Implementations advance the state's version only after a successful write and
-        raise CareerLoopConflictError when a stale snapshot loses the race.
+        When expected_owner_id is provided, the write must still be owned by that
+        execution lease. Unowned writes must not overwrite a snapshot currently leased
+        by another worker. Implementations advance the state's version only after a
+        successful write and raise CareerLoopConflictError on stale ownership/version.
         """
 
     def get(self, run_id: str) -> CareerLoopState | None:
