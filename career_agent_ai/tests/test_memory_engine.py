@@ -80,6 +80,32 @@ def test_snapshot():
     assert snapshot.size() == 1
 
 
+
+def test_snapshot_can_be_scoped_to_one_user():
+    engine = MemoryEngine()
+    engine.save(
+        MemoryRecord(
+            key="user-1:note",
+            value="private-one",
+            user_id="user-1",
+            memory_type="note",
+        )
+    )
+    engine.save(
+        MemoryRecord(
+            key="user-2:note",
+            value="private-two",
+            user_id="user-2",
+            memory_type="note",
+        )
+    )
+
+    snapshot = engine.snapshot(user_id="user-2")
+
+    assert snapshot.size() == 1
+    assert snapshot.get("user-2:note") == "private-two"
+    assert snapshot.contains("user-1:note") is False
+
 def test_clear():
     engine = MemoryEngine()
 
