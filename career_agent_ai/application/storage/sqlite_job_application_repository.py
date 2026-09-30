@@ -148,11 +148,16 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             """SELECT a.application_id, a.user_id, a.job_id, a.company_id,
                       a.status, a.created_at, a.updated_at, a.version,
                       a.serialization_version
-               FROM job_applications a""" + join + where
-            + " ORDER BY julianday(a.created_at), a.application_id",
+               FROM job_applications a""" + join + where,
             tuple(parameters),
         ).fetchall()
-        return tuple(self._load(row) for row in rows)
+        loaded = tuple(self._load(row) for row in rows)
+        return tuple(
+            sorted(
+                loaded,
+                key=lambda item: (item.created_at, item.application_id),
+            )
+        )
 
     def claim_submission(
         self,
