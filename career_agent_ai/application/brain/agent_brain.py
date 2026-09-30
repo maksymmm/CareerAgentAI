@@ -32,7 +32,7 @@ class AgentBrain:
 
         context = AgentContext(
             user_id=request.user_id,
-            memory_snapshot=self._memory.snapshot(),
+            memory_snapshot=self._memory.snapshot(user_id=request.user_id),
             active_workflow=self._workflow.workflow,
             payload=request.payload,
             metadata=request.metadata,
