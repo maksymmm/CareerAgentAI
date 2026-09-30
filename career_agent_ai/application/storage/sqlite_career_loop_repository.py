@@ -27,8 +27,12 @@ class SQLiteCareerLoopRepository:
         self._database = database
         self._create_schema()
 
-    def save(self, state: CareerLoopState) -> None:
+    def save(
+        self, state: CareerLoopState, *, expected_owner_id: str | None = None
+    ) -> None:
         """Create or compare-and-swap one validated active-loop snapshot."""
+        if expected_owner_id is not None:
+            expected_owner_id = self._identifier(expected_owner_id, "expected_owner_id")
         if not isinstance(state.version, int) or isinstance(state.version, bool) or state.version < 0:
             raise ValueError("state.version must be a non-negative integer.")
         current_version = state.version
@@ -52,20 +56,39 @@ class SQLiteCareerLoopRepository:
                     ),
                 )
             else:
-                cursor = connection.execute(
-                    """
-                    UPDATE autonomous_career_loops
-                    SET payload_json = ?, updated_at = ?, version = ?
-                    WHERE run_id = ? AND version = ?
-                    """,
-                    (
-                        serialized,
-                        state.updated_at.isoformat(),
-                        next_version,
-                        state.run_id,
-                        current_version,
-                    ),
-                )
+                if expected_owner_id is None:
+                    cursor = connection.execute(
+                        """
+                        UPDATE autonomous_career_loops
+                        SET payload_json = ?, updated_at = ?, version = ?
+                        WHERE run_id = ? AND version = ?
+                          AND execution_claim_owner IS NULL
+                        """,
+                        (
+                            serialized,
+                            state.updated_at.isoformat(),
+                            next_version,
+                            state.run_id,
+                            current_version,
+                        ),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        UPDATE autonomous_career_loops
+                        SET payload_json = ?, updated_at = ?, version = ?
+                        WHERE run_id = ? AND version = ?
+                          AND execution_claim_owner = ?
+                        """,
+                        (
+                            serialized,
+                            state.updated_at.isoformat(),
+                            next_version,
+                            state.run_id,
+                            current_version,
+                            expected_owner_id,
+                        ),
+                    )
                 if cursor.rowcount != 1:
                     raise CareerLoopConflictError(
                         "Autonomous-loop snapshot is stale and cannot overwrite newer state."
