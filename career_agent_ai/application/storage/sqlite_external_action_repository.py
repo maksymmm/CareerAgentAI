@@ -49,6 +49,9 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             return operation
         except sqlite3.IntegrityError:
             self._database.connection.rollback()
+        except Exception:
+            self._database.connection.rollback()
+            raise
         existing = self.get(operation.operation_id)
         if (
             existing is None
