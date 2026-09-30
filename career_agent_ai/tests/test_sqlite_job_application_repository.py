@@ -329,6 +329,31 @@ def test_equal_timestamp_transitions_preserve_lifecycle_insertion_order():
     assert recovered.status == JobApplicationStatus.INTERVIEW
 
 
+
+def test_sqlite_preserves_microsecond_application_ordering():
+    repository = SQLiteJobApplicationRepository(SQLiteDatabase())
+    earlier = JobApplication(
+        application_id="z-earlier",
+        user_id="candidate-1",
+        job_id="job-earlier",
+        status=JobApplicationStatus.SAVED,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    later = JobApplication(
+        application_id="a-later",
+        user_id="candidate-1",
+        job_id="job-later",
+        status=JobApplicationStatus.SAVED,
+        created_at=NOW + timedelta(microseconds=1),
+        updated_at=NOW + timedelta(microseconds=1),
+    )
+    repository.add(later)
+    repository.add(earlier)
+
+    assert repository.list("candidate-1") == (earlier, later)
+
+
 def test_sqlite_orders_timestamp_instants_across_timezone_offsets():
     database = SQLiteDatabase()
     repository = SQLiteJobApplicationRepository(database)
