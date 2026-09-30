@@ -9,6 +9,7 @@ from hashlib import sha256
 
 import pytest
 
+import career_agent_ai.application.career.autonomous_career_loop as autonomous_loop_module
 from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.agents.job_search.job_search_agent import JobSearchAgent
@@ -78,7 +79,11 @@ PROFILE = (
 
 
 def build_stack(
-    path: str, *, with_schedule: bool = True, plain_company: bool = False
+    path: str,
+    *,
+    with_schedule: bool = True,
+    plain_company: bool = False,
+    max_iterations: int = AutonomousCareerLoop.DEFAULT_MAX_ITERATIONS,
 ):
     database = SQLiteDatabase(path)
 
@@ -140,6 +145,7 @@ def build_stack(
         communication_service=communication,
         scheduling_service=scheduling,
         state_repository=SQLiteCareerLoopRepository(database),
+        max_iterations=max_iterations,
     )
     return (
         database,
@@ -210,6 +216,45 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
         },
     ],
 )
+
+def test_post_effect_recovery_remains_resumable_after_iteration_budget(tmp_path, monkeypatch):
+    path = str(tmp_path / "post-effect-recovery.sqlite")
+    database, loop, *_ = build_stack(path, with_schedule=False, max_iterations=1)
+    state = CareerLoopState(
+        run_id="post-effect-recovery",
+        request=request(with_schedule=False),
+        phase=CareerLoopPhase.APPLICATION_SUBMIT,
+        iterations=1,
+    )
+    loop._states.save(state)
+    calls = 0
+
+    def recoverable_step(current):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise autonomous_loop_module._RecoverableCareerLoopError(
+                "provider effect is durable; local tracker completion is unavailable"
+            )
+        current.phase = CareerLoopPhase.COMPLETE
+
+    monkeypatch.setattr(loop, "_step", recoverable_step)
+
+    first = loop.continue_run("post-effect-recovery")
+
+    assert first.completed is False
+    assert first.phase == CareerLoopPhase.APPLICATION_SUBMIT
+    assert first.iterations == 2
+    assert "local tracker completion" in first.error
+
+    second = loop.continue_run("post-effect-recovery")
+
+    assert second.completed is True
+    assert second.phase == CareerLoopPhase.COMPLETE
+    assert second.iterations == 3
+    assert calls == 2
+    database.close()
+
 def test_request_rejects_incomplete_enabled_messaging_before_run(changes):
     values = {
         "user_id": "user-1",
