@@ -116,6 +116,11 @@ class AutonomousCareerLoop:
     DEFAULT_MAX_ITERATIONS = 16
     EXECUTION_LEASE_SECONDS = 900
     EXECUTION_HEARTBEAT_SECONDS = 60
+    POST_EFFECT_RECOVERY_PHASES = frozenset({
+        CareerLoopPhase.APPLICATION_SUBMIT,
+        CareerLoopPhase.MESSAGE_SEND,
+        CareerLoopPhase.INTERVIEW_ACCEPT,
+    })
 
     def __init__(
         self,
@@ -380,6 +385,7 @@ class AutonomousCareerLoop:
             interval_seconds=self.EXECUTION_HEARTBEAT_SECONDS,
         )
         heartbeat.start()
+        segment_iterations = 0
         try:
             try:
                 while state.phase not in {
@@ -388,12 +394,18 @@ class AutonomousCareerLoop:
                 }:
                     if state.pending_human_action is not None:
                         break
-                    if state.iterations >= self._max_iterations:
+                    if segment_iterations >= self._max_iterations:
+                        if state.phase in self.POST_EFFECT_RECOVERY_PHASES:
+                            state.last_error = "max_iterations_reached_recovery_pending"
+                            state.touch()
+                            self._persist(state)
+                            break
                         state.last_error = "max_iterations_reached"
                         state.phase = CareerLoopPhase.FAILED
                         state.touch()
                         self._persist(state)
                         break
+                    segment_iterations += 1
                     state.iterations += 1
                     self._step(state)
                     heartbeat.raise_if_failed()
