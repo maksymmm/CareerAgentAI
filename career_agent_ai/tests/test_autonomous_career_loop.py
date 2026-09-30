@@ -191,6 +191,54 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
     )
 
 
+
+def test_stale_lease_owner_cannot_overwrite_recovered_snapshot(tmp_path):
+    path = str(tmp_path / "lease-fencing.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerLoopRepository(database)
+    stale = CareerLoopState(
+        run_id="lease-fencing",
+        request=request(with_schedule=False),
+    )
+    repository.save(stale)
+    assert stale.version == 1
+
+    repository.claim_execution(
+        stale.run_id,
+        "worker-old",
+        expected_version=stale.version,
+        lease_seconds=60,
+    )
+    database.connection.execute(
+        """
+        UPDATE autonomous_career_loops
+        SET execution_claim_expires_at = ?
+        WHERE run_id = ?
+        """,
+        ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), stale.run_id),
+    )
+    database.connection.commit()
+    repository.claim_execution(
+        stale.run_id,
+        "worker-new",
+        expected_version=stale.version,
+        lease_seconds=60,
+    )
+
+    stale.phase = CareerLoopPhase.DECISION
+    stale.touch()
+    with pytest.raises(CareerLoopConflictError):
+        repository.save(stale, expected_owner_id="worker-old")
+
+    recovered = repository.get(stale.run_id)
+    assert recovered is not None
+    recovered.phase = CareerLoopPhase.DECISION
+    recovered.touch()
+    repository.save(recovered, expected_owner_id="worker-new")
+    assert recovered.version == 2
+    database.close()
+
+
 def test_post_effect_recovery_remains_resumable_after_iteration_budget(tmp_path, monkeypatch):
     path = str(tmp_path / "post-effect-recovery.sqlite")
     database, loop, *_ = build_stack(path, with_schedule=False, max_iterations=1)
