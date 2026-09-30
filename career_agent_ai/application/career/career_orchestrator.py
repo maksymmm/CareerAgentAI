@@ -137,6 +137,8 @@ class CareerOrchestrator:
         engine.resume()
         engine.complete_step()
         self._workflow = engine
+        # Persist the approval and completed human gate before another agent runs.
+        self._persist_state(state)
         return self._continue(state)
 
     def _continue(self, state: CareerRunState) -> CareerRunResult:
@@ -159,7 +161,7 @@ class CareerOrchestrator:
             )
             context = AgentContext(
                 user_id=state.user_id,
-                memory_snapshot=self._memory.snapshot(),
+                memory_snapshot=self._memory.snapshot(user_id=state.user_id),
                 active_workflow=engine.workflow,
                 payload=dict(state.payload),
                 metadata={
@@ -277,6 +279,8 @@ class CareerOrchestrator:
                     ),
                 },
                 metadata={"user_id": user_id, "type": "career_run"},
+                user_id=user_id,
+                memory_type="career_run",
             )
         )
 
