@@ -249,7 +249,7 @@ class AutonomousCareerLoop:
             state.last_error = None
             state.phase = CareerLoopPhase.APPLICATION_SUBMIT
             state.touch()
-            self._persist(state)
+            self._persist(state, expected_owner_id=resolution_owner)
         finally:
             try:
                 self._states.release_execution(state.run_id, resolution_owner)
@@ -293,7 +293,7 @@ class AutonomousCareerLoop:
             state.last_error = None
             state.phase = CareerLoopPhase.MESSAGE_SEND
             state.touch()
-            self._persist(state)
+            self._persist(state, expected_owner_id=resolution_owner)
         finally:
             try:
                 self._states.release_execution(state.run_id, resolution_owner)
@@ -339,7 +339,7 @@ class AutonomousCareerLoop:
             state.last_error = None
             state.phase = CareerLoopPhase.INTERVIEW_ACCEPT
             state.touch()
-            self._persist(state)
+            self._persist(state, expected_owner_id=resolution_owner)
         finally:
             try:
                 self._states.release_execution(state.run_id, resolution_owner)
@@ -398,12 +398,12 @@ class AutonomousCareerLoop:
                         if state.phase in self.POST_EFFECT_RECOVERY_PHASES:
                             state.last_error = "max_iterations_reached_recovery_pending"
                             state.touch()
-                            self._persist(state)
+                            self._persist(state, expected_owner_id=execution_owner)
                             break
                         state.last_error = "max_iterations_reached"
                         state.phase = CareerLoopPhase.FAILED
                         state.touch()
-                        self._persist(state)
+                        self._persist(state, expected_owner_id=execution_owner)
                         break
                     segment_iterations += 1
                     state.iterations += 1
@@ -412,7 +412,7 @@ class AutonomousCareerLoop:
                     state.last_error = None
                     state.touch()
                     try:
-                        self._persist(state)
+                        self._persist(state, expected_owner_id=execution_owner)
                     except CareerLoopConflictError:
                         raise
                     except Exception as exc:
@@ -450,12 +450,12 @@ class AutonomousCareerLoop:
             except _RecoverableCareerLoopError as exc:
                 state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
                 state.touch()
-                self._persist(state)
+                self._persist(state, expected_owner_id=execution_owner)
             except Exception as exc:
                 state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
                 state.phase = CareerLoopPhase.FAILED
                 state.touch()
-                self._persist(state)
+                self._persist(state, expected_owner_id=execution_owner)
             return self._result(state)
         finally:
             heartbeat.stop()
@@ -1138,8 +1138,11 @@ class AutonomousCareerLoop:
             metadata={"career_loop_run_id": state.run_id},
         )
 
-    def _persist(self, state: CareerLoopState) -> None:
-        self._states.save(state)
+    def _persist(
+        self, state: CareerLoopState, *, expected_owner_id: str | None = None
+    ) -> None:
+        """Persist one snapshot, fencing writes by lease owner when executing."""
+        self._states.save(state, expected_owner_id=expected_owner_id)
 
     @staticmethod
     def _resume_artifact_content(result: Any) -> str:
