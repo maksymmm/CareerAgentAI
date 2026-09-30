@@ -10,8 +10,10 @@ from career_agent_ai.application.career.opportunity_signal_provider import (
 from career_agent_ai.application.career.opportunity_signal import OpportunitySignal
 from career_agent_ai.application.external_actions import (
     ExternalActionAdapter,
-    ExternalActionOperationRepository,
     ExternalActionService,
+)
+from career_agent_ai.application.external_actions.external_action_repository import (
+    ExternalActionOperationRepository,
 )
 
 from .config import RuntimeConfig
