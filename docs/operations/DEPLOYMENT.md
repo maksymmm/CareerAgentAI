@@ -13,6 +13,8 @@ Required production baseline:
 - `CAREER_AGENT_ALLOW_NETWORK_PROVIDERS` defaults to `false`; enable only when an explicitly configured provider is intended.
 - `CAREER_AGENT_ALLOW_CONSEQUENTIAL_ACTIONS` defaults to `false`; enabling it does not bypass any domain human-approval gate.
 
+Production composition must route consequential provider calls through `build_external_action_service(config, ...)` and network-backed opportunity collection through `guard_signal_provider(config, ...)`. These wrappers consume the validated runtime flags at the execution boundary, so the default `false` values are effective kill switches rather than documentation-only settings. Direct construction of unguarded real-provider execution paths is not a supported production composition.
+
 Secrets and provider credentials must come from the deployment secret store or process environment. Do not put credentials in repository files, images, logs, migration SQL, or test fixtures.
 
 ## Database
