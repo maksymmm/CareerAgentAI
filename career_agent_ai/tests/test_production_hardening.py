@@ -33,7 +33,12 @@ from career_agent_ai.application.observability import (
     log_event,
     redact_mapping,
 )
-from career_agent_ai.application.runtime import RuntimeConfig, RuntimeEnvironment
+from career_agent_ai.application.runtime import (
+    RuntimeConfig,
+    RuntimeEnvironment,
+    build_external_action_service,
+    guard_signal_provider,
+)
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
     SQLiteCareerLoopRepository,
 )
@@ -113,6 +118,87 @@ def test_runtime_config_rejects_malformed_environment(values):
     with pytest.raises(ValueError):
         RuntimeConfig.from_env(values)
 
+
+
+def test_runtime_composition_blocks_consequential_actions_by_default():
+    class RecordingAdapter:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, operation_id, action_type, payload):
+            self.calls.append((operation_id, action_type, dict(payload)))
+            return {"ok": True}
+
+    database = SQLiteDatabase()
+    repository = SQLiteExternalActionOperationRepository(database)
+    adapter = RecordingAdapter()
+    service = build_external_action_service(
+        RuntimeConfig.from_env({}),
+        repository,
+        adapter,
+    )
+    service.prepare("runtime-guard-action", "test.action", {"value": 1})
+
+    with pytest.raises(PermissionError, match="disabled by runtime policy"):
+        service.execute("runtime-guard-action", human_approved=True)
+
+    assert repository.get("runtime-guard-action").status == ExternalActionStatus.PREPARED
+    assert adapter.calls == []
+
+
+def test_runtime_composition_blocks_network_signal_provider_by_default():
+    class RecordingSignalProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def collect(self):
+            self.calls += 1
+            return ()
+
+    provider = RecordingSignalProvider()
+    guarded = guard_signal_provider(RuntimeConfig.from_env({}), provider)
+
+    with pytest.raises(PermissionError, match="Network providers are disabled"):
+        guarded.collect()
+
+    assert provider.calls == 0
+
+
+def test_runtime_composition_allows_explicitly_enabled_external_effects():
+    class RecordingAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, operation_id, action_type, payload):
+            self.calls += 1
+            return {"ok": True}
+
+    class RecordingSignalProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def collect(self):
+            self.calls += 1
+            return ()
+
+    config = RuntimeConfig.from_env(
+        {
+            "CAREER_AGENT_ALLOW_NETWORK_PROVIDERS": "true",
+            "CAREER_AGENT_ALLOW_CONSEQUENTIAL_ACTIONS": "true",
+        }
+    )
+    database = SQLiteDatabase()
+    repository = SQLiteExternalActionOperationRepository(database)
+    adapter = RecordingAdapter()
+    actions = build_external_action_service(config, repository, adapter)
+    actions.prepare("runtime-enabled-action", "test.action", {})
+    result = actions.execute("runtime-enabled-action", human_approved=True)
+
+    signals = RecordingSignalProvider()
+    assert guard_signal_provider(config, signals).collect() == ()
+    assert result.status == ExternalActionStatus.SUCCEEDED
+    assert adapter.calls == 1
+    assert signals.calls == 1
 
 def test_structured_logging_includes_correlation_id_and_redacts_secrets():
     stream = io.StringIO()
