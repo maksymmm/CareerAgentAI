@@ -118,7 +118,11 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 expected_status.value,
             ),
         )
-        self._database.connection.commit()
+        try:
+            self._database.connection.commit()
+        except Exception:
+            self._database.connection.rollback()
+            raise
         if cursor.rowcount != 1:
             raise OperationConflictError(
                 "Operation is missing or no longer has the expected status."
@@ -150,7 +154,11 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 ExternalActionStatus.SUCCEEDED.value,
             ),
         )
-        self._database.connection.commit()
+        try:
+            self._database.connection.commit()
+        except Exception:
+            self._database.connection.rollback()
+            raise
         if cursor.rowcount != 1:
             raise OperationConflictError(
                 "Operation is missing or is not in succeeded status."
