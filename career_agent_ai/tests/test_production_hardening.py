@@ -714,6 +714,28 @@ def test_operational_wsgi_rejects_non_ascii_configured_token():
     with pytest.raises(ValueError, match="ASCII"):
         OperationalWSGIApp(service, bearer_token="ä" * 40)
 
+
+def test_operational_wsgi_returns_sanitized_500_for_probe_failure():
+    class BrokenProbe:
+        def inspect(self, *, now, stale_after_seconds):
+            raise ValueError("corrupt persisted secret=do-not-expose")
+
+    service = OperationalApiService(BrokenProbe(), clock=lambda: NOW)
+    token = "p" * 40
+    app = OperationalWSGIApp(service, bearer_token=token)
+
+    meta, body = _wsgi_call(
+        app,
+        "/v1/operational/issues",
+        query="stale_after_seconds=60",
+        token=token,
+    )
+
+    assert meta["status"] == "500 Internal Server Error"
+    assert body == {"error": "internal_error"}
+    assert "do-not-expose" not in str(body)
+
+
 @pytest.mark.parametrize(
     "path,query,method,expected",
     [
