@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Mapping, Protocol
 
 from .external_action_operation import ExternalActionOperation, ExternalActionStatus
@@ -29,9 +30,12 @@ class ExternalActionService:
         self,
         repository: ExternalActionOperationRepository,
         adapter: ExternalActionAdapter,
+        *,
+        execution_allowed: Callable[[], bool] | None = None,
     ) -> None:
         self._repository = repository
         self._adapter = adapter
+        self._execution_allowed = execution_allowed
 
     def prepare(
         self,
@@ -79,6 +83,8 @@ class ExternalActionService:
             )
         if not human_approved:
             raise PermissionError("Explicit human approval is required before execution.")
+        if self._execution_allowed is not None and not self._execution_allowed():
+            raise PermissionError("Consequential external actions are disabled by runtime policy.")
 
         operation = self._repository.transition(
             operation.operation_id,
