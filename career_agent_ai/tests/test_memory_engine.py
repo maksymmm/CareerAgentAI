@@ -130,3 +130,15 @@ def test_memory_record_is_immutable():
 
     with pytest.raises(FrozenInstanceError):
         record.key = "c"
+
+def test_in_memory_engine_scopes_duplicate_keys_by_user():
+    engine = MemoryEngine()
+    first = MemoryRecord("goal", "engineer", user_id="u1")
+    second = MemoryRecord("goal", "designer", user_id="u2")
+    engine.save(first)
+    engine.save(second)
+
+    assert engine.get("goal", user_id="u1") == first
+    assert engine.get("goal", user_id="u2") == second
+    with pytest.raises(ValueError, match="multiple users"):
+        engine.get("goal")
