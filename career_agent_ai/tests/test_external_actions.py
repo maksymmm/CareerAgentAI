@@ -166,6 +166,21 @@ def test_reconciliation_resolution_requires_literal_boolean():
     )
 
 
+def test_prepare_rejects_non_finite_json_before_persisting_intent():
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+
+    with pytest.raises(ValueError, match="JSON-serializable"):
+        service.prepare(
+            "operation-non-finite-payload",
+            "application",
+            {"score": float("nan")},
+        )
+
+    assert repository.get("operation-non-finite-payload") is None
+    assert adapter.calls == []
+
+
 def test_adapter_failure_is_persisted_and_not_retried():
     adapter = RecordingAdapter(RuntimeError("provider unavailable"))
     service, _ = make_service(SQLiteDatabase(), adapter)
