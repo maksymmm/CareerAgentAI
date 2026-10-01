@@ -269,6 +269,39 @@ def test_redaction_sanitizes_fallback_object_representations():
     assert "provider-token" not in rendered
     assert rendered.count("[REDACTED]") == 2
 
+def test_structured_logging_normalizes_non_finite_numbers_to_valid_json():
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonLogFormatter())
+    logger = logging.getLogger("career-agent-non-finite-log-test")
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    log_event(
+        logger,
+        logging.INFO,
+        "numeric.diagnostic",
+        "Numeric diagnostic",
+        nan=float("nan"),
+        positive_infinity=float("inf"),
+        negative_infinity=float("-inf"),
+    )
+
+    rendered = stream.getvalue()
+    payload = json.loads(
+        rendered,
+        parse_constant=lambda token: (_ for _ in ()).throw(
+            ValueError(f"non-standard JSON constant: {token}")
+        ),
+    )
+    assert payload["fields"]["nan"] == "[NON_FINITE]"
+    assert payload["fields"]["positive_infinity"] == "[NON_FINITE]"
+    assert payload["fields"]["negative_infinity"] == "[NON_FINITE]"
+    assert "NaN" not in rendered
+    assert "Infinity" not in rendered
+
+
 @pytest.mark.parametrize("correlation_id", ["", "x" * 201, "bad\nvalue"])
 def test_correlation_scope_rejects_malformed_ids(correlation_id):
     with pytest.raises(ValueError):
