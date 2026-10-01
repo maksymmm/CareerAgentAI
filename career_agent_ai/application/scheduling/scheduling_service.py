@@ -577,6 +577,7 @@ class SchedulingService:
         self, operation_id: str, event_id: str, *, human_approved: bool
     ) -> ScheduleEvent | None:
         """Decline one exact persisted proposal after explicit human approval."""
+        self._validate_human_approval(human_approved)
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         event_id = validate_schedule_identifier(event_id, "event_id")
         event = self.get_event(event_id)
