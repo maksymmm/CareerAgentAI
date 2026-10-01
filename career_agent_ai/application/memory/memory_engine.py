@@ -35,11 +35,11 @@ class MemoryEngine:
             state=self._state.value,
         )
 
-    def get(self, key: str) -> MemoryRecord | None:
-        """
-        Returns a memory record.
-        """
-        return self._repository.get(key)
+    def get(
+        self, key: str, *, user_id: str | None = None
+    ) -> MemoryRecord | None:
+        """Return one memory record, optionally scoped to a user."""
+        return self._repository.get(key, user_id=user_id)
 
     def find(
         self,
