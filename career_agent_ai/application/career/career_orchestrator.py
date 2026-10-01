@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime
 from enum import Enum
+import math
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -11,7 +13,10 @@ from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.brain.agent_context import AgentContext
 from career_agent_ai.application.career.career_decision_engine import CareerDecisionEngine
 from career_agent_ai.application.career.career_plan import CareerPlan, CareerPlanStep
-from career_agent_ai.application.career.career_run_repository import CareerRunRepository
+from career_agent_ai.application.career.career_run_repository import (
+    CareerRunConflictError,
+    CareerRunRepository,
+)
 from career_agent_ai.application.career.career_run_state import CareerRunState
 from career_agent_ai.application.career.career_step_result import CareerStepResult
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
@@ -55,6 +60,7 @@ class CareerOrchestrator:
         self._decision_engine = CareerDecisionEngine()
         self._runs: dict[str, CareerRunState] = {}
         self._run_repository = run_repository
+        self._resume_lock = RLock()
 
     def plan(self, objective: str, payload: dict[str, Any] | None = None) -> CareerPlan:
         """Build a bounded career action plan from an objective."""
@@ -120,7 +126,22 @@ class CareerOrchestrator:
         run_id: str,
         human_result: Any | None = None,
     ) -> CareerRunResult:
-        """Resume a paused human-gated run after recording optional human input."""
+        """Resume one paused run with local serialization and durable CAS fencing."""
+        with self._resume_lock:
+            try:
+                return self._resume_locked(run_id, human_result)
+            except CareerRunConflictError:
+                # A different process advanced the durable snapshot. Discard any
+                # stale in-process cache so a deliberate retry reloads fresh state.
+                self._runs.pop(run_id, None)
+                raise
+
+    def _resume_locked(
+        self,
+        run_id: str,
+        human_result: Any | None,
+    ) -> CareerRunResult:
+        """Resume a paused human-gated run while holding the local resume lock."""
         state = self._runs.get(run_id)
         if state is None and self._run_repository is not None:
             state = self._run_repository.get(run_id)
@@ -141,6 +162,7 @@ class CareerOrchestrator:
         engine.complete_step()
         self._workflow = engine
         # Persist the approval and completed human gate before another agent runs.
+        # The repository compare-and-swap is the cross-process execution fence.
         self._persist_state(state)
         return self._continue(state)
 
@@ -308,7 +330,11 @@ class CareerOrchestrator:
     @classmethod
     def _json_safe(cls, value: Any) -> Any:
         """Convert supported agent metadata into deterministic JSON-safe values."""
-        if value is None or isinstance(value, (str, int, float, bool)):
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("Agent metadata floating-point values must be finite.")
             return value
         if isinstance(value, Enum):
             return cls._json_safe(value.value)
