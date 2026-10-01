@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -74,7 +75,13 @@ class JsonLogFormatter(logging.Formatter):
             payload["exception_type"] = (
                 record.exc_info[0].__name__ if record.exc_info[0] is not None else "Exception"
             )
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
 
 
 def configure_structured_logging(level: int = logging.INFO) -> None:
@@ -135,8 +142,10 @@ def redact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _safe_value(value: Any) -> Any:
-    if value is None or isinstance(value, (bool, int, float)):
+    if value is None or isinstance(value, (bool, int)):
         return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else "[NON_FINITE]"
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, Mapping):
