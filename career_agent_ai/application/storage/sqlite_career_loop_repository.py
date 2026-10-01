@@ -38,7 +38,12 @@ class SQLiteCareerLoopRepository:
         current_version = state.version
         next_version = current_version + 1
         payload = self._serialize(state, version=next_version)
-        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        serialized = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
         connection = self._database.connection
         try:
             if current_version == 0:
@@ -116,7 +121,12 @@ class SQLiteCareerLoopRepository:
         if row is None:
             return None
         try:
-            value = json.loads(row[0])
+            value = json.loads(
+                row[0],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValueError("Persisted autonomous-loop JSON is malformed.") from exc
         state = self._deserialize(value, storage_version=row[1])
