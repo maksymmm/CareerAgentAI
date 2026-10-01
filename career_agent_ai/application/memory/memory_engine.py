@@ -75,14 +75,29 @@ class MemoryEngine:
         )
 
     def load_snapshot(self, *, user_id: str | None = None) -> MemorySnapshot:
-        """Return an immutable snapshot optionally scoped to one user."""
-        return MemorySnapshot(
-            records={
-                key: record.value
-                for record in self._repository.find(user_id=user_id)
-                for key in (record.key,)
-            }
-        )
+        """Return an immutable snapshot optionally scoped to one user.
+
+        Unscoped snapshots remain supported when every visible key is unique. If
+        multiple users expose the same key, the caller must provide user_id so
+        one user's value cannot silently overwrite another user's memory.
+        """
+        records = self._repository.find(user_id=user_id)
+        values: dict[str, object] = {}
+        owners: dict[str, str] = {}
+        for record in records:
+            previous_owner = owners.get(record.key)
+            if (
+                user_id is None
+                and previous_owner is not None
+                and previous_owner != record.user_id
+            ):
+                raise ValueError(
+                    "Unscoped memory snapshot contains the same key for multiple users; "
+                    "provide user_id."
+                )
+            owners[record.key] = record.user_id
+            values[record.key] = record.value
+        return MemorySnapshot(records=values)
 
     def snapshot(self, *, user_id: str | None = None) -> MemorySnapshot:
         """Alias for load_snapshot with the same optional user scope."""

@@ -176,3 +176,15 @@ def test_memory_record_rejects_non_text_identity_fields(kwargs):
 
     with pytest.raises(TypeError):
         MemoryRecord(**values)
+
+
+def test_unscoped_snapshot_rejects_duplicate_keys_across_users():
+    engine = MemoryEngine()
+    engine.save(MemoryRecord(key="goal", value="engineer", user_id="u1"))
+    engine.save(MemoryRecord(key="goal", value="designer", user_id="u2"))
+
+    with pytest.raises(ValueError, match="multiple users"):
+        engine.snapshot()
+
+    assert engine.snapshot(user_id="u1").get("goal") == "engineer"
+    assert engine.snapshot(user_id="u2").get("goal") == "designer"

@@ -136,6 +136,35 @@ class CareerOrchestrator:
                 self._runs.pop(run_id, None)
                 raise
 
+    def continue_run(self, run_id: str) -> CareerRunResult:
+        """Reclaim and continue one durable RUNNING run after process restart.
+
+        Before any agent executes, the loaded snapshot is compare-and-swapped back
+        to durable storage. This version bump acts as an execution fence: concurrent
+        workers loading the same snapshot cannot both advance the run.
+        """
+        with self._resume_lock:
+            if self._run_repository is None:
+                state = self._runs.get(run_id)
+            else:
+                state = self._run_repository.get(run_id)
+                if state is not None:
+                    self._runs[run_id] = state
+            if state is None:
+                raise KeyError(f"Unknown career run '{run_id}'.")
+            engine = state.workflow_engine
+            if engine.workflow is None:
+                raise RuntimeError("Career run has no workflow.")
+            if engine.workflow.status != WorkflowState.RUNNING:
+                raise RuntimeError("Only a durable running career run can be continued.")
+            try:
+                if self._run_repository is not None:
+                    self._persist_state(state)
+                return self._continue(state)
+            except CareerRunConflictError:
+                self._runs.pop(run_id, None)
+                raise
+
     def _resume_locked(
         self,
         run_id: str,
