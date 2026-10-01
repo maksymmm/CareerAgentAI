@@ -98,6 +98,25 @@ def test_execution_requires_explicit_human_approval():
     assert adapter.calls == []
 
 
+@pytest.mark.parametrize("approval", ["false", "true", 1, None, object()])
+def test_execution_rejects_non_boolean_human_approval(approval):
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-strict-approval", "application", {})
+
+    with pytest.raises(TypeError, match="boolean"):
+        service.execute(
+            "operation-strict-approval",
+            human_approved=approval,
+        )
+
+    assert (
+        repository.get("operation-strict-approval").status
+        == ExternalActionStatus.PREPARED
+    )
+    assert adapter.calls == []
+
+
 def test_adapter_failure_is_persisted_and_not_retried():
     adapter = RecordingAdapter(RuntimeError("provider unavailable"))
     service, _ = make_service(SQLiteDatabase(), adapter)
