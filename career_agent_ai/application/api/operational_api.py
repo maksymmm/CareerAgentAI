@@ -165,6 +165,7 @@ class OperationalWSGIApp:
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
+            allow_nan=False,
         ).encode("utf-8")
         headers = [
             ("Content-Type", "application/json; charset=utf-8"),
