@@ -117,6 +117,55 @@ def test_execution_rejects_non_boolean_human_approval(approval):
     assert adapter.calls == []
 
 
+def test_execution_policy_requires_literal_boolean():
+    database = SQLiteDatabase()
+    repository = SQLiteExternalActionOperationRepository(database)
+    adapter = RecordingAdapter()
+    service = ExternalActionService(
+        repository,
+        adapter,
+        execution_allowed=lambda: "false",
+    )
+    service.prepare("operation-policy-bool", "application", {})
+
+    with pytest.raises(TypeError, match="execution_allowed"):
+        service.execute("operation-policy-bool", human_approved=True)
+
+    assert repository.get("operation-policy-bool").status == ExternalActionStatus.PREPARED
+    assert adapter.calls == []
+
+
+def test_reconciliation_resolution_requires_literal_boolean():
+    database = SQLiteDatabase()
+    adapter = RecordingAdapter()
+    service, repository = make_service(database, adapter)
+    repository.create(
+        ExternalActionOperation("operation-reconcile-bool", "application", {})
+    )
+    repository.transition(
+        "operation-reconcile-bool",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    repository.transition(
+        "operation-reconcile-bool",
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.RECONCILIATION_REQUIRED,
+        error="ambiguous",
+    )
+
+    with pytest.raises(TypeError, match="confirmed_succeeded"):
+        service.resolve_reconciliation(
+            "operation-reconcile-bool",
+            confirmed_succeeded="false",
+        )
+
+    assert (
+        repository.get("operation-reconcile-bool").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+
+
 def test_adapter_failure_is_persisted_and_not_retried():
     adapter = RecordingAdapter(RuntimeError("provider unavailable"))
     service, _ = make_service(SQLiteDatabase(), adapter)
