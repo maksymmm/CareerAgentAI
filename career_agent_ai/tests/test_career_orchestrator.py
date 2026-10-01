@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Barrier
 
 import pytest
 
@@ -9,6 +11,7 @@ from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.agents.agent_result import AgentResult
 from career_agent_ai.application.career.career_orchestrator import CareerOrchestrator
+from career_agent_ai.application.career.career_run_repository import CareerRunConflictError
 from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
 from career_agent_ai.application.memory.memory_record import MemoryRecord
@@ -488,3 +491,153 @@ def test_unsupported_agent_metadata_fails_cleanly_without_breaking_checkpoint(tm
     assert result.steps[0].success is False
     assert "not durably serializable" in result.steps[0].messages[0]
     database.close()
+
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_agent_metadata_is_rejected_before_durable_finalization(
+    non_finite,
+):
+    agent = FakeAgent(
+        "job_search",
+        result=AgentResult(
+            success=True,
+            agent_id="job_search",
+            metadata={"score": non_finite},
+        ),
+    )
+    orchestrator = make_orchestrator(agents=(agent,))
+
+    result = orchestrator.run(
+        "user-1",
+        "Find a job",
+        {"actions": ["job_search"]},
+    )
+
+    assert result.success is False
+    assert result.stopped_reason == "invalid_agent_metadata"
+    assert "must be finite" in result.steps[0].messages[0]
+
+
+def test_sqlite_run_repository_rejects_stale_snapshot_update(tmp_path):
+    path = str(tmp_path / "career-run-cas.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerRunRepository(database)
+    gated = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    registry = AgentRegistry()
+    registry.register(gated)
+    orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+    paused = orchestrator.run(
+        "user-1",
+        "Apply now",
+        {"actions": ["job_application"]},
+    )
+
+    first = repository.get(paused.run_id)
+    stale = repository.get(paused.run_id)
+    assert first is not None and stale is not None
+    assert first.version == stale.version
+
+    first.payload["winner"] = True
+    repository.save(first)
+    stale.payload["stale"] = True
+
+    with pytest.raises(CareerRunConflictError, match="changed"):
+        repository.save(stale)
+
+    durable = repository.get(paused.run_id)
+    assert durable is not None
+    assert durable.payload["winner"] is True
+    assert "stale" not in durable.payload
+    database.close()
+
+
+def test_concurrent_cross_process_resumes_execute_next_agent_once(tmp_path):
+    path = str(tmp_path / "career-run-resume-race.sqlite")
+    setup_db = SQLiteDatabase(path)
+    setup_repo = SQLiteCareerRunRepository(setup_db)
+    gated = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    setup_registry = AgentRegistry()
+    setup_registry.register(gated)
+    setup_registry.register(FakeAgent("resume"))
+    setup = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(setup_registry),
+        run_repository=setup_repo,
+    )
+    paused = setup.run(
+        "user-1",
+        "Apply then resume",
+        {"actions": ["job_application", "resume"]},
+    )
+    setup_db.close()
+
+    barrier = Barrier(2)
+
+    class BarrierRepository(SQLiteCareerRunRepository):
+        def get(self, run_id):
+            state = super().get(run_id)
+            if (
+                state is not None
+                and state.workflow_engine.workflow is not None
+                and state.workflow_engine.workflow.status == WorkflowState.PAUSED
+            ):
+                barrier.wait(timeout=5)
+            return state
+
+    resume_agent = FakeAgent("resume")
+
+    def make_worker():
+        database = SQLiteDatabase(path)
+        repository = BarrierRepository(database)
+        registry = AgentRegistry()
+        registry.register(resume_agent)
+        orchestrator = CareerOrchestrator(
+            memory_engine=MemoryEngine(),
+            workflow_engine=WorkflowEngine(),
+            agent_factory=AgentFactory(registry),
+            run_repository=repository,
+        )
+        return database, orchestrator
+
+    def resume_once():
+        database, orchestrator = make_worker()
+        try:
+            try:
+                return orchestrator.resume(
+                    paused.run_id,
+                    human_result={"approved": True},
+                )
+            except CareerRunConflictError:
+                return "conflict"
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _: resume_once(), range(2)))
+
+    assert sum(result == "conflict" for result in results) == 1
+    completed = [result for result in results if result != "conflict"]
+    assert len(completed) == 1
+    assert completed[0].success is True
+    assert resume_agent.last_context is not None
