@@ -142,3 +142,37 @@ def test_in_memory_engine_scopes_duplicate_keys_by_user():
     assert engine.get("goal", user_id="u2") == second
     with pytest.raises(ValueError, match="multiple users"):
         engine.get("goal")
+
+
+def test_memory_record_normalizes_identity_fields():
+    record = MemoryRecord(
+        key="  goal  ",
+        value="engineer",
+        user_id="  user-1  ",
+        memory_type="  preference  ",
+    )
+
+    assert record.key == "goal"
+    assert record.user_id == "user-1"
+    assert record.memory_type == "preference"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"key": 42},
+        {"user_id": 42},
+        {"memory_type": 42},
+    ],
+)
+def test_memory_record_rejects_non_text_identity_fields(kwargs):
+    values = {
+        "key": "goal",
+        "value": "engineer",
+        "user_id": "user-1",
+        "memory_type": "preference",
+    }
+    values.update(kwargs)
+
+    with pytest.raises(TypeError):
+        MemoryRecord(**values)
