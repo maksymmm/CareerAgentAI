@@ -67,6 +67,47 @@ def test_draft_creation_is_provider_neutral_and_persisted():
     assert provider.calls == [("draft", "message-1")]
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("recipient", "attacker@example.test"),
+        ("subject", "Changed subject"),
+        ("body", "Changed body"),
+        ("thread_id", "other-thread"),
+        ("direction", MessageDirection.OUTBOUND),
+    ],
+)
+def test_provider_draft_cannot_change_requested_message_intent(field, value):
+    class MutatingDraftProvider(FakeCommunicationAdapter):
+        def draft(self, requested):
+            created = super().draft(requested)
+            return replace(created, **{field: value})
+
+    provider = MutatingDraftProvider()
+    service, repository, operations, _ = stack(SQLiteDatabase(), provider)
+
+    with pytest.raises(ValueError, match="requested message intent"):
+        service.create_draft(message())
+
+    assert repository.get("message-1") is None
+    assert operations.get("send:message-1") is None
+
+
+def test_provider_draft_must_return_communication_message():
+    class MalformedDraftProvider(FakeCommunicationAdapter):
+        def draft(self, requested):
+            self.calls.append(("draft", requested.message_id))
+            return {"message_id": requested.message_id}
+
+    provider = MalformedDraftProvider()
+    service, repository, _, _ = stack(SQLiteDatabase(), provider)
+
+    with pytest.raises(ValueError, match="malformed draft"):
+        service.create_draft(message())
+
+    assert repository.get("message-1") is None
+
+
 def test_dry_run_send_requires_approval_and_suppresses_duplicates():
     service, repository, _, provider = stack(SQLiteDatabase())
     service.create_draft(message())
