@@ -253,6 +253,39 @@ def test_conflict_detection_ignores_terminal_events():
     assert tuple(item.event_id for item in conflicts) == ("active",)
 
 
+@pytest.mark.parametrize("action", ["accept", "decline", "reschedule"])
+def test_scheduling_rejects_non_boolean_approval_before_operation_mutation(action):
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+
+    with pytest.raises(TypeError, match="boolean"):
+        if action == "accept":
+            service.accept(
+                "schedule:non-bool",
+                "event-1",
+                human_approved="false",
+            )
+        elif action == "decline":
+            service.decline(
+                "schedule:non-bool",
+                "event-1",
+                human_approved="false",
+            )
+        else:
+            service.reschedule(
+                "schedule:non-bool",
+                "event-1",
+                start_at=BASE_START + timedelta(days=1),
+                end_at=BASE_START + timedelta(days=1, hours=1),
+                timezone_name="Europe/Berlin",
+                human_approved="false",
+            )
+
+    assert operations.get("schedule:non-bool") is None
+    assert repository.get("event-1") == event()
+    assert provider.calls == []
+
+
 def test_accept_requires_human_approval_and_replays_after_restart(tmp_path):
     path = str(tmp_path / "accept.sqlite")
     database = SQLiteDatabase(path)
