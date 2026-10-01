@@ -13,8 +13,14 @@ class MemoryRepository(ABC):
         """Insert or replace a memory record by its stable key."""
 
     @abstractmethod
-    def get(self, key: str) -> MemoryRecord | None:
-        """Return one record by key, or ``None`` when it does not exist."""
+    def get(
+        self, key: str, *, user_id: str | None = None
+    ) -> MemoryRecord | None:
+        """Return one record by key, optionally scoped to a user.
+
+        Implementations must reject an unscoped lookup when the same key exists
+        for multiple users rather than leaking one user's record to another.
+        """
 
     @abstractmethod
     def find(
