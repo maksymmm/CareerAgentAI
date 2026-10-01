@@ -543,6 +543,7 @@ class SchedulingService:
         A repeated operation ID replays its durable outcome. A prepared operation is
         bound to the event version and slot that the human was asked to approve.
         """
+        self._validate_human_approval(human_approved)
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         event_id = validate_schedule_identifier(event_id, "event_id")
         event = self.get_event(event_id)
@@ -610,6 +611,7 @@ class SchedulingService:
         Duplicate calls with the same operation ID must describe the same event and
         requested target slot; execution is bound to the original source version.
         """
+        self._validate_human_approval(human_approved)
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         event_id = validate_schedule_identifier(event_id, "event_id")
         event = self.get_event(event_id)
@@ -665,6 +667,12 @@ class SchedulingService:
         }
         self._external_actions.prepare(operation_id, "calendar.reschedule", payload)
         return self._execute(operation_id, human_approved)
+
+    @staticmethod
+    def _validate_human_approval(value: bool) -> None:
+        """Reject untyped truthy approval values before scheduling intent mutation."""
+        if not isinstance(value, bool):
+            raise TypeError("human_approved must be a boolean.")
 
     @staticmethod
     def _source_snapshot(event: ScheduleEvent) -> dict[str, Any]:
