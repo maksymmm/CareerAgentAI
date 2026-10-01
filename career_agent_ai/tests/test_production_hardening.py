@@ -600,6 +600,38 @@ def test_migration_runner_applies_once_and_verifies_checksum():
         runner.apply((changed,))
 
 
+def test_migration_checksum_includes_destructive_policy():
+    database = SQLiteDatabase()
+    runner = SQLiteMigrationRunner(database)
+    destructive = SQLiteMigration(
+        version=1,
+        name="policy-bound",
+        statements=("CREATE TABLE policy_bound(id TEXT PRIMARY KEY)",),
+        destructive=True,
+    )
+    non_destructive = SQLiteMigration(
+        version=1,
+        name="policy-bound",
+        statements=("CREATE TABLE policy_bound(id TEXT PRIMARY KEY)",),
+        destructive=False,
+    )
+
+    assert destructive.checksum != non_destructive.checksum
+    assert runner.apply((destructive,), allow_destructive=True) == (1,)
+    with pytest.raises(ValueError, match="differs"):
+        runner.apply((non_destructive,))
+
+
+def test_migration_rejects_non_boolean_destructive_metadata():
+    with pytest.raises(TypeError, match="destructive flag"):
+        SQLiteMigration(
+            version=1,
+            name="bad-policy",
+            statements=("SELECT 1",),
+            destructive="false",
+        )
+
+
 def test_migration_runner_rolls_back_failure_and_requires_destructive_approval():
     database = SQLiteDatabase()
     runner = SQLiteMigrationRunner(database)
