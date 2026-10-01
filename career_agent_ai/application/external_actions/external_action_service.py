@@ -81,7 +81,9 @@ class ExternalActionService:
                 ExternalActionStatus.RECONCILIATION_REQUIRED,
                 error="Previous execution has an ambiguous outcome; reconcile with the provider.",
             )
-        if not human_approved:
+        if not isinstance(human_approved, bool):
+            raise TypeError("human_approved must be a boolean.")
+        if human_approved is not True:
             raise PermissionError("Explicit human approval is required before execution.")
         if self._execution_allowed is not None and not self._execution_allowed():
             raise PermissionError("Consequential external actions are disabled by runtime policy.")
