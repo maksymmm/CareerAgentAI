@@ -85,8 +85,14 @@ class ExternalActionService:
             raise TypeError("human_approved must be a boolean.")
         if human_approved is not True:
             raise PermissionError("Explicit human approval is required before execution.")
-        if self._execution_allowed is not None and not self._execution_allowed():
-            raise PermissionError("Consequential external actions are disabled by runtime policy.")
+        if self._execution_allowed is not None:
+            execution_allowed = self._execution_allowed()
+            if not isinstance(execution_allowed, bool):
+                raise TypeError("execution_allowed callback must return a boolean.")
+            if execution_allowed is not True:
+                raise PermissionError(
+                    "Consequential external actions are disabled by runtime policy."
+                )
 
         operation = self._repository.transition(
             operation.operation_id,
@@ -225,6 +231,8 @@ class ExternalActionService:
         A confirmed no-effect outcome returns to prepared so the same stable
         idempotency key can be deliberately retried without creating a new intent.
         """
+        if not isinstance(confirmed_succeeded, bool):
+            raise TypeError("confirmed_succeeded must be a boolean.")
         operation = self._require_operation(operation_id)
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Operation is not awaiting reconciliation.")
