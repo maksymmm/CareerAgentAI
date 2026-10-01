@@ -107,10 +107,23 @@ class CommunicationService:
         return _CommunicationActionAdapter(provider, repository)
 
     def create_draft(self, message: CommunicationMessage) -> CommunicationMessage:
-        """Create and durably persist an unsent draft."""
+        """Create and persist only a provider draft matching the requested intent."""
         if message.direction != MessageDirection.DRAFT:
             raise ValueError("A new communication draft must have draft direction.")
-        return self._repository.save(self._provider.draft(message))
+        provider_draft = self._provider.draft(message)
+        self._validate_provider_draft(message, provider_draft)
+        return self._repository.save(provider_draft)
+
+    @staticmethod
+    def _validate_provider_draft(
+        requested: CommunicationMessage,
+        provider_draft: CommunicationMessage,
+    ) -> None:
+        """Reject provider-created drafts that alter any requested message field."""
+        if not isinstance(provider_draft, CommunicationMessage):
+            raise ValueError("Provider returned malformed draft data.")
+        if provider_draft != requested or provider_draft.direction != MessageDirection.DRAFT:
+            raise ValueError("Provider draft does not match the requested message intent.")
 
     def read(self, message_id: str) -> CommunicationMessage:
         """Read, validate, and persist a provider message for restart continuation."""
