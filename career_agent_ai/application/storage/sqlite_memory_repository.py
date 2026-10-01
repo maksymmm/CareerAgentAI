@@ -19,17 +19,16 @@ class SQLiteMemoryRepository(MemoryRepository):
         self._create_schema()
 
     def save(self, record: MemoryRecord) -> None:
-        """Atomically insert or replace a validated JSON-safe record."""
+        """Upsert one user's key without overwriting another user's memory."""
         value_json = self._dump(record.value, "value")
         metadata_json = self._dump(dict(record.metadata), "metadata")
         self._database.connection.execute(
             """
             INSERT INTO career_memory (
-                memory_key, user_id, memory_type, value_json, metadata_json,
+                user_id, memory_key, memory_type, value_json, metadata_json,
                 created_at, serialization_version
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(memory_key) DO UPDATE SET
-                user_id = excluded.user_id,
+            ON CONFLICT(user_id, memory_key) DO UPDATE SET
                 memory_type = excluded.memory_type,
                 value_json = excluded.value_json,
                 metadata_json = excluded.metadata_json,
@@ -37,8 +36,8 @@ class SQLiteMemoryRepository(MemoryRepository):
                 serialization_version = excluded.serialization_version
             """,
             (
-                record.key,
                 record.user_id,
+                record.key,
                 record.memory_type,
                 value_json,
                 metadata_json,
@@ -48,18 +47,40 @@ class SQLiteMemoryRepository(MemoryRepository):
         )
         self._database.connection.commit()
 
-    def get(self, key: str) -> MemoryRecord | None:
-        """Load and validate one persisted record by key."""
-        normalized = key.strip()
-        if not normalized:
+    def get(
+        self, key: str, *, user_id: str | None = None
+    ) -> MemoryRecord | None:
+        """Load one record, requiring a user scope for an ambiguous shared key."""
+        normalized_key = key.strip()
+        if not normalized_key:
             raise ValueError("Memory key must not be empty.")
-        row = self._database.connection.execute(
+        if user_id is not None:
+            normalized_user = user_id.strip()
+            if not normalized_user:
+                raise ValueError("Memory user_id filter must not be empty.")
+            row = self._database.connection.execute(
+                """SELECT memory_key, user_id, memory_type, value_json, metadata_json,
+                          created_at, serialization_version
+                   FROM career_memory
+                   WHERE user_id = ? AND memory_key = ?""",
+                (normalized_user, normalized_key),
+            ).fetchone()
+            return None if row is None else self._load(row)
+
+        rows = self._database.connection.execute(
             """SELECT memory_key, user_id, memory_type, value_json, metadata_json,
                       created_at, serialization_version
-               FROM career_memory WHERE memory_key = ?""",
-            (normalized,),
-        ).fetchone()
-        return None if row is None else self._load(row)
+               FROM career_memory
+               WHERE memory_key = ?
+               ORDER BY user_id
+               LIMIT 2""",
+            (normalized_key,),
+        ).fetchall()
+        if len(rows) > 1:
+            raise ValueError(
+                "Memory key exists for multiple users; user_id is required."
+            )
+        return None if not rows else self._load(rows[0])
 
     def find(
         self,
@@ -68,23 +89,32 @@ class SQLiteMemoryRepository(MemoryRepository):
         memory_type: str | None = None,
     ) -> tuple[MemoryRecord, ...]:
         """Load validated records filtered by user and/or memory type."""
-        if user_id is not None and not user_id.strip():
-            raise ValueError("Memory user_id filter must not be empty.")
-        if memory_type is not None and not memory_type.strip():
-            raise ValueError("Memory type filter must not be empty.")
+        normalized_user = None
+        if user_id is not None:
+            normalized_user = user_id.strip()
+            if not normalized_user:
+                raise ValueError("Memory user_id filter must not be empty.")
+        normalized_type = None
+        if memory_type is not None:
+            normalized_type = memory_type.strip()
+            if not normalized_type:
+                raise ValueError("Memory type filter must not be empty.")
+
         clauses: list[str] = []
         parameters: list[str] = []
-        if user_id is not None:
+        if normalized_user is not None:
             clauses.append("user_id = ?")
-            parameters.append(user_id)
-        if memory_type is not None:
+            parameters.append(normalized_user)
+        if normalized_type is not None:
             clauses.append("memory_type = ?")
-            parameters.append(memory_type)
+            parameters.append(normalized_type)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         rows = self._database.connection.execute(
             """SELECT memory_key, user_id, memory_type, value_json, metadata_json,
                       created_at, serialization_version
-               FROM career_memory""" + where + " ORDER BY memory_key",
+               FROM career_memory"""
+            + where
+            + " ORDER BY user_id, memory_key",
             tuple(parameters),
         ).fetchall()
         return tuple(self._load(row) for row in rows)
@@ -99,16 +129,24 @@ class SQLiteMemoryRepository(MemoryRepository):
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS career_memory (
-                memory_key TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
+                memory_key TEXT NOT NULL,
                 memory_type TEXT NOT NULL,
                 value_json TEXT NOT NULL,
                 metadata_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                serialization_version INTEGER NOT NULL
+                serialization_version INTEGER NOT NULL,
+                PRIMARY KEY (user_id, memory_key)
             )
             """
         )
+        primary_key = tuple(
+            (row[1], row[5])
+            for row in connection.execute("PRAGMA table_info(career_memory)").fetchall()
+            if row[5]
+        )
+        if primary_key != (("user_id", 1), ("memory_key", 2)):
+            self._migrate_single_key_schema()
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_career_memory_user_type
                ON career_memory(user_id, memory_type)"""
@@ -117,7 +155,50 @@ class SQLiteMemoryRepository(MemoryRepository):
             """CREATE INDEX IF NOT EXISTS idx_career_memory_type
                ON career_memory(memory_type)"""
         )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_career_memory_key
+               ON career_memory(memory_key)"""
+        )
         connection.commit()
+
+    def _migrate_single_key_schema(self) -> None:
+        """Upgrade the legacy global-key table to per-user composite identity."""
+        connection = self._database.connection
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("DROP TABLE IF EXISTS career_memory_v2")
+            connection.execute(
+                """
+                CREATE TABLE career_memory_v2 (
+                    user_id TEXT NOT NULL,
+                    memory_key TEXT NOT NULL,
+                    memory_type TEXT NOT NULL,
+                    value_json TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    serialization_version INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, memory_key)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO career_memory_v2 (
+                    user_id, memory_key, memory_type, value_json, metadata_json,
+                    created_at, serialization_version
+                )
+                SELECT user_id, memory_key, memory_type, value_json, metadata_json,
+                       created_at, serialization_version
+                FROM career_memory
+                """
+            )
+            connection.execute("DROP TABLE career_memory")
+            connection.execute("ALTER TABLE career_memory_v2 RENAME TO career_memory")
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
 
     @classmethod
     def _load(cls, row: tuple[Any, ...]) -> MemoryRecord:
@@ -142,7 +223,12 @@ class SQLiteMemoryRepository(MemoryRepository):
     @staticmethod
     def _dump(value: Any, field: str) -> str:
         try:
-            return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Memory {field} must be JSON-serializable.") from exc
 
