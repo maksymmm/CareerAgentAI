@@ -195,6 +195,7 @@ class CommunicationService:
         self, operation_id: str, message_id: str, *, human_approved: bool
     ) -> CommunicationMessage | None:
         """Send a persisted draft once through the crash-safe action service."""
+        self._validate_human_approval(human_approved)
         message = self._require_message(message_id)
         existing_operation = self._external_actions.get(operation_id)
         if message.direction != MessageDirection.DRAFT and existing_operation is None:
@@ -213,6 +214,7 @@ class CommunicationService:
         human_approved: bool,
     ) -> CommunicationMessage | None:
         """Persist and send a reply once, retaining its conversation identifiers."""
+        self._validate_human_approval(human_approved)
         parent = self._require_message(parent_message_id)
         payload = {"message_id": reply.message_id, "parent_message_id": parent.message_id}
         existing_operation = self._external_actions.get(operation_id)
@@ -234,6 +236,12 @@ class CommunicationService:
             payload,
         )
         return self._execute(operation_id, human_approved)
+
+    @staticmethod
+    def _validate_human_approval(value: bool) -> None:
+        """Reject untyped truthy approval values before persisting communication intent."""
+        if not isinstance(value, bool):
+            raise TypeError("human_approved must be a boolean.")
 
     @staticmethod
     def _validate_retry_message(
