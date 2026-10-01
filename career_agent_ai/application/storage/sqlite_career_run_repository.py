@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
 from career_agent_ai.application.career.career_plan import CareerPlan, CareerPlanStep
-from career_agent_ai.application.career.career_run_repository import CareerRunRepository
+from career_agent_ai.application.career.career_run_repository import (
+    CareerRunConflictError,
+    CareerRunRepository,
+)
 from career_agent_ai.application.career.career_run_state import CareerRunState
 from career_agent_ai.application.career.career_step_result import CareerStepResult
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
@@ -23,40 +27,79 @@ class SQLiteCareerRunRepository(CareerRunRepository):
         self._create_schema()
 
     def save(self, state: CareerRunState) -> None:
-        """Persist the complete state required to resume a career run."""
+        """Persist one run snapshot with optimistic compare-and-swap fencing."""
         workflow = state.workflow_engine.workflow
         if workflow is None:
             raise ValueError("Career run must contain a workflow before it can be saved.")
 
-        connection = self._database.connection
-        connection.execute(
-            """
-            INSERT INTO career_runs (
-                run_id, user_id, objective, plan_json, payload_json,
-                workflow_json, steps_json, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                user_id = excluded.user_id,
-                objective = excluded.objective,
-                plan_json = excluded.plan_json,
-                payload_json = excluded.payload_json,
-                workflow_json = excluded.workflow_json,
-                steps_json = excluded.steps_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                state.run_id,
-                state.user_id,
-                state.objective,
-                self._dump(self._plan_to_dict(state.plan)),
-                self._dump(state.payload),
-                self._dump(self._workflow_to_dict(workflow)),
-                self._dump([self._step_result_to_dict(item) for item in state.steps]),
-                datetime.now(timezone.utc).isoformat(),
-            ),
+        plan_json = self._dump(self._plan_to_dict(state.plan))
+        payload_json = self._dump(state.payload)
+        workflow_json = self._dump(self._workflow_to_dict(workflow))
+        steps_json = self._dump(
+            [self._step_result_to_dict(item) for item in state.steps]
         )
-        connection.commit()
+        updated_at = datetime.now(timezone.utc).isoformat()
+        connection = self._database.connection
+        next_version = 1 if state.version == 0 else state.version + 1
+        try:
+            if state.version == 0:
+                connection.execute(
+                    """
+                    INSERT INTO career_runs (
+                        run_id, user_id, objective, plan_json, payload_json,
+                        workflow_json, steps_json, updated_at, version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        state.run_id,
+                        state.user_id,
+                        state.objective,
+                        plan_json,
+                        payload_json,
+                        workflow_json,
+                        steps_json,
+                        updated_at,
+                        next_version,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE career_runs
+                    SET user_id = ?, objective = ?, plan_json = ?, payload_json = ?,
+                        workflow_json = ?, steps_json = ?, updated_at = ?, version = ?
+                    WHERE run_id = ? AND version = ?
+                    """,
+                    (
+                        state.user_id,
+                        state.objective,
+                        plan_json,
+                        payload_json,
+                        workflow_json,
+                        steps_json,
+                        updated_at,
+                        next_version,
+                        state.run_id,
+                        state.version,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise CareerRunConflictError(
+                        "Career run snapshot changed in another worker."
+                    )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            if connection.in_transaction:
+                connection.rollback()
+            raise CareerRunConflictError(
+                "Career run snapshot already exists with another version."
+            ) from exc
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+        state.version = next_version
 
     def get(self, run_id: str) -> CareerRunState | None:
         """Load one persisted run and rebuild its workflow engine."""
@@ -67,7 +110,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
         row = self._database.connection.execute(
             """
             SELECT run_id, user_id, objective, plan_json, payload_json,
-                   workflow_json, steps_json
+                   workflow_json, steps_json, version
             FROM career_runs
             WHERE run_id = ?
             """,
@@ -89,6 +132,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
                 self._step_result_from_dict(item)
                 for item in self._load(row[6])
             ],
+            version=int(row[7]),
         )
 
     def delete(self, run_id: str) -> None:
@@ -114,10 +158,19 @@ class SQLiteCareerRunRepository(CareerRunRepository):
                 payload_json TEXT NOT NULL,
                 workflow_json TEXT NOT NULL,
                 steps_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                version INTEGER NOT NULL CHECK(version >= 1)
             )
             """
         )
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(career_runs)").fetchall()
+        }
+        if "version" not in columns:
+            connection.execute(
+                "ALTER TABLE career_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+            )
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_career_runs_user_id
@@ -129,7 +182,12 @@ class SQLiteCareerRunRepository(CareerRunRepository):
     @staticmethod
     def _dump(value: Any) -> str:
         try:
-            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "Career run state must contain JSON-serializable values."
@@ -137,7 +195,12 @@ class SQLiteCareerRunRepository(CareerRunRepository):
 
     @staticmethod
     def _load(value: str) -> Any:
-        return json.loads(value)
+        return json.loads(
+            value,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"Invalid JSON constant: {token}.")
+            ),
+        )
 
     @staticmethod
     def _plan_to_dict(plan: CareerPlan) -> dict[str, Any]:
