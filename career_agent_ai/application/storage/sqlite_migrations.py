@@ -31,6 +31,8 @@ class SQLiteMigration:
             for statement in self.statements
         ):
             raise ValueError("migration statements must contain non-empty SQL strings.")
+        if not isinstance(self.destructive, bool):
+            raise TypeError("migration destructive flag must be a boolean.")
         object.__setattr__(self, "name", self.name.strip())
         object.__setattr__(
             self,
@@ -41,7 +43,14 @@ class SQLiteMigration:
     @property
     def checksum(self) -> str:
         """Return the stable SHA-256 checksum of migration identity and SQL."""
-        payload = "\n".join((str(self.version), self.name, *self.statements))
+        payload = "\n".join(
+            (
+                str(self.version),
+                self.name,
+                f"destructive={str(self.destructive).lower()}",
+                *self.statements,
+            )
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
