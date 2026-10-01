@@ -143,3 +143,86 @@ def test_upsert_is_durable_and_does_not_duplicate_records(tmp_path):
     restarted = make_engine(SQLiteDatabase(path))
     assert restarted.get("goal").value == "staff developer"
     assert len(restarted.find(user_id="u1", memory_type="goal")) == 1
+
+
+def test_same_memory_key_is_isolated_per_user():
+    repository = SQLiteMemoryRepository(SQLiteDatabase())
+    user_one = MemoryRecord(
+        "goal", "engineer", user_id="u1", memory_type="goal"
+    )
+    user_two = MemoryRecord(
+        "goal", "designer", user_id="u2", memory_type="goal"
+    )
+
+    repository.save(user_one)
+    repository.save(user_two)
+
+    assert repository.get("goal", user_id="u1") == user_one
+    assert repository.get("goal", user_id="u2") == user_two
+    assert repository.find(user_id="u1") == (user_one,)
+    assert repository.find(user_id="u2") == (user_two,)
+    with pytest.raises(ValueError, match="multiple users"):
+        repository.get("goal")
+
+
+def test_user_scoped_upsert_does_not_reassign_another_users_key():
+    repository = SQLiteMemoryRepository(SQLiteDatabase())
+    repository.save(
+        MemoryRecord("goal", "engineer", user_id="u1", memory_type="goal")
+    )
+    repository.save(
+        MemoryRecord("goal", "designer", user_id="u2", memory_type="goal")
+    )
+    replacement = MemoryRecord(
+        "goal", "staff engineer", user_id="u1", memory_type="goal"
+    )
+
+    repository.save(replacement)
+
+    assert repository.get("goal", user_id="u1") == replacement
+    assert repository.get("goal", user_id="u2").value == "designer"
+
+
+def test_legacy_global_key_schema_migrates_without_data_loss(tmp_path):
+    path = str(tmp_path / "legacy-memory.sqlite")
+    database = SQLiteDatabase(path)
+    database.connection.execute(
+        """
+        CREATE TABLE career_memory (
+            memory_key TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            memory_type TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            serialization_version INTEGER NOT NULL
+        )
+        """
+    )
+    database.connection.execute(
+        """
+        INSERT INTO career_memory (
+            memory_key, user_id, memory_type, value_json, metadata_json,
+            created_at, serialization_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "goal",
+            "u1",
+            "goal",
+            '"engineer"',
+            "{}",
+            datetime(2026, 1, 2, tzinfo=timezone.utc).isoformat(),
+            1,
+        ),
+    )
+    database.connection.commit()
+
+    repository = SQLiteMemoryRepository(database)
+
+    assert repository.get("goal", user_id="u1").value == "engineer"
+    repository.save(
+        MemoryRecord("goal", "designer", user_id="u2", memory_type="goal")
+    )
+    assert repository.get("goal", user_id="u1").value == "engineer"
+    assert repository.get("goal", user_id="u2").value == "designer"
