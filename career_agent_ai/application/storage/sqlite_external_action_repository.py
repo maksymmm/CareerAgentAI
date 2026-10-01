@@ -203,13 +203,23 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
     @staticmethod
     def _dump(value: Mapping[str, Any]) -> str:
         try:
-            return json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
+            return json.dumps(
+                dict(value),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
         except (TypeError, ValueError) as exc:
             raise ValueError("External-action data must be JSON-serializable.") from exc
 
     @staticmethod
     def _load_object(value: str, field: str) -> dict[str, Any]:
-        loaded = json.loads(value)
+        loaded = json.loads(
+            value,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"Invalid JSON constant: {token}.")
+            ),
+        )
         if not isinstance(loaded, dict):
             raise ValueError(f"{field} must contain a JSON object.")
         return loaded
