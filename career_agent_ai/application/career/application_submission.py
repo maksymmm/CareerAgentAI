@@ -176,6 +176,8 @@ class ApplicationSubmissionService:
         human_approved: bool,
     ) -> Mapping[str, Any] | None:
         """Submit one exact approved application artifact after explicit human approval."""
+        if not isinstance(human_approved, bool):
+            raise TypeError("human_approved must be a boolean.")
         operation_id = self._identifier(operation_id, "operation_id")
         job_id = self._identifier(job_id, "job_id")
         application_id = self._identifier(application_id, "application_id")
