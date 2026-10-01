@@ -157,7 +157,13 @@ class CareerOrchestrator:
             raise RuntimeError("Only a human-gated career run can be resumed.")
 
         if human_result is not None:
-            state.payload["human_result"] = human_result
+            try:
+                durable_human_result = self._json_safe(human_result)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "human_result is not durably serializable."
+                ) from exc
+            state.payload["human_result"] = durable_human_result
         engine.resume()
         engine.complete_step()
         self._workflow = engine
