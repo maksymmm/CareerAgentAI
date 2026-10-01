@@ -86,6 +86,39 @@ def test_dry_run_send_requires_approval_and_suppresses_duplicates():
     ]
 
 
+def test_send_rejects_non_boolean_approval_before_preparing_operation():
+    service, _, operations, provider = stack(SQLiteDatabase())
+    service.create_draft(message())
+
+    with pytest.raises(TypeError, match="boolean"):
+        service.send(
+            "send:non-bool",
+            "message-1",
+            human_approved="false",
+        )
+
+    assert operations.get("send:non-bool") is None
+    assert [call for call in provider.calls if call[0] == "send"] == []
+
+
+def test_reply_rejects_non_boolean_approval_before_persisting_reply():
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    repository.save(message(direction=MessageDirection.INBOUND))
+    reply = message("message-2", in_reply_to="message-1")
+
+    with pytest.raises(TypeError, match="boolean"):
+        service.reply(
+            "reply:non-bool",
+            "message-1",
+            reply,
+            human_approved="false",
+        )
+
+    assert operations.get("reply:non-bool") is None
+    assert repository.get("message-2") is None
+    assert [call for call in provider.calls if call[0] == "reply"] == []
+
+
 def test_outbound_message_cannot_be_resent_with_a_new_operation_id():
     service, _, operations, provider = stack(SQLiteDatabase())
     service.create_draft(message())
