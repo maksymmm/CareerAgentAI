@@ -641,3 +641,169 @@ def test_concurrent_cross_process_resumes_execute_next_agent_once(tmp_path):
     assert len(completed) == 1
     assert completed[0].success is True
     assert resume_agent.last_context is not None
+
+
+def test_durable_running_run_can_continue_after_process_restart(tmp_path):
+    path = str(tmp_path / "running-recovery.sqlite")
+    first_database = SQLiteDatabase(path)
+    first_repository = SQLiteCareerRunRepository(first_database)
+    crash_agent = FakeAgent("job_search", error=SystemExit("simulated process death"))
+    first_registry = AgentRegistry()
+    first_registry.register(crash_agent)
+    first = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(first_registry),
+        run_repository=first_repository,
+    )
+
+    with pytest.raises(SystemExit, match="simulated process death"):
+        first.run(
+            "user-1",
+            "Find a job",
+            {"actions": ["job_search"]},
+        )
+
+    row = first_database.connection.execute(
+        "SELECT run_id FROM career_runs"
+    ).fetchone()
+    assert row is not None
+    run_id = str(row[0])
+    durable = first_repository.get(run_id)
+    assert durable is not None
+    assert durable.workflow_engine.workflow is not None
+    assert durable.workflow_engine.workflow.status == WorkflowState.RUNNING
+    first_database.close()
+
+    second_database = SQLiteDatabase(path)
+    second_repository = SQLiteCareerRunRepository(second_database)
+    recovered_agent = FakeAgent("job_search")
+    second_registry = AgentRegistry()
+    second_registry.register(recovered_agent)
+    second = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(second_registry),
+        run_repository=second_repository,
+    )
+
+    result = second.continue_run(run_id)
+
+    assert result.success is True
+    assert tuple(step.action for step in result.steps) == ("job_search",)
+    assert recovered_agent.last_context is not None
+    assert second_repository.get(run_id) is None
+    second_database.close()
+
+
+def test_concurrent_running_recovery_is_fenced_before_agent_execution(tmp_path):
+    path = str(tmp_path / "running-recovery-race.sqlite")
+    setup_database = SQLiteDatabase(path)
+    setup_repository = SQLiteCareerRunRepository(setup_database)
+    crash_agent = FakeAgent("job_search", error=SystemExit("simulated process death"))
+    setup_registry = AgentRegistry()
+    setup_registry.register(crash_agent)
+    setup = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(setup_registry),
+        run_repository=setup_repository,
+    )
+
+    with pytest.raises(SystemExit):
+        setup.run("user-1", "Find a job", {"actions": ["job_search"]})
+    row = setup_database.connection.execute(
+        "SELECT run_id FROM career_runs"
+    ).fetchone()
+    assert row is not None
+    run_id = str(row[0])
+    setup_database.close()
+
+    barrier = Barrier(2)
+    executed = []
+    execution_lock = __import__("threading").Lock()
+
+    class BarrierRepository(SQLiteCareerRunRepository):
+        def get(self, requested_run_id):
+            state = super().get(requested_run_id)
+            if (
+                state is not None
+                and state.workflow_engine.workflow is not None
+                and state.workflow_engine.workflow.status == WorkflowState.RUNNING
+                and state.version == 1
+            ):
+                barrier.wait(timeout=5)
+            return state
+
+    class CountingAgent(FakeAgent):
+        def execute(self, context):
+            with execution_lock:
+                executed.append(context.metadata["career_run_id"])
+            return super().execute(context)
+
+    agent = CountingAgent("job_search")
+
+    def recover_once():
+        database = SQLiteDatabase(path)
+        repository = BarrierRepository(database)
+        registry = AgentRegistry()
+        registry.register(agent)
+        worker = CareerOrchestrator(
+            memory_engine=MemoryEngine(),
+            workflow_engine=WorkflowEngine(),
+            agent_factory=AgentFactory(registry),
+            run_repository=repository,
+        )
+        try:
+            try:
+                return worker.continue_run(run_id)
+            except CareerRunConflictError:
+                return "conflict"
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(lambda _: recover_once(), range(2)))
+
+    assert sum(result == "conflict" for result in results) == 1
+    completed = [result for result in results if result != "conflict"]
+    assert len(completed) == 1
+    assert completed[0].success is True
+    assert executed == [run_id]
+
+
+def test_continue_run_rejects_paused_human_gate(tmp_path):
+    path = str(tmp_path / "paused-not-running.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerRunRepository(database)
+    gated = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    registry = AgentRegistry()
+    registry.register(gated)
+    orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+    paused = orchestrator.run(
+        "user-1",
+        "Apply now",
+        {"actions": ["job_application"]},
+    )
+
+    restarted = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(AgentRegistry()),
+        run_repository=repository,
+    )
+    with pytest.raises(RuntimeError, match="running"):
+        restarted.continue_run(paused.run_id)
+    database.close()
