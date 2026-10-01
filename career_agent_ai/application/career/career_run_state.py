@@ -19,6 +19,16 @@ class CareerRunState:
     payload: dict[str, Any]
     workflow_engine: WorkflowEngine
     steps: list[CareerStepResult] = field(default_factory=list)
+    version: int = 0
+
+    def __post_init__(self) -> None:
+        """Validate the optimistic persistence version."""
+        if (
+            not isinstance(self.version, int)
+            or isinstance(self.version, bool)
+            or self.version < 0
+        ):
+            raise ValueError("Career run version must be a non-negative integer.")
 
     def add_step(self, result: CareerStepResult) -> None:
         """Append one completed execution result to the run state."""
