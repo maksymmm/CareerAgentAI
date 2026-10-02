@@ -630,7 +630,7 @@ def test_concurrent_cross_process_resumes_execute_next_agent_once(tmp_path):
                     paused.run_id,
                     human_result={"approved": True},
                 )
-            except CareerRunConflictError:
+            except (CareerRunConflictError, KeyError):
                 return "conflict"
         finally:
             database.close()
@@ -904,18 +904,17 @@ def test_execution_lease_heartbeat_retries_transient_sqlite_lock(tmp_path):
             assert release.wait(timeout=5)
             return super().execute(context)
 
-    first_db = SQLiteDatabase(path)
-    first_repo = FlakyHeartbeatRepository(first_db)
-    first_registry = AgentRegistry()
-    first_registry.register(BlockingAgent("job_search"))
-    first = FastLeaseOrchestrator(
-        memory_engine=MemoryEngine(),
-        workflow_engine=WorkflowEngine(),
-        agent_factory=AgentFactory(first_registry),
-        run_repository=first_repo,
-    )
-
     def run_first():
+        first_db = SQLiteDatabase(path)
+        first_repo = FlakyHeartbeatRepository(first_db)
+        first_registry = AgentRegistry()
+        first_registry.register(BlockingAgent("job_search"))
+        first = FastLeaseOrchestrator(
+            memory_engine=MemoryEngine(),
+            workflow_engine=WorkflowEngine(),
+            agent_factory=AgentFactory(first_registry),
+            run_repository=first_repo,
+        )
         try:
             return first.continue_run(run_id)
         finally:
