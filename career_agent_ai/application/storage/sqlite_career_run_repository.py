@@ -26,6 +26,11 @@ class SQLiteCareerRunRepository(CareerRunRepository):
         self._database = database
         self._create_schema()
 
+    @property
+    def supports_background_lease_renewal(self) -> bool:
+        """Use a separate SQLite connection for file-backed lease heartbeats."""
+        return self._database.path != ":memory:"
+
     def save(self, state: CareerRunState, *, lease_owner: str | None = None) -> None:
         """Persist one run snapshot with optimistic version and lease fencing."""
         workflow = state.workflow_engine.workflow
