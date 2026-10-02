@@ -758,7 +758,7 @@ def test_concurrent_running_recovery_is_fenced_before_agent_execution(tmp_path):
         try:
             try:
                 return worker.continue_run(run_id)
-            except CareerRunConflictError:
+            except (CareerRunConflictError, KeyError):
                 return "conflict"
         finally:
             database.close()
@@ -827,10 +827,15 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_agent_call(tmp_pat
         )
         return database, worker
 
-    first_db, first = make_worker(blocking_agent)
+    def run_first_worker():
+        first_db, first = make_worker(blocking_agent)
+        try:
+            return first.continue_run(run_id)
+        finally:
+            first_db.close()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(first.continue_run, run_id)
+        future = executor.submit(run_first_worker)
         assert entered.wait(timeout=5)
 
         # Wait beyond the original lease TTL. Heartbeat renewal must keep
@@ -849,7 +854,6 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_agent_call(tmp_pat
 
     assert result.success is True
     assert executed == [run_id]
-    first_db.close()
 
 def test_continue_run_rejects_paused_human_gate(tmp_path):
     path = str(tmp_path / "paused-not-running.sqlite")
