@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
+import time
 
 from career_agent_ai.application.agents.agent import Agent
 from career_agent_ai.application.agents.agent_factory import AgentFactory
@@ -771,6 +772,84 @@ def test_concurrent_running_recovery_is_fenced_before_agent_execution(tmp_path):
     assert completed[0].success is True
     assert executed == [run_id]
 
+
+
+def test_execution_lease_heartbeat_blocks_reclaim_during_long_agent_call(tmp_path):
+    path = str(tmp_path / "running-lease-heartbeat.sqlite")
+    setup_database = SQLiteDatabase(path)
+    setup_repository = SQLiteCareerRunRepository(setup_database)
+    crash_agent = FakeAgent("job_search", error=SystemExit("simulated process death"))
+    setup_registry = AgentRegistry()
+    setup_registry.register(crash_agent)
+    setup = CareerOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(setup_registry),
+        run_repository=setup_repository,
+    )
+
+    with pytest.raises(SystemExit):
+        setup.run("user-1", "Find a job", {"actions": ["job_search"]})
+    row = setup_database.connection.execute(
+        "SELECT run_id FROM career_runs"
+    ).fetchone()
+    assert row is not None
+    run_id = str(row[0])
+    setup_database.close()
+
+    entered = Event()
+    release = Event()
+    executed: list[str] = []
+
+    class FastLeaseOrchestrator(CareerOrchestrator):
+        LEASE_TTL_SECONDS = 1
+        LEASE_HEARTBEAT_SECONDS = 0.2
+
+    class BlockingAgent(FakeAgent):
+        def execute(self, context):
+            executed.append(context.metadata["career_run_id"])
+            entered.set()
+            assert release.wait(timeout=5)
+            return super().execute(context)
+
+    blocking_agent = BlockingAgent("job_search")
+
+    def make_worker(agent):
+        database = SQLiteDatabase(path)
+        repository = SQLiteCareerRunRepository(database)
+        registry = AgentRegistry()
+        registry.register(agent)
+        worker = FastLeaseOrchestrator(
+            memory_engine=MemoryEngine(),
+            workflow_engine=WorkflowEngine(),
+            agent_factory=AgentFactory(registry),
+            run_repository=repository,
+        )
+        return database, worker
+
+    first_db, first = make_worker(blocking_agent)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(first.continue_run, run_id)
+        assert entered.wait(timeout=5)
+
+        # Wait beyond the original lease TTL. Heartbeat renewal must keep
+        # the live worker's durable ownership intact.
+        time.sleep(1.2)
+
+        second_db, second = make_worker(FakeAgent("job_search"))
+        try:
+            with pytest.raises(CareerRunConflictError, match="leased"):
+                second.continue_run(run_id)
+        finally:
+            second_db.close()
+
+        release.set()
+        result = future.result(timeout=5)
+
+    assert result.success is True
+    assert executed == [run_id]
+    first_db.close()
 
 def test_continue_run_rejects_paused_human_gate(tmp_path):
     path = str(tmp_path / "paused-not-running.sqlite")
