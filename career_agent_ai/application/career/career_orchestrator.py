@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 import math
-from threading import RLock
+from threading import Event, RLock, Thread
 from typing import Any
 from uuid import uuid4
 
@@ -42,6 +43,8 @@ class CareerOrchestrator:
     """Turn a career objective into bounded, independently resumable runs."""
 
     DEFAULT_MAX_STEPS = 8
+    LEASE_TTL_SECONDS = 30
+    LEASE_HEARTBEAT_SECONDS = 10
 
     def __init__(
         self,
@@ -61,6 +64,9 @@ class CareerOrchestrator:
         self._runs: dict[str, CareerRunState] = {}
         self._run_repository = run_repository
         self._resume_lock = RLock()
+        self._lease_owner = uuid4().hex
+        self._leased_runs: set[str] = set()
+        self._lease_errors: dict[str, list[Exception]] = {}
 
     def plan(self, objective: str, payload: dict[str, Any] | None = None) -> CareerPlan:
         """Build a bounded career action plan from an objective."""
@@ -119,7 +125,10 @@ class CareerOrchestrator:
         self._runs[run_id] = state
         self._workflow = engine
         self._persist_state(state)
-        return self._continue(state)
+        if self._run_repository is None:
+            return self._continue(state)
+        with self._execution_lease(run_id) as leased_state:
+            return self._continue(leased_state)
 
     def resume(
         self,
@@ -137,48 +146,48 @@ class CareerOrchestrator:
                 raise
 
     def continue_run(self, run_id: str) -> CareerRunResult:
-        """Reclaim and continue one durable RUNNING run after process restart.
-
-        Before any agent executes, the loaded snapshot is compare-and-swapped back
-        to durable storage. This version bump acts as an execution fence: concurrent
-        workers loading the same snapshot cannot both advance the run.
-        """
+        """Reclaim and continue one durable RUNNING run under an execution lease."""
         with self._resume_lock:
-            if self._run_repository is None:
-                state = self._runs.get(run_id)
-            else:
-                state = self._run_repository.get(run_id)
-                if state is not None:
-                    self._runs[run_id] = state
-            if state is None:
-                raise KeyError(f"Unknown career run '{run_id}'.")
-            engine = state.workflow_engine
-            if engine.workflow is None:
-                raise RuntimeError("Career run has no workflow.")
-            if engine.workflow.status != WorkflowState.RUNNING:
-                raise RuntimeError("Only a durable running career run can be continued.")
             try:
-                if self._run_repository is not None:
-                    self._persist_state(state)
-                return self._continue(state)
+                if self._run_repository is None:
+                    state = self._runs.get(run_id)
+                    if state is None:
+                        raise KeyError(f"Unknown career run '{run_id}'.")
+                    return self._continue_running_state(state)
+                with self._execution_lease(run_id) as state:
+                    return self._continue_running_state(state)
             except CareerRunConflictError:
                 self._runs.pop(run_id, None)
                 raise
+
+    def _continue_running_state(self, state: CareerRunState) -> CareerRunResult:
+        """Validate and continue a state that must already be RUNNING."""
+        engine = state.workflow_engine
+        if engine.workflow is None:
+            raise RuntimeError("Career run has no workflow.")
+        if engine.workflow.status != WorkflowState.RUNNING:
+            raise RuntimeError("Only a durable running career run can be continued.")
+        return self._continue(state)
 
     def _resume_locked(
         self,
         run_id: str,
         human_result: Any | None,
     ) -> CareerRunResult:
-        """Resume a paused human-gated run while holding the local resume lock."""
+        """Resume a paused human-gated run while holding local and durable fencing."""
+        if self._run_repository is not None:
+            with self._execution_lease(run_id) as state:
+                return self._resume_state(state, human_result)
+
         state = self._runs.get(run_id)
-        if state is None and self._run_repository is not None:
-            state = self._run_repository.get(run_id)
-            if state is not None:
-                self._runs[run_id] = state
         if state is None:
             raise KeyError(f"Unknown career run '{run_id}'.")
+        return self._resume_state(state, human_result)
 
+    def _resume_state(
+        self, state: CareerRunState, human_result: Any | None
+    ) -> CareerRunResult:
+        """Apply human input to one exclusively owned paused run and continue it."""
         engine = state.workflow_engine
         if engine.workflow is None:
             raise RuntimeError("Career run has no workflow.")
@@ -196,8 +205,6 @@ class CareerOrchestrator:
         engine.resume()
         engine.complete_step()
         self._workflow = engine
-        # Persist the approval and completed human gate before another agent runs.
-        # The repository compare-and-swap is the cross-process execution fence.
         self._persist_state(state)
         return self._continue(state)
 
@@ -235,8 +242,10 @@ class CareerOrchestrator:
             )
 
             try:
+                self._assert_lease_healthy(state.run_id)
                 agent = self._factory.resolve(step.action)
                 result = agent.execute(context)
+                self._assert_lease_healthy(state.run_id)
             except Exception as exc:
                 step_result = CareerStepResult(
                     step_id=step.id,
@@ -325,15 +334,92 @@ class CareerOrchestrator:
         return result
 
     def _persist_state(self, state: CareerRunState) -> None:
-        """Persist a resumable run when durable storage is configured."""
+        """Persist a resumable run while respecting any held execution lease."""
         if self._run_repository is not None:
-            self._run_repository.save(state)
+            self._assert_lease_healthy(state.run_id)
+            lease_owner = (
+                self._lease_owner if state.run_id in self._leased_runs else None
+            )
+            self._run_repository.save(state, lease_owner=lease_owner)
 
     def _forget_state(self, run_id: str) -> None:
-        """Evict terminal state from memory and durable active-run storage."""
+        """Evict terminal state while respecting any held execution lease."""
         self._runs.pop(run_id, None)
         if self._run_repository is not None:
-            self._run_repository.delete(run_id)
+            lease_owner = self._lease_owner if run_id in self._leased_runs else None
+            self._run_repository.delete(run_id, lease_owner=lease_owner)
+
+    @contextmanager
+    def _execution_lease(self, run_id: str) -> Iterator[CareerRunState]:
+        """Hold durable ownership across agent execution and checkpoint writes."""
+        if self._run_repository is None:
+            state = self._runs.get(run_id)
+            if state is None:
+                raise KeyError(f"Unknown career run '{run_id}'.")
+            yield state
+            return
+
+        state = self._run_repository.acquire_lease(
+            run_id, self._lease_owner, ttl_seconds=self.LEASE_TTL_SECONDS
+        )
+        self._runs[run_id] = state
+        self._leased_runs.add(run_id)
+        errors: list[Exception] = []
+        self._lease_errors[run_id] = errors
+        stop = Event()
+        heartbeat: Thread | None = None
+        if self._run_repository.supports_background_lease_renewal:
+            heartbeat = Thread(
+                target=self._lease_heartbeat,
+                args=(run_id, stop, errors),
+                name=f"career-run-lease-{run_id[:8]}",
+                daemon=True,
+            )
+            heartbeat.start()
+
+        active_exception = False
+        try:
+            yield state
+            self._assert_lease_healthy(run_id)
+        except BaseException:
+            active_exception = True
+            raise
+        finally:
+            stop.set()
+            if heartbeat is not None:
+                heartbeat.join(timeout=self.LEASE_HEARTBEAT_SECONDS + 1)
+            try:
+                self._run_repository.release_lease(run_id, self._lease_owner)
+            except CareerRunConflictError:
+                if not active_exception:
+                    raise
+            finally:
+                self._leased_runs.discard(run_id)
+                self._lease_errors.pop(run_id, None)
+
+    def _lease_heartbeat(
+        self, run_id: str, stop: Event, errors: list[Exception]
+    ) -> None:
+        """Renew a file-backed execution lease until the owning action completes."""
+        assert self._run_repository is not None
+        while not stop.wait(self.LEASE_HEARTBEAT_SECONDS):
+            try:
+                self._run_repository.renew_lease(
+                    run_id,
+                    self._lease_owner,
+                    ttl_seconds=self.LEASE_TTL_SECONDS,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                return
+
+    def _assert_lease_healthy(self, run_id: str) -> None:
+        """Fail closed when durable lease renewal has been lost."""
+        errors = self._lease_errors.get(run_id)
+        if errors:
+            raise CareerRunConflictError(
+                "Career run execution lease heartbeat failed."
+            ) from errors[0]
 
     def _remember_run(self, user_id: str, result: CareerRunResult) -> None:
         """Persist a compact run summary in the current memory engine."""
