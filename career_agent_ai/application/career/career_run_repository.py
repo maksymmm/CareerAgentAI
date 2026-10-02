@@ -12,6 +12,11 @@ class CareerRunConflictError(RuntimeError):
 class CareerRunRepository(ABC):
     """Persistence boundary for resumable career runs."""
 
+    @property
+    def supports_background_lease_renewal(self) -> bool:
+        """Return whether lease renewal is safe from a dedicated heartbeat thread."""
+        return False
+
     @abstractmethod
     def save(self, state: CareerRunState, *, lease_owner: str | None = None) -> None:
         """Create or compare-and-swap one active run snapshot.
