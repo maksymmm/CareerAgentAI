@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from career_agent_ai.application.career.career_plan import CareerPlan, CareerPlanStep
@@ -26,8 +26,8 @@ class SQLiteCareerRunRepository(CareerRunRepository):
         self._database = database
         self._create_schema()
 
-    def save(self, state: CareerRunState) -> None:
-        """Persist one run snapshot with optimistic compare-and-swap fencing."""
+    def save(self, state: CareerRunState, *, lease_owner: str | None = None) -> None:
+        """Persist one run snapshot with optimistic version and lease fencing."""
         workflow = state.workflow_engine.workflow
         if workflow is None:
             raise ValueError("Career run must contain a workflow before it can be saved.")
@@ -69,6 +69,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
                     SET user_id = ?, objective = ?, plan_json = ?, payload_json = ?,
                         workflow_json = ?, steps_json = ?, updated_at = ?, version = ?
                     WHERE run_id = ? AND version = ?
+                      AND (lease_owner IS NULL OR lease_owner = ?)
                     """,
                     (
                         state.user_id,
@@ -81,11 +82,12 @@ class SQLiteCareerRunRepository(CareerRunRepository):
                         next_version,
                         state.run_id,
                         state.version,
+                        lease_owner,
                     ),
                 )
                 if cursor.rowcount != 1:
                     raise CareerRunConflictError(
-                        "Career run snapshot changed in another worker."
+                        "Career run snapshot changed or is leased by another worker."
                     )
             connection.commit()
         except sqlite3.IntegrityError as exc:
@@ -119,6 +121,211 @@ class SQLiteCareerRunRepository(CareerRunRepository):
         if row is None:
             return None
 
+        return self._state_from_row(row)
+
+    def acquire_lease(
+        self, run_id: str, owner_id: str, *, ttl_seconds: int
+    ) -> CareerRunState:
+        """Acquire or reclaim an execution lease without a post-commit reread."""
+        normalized_run = self._normalize_token(run_id, "run_id")
+        normalized_owner = self._normalize_token(owner_id, "owner_id")
+        self._validate_ttl(ttl_seconds)
+        connection = self._database.connection
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT run_id, user_id, objective, plan_json, payload_json,
+                       workflow_json, steps_json, version,
+                       lease_owner, lease_expires_at
+                FROM career_runs WHERE run_id = ?
+                """,
+                (normalized_run,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown career run '{normalized_run}'.")
+            current_owner = row[8]
+            raw_expiry = row[9]
+            if current_owner is not None and current_owner != normalized_owner:
+                if raw_expiry is None:
+                    raise CareerRunConflictError(
+                        "Career run has a malformed active execution lease."
+                    )
+                expiry = datetime.fromisoformat(str(raw_expiry))
+                if expiry.tzinfo is None or expiry.utcoffset() is None:
+                    raise CareerRunConflictError(
+                        "Career run has a malformed active execution lease."
+                    )
+                if expiry > now:
+                    raise CareerRunConflictError(
+                        "Career run is actively leased by another worker."
+                    )
+            cursor = connection.execute(
+                """
+                UPDATE career_runs
+                SET lease_owner = ?, lease_expires_at = ?
+                WHERE run_id = ?
+                  AND (
+                    lease_owner IS NULL
+                    OR lease_owner = ?
+                    OR lease_expires_at <= ?
+                  )
+                """,
+                (
+                    normalized_owner,
+                    expires_at,
+                    normalized_run,
+                    normalized_owner,
+                    now.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise CareerRunConflictError(
+                    "Career run execution lease changed in another worker."
+                )
+            state = self._state_from_row(row)
+            connection.commit()
+            return state
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+    def renew_lease(
+        self, run_id: str, owner_id: str, *, ttl_seconds: int
+    ) -> None:
+        """Extend one execution lease; file-backed SQLite uses its own connection."""
+        normalized_run = self._normalize_token(run_id, "run_id")
+        normalized_owner = self._normalize_token(owner_id, "owner_id")
+        self._validate_ttl(ttl_seconds)
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        ).isoformat()
+        if self._database.path == ":memory:":
+            connection = self._database.connection
+            close_connection = False
+        else:
+            connection = sqlite3.connect(self._database.path, timeout=5)
+            close_connection = True
+        try:
+            cursor = connection.execute(
+                """
+                UPDATE career_runs
+                SET lease_expires_at = ?
+                WHERE run_id = ? AND lease_owner = ?
+                """,
+                (expires_at, normalized_run, normalized_owner),
+            )
+            connection.commit()
+            if cursor.rowcount != 1:
+                raise CareerRunConflictError(
+                    "Career run execution lease is no longer owned by this worker."
+                )
+        finally:
+            if close_connection:
+                connection.close()
+
+    def release_lease(self, run_id: str, owner_id: str) -> None:
+        """Release an owned execution lease; missing terminal rows are harmless."""
+        normalized_run = self._normalize_token(run_id, "run_id")
+        normalized_owner = self._normalize_token(owner_id, "owner_id")
+        connection = self._database.connection
+        cursor = connection.execute(
+            """
+            UPDATE career_runs
+            SET lease_owner = NULL, lease_expires_at = NULL
+            WHERE run_id = ? AND lease_owner = ?
+            """,
+            (normalized_run, normalized_owner),
+        )
+        connection.commit()
+        if cursor.rowcount == 1:
+            return
+        row = connection.execute(
+            "SELECT lease_owner FROM career_runs WHERE run_id = ?",
+            (normalized_run,),
+        ).fetchone()
+        if row is None:
+            return
+        if row[0] is not None:
+            raise CareerRunConflictError(
+                "Career run execution lease is owned by another worker."
+            )
+
+    def delete(self, run_id: str, *, lease_owner: str | None = None) -> None:
+        """Delete one persisted career run while respecting active lease ownership."""
+        normalized = self._normalize_token(run_id, "run_id")
+        cursor = self._database.connection.execute(
+            """
+            DELETE FROM career_runs
+            WHERE run_id = ? AND (lease_owner IS NULL OR lease_owner = ?)
+            """,
+            (normalized, lease_owner),
+        )
+        self._database.connection.commit()
+        if cursor.rowcount == 0:
+            row = self._database.connection.execute(
+                "SELECT 1 FROM career_runs WHERE run_id = ?",
+                (normalized,),
+            ).fetchone()
+            if row is not None:
+                raise CareerRunConflictError(
+                    "Career run is leased by another worker."
+                )
+
+    def _create_schema(self) -> None:
+        connection = self._database.connection
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS career_runs (
+                run_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                objective TEXT NOT NULL,
+                plan_json TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                workflow_json TEXT NOT NULL,
+                steps_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                version INTEGER NOT NULL CHECK(version >= 1),
+                lease_owner TEXT,
+                lease_expires_at TEXT
+            )
+            """
+        )
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(career_runs)").fetchall()
+        }
+        if "version" not in columns:
+            connection.execute(
+                "ALTER TABLE career_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+            )
+        if "lease_owner" not in columns:
+            connection.execute(
+                "ALTER TABLE career_runs ADD COLUMN lease_owner TEXT"
+            )
+        if "lease_expires_at" not in columns:
+            connection.execute(
+                "ALTER TABLE career_runs ADD COLUMN lease_expires_at TEXT"
+            )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_career_runs_user_id
+            ON career_runs(user_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_career_runs_lease_expiry
+            ON career_runs(lease_expires_at)
+            """
+        )
+        connection.commit()
+
+    def _state_from_row(self, row: tuple[Any, ...]) -> CareerRunState:
+        """Rebuild a validated run state from the durable snapshot columns."""
         engine = WorkflowEngine()
         engine.restore(self._workflow_from_dict(self._load(row[5])))
         return CareerRunState(
@@ -135,49 +342,26 @@ class SQLiteCareerRunRepository(CareerRunRepository):
             version=int(row[7]),
         )
 
-    def delete(self, run_id: str) -> None:
-        """Delete one persisted career run."""
-        normalized = run_id.strip()
+    @staticmethod
+    def _normalize_token(value: str, field: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{field} must be text.")
+        normalized = value.strip()
         if not normalized:
-            raise ValueError("run_id must not be empty.")
-        self._database.connection.execute(
-            "DELETE FROM career_runs WHERE run_id = ?",
-            (normalized,),
-        )
-        self._database.connection.commit()
+            raise ValueError(f"{field} must not be empty.")
+        if len(normalized) > 200:
+            raise ValueError(f"{field} must not exceed 200 characters.")
+        return normalized
 
-    def _create_schema(self) -> None:
-        connection = self._database.connection
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS career_runs (
-                run_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                objective TEXT NOT NULL,
-                plan_json TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                workflow_json TEXT NOT NULL,
-                steps_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                version INTEGER NOT NULL CHECK(version >= 1)
-            )
-            """
-        )
-        columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(career_runs)").fetchall()
-        }
-        if "version" not in columns:
-            connection.execute(
-                "ALTER TABLE career_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
-            )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_career_runs_user_id
-            ON career_runs(user_id)
-            """
-        )
-        connection.commit()
+    @staticmethod
+    def _validate_ttl(ttl_seconds: int) -> None:
+        if (
+            not isinstance(ttl_seconds, int)
+            or isinstance(ttl_seconds, bool)
+            or ttl_seconds <= 0
+            or ttl_seconds > 3600
+        ):
+            raise ValueError("ttl_seconds must be an integer from 1 to 3600.")
 
     @staticmethod
     def _dump(value: Any) -> str:
