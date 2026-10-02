@@ -6,7 +6,9 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 import math
+import sqlite3
 from threading import Event, RLock, Thread
+from time import monotonic
 from typing import Any
 from uuid import uuid4
 
@@ -400,18 +402,45 @@ class CareerOrchestrator:
     def _lease_heartbeat(
         self, run_id: str, stop: Event, errors: list[Exception]
     ) -> None:
-        """Renew a file-backed execution lease until the owning action completes."""
+        """Renew a file-backed execution lease until the owning action completes.
+
+        SQLite lock/busy errors are transient writer-contention signals. Retry them
+        within the remaining lease budget instead of poisoning an otherwise valid
+        execution lease after the first lock timeout. Ownership conflicts and other
+        errors remain terminal for the heartbeat.
+        """
         assert self._run_repository is not None
+        retry_delay = min(1.0, max(0.05, self.LEASE_HEARTBEAT_SECONDS / 4))
+        retry_budget = max(
+            retry_delay,
+            self.LEASE_TTL_SECONDS - self.LEASE_HEARTBEAT_SECONDS,
+        )
         while not stop.wait(self.LEASE_HEARTBEAT_SECONDS):
-            try:
-                self._run_repository.renew_lease(
-                    run_id,
-                    self._lease_owner,
-                    ttl_seconds=self.LEASE_TTL_SECONDS,
-                )
-            except Exception as exc:
-                errors.append(exc)
-                return
+            deadline = monotonic() + retry_budget
+            while True:
+                try:
+                    self._run_repository.renew_lease(
+                        run_id,
+                        self._lease_owner,
+                        ttl_seconds=self.LEASE_TTL_SECONDS,
+                    )
+                    break
+                except sqlite3.OperationalError as exc:
+                    message = str(exc).lower()
+                    if (
+                        "locked" not in message
+                        and "busy" not in message
+                    ):
+                        errors.append(exc)
+                        return
+                    if monotonic() >= deadline:
+                        errors.append(exc)
+                        return
+                    if stop.wait(retry_delay):
+                        return
+                except Exception as exc:
+                    errors.append(exc)
+                    return
 
     def _assert_lease_healthy(self, run_id: str) -> None:
         """Fail closed when durable lease renewal has been lost."""
