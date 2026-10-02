@@ -225,6 +225,12 @@ class SQLiteCareerRunRepository(CareerRunRepository):
             )
             connection.commit()
             if cursor.rowcount != 1:
+                row = connection.execute(
+                    "SELECT lease_owner FROM career_runs WHERE run_id = ?",
+                    (normalized_run,),
+                ).fetchone()
+                if row is None:
+                    return
                 raise CareerRunConflictError(
                     "Career run execution lease is no longer owned by this worker."
                 )
