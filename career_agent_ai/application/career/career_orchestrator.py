@@ -137,7 +137,11 @@ class CareerOrchestrator:
         run_id: str,
         human_result: Any | None = None,
     ) -> CareerRunResult:
-        """Resume one paused run with local serialization and durable CAS fencing."""
+        """Resume one human-gated run only after an explicit affirmative approval."""
+        if not self._is_affirmative_human_result(human_result):
+            raise PermissionError(
+                "Explicit affirmative human approval is required to resume a gated run."
+            )
         with self._resume_lock:
             try:
                 return self._resume_locked(run_id, human_result)
@@ -189,21 +193,24 @@ class CareerOrchestrator:
     def _resume_state(
         self, state: CareerRunState, human_result: Any | None
     ) -> CareerRunResult:
-        """Apply human input to one exclusively owned paused run and continue it."""
+        """Persist approved human input, complete the gate, and continue the run."""
+        if not self._is_affirmative_human_result(human_result):
+            raise PermissionError(
+                "Explicit affirmative human approval is required to resume a gated run."
+            )
         engine = state.workflow_engine
         if engine.workflow is None:
             raise RuntimeError("Career run has no workflow.")
         if engine.workflow.status != WorkflowState.PAUSED:
             raise RuntimeError("Only a human-gated career run can be resumed.")
 
-        if human_result is not None:
-            try:
-                durable_human_result = self._json_safe(human_result)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "human_result is not durably serializable."
-                ) from exc
-            state.payload["human_result"] = durable_human_result
+        try:
+            durable_human_result = self._json_safe(human_result)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "human_result is not durably serializable."
+            ) from exc
+        state.payload["human_result"] = durable_human_result
         engine.resume()
         engine.complete_step()
         self._workflow = engine
@@ -476,6 +483,15 @@ class CareerOrchestrator:
                 memory_type="career_run",
             )
         )
+
+    @staticmethod
+    def _is_affirmative_human_result(human_result: Any | None) -> bool:
+        """Return whether human input explicitly grants approval to cross the gate."""
+        if human_result is True:
+            return True
+        if not isinstance(human_result, Mapping):
+            return False
+        return human_result.get("approved") is True
 
     @classmethod
     def _json_safe(cls, value: Any) -> Any:
