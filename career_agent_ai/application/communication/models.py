@@ -20,6 +20,22 @@ def validate_identifier(value: str, field: str) -> str:
     return normalized
 
 
+def sanitize_header_text(value: str, field: str, *, maximum: int) -> str:
+    """Validate one header-like text value without permitting line/control injection."""
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be text.")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field} must not be empty.")
+    if len(normalized) > maximum:
+        raise ValueError(f"{field} must not exceed {maximum} characters.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError(f"{field} contains forbidden header control characters.")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in normalized):
+        raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
+    return normalized
+
+
 def sanitize_text(value: str, field: str, *, maximum: int) -> str:
     """Normalize untrusted plain text and reject controls and excessive input."""
     if not isinstance(value, str):
@@ -67,7 +83,11 @@ class CommunicationMessage:
         object.__setattr__(self, "thread_id", validate_identifier(self.thread_id, "thread_id"))
         object.__setattr__(self, "sender", validate_identifier(self.sender, "sender"))
         object.__setattr__(self, "recipient", validate_identifier(self.recipient, "recipient"))
-        object.__setattr__(self, "subject", sanitize_text(self.subject, "subject", maximum=500))
+        object.__setattr__(
+            self,
+            "subject",
+            sanitize_header_text(self.subject, "subject", maximum=500),
+        )
         object.__setattr__(self, "body", sanitize_text(self.body, "body", maximum=100_000))
         if self.in_reply_to is not None:
             object.__setattr__(
