@@ -29,7 +29,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
     @property
     def supports_background_lease_renewal(self) -> bool:
         """Use a separate SQLite connection for file-backed lease heartbeats."""
-        return self._database.path != ":memory:"
+        return bool(self._database.path) and self._database.path != ":memory:"
 
     def save(self, state: CareerRunState, *, lease_owner: str | None = None) -> None:
         """Persist one run snapshot with optimistic version and lease fencing."""
@@ -208,7 +208,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
         expires_at = (
             datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
         ).isoformat()
-        if self._database.path == ":memory:":
+        if not self.supports_background_lease_renewal:
             connection = self._database.connection
             close_connection = False
         else:
