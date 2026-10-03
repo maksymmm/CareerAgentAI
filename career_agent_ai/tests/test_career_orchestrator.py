@@ -965,17 +965,13 @@ def test_anonymous_temporary_sqlite_run_does_not_open_separate_heartbeat_databas
         LEASE_TTL_SECONDS = 1
         LEASE_HEARTBEAT_SECONDS = 0.1
 
-    entered = Event()
-    release = Event()
-
-    class BlockingAgent(FakeAgent):
+    class SlowAgent(FakeAgent):
         def execute(self, context):
-            entered.set()
-            assert release.wait(timeout=5)
+            time.sleep(0.25)
             return super().execute(context)
 
     registry = AgentRegistry()
-    registry.register(BlockingAgent("job_search"))
+    registry.register(SlowAgent("job_search"))
     orchestrator = FastLeaseOrchestrator(
         memory_engine=MemoryEngine(),
         workflow_engine=WorkflowEngine(),
@@ -983,17 +979,11 @@ def test_anonymous_temporary_sqlite_run_does_not_open_separate_heartbeat_databas
         run_repository=repository,
     )
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(
-            orchestrator.run,
-            "user-1",
-            "Find a job",
-            {"actions": ["job_search"]},
-        )
-        assert entered.wait(timeout=5)
-        time.sleep(0.25)
-        release.set()
-        result = future.result(timeout=5)
+    result = orchestrator.run(
+        "user-1",
+        "Find a job",
+        {"actions": ["job_search"]},
+    )
 
     assert result.success is True
     database.close()
