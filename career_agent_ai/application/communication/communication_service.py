@@ -14,7 +14,7 @@ from career_agent_ai.application.external_actions import (
 
 from .communication_adapter import CommunicationAdapter, PreDeliveryCommunicationError
 from .communication_repository import CommunicationRepository
-from .models import CommunicationMessage, MessageDirection
+from .models import CommunicationMessage, MessageDirection, validate_identifier
 
 
 class _CommunicationActionAdapter:
@@ -126,8 +126,16 @@ class CommunicationService:
             raise ValueError("Provider draft does not match the requested message intent.")
 
     def read(self, message_id: str) -> CommunicationMessage:
-        """Read, validate, and persist a provider message for restart continuation."""
-        return self._repository.save(self._provider.read(message_id))
+        """Read exactly one validated provider message and persist it locally."""
+        normalized_id = validate_identifier(message_id, "message_id")
+        provider_message = self._provider.read(normalized_id)
+        if not isinstance(provider_message, CommunicationMessage):
+            raise ValueError("Provider returned malformed message data.")
+        if provider_message.message_id != normalized_id:
+            raise ValueError(
+                "Provider message does not match the requested message identifier."
+            )
+        return self._repository.save(provider_message)
 
     def get_persisted(self, message_id: str) -> CommunicationMessage | None:
         """Return one locally persisted message without contacting the provider."""
