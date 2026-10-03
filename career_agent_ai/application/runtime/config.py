@@ -43,7 +43,10 @@ class RuntimeConfig:
             raise ValueError("CAREER_AGENT_DB_PATH must not be empty.")
         if "\x00" in database_path:
             raise ValueError("CAREER_AGENT_DB_PATH contains a forbidden NUL byte.")
-        if environment == RuntimeEnvironment.PRODUCTION and database_path == ":memory:":
+        if (
+            environment == RuntimeEnvironment.PRODUCTION
+            and cls._is_sqlite_memory_path(database_path)
+        ):
             raise ValueError("Production requires a durable CAREER_AGENT_DB_PATH.")
 
         raw_level = source.get("CAREER_AGENT_LOG_LEVEL", "INFO").strip().upper()
@@ -74,6 +77,22 @@ class RuntimeConfig:
             log_level=level,
             allow_network_providers=allow_network,
             allow_consequential_actions=allow_actions,
+        )
+
+    @staticmethod
+    def _is_sqlite_memory_path(value: str) -> bool:
+        """Return whether SQLite would treat the configured path as in-memory."""
+        normalized = value.strip().lower()
+        if normalized == ":memory:" or normalized.startswith("file::memory:"):
+            return True
+        if not normalized.startswith("file:"):
+            return False
+        query = normalized.partition("?")[2]
+        return any(
+            part.partition("=")[0] == "mode"
+            and part.partition("=")[2] == "memory"
+            for part in query.split("&")
+            if part
         )
 
     @staticmethod
