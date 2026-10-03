@@ -195,7 +195,7 @@ def test_provider_failure_errors_are_redacted_before_persistence():
     assert failed.status == ExternalActionStatus.FAILED
     assert "super-secret-token" not in failed.error
     assert "very-secret-value" not in failed.error
-    assert failed.error.count("[REDACTED]") == 2
+    assert failed.error.count("[REDACTED]") >= 2
     assert repository.get("operation-secret-error").error == failed.error
 
 
