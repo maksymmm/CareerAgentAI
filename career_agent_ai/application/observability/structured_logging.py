@@ -120,8 +120,16 @@ def redact_text(value: str) -> str:
     if not isinstance(value, str):
         raise TypeError("diagnostic text must be text.")
     sanitized = value.replace("\\r", "\\\\r").replace("\\n", "\\\\n")
+    sanitized = _AUTHORIZATION_HEADER_PATTERN.sub(
+        lambda match: f"{match.group(1)}[REDACTED]",
+        sanitized,
+    )
     sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", sanitized)
-    sanitized = _SENSITIVE_ASSIGNMENT_PATTERN.sub(
+    sanitized = _SENSITIVE_QUOTED_ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(2)}",
+        sanitized,
+    )
+    sanitized = _SENSITIVE_UNQUOTED_ASSIGNMENT_PATTERN.sub(
         lambda match: f"{match.group(1)}[REDACTED]",
         sanitized,
     )
