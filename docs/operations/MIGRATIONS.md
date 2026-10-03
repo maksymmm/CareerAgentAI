@@ -14,3 +14,9 @@ Rules:
 8. Never interpolate external/provider input into migration SQL.
 
 Repository-local compatibility migrations that already exist inside legacy SQLite adapters should be moved into this registry when those schemas next require a breaking or coordinated migration. The registry is the release-level strategy going forward; existing startup-compatible additive migrations remain supported to avoid breaking deployed databases.
+
+## Legacy career-memory primary-key migration
+
+The legacy `career_memory` schema whose primary key is only `memory_key` requires a destructive table rebuild to move to the per-user composite key `(user_id, memory_key)`. Repository startup no longer performs that rebuild implicitly.
+
+Opening a legacy database through `SQLiteMemoryRepository` fails closed unless the deployment explicitly opts in with `allow_destructive_migration=True`. That opt-in routes the rebuild through `SQLiteMigrationRunner`, records the migration checksum, and therefore constitutes the required human change-control approval. Take and verify a backup before enabling the flag, run the migration once, then return normal runtime composition to the default `False` value.
