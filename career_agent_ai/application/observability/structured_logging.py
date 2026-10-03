@@ -15,7 +15,23 @@ from uuid import uuid4
 _correlation_id: ContextVar[str | None] = ContextVar("career_agent_correlation_id", default=None)
 _SENSITIVE_TOKENS = ("password", "secret", "token", "api_key", "apikey", "authorization", "cookie")
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
-_SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+_AUTHORIZATION_HEADER_PATTERN = re.compile(
+    r"""(?imx)
+    (\bauthorization\s*:\s*)
+    .*?
+    (?=
+        \s+
+        ["']?
+        [a-z0-9_-]*
+        (?:password|secret|token|api[_-]?key|apikey|cookie)
+        [a-z0-9_-]*
+        ["']?
+        \s*[:=]
+        |\r?$|\n
+    )
+    """
+)
+_SENSITIVE_QUOTED_ASSIGNMENT_PATTERN = re.compile(
     r"""(?ix)
     (
         ["']?
@@ -24,9 +40,23 @@ _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
         [a-z0-9_-]*
         ["']?
         \s*[:=]\s*
-        ["']?
     )
-    [^"'\s,;}]*
+    (["'])
+    .*?
+    \2
+    """
+)
+_SENSITIVE_UNQUOTED_ASSIGNMENT_PATTERN = re.compile(
+    r"""(?ix)
+    (
+        ["']?
+        [a-z0-9_-]*
+        (?:password|secret|token|api[_-]?key|apikey|authorization|cookie)
+        [a-z0-9_-]*
+        ["']?
+        \s*[:=]\s*
+    )
+    [^\s,;}]+
     """
 )
 
@@ -120,8 +150,16 @@ def redact_text(value: str) -> str:
     if not isinstance(value, str):
         raise TypeError("diagnostic text must be text.")
     sanitized = value.replace("\\r", "\\\\r").replace("\\n", "\\\\n")
+    sanitized = _AUTHORIZATION_HEADER_PATTERN.sub(
+        lambda match: f"{match.group(1)}[REDACTED]",
+        sanitized,
+    )
     sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", sanitized)
-    sanitized = _SENSITIVE_ASSIGNMENT_PATTERN.sub(
+    sanitized = _SENSITIVE_QUOTED_ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(2)}",
+        sanitized,
+    )
+    sanitized = _SENSITIVE_UNQUOTED_ASSIGNMENT_PATTERN.sub(
         lambda match: f"{match.group(1)}[REDACTED]",
         sanitized,
     )

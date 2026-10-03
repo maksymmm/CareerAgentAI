@@ -129,17 +129,17 @@ class OperationalWSGIApp:
                     )
                 try:
                     payload = self._service.issues(stale_after_seconds=stale)
+                    return self._respond(
+                        start_response,
+                        "200 OK",
+                        payload,
+                    )
                 except Exception:
                     return self._respond(
                         start_response,
                         "500 Internal Server Error",
                         {"error": "internal_error"},
                     )
-                return self._respond(
-                    start_response,
-                    "200 OK",
-                    payload,
-                )
             return self._respond(
                 start_response,
                 "404 Not Found",
