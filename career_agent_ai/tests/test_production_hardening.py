@@ -269,6 +269,22 @@ def test_redaction_sanitizes_fallback_object_representations():
     assert "provider-token" not in rendered
     assert rendered.count("[REDACTED]") == 2
 
+def test_redaction_covers_basic_authorization_and_quoted_secret_whitespace():
+    result = redact_mapping(
+        {
+            "diagnostic": (
+                'Authorization: Basic dXNlcjpwYXNz\n'
+                '{"api_key":"abc def"}'
+            )
+        }
+    )
+
+    rendered = result["diagnostic"]
+    assert "dXNlcjpwYXNz" not in rendered
+    assert "abc def" not in rendered
+    assert rendered.count("[REDACTED]") == 2
+
+
 def test_structured_logging_normalizes_non_finite_numbers_to_valid_json():
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -833,6 +849,39 @@ def test_operational_wsgi_returns_sanitized_500_for_probe_failure():
     assert meta["status"] == "500 Internal Server Error"
     assert body == {"error": "internal_error"}
     assert "do-not-expose" not in str(body)
+
+
+def test_operational_wsgi_serialization_failure_is_sanitized_500():
+    class NonJsonOperationalService:
+        def health(self):
+            return {"status": "ok"}
+
+        def issues(self, *, stale_after_seconds):
+            return {
+                "generated_at": NOW.isoformat(),
+                "issues": [
+                    {
+                        "issue_type": "example",
+                        "entity_id": "entity-1",
+                        "severity": "warning",
+                        "updated_at": NOW.isoformat(),
+                        "details": {"non_finite": float("nan")},
+                    }
+                ],
+            }
+
+    token = "s" * 40
+    app = OperationalWSGIApp(NonJsonOperationalService(), bearer_token=token)
+
+    meta, body = _wsgi_call(
+        app,
+        "/v1/operational/issues",
+        query="stale_after_seconds=60",
+        token=token,
+    )
+
+    assert meta["status"] == "500 Internal Server Error"
+    assert body == {"error": "internal_error"}
 
 
 @pytest.mark.parametrize(
