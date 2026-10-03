@@ -218,7 +218,13 @@ def test_legacy_global_key_schema_migrates_without_data_loss(tmp_path):
     )
     database.connection.commit()
 
-    repository = SQLiteMemoryRepository(database)
+    with pytest.raises(PermissionError, match="destructive migration"):
+        SQLiteMemoryRepository(database)
+
+    repository = SQLiteMemoryRepository(
+        database,
+        allow_destructive_migration=True,
+    )
 
     assert repository.get("goal", user_id="u1").value == "engineer"
     repository.save(
