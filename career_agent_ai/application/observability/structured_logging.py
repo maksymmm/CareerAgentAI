@@ -16,7 +16,20 @@ _correlation_id: ContextVar[str | None] = ContextVar("career_agent_correlation_i
 _SENSITIVE_TOKENS = ("password", "secret", "token", "api_key", "apikey", "authorization", "cookie")
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _AUTHORIZATION_HEADER_PATTERN = re.compile(
-    r"(?im)(\bauthorization\s*:\s*)[^\r\n]+"
+    r"""(?imx)
+    (\bauthorization\s*:\s*)
+    .*?
+    (?=
+        \s+
+        ["']?
+        [a-z0-9_-]*
+        (?:password|secret|token|api[_-]?key|apikey|cookie)
+        [a-z0-9_-]*
+        ["']?
+        \s*[:=]
+        |\r?$|\n
+    )
+    """
 )
 _SENSITIVE_QUOTED_ASSIGNMENT_PATTERN = re.compile(
     r"""(?ix)
