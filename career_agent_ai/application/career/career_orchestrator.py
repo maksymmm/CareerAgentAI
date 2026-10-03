@@ -137,11 +137,7 @@ class CareerOrchestrator:
         run_id: str,
         human_result: Any | None = None,
     ) -> CareerRunResult:
-        """Resume one human-gated run only after an explicit affirmative approval."""
-        if not self._is_affirmative_human_result(human_result):
-            raise PermissionError(
-                "Explicit affirmative human approval is required to resume a gated run."
-            )
+        """Resume one paused run after its human gate validates explicit approval."""
         with self._resume_lock:
             try:
                 return self._resume_locked(run_id, human_result)
