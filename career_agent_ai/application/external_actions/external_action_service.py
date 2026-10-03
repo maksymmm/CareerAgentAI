@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Mapping, Protocol
 
+from career_agent_ai.application.observability.structured_logging import redact_text
+
 from .external_action_operation import ExternalActionOperation, ExternalActionStatus
 from .external_action_repository import ExternalActionOperationRepository
 
@@ -262,4 +264,6 @@ class ExternalActionService:
     @staticmethod
     def _safe_error(error: Exception) -> str:
         message = str(error).strip()
-        return message[:1000] if message else type(error).__name__
+        if not message:
+            message = type(error).__name__
+        return redact_text(message)[:1000]
