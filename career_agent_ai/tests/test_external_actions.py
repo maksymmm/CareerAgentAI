@@ -181,6 +181,24 @@ def test_prepare_rejects_non_finite_json_before_persisting_intent():
     assert adapter.calls == []
 
 
+def test_provider_failure_errors_are_redacted_before_persistence():
+    adapter = RecordingAdapter(
+        RuntimeError(
+            "Authorization: Bearer super-secret-token api_key=very-secret-value"
+        )
+    )
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-secret-error", "application", {})
+
+    failed = service.execute("operation-secret-error", human_approved=True)
+
+    assert failed.status == ExternalActionStatus.FAILED
+    assert "super-secret-token" not in failed.error
+    assert "very-secret-value" not in failed.error
+    assert failed.error.count("[REDACTED]") == 2
+    assert repository.get("operation-secret-error").error == failed.error
+
+
 def test_adapter_failure_is_persisted_and_not_retried():
     adapter = RecordingAdapter(RuntimeError("provider unavailable"))
     service, _ = make_service(SQLiteDatabase(), adapter)
