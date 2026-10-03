@@ -272,6 +272,24 @@ def openapi_document() -> dict[str, Any]:
                         },
                         "400": {"description": "Invalid query input"},
                         "401": {"description": "Missing or invalid bearer token"},
+                        "500": {
+                            "description": "Sanitized internal operational error",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["error"],
+                                        "properties": {
+                                            "error": {
+                                                "type": "string",
+                                                "const": "internal_error",
+                                            }
+                                        },
+                                        "additionalProperties": False,
+                                    }
+                                }
+                            },
+                        },
                     },
                 }
             },
