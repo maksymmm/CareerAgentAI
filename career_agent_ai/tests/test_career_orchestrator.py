@@ -1023,3 +1023,87 @@ def test_continue_run_rejects_paused_human_gate(tmp_path):
     with pytest.raises(RuntimeError, match="running"):
         restarted.continue_run(paused.run_id)
     database.close()
+
+
+def test_resume_without_explicit_approval_does_not_cross_human_gate():
+    gated = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    next_agent = FakeAgent("resume")
+    orchestrator = make_orchestrator(agents=(gated, next_agent))
+    paused = orchestrator.run(
+        "user-1",
+        "Apply then continue",
+        {"actions": ["job_application", "resume"]},
+    )
+
+    with pytest.raises(PermissionError, match="affirmative human approval"):
+        orchestrator.resume(paused.run_id)
+
+    assert orchestrator._workflow.workflow is not None
+    assert orchestrator._workflow.workflow.status == WorkflowState.PAUSED
+    assert next_agent.last_context is None
+
+
+@pytest.mark.parametrize(
+    "human_result",
+    [
+        False,
+        {"approved": False},
+        {"approved": None},
+        {"decision": "approve"},
+        "approved",
+    ],
+)
+def test_resume_rejects_non_affirmative_human_results(human_result):
+    gated = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    next_agent = FakeAgent("resume")
+    orchestrator = make_orchestrator(agents=(gated, next_agent))
+    paused = orchestrator.run(
+        "user-1",
+        "Apply then continue",
+        {"actions": ["job_application", "resume"]},
+    )
+
+    with pytest.raises(PermissionError, match="affirmative human approval"):
+        orchestrator.resume(paused.run_id, human_result=human_result)
+
+    assert orchestrator._workflow.workflow is not None
+    assert orchestrator._workflow.workflow.status == WorkflowState.PAUSED
+    assert next_agent.last_context is None
+
+
+def test_resume_accepts_boolean_true_as_explicit_approval():
+    gated = FakeAgent(
+        "job_application",
+        result=AgentResult(
+            success=True,
+            agent_id="job_application",
+            metadata={"requires_human": True},
+        ),
+    )
+    next_agent = FakeAgent("resume")
+    orchestrator = make_orchestrator(agents=(gated, next_agent))
+    paused = orchestrator.run(
+        "user-1",
+        "Apply then continue",
+        {"actions": ["job_application", "resume"]},
+    )
+
+    resumed = orchestrator.resume(paused.run_id, human_result=True)
+
+    assert resumed.success is True
+    assert next_agent.last_context is not None
+    assert next_agent.last_context.payload["human_result"] is True
