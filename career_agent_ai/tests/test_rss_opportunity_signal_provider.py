@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Barrier, Lock
 
 import pytest
 
@@ -219,6 +221,35 @@ def test_provider_rate_limits_between_configured_sources(monkeypatch):
     provider.collect()
 
     assert clock.sleeps == [pytest.approx(0.5)]
+
+
+def test_provider_serializes_concurrent_rate_limit_reservations():
+    barrier = Barrier(2)
+    recorded: list[float] = []
+    recorded_lock = Lock()
+
+    def sleeper(seconds: float) -> None:
+        with recorded_lock:
+            recorded.append(seconds)
+
+    provider = RSSOpportunitySignalProvider(
+        (feed(),),
+        min_interval_seconds=0.5,
+        monotonic=lambda: 0.0,
+        sleeper=sleeper,
+    )
+
+    def reserve() -> None:
+        barrier.wait(timeout=5)
+        provider._rate_limit()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(reserve) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=5)
+
+    assert recorded == [pytest.approx(0.5)]
+    assert provider._next_request_at == pytest.approx(1.0)
 
 
 def test_provider_is_fail_soft_and_reports_sanitized_source_error(monkeypatch):
