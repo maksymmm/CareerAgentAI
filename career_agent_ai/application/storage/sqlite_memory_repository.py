@@ -7,15 +7,56 @@ from typing import Any
 from career_agent_ai.application.memory.memory_record import MemoryRecord
 from career_agent_ai.application.memory.memory_repository import MemoryRepository
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_migrations import (
+    SQLiteMigration,
+    SQLiteMigrationRunner,
+)
 
 
 class SQLiteMemoryRepository(MemoryRepository):
     """Restart-safe SQLite career memory with versioned JSON serialization."""
 
     SERIALIZATION_VERSION = 1
+    LEGACY_COMPOSITE_KEY_MIGRATION = SQLiteMigration(
+        version=2026100301,
+        name="career_memory_composite_primary_key",
+        statements=(
+            "DROP TABLE IF EXISTS career_memory_v2",
+            """
+            CREATE TABLE career_memory_v2 (
+                user_id TEXT NOT NULL,
+                memory_key TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                serialization_version INTEGER NOT NULL,
+                PRIMARY KEY (user_id, memory_key)
+            )
+            """,
+            """
+            INSERT INTO career_memory_v2 (
+                user_id, memory_key, memory_type, value_json, metadata_json,
+                created_at, serialization_version
+            )
+            SELECT user_id, memory_key, memory_type, value_json, metadata_json,
+                   created_at, serialization_version
+            FROM career_memory
+            """,
+            "DROP TABLE career_memory",
+            "ALTER TABLE career_memory_v2 RENAME TO career_memory",
+        ),
+        destructive=True,
+    )
 
-    def __init__(self, database: SQLiteDatabase) -> None:
+    def __init__(
+        self,
+        database: SQLiteDatabase,
+        *,
+        allow_destructive_migration: bool = False,
+    ) -> None:
         self._database = database
+        self._allow_destructive_migration = allow_destructive_migration
         self._create_schema()
 
     def save(self, record: MemoryRecord) -> None:
@@ -146,7 +187,10 @@ class SQLiteMemoryRepository(MemoryRepository):
             if row[5]
         )
         if primary_key != (("user_id", 1), ("memory_key", 2)):
-            self._migrate_single_key_schema()
+            SQLiteMigrationRunner(self._database).apply(
+                (self.LEGACY_COMPOSITE_KEY_MIGRATION,),
+                allow_destructive=self._allow_destructive_migration,
+            )
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_career_memory_user_type
                ON career_memory(user_id, memory_type)"""
@@ -160,45 +204,6 @@ class SQLiteMemoryRepository(MemoryRepository):
                ON career_memory(memory_key)"""
         )
         connection.commit()
-
-    def _migrate_single_key_schema(self) -> None:
-        """Upgrade the legacy global-key table to per-user composite identity."""
-        connection = self._database.connection
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute("DROP TABLE IF EXISTS career_memory_v2")
-            connection.execute(
-                """
-                CREATE TABLE career_memory_v2 (
-                    user_id TEXT NOT NULL,
-                    memory_key TEXT NOT NULL,
-                    memory_type TEXT NOT NULL,
-                    value_json TEXT NOT NULL,
-                    metadata_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    serialization_version INTEGER NOT NULL,
-                    PRIMARY KEY (user_id, memory_key)
-                )
-                """
-            )
-            connection.execute(
-                """
-                INSERT INTO career_memory_v2 (
-                    user_id, memory_key, memory_type, value_json, metadata_json,
-                    created_at, serialization_version
-                )
-                SELECT user_id, memory_key, memory_type, value_json, metadata_json,
-                       created_at, serialization_version
-                FROM career_memory
-                """
-            )
-            connection.execute("DROP TABLE career_memory")
-            connection.execute("ALTER TABLE career_memory_v2 RENAME TO career_memory")
-            connection.commit()
-        except Exception:
-            if connection.in_transaction:
-                connection.rollback()
-            raise
 
     @classmethod
     def _load(cls, row: tuple[Any, ...]) -> MemoryRecord:
