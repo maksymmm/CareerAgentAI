@@ -15,7 +15,10 @@ from uuid import uuid4
 _correlation_id: ContextVar[str | None] = ContextVar("career_agent_correlation_id", default=None)
 _SENSITIVE_TOKENS = ("password", "secret", "token", "api_key", "apikey", "authorization", "cookie")
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
-_SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+_AUTHORIZATION_HEADER_PATTERN = re.compile(
+    r"(?im)(\bauthorization\s*:\s*)[^\r\n]+"
+)
+_SENSITIVE_QUOTED_ASSIGNMENT_PATTERN = re.compile(
     r"""(?ix)
     (
         ["']?
@@ -24,9 +27,23 @@ _SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
         [a-z0-9_-]*
         ["']?
         \s*[:=]\s*
-        ["']?
     )
-    [^"'\s,;}]*
+    (["'])
+    .*?
+    \2
+    """
+)
+_SENSITIVE_UNQUOTED_ASSIGNMENT_PATTERN = re.compile(
+    r"""(?ix)
+    (
+        ["']?
+        [a-z0-9_-]*
+        (?:password|secret|token|api[_-]?key|apikey|authorization|cookie)
+        [a-z0-9_-]*
+        ["']?
+        \s*[:=]\s*
+    )
+    [^\s,;}]+
     """
 )
 
