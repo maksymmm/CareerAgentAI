@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
+from threading import Lock
 from typing import Callable, Iterable
 from urllib.parse import urlparse
 
@@ -147,7 +148,8 @@ class RSSOpportunitySignalProvider:
         self._now = now
         self._resolver = resolver or _resolve_host_addresses
         self._deduplicator = deduplicator or OpportunitySignalDeduplicator()
-        self._last_request_at: float | None = None
+        self._rate_limit_lock = Lock()
+        self._next_request_at: float | None = None
         self._last_errors: tuple[SignalSourceError, ...] = ()
 
     @property
@@ -189,8 +191,6 @@ class RSSOpportunitySignalProvider:
             )
         except Exception as exc:
             raise RuntimeError("failed to fetch configured news feed") from exc
-        finally:
-            self._last_request_at = self._monotonic()
 
         if len(body) > self._max_response_bytes:
             raise RuntimeError("feed response exceeds configured size limit")
@@ -224,12 +224,18 @@ class RSSOpportunitySignalProvider:
         return tuple(dict.fromkeys(addresses))
 
     def _rate_limit(self) -> None:
-        if self._last_request_at is None:
-            return
-        elapsed = self._monotonic() - self._last_request_at
-        remaining = self._min_interval - elapsed
-        if remaining > 0:
-            self._sleeper(remaining)
+        """Atomically reserve the next provider request slot across workers."""
+        with self._rate_limit_lock:
+            now = self._monotonic()
+            reserved_at = (
+                now
+                if self._next_request_at is None
+                else max(now, self._next_request_at)
+            )
+            delay = reserved_at - now
+            self._next_request_at = reserved_at + self._min_interval
+        if delay > 0:
+            self._sleeper(delay)
 
     def _signals_from_entries(
         self,
