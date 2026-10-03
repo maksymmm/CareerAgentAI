@@ -724,3 +724,43 @@ def test_no_delivery_reconciliation_restores_outbound_message_before_retry():
     assert delivered is not None
     assert delivered.direction == MessageDirection.OUTBOUND
     assert provider.calls.count(("send", "send:reconcile")) == 1
+
+
+def test_read_rejects_malformed_message_id_before_provider_call():
+    provider = FakeCommunicationAdapter()
+    service, repository, _, _ = stack(SQLiteDatabase(), provider)
+
+    with pytest.raises(ValueError, match="message_id"):
+        service.read("../bad")
+
+    assert provider.calls == []
+    assert repository.get("message-1") is None
+
+
+def test_read_rejects_provider_message_with_different_identifier():
+    class WrongMessageProvider(FakeCommunicationAdapter):
+        def read(self, message_id):
+            self.calls.append(("read", message_id))
+            return message("different-message", direction=MessageDirection.INBOUND)
+
+    provider = WrongMessageProvider()
+    service, repository, _, _ = stack(SQLiteDatabase(), provider)
+
+    with pytest.raises(ValueError, match="requested message identifier"):
+        service.read("message-1")
+
+    assert provider.calls == [("read", "message-1")]
+    assert repository.get("different-message") is None
+
+
+def test_read_normalizes_identifier_before_provider_lookup():
+    provider = FakeCommunicationAdapter()
+    inbound = message(direction=MessageDirection.INBOUND)
+    provider.draft(inbound)
+    service, repository, _, _ = stack(SQLiteDatabase(), provider)
+
+    loaded = service.read("  message-1  ")
+
+    assert loaded == inbound
+    assert provider.calls[-1] == ("read", "message-1")
+    assert repository.get("message-1") == inbound
