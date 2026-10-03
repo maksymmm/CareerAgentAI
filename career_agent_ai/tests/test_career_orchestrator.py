@@ -947,6 +947,57 @@ def test_execution_lease_heartbeat_retries_transient_sqlite_lock(tmp_path):
     assert result.success is True
     assert renew_attempts >= 2
 
+
+def test_anonymous_temporary_sqlite_disables_background_lease_renewal():
+    database = SQLiteDatabase("")
+    repository = SQLiteCareerRunRepository(database)
+
+    assert repository.supports_background_lease_renewal is False
+
+    database.close()
+
+
+def test_anonymous_temporary_sqlite_run_does_not_open_separate_heartbeat_database():
+    database = SQLiteDatabase("")
+    repository = SQLiteCareerRunRepository(database)
+
+    class FastLeaseOrchestrator(CareerOrchestrator):
+        LEASE_TTL_SECONDS = 1
+        LEASE_HEARTBEAT_SECONDS = 0.1
+
+    entered = Event()
+    release = Event()
+
+    class BlockingAgent(FakeAgent):
+        def execute(self, context):
+            entered.set()
+            assert release.wait(timeout=5)
+            return super().execute(context)
+
+    registry = AgentRegistry()
+    registry.register(BlockingAgent("job_search"))
+    orchestrator = FastLeaseOrchestrator(
+        memory_engine=MemoryEngine(),
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            orchestrator.run,
+            "user-1",
+            "Find a job",
+            {"actions": ["job_search"]},
+        )
+        assert entered.wait(timeout=5)
+        time.sleep(0.25)
+        release.set()
+        result = future.result(timeout=5)
+
+    assert result.success is True
+    database.close()
+
 def test_continue_run_rejects_paused_human_gate(tmp_path):
     path = str(tmp_path / "paused-not-running.sqlite")
     database = SQLiteDatabase(path)
