@@ -372,7 +372,10 @@ Implemented foundations:
 - Versioned checksum-verified SQLite migration runner and deployment/security runbooks
 - Continuous integration workflow
 
-Roadmap implementation is complete on the integration branch; release/deployment remains an explicit operator decision.
+The eight-item autonomous-core execution plan is implemented on the integration branch.
+This is a backend release candidate, not a completed public web/mobile product.
+Release/deployment remains an explicit operator decision. See `SPEC.md` for the
+current release contract and `PROJECT_PLAN.md` for the remaining product scope.
 
 ---
 

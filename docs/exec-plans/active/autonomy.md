@@ -233,4 +233,16 @@ project's 90% coverage floor.
 
 ## Completion definition
 
+### Release scope clarification
+
+The eight completed units cover the autonomous backend core. `SPEC.md` now records
+its implemented contracts and release exclusions; `PROJECT_PLAN.md` retains the
+broader web/mobile/provider/deployment roadmap. Completed core work does not imply
+that the public product is complete.
+
+Next priority: obtain a fresh release review of the exact integration HEAD and
+address any confirmed findings. Then record final test/coverage evidence and stop
+at explicit approval to merge into `main`. Subsequent product delivery needs its
+own acceptance criteria for the user interface, real providers and deployment.
+
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
