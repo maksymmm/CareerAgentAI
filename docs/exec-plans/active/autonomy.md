@@ -9,11 +9,13 @@ its implemented contracts and release exclusions; `PROJECT_PLAN.md` retains the
 broader web/mobile/provider/deployment roadmap. Completed core work does not imply
 that the public product is complete.
 
-Release evidence: integration commit `44bcc50907ce2827e1612fecbe16f1ac81dca2cb`
-passed GitHub CI #899 with 635 tests and 91.72% coverage, and its exact-head Codex
-review found no major issues. The release is stopped at explicit approval to merge
-into `main`. Subsequent product delivery needs its own acceptance criteria for the
-user interface, real providers and deployment.
+Parent integration commit `44bcc50907ce2827e1612fecbe16f1ac81dca2cb` passed
+GitHub CI #899 with 635 tests and 91.72% coverage, and its exact-head Codex review
+found no major issues. Any documentation commit after that evidence must pass its own
+exact-head CI and Codex review before integration. The resulting integration HEAD must
+then receive fresh release evidence before the final explicit approval to merge into
+`main`. Subsequent product delivery needs separate acceptance criteria for the user
+interface, real providers and deployment.
 
 ## 1. Crash-safe idempotency for consequential external actions
 
