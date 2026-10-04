@@ -9,7 +9,10 @@ import re
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from career_agent_ai.application.communication.models import validate_identifier as validate_communication_identifier
+from career_agent_ai.application.communication.models import (
+    sanitize_header_text,
+    validate_identifier as validate_communication_identifier,
+)
 
 
 _INTERNAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$")
@@ -129,16 +132,15 @@ class CareerLoopRequest:
             recipient = validate_communication_identifier(recipient, "recipient")
         object.__setattr__(self, "sender", sender)
         object.__setattr__(self, "recipient", recipient)
-        object.__setattr__(
-            self,
+        subject = _safe_text(
+            self.message_subject,
             "message_subject",
-            _safe_text(
-                self.message_subject,
-                "message_subject",
-                maximum=500,
-                required=messaging_enabled,
-            ),
+            maximum=500,
+            required=messaging_enabled,
         )
+        if messaging_enabled:
+            subject = sanitize_header_text(subject, "message_subject", maximum=500)
+        object.__setattr__(self, "message_subject", subject)
         object.__setattr__(
             self,
             "message_body",
