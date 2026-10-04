@@ -35,13 +35,19 @@ class SQLiteCareerRunRepository(CareerRunRepository):
 
     @staticmethod
     def _is_private_memory_path(value: str) -> bool:
-        """Return whether SQLite opens value as a private in-memory database."""
-        normalized = value.strip().lower()
-        if normalized == ":memory:" or normalized.startswith("file::memory:"):
+        """Return whether SQLite actually opens value as a private in-memory database."""
+        raw = value.strip()
+        if raw == ":memory:":
             return True
-        if not normalized.startswith("file:"):
+        # SQLite URI filenames require the case-sensitive file: prefix.
+        # FILE::MEMORY: is therefore a normal filesystem filename.
+        if not raw.startswith("file:"):
             return False
-        query = normalized.partition("?")[2]
+        uri = raw[5:]
+        normalized_uri = uri.lower()
+        if normalized_uri.startswith(":memory:"):
+            return True
+        query = normalized_uri.partition("?")[2]
         return any(
             key == "mode" and setting == "memory"
             for part in query.split("&")
