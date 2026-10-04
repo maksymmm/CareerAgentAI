@@ -42,6 +42,7 @@ from career_agent_ai.application.jobs.job_application_repository import (
 )
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
+from career_agent_ai.application.observability import redact_text
 from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
 
 
@@ -446,13 +447,19 @@ class AutonomousCareerLoop:
                     durable = None
                 if durable is not None:
                     state = durable
-                state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
+                state.last_error = (
+                    f"{type(exc).__name__}: {redact_text(str(exc))}"
+                )
             except _RecoverableCareerLoopError as exc:
-                state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
+                state.last_error = (
+                    f"{type(exc).__name__}: {redact_text(str(exc))}"
+                )
                 state.touch()
                 self._persist(state, expected_owner_id=execution_owner)
             except Exception as exc:
-                state.last_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
+                state.last_error = (
+                    f"{type(exc).__name__}: {redact_text(str(exc))}"
+                )
                 state.phase = CareerLoopPhase.FAILED
                 state.touch()
                 self._persist(state, expected_owner_id=execution_owner)
