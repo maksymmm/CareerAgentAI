@@ -34,6 +34,13 @@ Deployments that previously relied on a literal filename beginning with `file:`
 must move that database to an ordinary filesystem path before adopting this release;
 URI-looking paths now have explicit URI meaning.
 
+Production configuration classifies URI databases using SQLite's own
+`PRAGMA database_list`, rejecting encoded or fragment-bearing memory URIs.
+URI text is preserved unchanged for the worker connection. Validation opens and
+closes URI databases and may create a new empty file for a valid writable URI;
+ensure its parent directory exists and deployment permissions are appropriate.
+Invalid or unopenable URIs fail configuration validation.
+
 ## Caller ownership
 
 Existing autonomous-loop entry points require the authenticated caller's `user_id`,

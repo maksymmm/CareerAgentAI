@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -43,12 +45,6 @@ class RuntimeConfig:
             raise ValueError("CAREER_AGENT_DB_PATH must not be empty.")
         if "\x00" in database_path:
             raise ValueError("CAREER_AGENT_DB_PATH contains a forbidden NUL byte.")
-        if (
-            environment == RuntimeEnvironment.PRODUCTION
-            and cls._is_sqlite_memory_path(database_path)
-        ):
-            raise ValueError("Production requires a durable CAREER_AGENT_DB_PATH.")
-
         raw_level = source.get("CAREER_AGENT_LOG_LEVEL", "INFO").strip().upper()
         level = logging.getLevelName(raw_level)
         if not isinstance(level, int):
@@ -65,11 +61,17 @@ class RuntimeConfig:
         if environment == RuntimeEnvironment.TEST and (allow_network or allow_actions):
             raise ValueError("Test environment cannot enable external network or consequential actions.")
 
-        if database_path != ":memory:":
+        if database_path != ":memory:" and not database_path.startswith("file:"):
             path = Path(database_path).expanduser()
             if path.exists() and path.is_dir():
                 raise ValueError("CAREER_AGENT_DB_PATH must reference a file, not a directory.")
             database_path = str(path)
+
+        if (
+            environment == RuntimeEnvironment.PRODUCTION
+            and cls._is_sqlite_memory_path(database_path)
+        ):
+            raise ValueError("Production requires a durable CAREER_AGENT_DB_PATH.")
 
         return cls(
             environment=environment,
@@ -82,18 +84,15 @@ class RuntimeConfig:
     @staticmethod
     def _is_sqlite_memory_path(value: str) -> bool:
         """Return whether SQLite would treat the configured path as in-memory."""
-        normalized = value.strip().lower()
-        if normalized == ":memory:" or normalized.startswith("file::memory:"):
+        if value == ":memory:":
             return True
-        if not normalized.startswith("file:"):
+        if not value.startswith("file:"):
             return False
-        query = normalized.partition("?")[2]
-        return any(
-            part.partition("=")[0] == "mode"
-            and part.partition("=")[2] == "memory"
-            for part in query.split("&")
-            if part
-        )
+        try:
+            with closing(sqlite3.connect(value, uri=True)) as connection:
+                return not connection.execute("PRAGMA database_list").fetchone()[2]
+        except sqlite3.Error as exc:
+            raise ValueError("CAREER_AGENT_DB_PATH is not an openable SQLite URI.") from exc
 
     @staticmethod
     def _parse_bool(value: str, field: str) -> bool:

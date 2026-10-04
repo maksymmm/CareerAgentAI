@@ -252,6 +252,11 @@ Regression cases compare SQLite-reported backing for ordinary, case-variant,
 percent-encoded, repeated-key and fragment-bearing URI filenames. Owner tests cover
 approve/decline and all three ambiguous-outcome gates across process restart.
 
+Additional P1 follow-up: production runtime validation now asks SQLite for actual
+URI backing, preserves URI text, and rejects encoded/fragment-bearing memory
+paths and invalid URIs. Durable case-sensitive and repeated-key paths remain
+accepted. Local verification: 623 tests passed with 91.71% coverage.
+
 Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
 review before integrating the release fixes. Merge into `main` still requires
 explicit user approval.
