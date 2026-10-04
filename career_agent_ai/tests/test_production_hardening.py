@@ -318,7 +318,10 @@ def test_structured_logging_normalizes_non_finite_numbers_to_valid_json():
     assert "Infinity" not in rendered
 
 
-@pytest.mark.parametrize("correlation_id", ["", "x" * 201, "bad\nvalue"])
+@pytest.mark.parametrize(
+    "correlation_id",
+    ["", "x" * 201, "bad\nvalue", "bad\ud800value"],
+)
 def test_correlation_scope_rejects_malformed_ids(correlation_id):
     with pytest.raises(ValueError):
         with correlation_scope(correlation_id):
