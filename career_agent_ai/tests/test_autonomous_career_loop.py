@@ -2322,3 +2322,15 @@ def test_reconciliation_resolution_respects_execution_lease(tmp_path, monkeypatc
     completed = loop.resolve_message_reconciliation(run_id, delivered=True)
     assert completed.completed is True
     database.close()
+
+
+def test_request_rejects_message_subject_header_injection_before_loop_start():
+    with pytest.raises(ValueError, match="header control"):
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+            sender="candidate@example.test",
+            recipient="recruiter@example.test",
+            message_subject="Approved\nBcc: attacker@example.test",
+        )
