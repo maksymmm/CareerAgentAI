@@ -233,4 +233,27 @@ project's 90% coverage floor.
 
 ## Completion definition
 
+### Exact-head release review follow-up
+
+Review of `100acf2e8d` found an ownerless approval/reconciliation boundary (P1) and
+SQLite query casing that could disable durable heartbeat renewal (P2).
+
+- [x] Require caller identity on all existing autonomous-loop entry points and
+  compare it with the durable owner before state disclosure or mutation.
+- [x] Exercise foreign approve/decline after restart at every approval gate and
+  reject missing/invalid identities and cross-user resolver/recovery/read calls.
+- [x] Use SQLite-reported actual database backing in both renewal repositories,
+  avoiding URI reinterpretation for casing, decoded tokens and repeated query keys.
+- [x] Open worker and renewal connections with consistent explicit URI semantics.
+- [x] Document the required caller API migration and URI filename behavior.
+
+Verification: full local suite passed with 611 tests and 91.69% coverage (90% floor).
+Regression cases compare SQLite-reported backing for ordinary, case-variant,
+percent-encoded, repeated-key and fragment-bearing URI filenames. Owner tests cover
+approve/decline and all three ambiguous-outcome gates across process restart.
+
+Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
+review before integrating the release fixes. Merge into `main` still requires
+explicit user approval.
+
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.

@@ -18,6 +18,36 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
 @pytest.mark.parametrize(
+    "uri, expected_memory",
+    [
+        (":memory:", True),
+        ("FILE::MEMORY:", False),
+        ("file:case.db?mode=memory#fragment", True),
+        ("file:case.db?MODE=MEMORY", False),
+        ("file:case.db?MODE=memory", False),
+        ("file::MEMORY:", False),
+        ("file::memory:extra", False),
+        ("file::memory:", True),
+        ("file:%3Amemory%3A", True),
+        ("file:case.db?%6dode=memory", True),
+        ("file:case.db?mode=rwc&mode=memory", True),
+        ("file:case.db?mode=memory&mode=rwc", False),
+    ],
+)
+def test_sqlite_uri_detection_matches_actual_database_and_lease_renewal(
+    tmp_path, monkeypatch, uri, expected_memory
+):
+    monkeypatch.chdir(tmp_path)
+    database = SQLiteDatabase(uri)
+    actual_path = database.connection.execute("PRAGMA database_list").fetchone()[2]
+    assert (actual_path == "") is expected_memory
+    assert database.is_memory is expected_memory
+    run_repository = SQLiteCareerRunRepository(database)
+    assert run_repository.supports_background_lease_renewal is not expected_memory
+    database.close()
+
+
+@pytest.mark.parametrize(
     "database_path",
     [
         ":memory:",
@@ -104,25 +134,3 @@ def test_private_sqlite_memory_uri_skips_independent_heartbeat_connection(databa
     )
 
     database.close()
-
-
-def test_sqlite_memory_detection_respects_case_sensitive_uri_prefix():
-    assert SQLiteCareerLoopRepository._is_private_memory_path(":memory:") is True
-    assert SQLiteCareerLoopRepository._is_private_memory_path("file::memory:") is True
-    assert (
-        SQLiteCareerLoopRepository._is_private_memory_path(
-            "file:career?cache=shared&mode=memory"
-        )
-        is True
-    )
-    assert SQLiteCareerLoopRepository._is_private_memory_path("FILE::MEMORY:") is False
-
-    assert SQLiteCareerRunRepository._is_private_memory_path(":memory:") is True
-    assert SQLiteCareerRunRepository._is_private_memory_path("file::memory:") is True
-    assert (
-        SQLiteCareerRunRepository._is_private_memory_path(
-            "file:career?cache=shared&mode=memory"
-        )
-        is True
-    )
-    assert SQLiteCareerRunRepository._is_private_memory_path("FILE::MEMORY:") is False

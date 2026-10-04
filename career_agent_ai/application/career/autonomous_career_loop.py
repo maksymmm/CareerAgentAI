@@ -181,11 +181,9 @@ class AutonomousCareerLoop:
         self._persist(state)
         return self._continue(state)
 
-    def resume(self, run_id: str, *, approved: bool) -> CareerLoopResult:
+    def resume(self, run_id: str, *, user_id: str, approved: bool) -> CareerLoopResult:
         """Resume one human-gated run using an explicit approve/decline decision."""
-        state = self._states.get(run_id)
-        if state is None:
-            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        state = self._owned_state(run_id, user_id)
         if state.pending_human_action is None:
             raise RuntimeError("Career loop is not waiting for human action.")
         if not isinstance(approved, bool):
@@ -226,6 +224,7 @@ class AutonomousCareerLoop:
         self,
         run_id: str,
         *,
+        user_id: str,
         submitted: bool,
         provider_submission_id: str | None = None,
     ) -> CareerLoopResult:
@@ -236,9 +235,7 @@ class AutonomousCareerLoop:
         that no external effect occurred and safely reopens the same idempotent
         operation for retry under the already approved application intent.
         """
-        state = self._states.get(run_id)
-        if state is None:
-            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        state = self._owned_state(run_id, user_id)
         action = state.pending_human_action
         if (
             state.phase != CareerLoopPhase.APPLICATION_RECONCILIATION
@@ -284,12 +281,11 @@ class AutonomousCareerLoop:
         self,
         run_id: str,
         *,
+        user_id: str,
         delivered: bool,
     ) -> CareerLoopResult:
         """Resolve a verified ambiguous recruiter/employer message outcome."""
-        state = self._states.get(run_id)
-        if state is None:
-            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        state = self._owned_state(run_id, user_id)
         action = state.pending_human_action
         if (
             state.phase != CareerLoopPhase.MESSAGE_RECONCILIATION
@@ -328,13 +324,12 @@ class AutonomousCareerLoop:
         self,
         run_id: str,
         *,
+        user_id: str,
         completed: bool,
         provider_event_id: str | None = None,
     ) -> CareerLoopResult:
         """Resolve a verified ambiguous interview/calendar response outcome."""
-        state = self._states.get(run_id)
-        if state is None:
-            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        state = self._owned_state(run_id, user_id)
         action = state.pending_human_action
         if (
             state.phase != CareerLoopPhase.INTERVIEW_RECONCILIATION
@@ -370,27 +365,33 @@ class AutonomousCareerLoop:
                 pass
         return self._continue(state)
 
-    def get(self, run_id: str) -> CareerLoopResult:
+    def get(self, run_id: str, *, user_id: str) -> CareerLoopResult:
         """Return a durable loop snapshot without executing work."""
-        state = self._states.get(run_id)
-        if state is None:
-            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        state = self._owned_state(run_id, user_id)
         return self._result(state)
 
-    def continue_run(self, run_id: str) -> CareerLoopResult:
+    def continue_run(self, run_id: str, *, user_id: str) -> CareerLoopResult:
         """Continue a persisted non-human phase after a process restart.
 
         This is the recovery entry point for a crash that occurred after an explicit
         approval was durably recorded but before the next phase completed.
         """
-        state = self._states.get(run_id)
-        if state is None:
-            raise KeyError(f"Unknown autonomous career loop: {run_id!r}")
+        state = self._owned_state(run_id, user_id)
         if state.pending_human_action is not None:
             raise RuntimeError("Career loop is waiting for explicit human action.")
         if state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
             return self._result(state)
         return self._continue(state)
+
+    def _owned_state(self, run_id: str, user_id: str) -> CareerLoopState:
+        """Load a run only for its authenticated caller before any gate or side effect."""
+        caller = validate_loop_identifier(user_id, "user_id")
+        identifier = validate_loop_identifier(run_id, "run_id", maximum=120)
+        state = self._states.get(identifier)
+        if state is None or state.request.user_id != caller:
+            # Do not disclose whether another tenant owns this identifier.
+            raise KeyError("Unknown autonomous career loop for this user.")
+        return state
 
     def _continue(self, state: CareerLoopState) -> CareerLoopResult:
         execution_owner = f"worker:{uuid4().hex}"

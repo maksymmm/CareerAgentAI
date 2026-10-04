@@ -29,31 +29,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
     @property
     def supports_background_lease_renewal(self) -> bool:
         """Use a separate SQLite connection only for durable file-backed databases."""
-        return bool(self._database.path) and not self._is_private_memory_path(
-            self._database.path
-        )
-
-    @staticmethod
-    def _is_private_memory_path(value: str) -> bool:
-        """Return whether SQLite actually opens value as a private in-memory database."""
-        raw = value.strip()
-        if raw == ":memory:":
-            return True
-        # SQLite URI filenames require the case-sensitive file: prefix.
-        # FILE::MEMORY: is therefore a normal filesystem filename.
-        if not raw.startswith("file:"):
-            return False
-        uri = raw[5:]
-        normalized_uri = uri.lower()
-        if normalized_uri.startswith(":memory:"):
-            return True
-        query = normalized_uri.partition("?")[2]
-        return any(
-            key == "mode" and setting == "memory"
-            for part in query.split("&")
-            if part
-            for key, _, setting in (part.partition("="),)
-        )
+        return not self._database.is_memory
 
     def save(self, state: CareerRunState, *, lease_owner: str | None = None) -> None:
         """Persist one run snapshot with optimistic version and lease fencing."""
@@ -236,7 +212,7 @@ class SQLiteCareerRunRepository(CareerRunRepository):
             connection = self._database.connection
             close_connection = False
         else:
-            connection = sqlite3.connect(self._database.path, timeout=5)
+            connection = sqlite3.connect(self._database.path, timeout=5, uri=True)
             close_connection = True
         try:
             cursor = connection.execute(

@@ -25,6 +25,24 @@ Never edit an already-applied migration. A checksum mismatch is a deployment fai
 
 Use one durable database path per environment. Do not use `:memory:` in production.
 
+SQLite connections explicitly enable URI filenames. The worker and renewal
+connections use the same URI semantics. URI paths and query keys/values are
+case-sensitive: `mode=memory` selects memory, while `MODE=MEMORY` is ignored by
+SQLite and leaves a file-backed database eligible for heartbeat renewal. URI
+percent-encoding is decoded and repeated query keys use the last value.
+Deployments that previously relied on a literal filename beginning with `file:`
+must move that database to an ordinary filesystem path before adopting this release;
+URI-looking paths now have explicit URI meaning.
+
+## Caller ownership
+
+Existing autonomous-loop entry points require the authenticated caller's `user_id`,
+including approvals, recovery, readback and all three reconciliation resolvers.
+Pass it from trusted authentication/session context; do not copy it from a client
+payload or from the run being loaded. Cross-user and missing run identifiers have
+the same error response. This is a deliberate API tightening: callers must supply
+the identity explicitly; there is no legacy identity-free fallback.
+
 ## Observability
 
 Configure JSON logs with `configure_structured_logging()`. Wrap request/run entry points in `correlation_scope()` and pass stable correlation identifiers when available. Put structured data in `log_event(..., **fields)`; credential-like field names are redacted.
