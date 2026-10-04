@@ -229,7 +229,7 @@ class SQLiteCareerLoopRepository:
             or lease_seconds > 3600
         ):
             raise ValueError("lease_seconds must be between 1 and 3600.")
-        if self._database.path == ":memory:":
+        if self._is_private_memory_path(self._database.path):
             return
 
         now = datetime.now(timezone.utc)
@@ -257,6 +257,23 @@ class SQLiteCareerLoopRepository:
             raise
         finally:
             connection.close()
+
+
+    @staticmethod
+    def _is_private_memory_path(value: str) -> bool:
+        """Return whether SQLite opens value as a private in-memory database."""
+        normalized = value.strip().lower()
+        if normalized == ":memory:" or normalized.startswith("file::memory:"):
+            return True
+        if not normalized.startswith("file:"):
+            return False
+        query = normalized.partition("?")[2]
+        return any(
+            key == "mode" and setting == "memory"
+            for part in query.split("&")
+            if part
+            for key, _, setting in (part.partition("="),)
+        )
 
     def release_execution(self, run_id: str, owner_id: str) -> None:
         """Release only the execution lease owned by owner_id."""

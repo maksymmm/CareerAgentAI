@@ -8,6 +8,10 @@ from career_agent_ai.application.communication.models import (
     MessageDirection,
 )
 from career_agent_ai.application.runtime import RuntimeConfig
+from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+    SQLiteCareerLoopRepository,
+)
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
 @pytest.mark.parametrize(
@@ -76,3 +80,25 @@ def test_operational_openapi_documents_sanitized_500_response():
     assert schema["required"] == ["error"]
     assert schema["properties"]["error"]["const"] == "internal_error"
     assert schema["additionalProperties"] is False
+
+
+@pytest.mark.parametrize(
+    "database_path",
+    [
+        "file::memory:",
+        "FILE::MEMORY:",
+        "file:career?mode=memory",
+        "file:career?cache=shared&mode=memory",
+    ],
+)
+def test_private_sqlite_memory_uri_skips_independent_heartbeat_connection(database_path):
+    database = SQLiteDatabase(database_path)
+    repository = SQLiteCareerLoopRepository(database)
+
+    repository.renew_execution(
+        "not-materialized-in-private-memory",
+        "worker-1",
+        lease_seconds=60,
+    )
+
+    database.close()

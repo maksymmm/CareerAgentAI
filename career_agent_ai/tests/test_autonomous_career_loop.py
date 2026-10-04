@@ -2324,6 +2324,35 @@ def test_reconciliation_resolution_respects_execution_lease(tmp_path, monkeypatc
     database.close()
 
 
+def test_generic_loop_exception_credentials_are_redacted_before_persistence(monkeypatch):
+    database, loop, _, _, _, _, _, _ = build_stack(
+        ":memory:", with_schedule=False
+    )
+
+    def fail_resolve(_action):
+        raise RuntimeError("authorization=super-secret-token")
+
+    monkeypatch.setattr(loop._agents, "resolve", fail_resolve)
+
+    result = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id="redacted-loop-error",
+    )
+    durable = loop._states.get("redacted-loop-error")
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "super-secret-token" not in (result.error or "")
+    assert "[REDACTED]" in (result.error or "")
+    assert durable is not None
+    assert "super-secret-token" not in (durable.last_error or "")
+    assert "[REDACTED]" in (durable.last_error or "")
+    database.close()
+
+
 def test_request_rejects_message_subject_header_injection_before_loop_start():
     with pytest.raises(ValueError, match="header control"):
         CareerLoopRequest(
