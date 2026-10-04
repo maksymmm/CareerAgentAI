@@ -257,6 +257,10 @@ URI backing, preserves URI text, and rejects encoded/fragment-bearing memory
 paths and invalid URIs. Durable case-sensitive and repeated-key paths remain
 accepted. Local verification: 623 tests passed with 91.71% coverage.
 
+The subsequent exact-head review found percent-encoded NUL bytes could make SQLite
+truncate a URI filename. Runtime validation now rejects raw or decoded NUL bytes
+before opening the database URI, with coverage in every runtime environment.
+
 Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
 review before integrating the release fixes. Merge into `main` still requires
 explicit user approval.

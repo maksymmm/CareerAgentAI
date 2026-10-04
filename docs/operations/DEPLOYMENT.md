@@ -40,6 +40,8 @@ URI text is preserved unchanged for the worker connection. Validation opens and
 closes URI databases and may create a new empty file for a valid writable URI;
 ensure its parent directory exists and deployment permissions are appropriate.
 Invalid or unopenable URIs fail configuration validation.
+Raw and percent-encoded NUL bytes are rejected before SQLite opens the URI, so
+configuration text cannot be silently truncated to a different database filename.
 
 ## Caller ownership
 

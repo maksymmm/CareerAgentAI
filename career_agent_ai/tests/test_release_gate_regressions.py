@@ -71,6 +71,28 @@ def test_production_runtime_rejects_all_sqlite_memory_paths(database_path):
 
 
 @pytest.mark.parametrize(
+    "database_path",
+    [
+        "file:tenant.sqlite%00ignored",
+        "file:tenant.sqlite%00",
+        "file:tenant.sqlite%000",
+        "file:tenant.sqlite?cache=shared%00ignored",
+    ],
+)
+@pytest.mark.parametrize("environment", ["development", "test", "production"])
+def test_runtime_rejects_percent_encoded_nul_in_sqlite_uri(
+    database_path, environment
+):
+    with pytest.raises(ValueError, match="forbidden NUL byte"):
+        RuntimeConfig.from_env(
+            {
+                "CAREER_AGENT_ENV": environment,
+                "CAREER_AGENT_DB_PATH": database_path,
+            }
+        )
+
+
+@pytest.mark.parametrize(
     "subject",
     [
         "Approved\r\nBcc: attacker@example.com",

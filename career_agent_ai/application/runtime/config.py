@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import unquote
 
 
 class RuntimeEnvironment(str, Enum):
@@ -43,7 +44,9 @@ class RuntimeConfig:
         database_path = source.get("CAREER_AGENT_DB_PATH", ":memory:").strip()
         if not database_path:
             raise ValueError("CAREER_AGENT_DB_PATH must not be empty.")
-        if "\x00" in database_path:
+        if "\x00" in database_path or (
+            database_path.startswith("file:") and "\x00" in unquote(database_path)
+        ):
             raise ValueError("CAREER_AGENT_DB_PATH contains a forbidden NUL byte.")
         raw_level = source.get("CAREER_AGENT_LOG_LEVEL", "INFO").strip().upper()
         level = logging.getLevelName(raw_level)
