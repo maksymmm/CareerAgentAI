@@ -191,6 +191,123 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
     )
 
 
+@pytest.mark.parametrize("gate", ["application", "message", "interview"])
+@pytest.mark.parametrize("approved", [True, False])
+def test_approval_owner_is_required_after_restart(tmp_path, gate, approved):
+    path = str(tmp_path / "approval-owner.sqlite")
+    database, loop, _, _, scheduling, *_ = build_stack(path)
+    add_interview(scheduling, "owned:application")
+    result = loop.start(request(), run_id="owned")
+    if gate in {"message", "interview"}:
+        result = loop.resume("owned", user_id="user-1", approved=True)
+    if gate == "interview":
+        result = loop.resume("owned", user_id="user-1", approved=True)
+    database.close()
+
+    database, loop, _, _, _, submission, communication, calendar = build_stack(path)
+    before = database.connection.execute(
+        "SELECT * FROM autonomous_career_loops WHERE run_id = 'owned'"
+    ).fetchone()
+    with pytest.raises(KeyError, match="for this user"):
+        loop.resume("owned", user_id="other-user", approved=approved)
+    after = database.connection.execute(
+        "SELECT * FROM autonomous_career_loops WHERE run_id = 'owned'"
+    ).fetchone()
+    assert after == before
+    assert loop.get("owned", user_id="user-1").phase == result.phase
+    # The owner can still decide on the unchanged gate.
+    decided = loop.resume("owned", user_id="user-1", approved=approved)
+    assert decided.phase != result.phase
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "method, arguments",
+    [
+        ("get", {}),
+        ("continue_run", {}),
+        ("resume", {"approved": True}),
+        ("resolve_application_reconciliation", {"submitted": False}),
+        ("resolve_message_reconciliation", {"delivered": False}),
+        ("resolve_interview_reconciliation", {"completed": False}),
+    ],
+)
+def test_all_existing_run_entry_points_reject_other_tenants_before_mutation(
+    tmp_path, monkeypatch, method, arguments
+):
+    database, loop, *_ = build_stack(str(tmp_path / "owner-boundaries.sqlite"))
+    loop.start(request(with_schedule=False), run_id="owned")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unauthorized caller reached mutation or execution")
+
+    monkeypatch.setattr(loop._states, "save", forbidden)
+    monkeypatch.setattr(loop._states, "claim_execution", forbidden)
+    monkeypatch.setattr(loop, "_continue", forbidden)
+    entry = getattr(loop, method)
+    with pytest.raises(TypeError, match="user_id"):
+        entry("owned", **arguments)
+    with pytest.raises(KeyError, match="for this user") as foreign:
+        entry("owned", user_id="other-user", **arguments)
+    with pytest.raises(KeyError, match="for this user") as absent:
+        entry("absent", user_id="other-user", **arguments)
+    assert str(foreign.value) == str(absent.value)
+    database.close()
+
+
+@pytest.mark.parametrize("user_id", [None, True, "", "bad\x00id"])
+def test_approval_rejects_invalid_caller_identity(tmp_path, user_id):
+    database, loop, *_ = build_stack(str(tmp_path / "invalid-owner.sqlite"))
+    loop.start(request(with_schedule=False), run_id="owned")
+    with pytest.raises((TypeError, ValueError)):
+        loop.resume("owned", user_id=user_id, approved=True)
+    assert loop.get("owned", user_id="user-1").phase == CareerLoopPhase.APPLICATION_APPROVAL
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "kind, resolver, arguments",
+    [
+        ("application", "resolve_application_reconciliation", {"submitted": False}),
+        ("message", "resolve_message_reconciliation", {"delivered": False}),
+        ("interview", "resolve_interview_reconciliation", {"completed": False}),
+    ],
+)
+def test_ambiguous_outcome_cannot_be_resolved_by_another_tenant_after_restart(
+    tmp_path, monkeypatch, kind, resolver, arguments
+):
+    path = str(tmp_path / "reconciliation-owner.sqlite")
+    database, loop, _, _, scheduling, submission, communication, calendar = build_stack(path)
+    add_interview(scheduling, "owned:application")
+    loop.start(request(), run_id="owned")
+    if kind in {"message", "interview"}:
+        loop.resume("owned", user_id="user-1", approved=True)
+    if kind == "interview":
+        loop.resume("owned", user_id="user-1", approved=True)
+
+    def ambiguous(*args, **kwargs):
+        raise RuntimeError("Provider outcome unknown")
+
+    provider, method = {
+        "application": (submission, "submit"),
+        "message": (communication, "send"),
+        "interview": (calendar, "accept"),
+    }[kind]
+    monkeypatch.setattr(provider, method, ambiguous)
+    result = loop.resume("owned", user_id="user-1", approved=True)
+    assert result.phase.value == f"{kind}_reconciliation"
+    before_operations = database.connection.execute("SELECT * FROM external_action_operations").fetchall()
+    database.close()
+
+    database, restarted, *_ = build_stack(path)
+    with pytest.raises(KeyError, match="for this user"):
+        getattr(restarted, resolver)("owned", user_id="other-user", **arguments)
+    assert restarted.get("owned", user_id="user-1").phase == result.phase
+    after_operations = database.connection.execute("SELECT * FROM external_action_operations").fetchall()
+    assert after_operations == before_operations
+    database.close()
+
+
 
 def test_stale_lease_owner_cannot_overwrite_recovered_snapshot(tmp_path):
     path = str(tmp_path / "lease-fencing.sqlite")
@@ -262,14 +379,14 @@ def test_post_effect_recovery_remains_resumable_after_iteration_budget(tmp_path,
 
     monkeypatch.setattr(loop, "_step", recoverable_step)
 
-    first = loop.continue_run("post-effect-recovery")
+    first = loop.continue_run("post-effect-recovery", user_id="user-1")
 
     assert first.completed is False
     assert first.phase == CareerLoopPhase.APPLICATION_SUBMIT
     assert first.iterations == 2
     assert "local tracker completion" in first.error
 
-    second = loop.continue_run("post-effect-recovery")
+    second = loop.continue_run("post-effect-recovery", user_id="user-1")
 
     assert second.completed is True
     assert second.phase == CareerLoopPhase.COMPLETE
@@ -357,7 +474,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
 
     second = build_stack(path)
     database, loop, applications, _, _, submission_provider, communication_provider, _ = second
-    after_application = loop.resume(run_id, approved=True)
+    after_application = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert after_application.phase == CareerLoopPhase.MESSAGE_APPROVAL
     assert after_application.human_action is not None
@@ -386,7 +503,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
 
     third = build_stack(path)
     database, loop, applications, messages, _, submission_provider, communication_provider, _ = third
-    after_message = loop.resume(run_id, approved=True)
+    after_message = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert after_message.phase == CareerLoopPhase.INTERVIEW_APPROVAL
     assert after_message.human_action is not None
@@ -407,7 +524,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
 
     fourth = build_stack(path)
     database, loop, applications, messages, scheduling, submission_provider, communication_provider, calendar_provider = fourth
-    completed = loop.resume(run_id, approved=True)
+    completed = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert completed.completed is True
     assert completed.phase == CareerLoopPhase.COMPLETE
@@ -423,7 +540,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert tracked[0].timeline[-1].to_status == JobApplicationStatus.INTERVIEW
     assert messages.get(f"{run_id}:message").direction.value == "outbound"
 
-    snapshot = loop.get(run_id)
+    snapshot = loop.get(run_id, user_id="user-1")
     assert snapshot.completed is True
     assert snapshot.human_action is None
     database.close()
@@ -444,7 +561,7 @@ def test_loop_without_message_or_interview_completes_after_application_approval(
     started = loop.start(minimal, run_id="minimal")
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
 
-    completed = loop.resume("minimal", approved=True)
+    completed = loop.resume("minimal", approved=True, user_id="user-1")
 
     assert completed.completed is True
     assert submission_provider.calls == [
@@ -466,7 +583,7 @@ def test_human_decline_stops_without_consequential_external_action(tmp_path):
     started = loop.start(request(with_schedule=False), run_id="declined")
     assert started.human_action is not None
 
-    stopped = loop.resume("declined", approved=False)
+    stopped = loop.resume("declined", approved=False, user_id="user-1")
 
     assert stopped.phase == CareerLoopPhase.FAILED
     assert stopped.error == "human_declined:approve_application"
@@ -566,7 +683,7 @@ def test_restart_before_message_phase_does_not_duplicate_application(tmp_path):
 
     second = build_stack(path, with_schedule=False)
     database, loop, applications, _, _, submission_provider, _, _ = second
-    completed = loop.resume(run_id, approved=True)
+    completed = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert completed.completed is True
     assert len(applications.find(ApplicationQuery(user_id="user-1", job_id="job-1"))) == 1
@@ -599,7 +716,7 @@ def test_continue_run_recovers_approved_phase_after_process_restart(tmp_path):
 
     second = build_stack(path, with_schedule=False)
     database, loop, applications, _, _, submission_provider, _, _ = second
-    recovered = loop.continue_run(run_id)
+    recovered = loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.completed is True
     assert submission_provider.calls == [
@@ -705,7 +822,7 @@ def test_tracker_completion_failure_after_durable_submit_remains_recoverable(
 
     monkeypatch.setattr(applications, "complete_submission", fail_once)
 
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.APPLICATION_SUBMIT
     assert partial.completed is False
@@ -719,7 +836,7 @@ def test_tracker_completion_failure_after_durable_submit_remains_recoverable(
     database, restarted_loop, applications, _, _, restarted_provider, _, _ = build_stack(
         path, with_schedule=False
     )
-    recovered = restarted_loop.continue_run(run_id)
+    recovered = restarted_loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.completed is True
     assert restarted_provider.calls == []
@@ -790,7 +907,7 @@ def test_post_action_crash_after_application_success_recovers_without_resubmit(t
 
     restarted = build_stack(path, with_schedule=False)
     database, loop, applications, _, _, submission_provider, _, _ = restarted
-    recovered = loop.continue_run(run_id)
+    recovered = loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.completed is True
     assert submission_provider.calls == []
@@ -805,7 +922,7 @@ def test_post_action_crash_after_message_send_replays_without_duplicate(tmp_path
     database, loop, _, messages, _, _, communication_provider, _ = first
     started = loop.start(request(with_schedule=False), run_id=run_id)
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
-    message_gate = loop.resume(run_id, approved=True)
+    message_gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     states = SQLiteCareerLoopRepository(database)
@@ -836,7 +953,7 @@ def test_post_action_crash_after_message_send_replays_without_duplicate(tmp_path
 
     second = build_stack(path, with_schedule=False)
     database, loop, _, messages, _, _, restarted_provider, _ = second
-    recovered = loop.continue_run(run_id)
+    recovered = loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.completed is True
     assert restarted_provider.calls == []
@@ -861,10 +978,10 @@ def test_preaccepted_interview_updates_application_lifecycle(tmp_path):
 
     started = loop.start(request(), run_id=run_id)
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
-    message_gate = loop.resume(run_id, approved=True)
+    message_gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
 
-    completed = loop.resume(run_id, approved=True)
+    completed = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert completed.completed is True
     tracked = applications.get(f"{run_id}:application")
@@ -881,8 +998,8 @@ def test_post_action_crash_after_interview_accept_replays_without_duplicate(tmp_
     database, loop, _, _, scheduling, _, _, _ = first
     add_interview(scheduling, f"{run_id}:application")
     assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
-    gate = loop.resume(run_id, approved=True)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
 
     states = SQLiteCareerLoopRepository(database)
@@ -903,7 +1020,7 @@ def test_post_action_crash_after_interview_accept_replays_without_duplicate(tmp_
 
     second = build_stack(path)
     database, loop, applications, _, scheduling, _, _, calendar_provider = second
-    recovered = loop.continue_run(run_id)
+    recovered = loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.completed is True
     assert calendar_provider.calls == []
@@ -942,7 +1059,7 @@ def test_unlinked_interview_for_another_candidate_is_rejected(tmp_path):
     )
     assert loop.start(req, run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
 
-    result = loop.resume(run_id, approved=True)
+    result = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert result.phase == CareerLoopPhase.FAILED
     assert "different candidate" in (result.error or "")
@@ -992,13 +1109,13 @@ def test_application_artifact_survives_restart_and_is_bound_to_approval(tmp_path
 
     second = build_stack(path, with_schedule=False)
     database, loop, _, _, _, submission_provider, _, _ = second
-    restored = loop.get(run_id)
+    restored = loop.get(run_id, user_id="user-1")
 
     assert restored.human_action is not None
     assert restored.human_action.details["artifact_content"] == artifact
     assert restored.human_action.details["artifact_sha256"] == digest
 
-    completed = loop.resume(run_id, approved=True)
+    completed = loop.resume(run_id, approved=True, user_id="user-1")
     assert completed.completed is True
     assert len(submission_provider.calls) == 1
     database.close()
@@ -1026,10 +1143,10 @@ def test_linked_interview_for_another_candidate_is_rejected(tmp_path):
 
     started = loop.start(request(), run_id=run_id)
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
-    message_gate = loop.resume(run_id, approved=True)
+    message_gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
 
-    result = loop.resume(run_id, approved=True)
+    result = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert result.phase == CareerLoopPhase.FAILED
     assert "different candidate" in (result.error or "")
@@ -1052,7 +1169,7 @@ def test_application_approval_becomes_stale_before_external_submission(tmp_path)
     withdrawn = application.transition(JobApplicationStatus.WITHDRAWN)
     applications.update(withdrawn, expected_version=application.version)
 
-    result = loop.resume("stale-app", approved=True)
+    result = loop.resume("stale-app", approved=True, user_id="user-1")
 
     assert result.phase == CareerLoopPhase.FAILED
     assert "Approved application intent is stale" in (result.error or "")
@@ -1073,13 +1190,13 @@ def test_interview_approval_is_bound_to_the_exact_displayed_slot(tmp_path):
 
     second = build_stack(path)
     database, loop, _, _, _, _, _, _ = second
-    message_gate = loop.resume(run_id, approved=True)
+    message_gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
     database.close()
 
     third = build_stack(path)
     database, loop, _, _, scheduling, _, _, calendar_provider = third
-    interview_gate = loop.resume(run_id, approved=True)
+    interview_gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert interview_gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
     original_start = scheduling.get_event("interview-1").start_at
     moved_start = original_start + timedelta(days=1)
@@ -1094,7 +1211,7 @@ def test_interview_approval_is_bound_to_the_exact_displayed_slot(tmp_path):
     assert changed is not None
     provider_calls_before = list(calendar_provider.calls)
 
-    result = loop.resume(run_id, approved=True)
+    result = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert result.phase == CareerLoopPhase.FAILED
     assert "Approved interview intent is stale" in (result.error or "")
@@ -1112,7 +1229,7 @@ def test_new_run_cannot_resubmit_a_job_that_is_already_applied(tmp_path):
         run_id="first-run",
     )
     assert initial.phase == CareerLoopPhase.APPLICATION_APPROVAL
-    completed = loop.resume("first-run", approved=True)
+    completed = loop.resume("first-run", approved=True, user_id="user-1")
     assert completed.completed is True
     assert len(first_submission.calls) == 1
     database.close()
@@ -1202,7 +1319,7 @@ def test_long_existing_application_id_uses_bounded_stable_submission_key(tmp_pat
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
     assert started.application_id == application_id
 
-    completed = loop.resume("long-id", approved=True)
+    completed = loop.resume("long-id", approved=True, user_id="user-1")
 
     assert completed.completed is True
     assert len(submission_provider.calls) == 1
@@ -1224,7 +1341,7 @@ def test_loop_execution_lease_blocks_concurrent_recovered_worker(
     run_id = "lease-run"
     database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
     assert loop.start(request(with_schedule=False), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     states = SQLiteCareerLoopRepository(database)
     state = states.get(run_id)
@@ -1251,7 +1368,7 @@ def test_loop_execution_lease_blocks_concurrent_recovered_worker(
 
         first_loop._communication.send = blocking_send
         try:
-            return first_loop.continue_run(run_id)
+            return first_loop.continue_run(run_id, user_id="user-1")
         finally:
             first_db.close()
 
@@ -1263,7 +1380,7 @@ def test_loop_execution_lease_blocks_concurrent_recovered_worker(
             path, with_schedule=False
         )
         with pytest.raises(CareerLoopConflictError, match="already executing"):
-            second_loop.continue_run(run_id)
+            second_loop.continue_run(run_id, user_id="user-1")
         assert second_message_provider.calls == []
         second_db.close()
 
@@ -1370,7 +1487,7 @@ def test_transient_message_prepare_failure_after_submission_is_resumable(
         return original_create_draft(message)
 
     monkeypatch.setattr(loop._communication, "create_draft", fail_once)
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.MESSAGE_PREPARE
     assert partial.completed is False
@@ -1383,7 +1500,7 @@ def test_transient_message_prepare_failure_after_submission_is_resumable(
     database, restarted_loop, _, _, _, restarted_submission, _, _ = build_stack(
         path, with_schedule=False
     )
-    recovered = restarted_loop.continue_run(run_id)
+    recovered = restarted_loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.phase == CareerLoopPhase.MESSAGE_APPROVAL
     assert recovered.error is None
@@ -1401,7 +1518,7 @@ def test_transient_interview_read_after_submission_and_message_is_resumable(
     )
     add_interview(scheduling, f"{run_id}:application")
     assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     original_get_event = scheduling.get_event
     attempts = {"count": 0}
@@ -1413,7 +1530,7 @@ def test_transient_interview_read_after_submission_and_message_is_resumable(
         return original_get_event(event_id)
 
     monkeypatch.setattr(scheduling, "get_event", fail_once)
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.INTERVIEW_COORDINATION
     assert partial.completed is False
@@ -1425,7 +1542,7 @@ def test_transient_interview_read_after_submission_and_message_is_resumable(
     database, restarted_loop, _, _, _, restarted_submission, restarted_message, _ = build_stack(
         path
     )
-    recovered = restarted_loop.continue_run(run_id)
+    recovered = restarted_loop.continue_run(run_id, user_id="user-1")
 
     assert recovered.phase == CareerLoopPhase.INTERVIEW_APPROVAL
     assert recovered.error is None
@@ -1511,7 +1628,7 @@ def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_
         ),
         run_id=run_id,
     ).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     original_save = loop._states.save
     failed_once = {"value": False}
@@ -1523,7 +1640,7 @@ def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_
         return original_save(state, **kwargs)
 
     monkeypatch.setattr(loop._states, "save", fail_once_after_send)
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.MESSAGE_SEND
     assert partial.completed is False
@@ -1534,7 +1651,7 @@ def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_
     database, restarted, _, _, _, _, restarted_messages, _ = build_stack(
         path, with_schedule=False
     )
-    completed = restarted.continue_run(run_id)
+    completed = restarted.continue_run(run_id, user_id="user-1")
 
     assert completed.completed is True
     assert completed.error is None
@@ -1588,7 +1705,7 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_provider_call(
         ),
         run_id=run_id,
     ).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     states = SQLiteCareerLoopRepository(database)
     state = states.get(run_id)
@@ -1617,7 +1734,7 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_provider_call(
 
         first_loop._communication.send = blocking_send
         try:
-            return first_loop.continue_run(run_id)
+            return first_loop.continue_run(run_id, user_id="user-1")
         finally:
             first_db.close()
 
@@ -1630,7 +1747,7 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_provider_call(
             path, with_schedule=False
         )
         with pytest.raises(CareerLoopConflictError, match="already executing"):
-            second_loop.continue_run(run_id)
+            second_loop.continue_run(run_id, user_id="user-1")
         assert second_provider.calls == []
         second_db.close()
 
@@ -1649,8 +1766,8 @@ def test_post_interview_accept_snapshot_failure_replays_without_duplicate_calend
     add_interview(scheduling, f"{run_id}:application")
 
     assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
 
     original_save = loop._states.save
     failed_once = {"value": False}
@@ -1662,7 +1779,7 @@ def test_post_interview_accept_snapshot_failure_replays_without_duplicate_calend
         return original_save(state, **kwargs)
 
     monkeypatch.setattr(loop._states, "save", fail_once_after_accept)
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.INTERVIEW_ACCEPT
     assert partial.completed is False
@@ -1676,7 +1793,7 @@ def test_post_interview_accept_snapshot_failure_replays_without_duplicate_calend
     database, restarted, _, _, restarted_scheduling, _, _, restarted_calendar = build_stack(
         path
     )
-    completed = restarted.continue_run(run_id)
+    completed = restarted.continue_run(run_id, user_id="user-1")
 
     assert completed.completed is True
     assert completed.error is None
@@ -1710,7 +1827,7 @@ def test_ambiguous_application_submission_enters_explicit_reconciliation_and_can
         raise RuntimeError("connection lost after provider may have accepted submission")
 
     monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
     assert ambiguous.completed is False
@@ -1727,12 +1844,13 @@ def test_ambiguous_application_submission_enters_explicit_reconciliation_and_can
     assert calls["count"] == 1
 
     with pytest.raises(RuntimeError, match="dedicated reconciliation resolver"):
-        loop.resume(run_id, approved=True)
+        loop.resume(run_id, approved=True, user_id="user-1")
 
     completed = loop.resolve_application_reconciliation(
         run_id,
         submitted=True,
         provider_submission_id="provider/confirmed=123",
+        user_id="user-1",
     )
 
     assert completed.completed is True
@@ -1772,7 +1890,7 @@ def test_ambiguous_application_submission_confirmed_no_effect_retries_same_opera
         return original_submit(*args, **kwargs)
 
     monkeypatch.setattr(submission_provider, "submit", ambiguous_once)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
     operation_id = ambiguous.human_action.details["operation_id"]
@@ -1780,6 +1898,7 @@ def test_ambiguous_application_submission_confirmed_no_effect_retries_same_opera
     completed = loop.resolve_application_reconciliation(
         run_id,
         submitted=False,
+        user_id="user-1",
     )
 
     assert completed.completed is True
@@ -1812,7 +1931,7 @@ def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_succes
         run_id=run_id,
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
-    message_gate = loop.resume(run_id, approved=True)
+    message_gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert message_gate.phase == CareerLoopPhase.MESSAGE_APPROVAL
     assert message_gate.human_action is not None
 
@@ -1823,7 +1942,7 @@ def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_succes
         raise RuntimeError("connection lost after message may have been delivered")
 
     monkeypatch.setattr(communication_provider, "send", ambiguous_send)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
     assert ambiguous.human_action is not None
@@ -1847,7 +1966,7 @@ def test_ambiguous_message_delivery_enters_reconciliation_and_can_confirm_succes
     assert ambiguous.human_action.details["content_sha256"] == expected_message_digest
     assert calls["count"] == 1
 
-    completed = loop.resolve_message_reconciliation(run_id, delivered=True)
+    completed = loop.resolve_message_reconciliation(run_id, delivered=True, user_id="user-1")
 
     assert completed.completed is True
     assert calls["count"] == 1
@@ -1873,7 +1992,7 @@ def test_ambiguous_message_delivery_confirmed_no_effect_retries_same_operation(
         ),
         run_id=run_id,
     )
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     original_send = communication_provider.send
     attempts = {"count": 0}
@@ -1885,9 +2004,9 @@ def test_ambiguous_message_delivery_confirmed_no_effect_retries_same_operation(
         return original_send(*args, **kwargs)
 
     monkeypatch.setattr(communication_provider, "send", ambiguous_once)
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_RECONCILIATION
 
-    completed = loop.resolve_message_reconciliation(run_id, delivered=False)
+    completed = loop.resolve_message_reconciliation(run_id, delivered=False, user_id="user-1")
 
     assert completed.completed is True
     assert attempts["count"] == 2
@@ -1906,8 +2025,8 @@ def test_ambiguous_interview_response_enters_reconciliation_and_can_confirm_succ
     add_interview(scheduling, f"{run_id}:application")
 
     assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
 
     calls = {"count": 0}
 
@@ -1916,7 +2035,7 @@ def test_ambiguous_interview_response_enters_reconciliation_and_can_confirm_succ
         raise RuntimeError("calendar response outcome unknown")
 
     monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert ambiguous.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
     assert ambiguous.human_action is not None
@@ -1930,6 +2049,7 @@ def test_ambiguous_interview_response_enters_reconciliation_and_can_confirm_succ
         run_id,
         completed=True,
         provider_event_id="provider-confirmed-interview-1",
+        user_id="user-1",
     )
 
     assert completed.completed is True
@@ -1949,8 +2069,8 @@ def test_ambiguous_interview_response_confirmed_no_effect_retries_same_operation
     add_interview(scheduling, f"{run_id}:application")
 
     loop.start(request(), run_id=run_id)
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
 
     original_accept = calendar_provider.accept
     attempts = {"count": 0}
@@ -1962,9 +2082,9 @@ def test_ambiguous_interview_response_confirmed_no_effect_retries_same_operation
         return original_accept(*args, **kwargs)
 
     monkeypatch.setattr(calendar_provider, "accept", ambiguous_once)
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
 
-    completed = loop.resolve_interview_reconciliation(run_id, completed=False)
+    completed = loop.resolve_interview_reconciliation(run_id, completed=False, user_id="user-1")
 
     assert completed.completed is True
     assert attempts["count"] == 2
@@ -1996,13 +2116,13 @@ def test_generic_decline_cannot_terminalize_application_reconciliation(
         raise RuntimeError("ambiguous provider outcome")
 
     monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
     assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
 
     with pytest.raises(RuntimeError, match="dedicated reconciliation resolver"):
-        loop.resume(run_id, approved=False)
+        loop.resume(run_id, approved=False, user_id="user-1")
 
-    still_waiting = loop.get(run_id)
+    still_waiting = loop.get(run_id, user_id="user-1")
     assert still_waiting.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
     assert still_waiting.human_action is not None
     tracked = applications.get(f"{run_id}:application")
@@ -2031,7 +2151,7 @@ def test_application_reconciliation_resolution_survives_snapshot_failure(
         raise RuntimeError("ambiguous provider outcome")
 
     monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
     assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
 
     original_save = loop._states.save
@@ -2049,15 +2169,17 @@ def test_application_reconciliation_resolution_survives_snapshot_failure(
             run_id,
             submitted=True,
             provider_submission_id="provider-confirmed-after-crash",
+            user_id="user-1",
         )
 
-    persisted_gate = loop.get(run_id)
+    persisted_gate = loop.get(run_id, user_id="user-1")
     assert persisted_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
 
     completed = loop.resolve_application_reconciliation(
         run_id,
         submitted=True,
         provider_submission_id="provider-confirmed-after-crash",
+        user_id="user-1",
     )
 
     assert completed.completed is True
@@ -2084,13 +2206,13 @@ def test_message_reconciliation_resolution_survives_snapshot_failure(
         ),
         run_id=run_id,
     )
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     def ambiguous_send(*args, **kwargs):
         raise RuntimeError("ambiguous message outcome")
 
     monkeypatch.setattr(communication_provider, "send", ambiguous_send)
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_RECONCILIATION
 
     original_save = loop._states.save
     failed_once = {"value": False}
@@ -2103,10 +2225,10 @@ def test_message_reconciliation_resolution_survives_snapshot_failure(
 
     monkeypatch.setattr(loop._states, "save", fail_resolution_snapshot_once)
     with pytest.raises(sqlite3.OperationalError):
-        loop.resolve_message_reconciliation(run_id, delivered=True)
+        loop.resolve_message_reconciliation(run_id, delivered=True, user_id="user-1")
 
-    assert loop.get(run_id).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
-    completed = loop.resolve_message_reconciliation(run_id, delivered=True)
+    assert loop.get(run_id, user_id="user-1").phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    completed = loop.resolve_message_reconciliation(run_id, delivered=True, user_id="user-1")
 
     assert completed.completed is True
     assert messages.get(f"{run_id}:message").direction.value == "outbound"
@@ -2130,7 +2252,7 @@ def test_definite_pre_submission_failure_is_recoverable_with_same_operation(tmp_
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
 
     submission_provider.failure = RuntimeError("provider unavailable before submission")
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.APPLICATION_SUBMIT
     assert partial.completed is False
@@ -2139,7 +2261,7 @@ def test_definite_pre_submission_failure_is_recoverable_with_same_operation(tmp_
     assert tracked is not None and tracked.status == JobApplicationStatus.SAVED
 
     submission_provider.failure = None
-    completed = loop.continue_run(run_id)
+    completed = loop.continue_run(run_id, user_id="user-1")
 
     assert completed.completed is True
     assert completed.error is None
@@ -2200,7 +2322,7 @@ def test_submission_terminal_success_write_failure_enters_reconciliation(
         )
 
     monkeypatch.setattr(repository, "transition", fail_success_write_once)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
     assert ambiguous.human_action is not None
@@ -2236,17 +2358,17 @@ def test_definite_pre_delivery_message_failure_is_recoverable(tmp_path):
         ),
         run_id=run_id,
     ).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     communication_provider.failure = RuntimeError("provider unavailable before delivery")
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.MESSAGE_SEND
     assert partial.completed is False
     assert "retried deliberately" in (partial.error or "")
 
     communication_provider.failure = None
-    completed = loop.continue_run(run_id)
+    completed = loop.continue_run(run_id, user_id="user-1")
 
     assert completed.completed is True
     assert communication_provider.calls.count(("send", f"{run_id}:message-send")) == 2
@@ -2260,18 +2382,18 @@ def test_definite_pre_calendar_failure_is_recoverable(tmp_path):
     add_interview(scheduling, f"{run_id}:application")
 
     assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
 
     calendar_provider.failure = RuntimeError("calendar unavailable before response")
-    partial = loop.resume(run_id, approved=True)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert partial.phase == CareerLoopPhase.INTERVIEW_ACCEPT
     assert partial.completed is False
     assert "retried deliberately" in (partial.error or "")
 
     calendar_provider.failure = None
-    completed = loop.continue_run(run_id)
+    completed = loop.continue_run(run_id, user_id="user-1")
 
     assert completed.completed is True
     assert calendar_provider.calls.count(
@@ -2287,8 +2409,8 @@ def test_approved_interview_already_accepted_completes_without_duplicate(tmp_pat
     add_interview(scheduling, f"{run_id}:application")
 
     assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
-    gate = loop.resume(run_id, approved=True)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    gate = loop.resume(run_id, approved=True, user_id="user-1")
     assert gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
 
     externally_accepted = scheduling.accept(
@@ -2300,7 +2422,7 @@ def test_approved_interview_already_accepted_completes_without_duplicate(tmp_pat
     assert externally_accepted.status == ScheduleStatus.ACCEPTED
     assert calendar_provider.calls == [("accept", "external:accept")]
 
-    completed = loop.resume(run_id, approved=True)
+    completed = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert completed.completed is True
     assert calendar_provider.calls == [("accept", "external:accept")]
@@ -2323,13 +2445,13 @@ def test_reconciliation_resolution_respects_execution_lease(tmp_path, monkeypatc
         ),
         run_id=run_id,
     )
-    assert loop.resume(run_id, approved=True).phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
 
     def ambiguous_send(*args, **kwargs):
         raise RuntimeError("unknown provider outcome")
 
     monkeypatch.setattr(communication_provider, "send", ambiguous_send)
-    ambiguous = loop.resume(run_id, approved=True)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
     assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
 
     state = loop._states.get(run_id)
@@ -2342,14 +2464,14 @@ def test_reconciliation_resolution_respects_execution_lease(tmp_path, monkeypatc
     )
     try:
         with pytest.raises(CareerLoopConflictError):
-            loop.resolve_message_reconciliation(run_id, delivered=True)
-        persisted = loop.get(run_id)
+            loop.resolve_message_reconciliation(run_id, delivered=True, user_id="user-1")
+        persisted = loop.get(run_id, user_id="user-1")
         assert persisted.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
         assert messages.get(f"{run_id}:message").direction.value == "draft"
     finally:
         loop._states.release_execution(run_id, "competing-resolver")
 
-    completed = loop.resolve_message_reconciliation(run_id, delivered=True)
+    completed = loop.resolve_message_reconciliation(run_id, delivered=True, user_id="user-1")
     assert completed.completed is True
     database.close()
 

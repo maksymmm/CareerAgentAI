@@ -9,10 +9,11 @@ its implemented contracts and release exclusions; `PROJECT_PLAN.md` retains the
 broader web/mobile/provider/deployment roadmap. Completed core work does not imply
 that the public product is complete.
 
-Next priority: obtain a fresh release review of the exact integration HEAD and
-address any confirmed findings. Then record final test/coverage evidence and stop
-at explicit approval to merge into `main`. Subsequent product delivery needs its
-own acceptance criteria for the user interface, real providers and deployment.
+Release evidence: integration commit `44bcc50907ce2827e1612fecbe16f1ac81dca2cb`
+passed GitHub CI #899 with 635 tests and 91.72% coverage, and its exact-head Codex
+review found no major issues. The release is stopped at explicit approval to merge
+into `main`. Subsequent product delivery needs its own acceptance criteria for the
+user interface, real providers and deployment.
 
 ## 1. Crash-safe idempotency for consequential external actions
 
@@ -244,5 +245,37 @@ the production operating contract. The complete GitHub CI suite remains above th
 project's 90% coverage floor.
 
 ## Completion definition
+
+### Exact-head release review follow-up
+
+Review of `100acf2e8d` found an ownerless approval/reconciliation boundary (P1) and
+SQLite query casing that could disable durable heartbeat renewal (P2).
+
+- [x] Require caller identity on all existing autonomous-loop entry points and
+  compare it with the durable owner before state disclosure or mutation.
+- [x] Exercise foreign approve/decline after restart at every approval gate and
+  reject missing/invalid identities and cross-user resolver/recovery/read calls.
+- [x] Use SQLite-reported actual database backing in both renewal repositories,
+  avoiding URI reinterpretation for casing, decoded tokens and repeated query keys.
+- [x] Open worker and renewal connections with consistent explicit URI semantics.
+- [x] Document the required caller API migration and URI filename behavior.
+
+Verification: full local suite passed with 611 tests and 91.69% coverage (90% floor).
+Regression cases compare SQLite-reported backing for ordinary, case-variant,
+percent-encoded, repeated-key and fragment-bearing URI filenames. Owner tests cover
+approve/decline and all three ambiguous-outcome gates across process restart.
+
+Additional P1 follow-up: production runtime validation now asks SQLite for actual
+URI backing, preserves URI text, and rejects encoded/fragment-bearing memory
+paths and invalid URIs. Durable case-sensitive and repeated-key paths remain
+accepted. Local verification: 623 tests passed with 91.71% coverage.
+
+The subsequent exact-head review found percent-encoded NUL bytes could make SQLite
+truncate a URI filename. Runtime validation now rejects raw or decoded NUL bytes
+before opening the database URI, with coverage in every runtime environment.
+
+Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
+review before integrating the release fixes. Merge into `main` still requires
+explicit user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.

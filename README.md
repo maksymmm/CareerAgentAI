@@ -245,6 +245,12 @@ approval, crash-safe application submission, optional recruiter/employer messagi
 application tracking, and interview coordination.
 
 The loop is a bounded state machine with a restart-safe SQLite state repository.
+All entry points for existing loop runs (`get`, `resume`, `continue_run`, and the
+three reconciliation resolvers) require keyword-only `user_id`. Service callers
+must derive it from the authenticated principal, never an untrusted request body.
+The loop checks it against the durable request owner before exposing state, changing
+an approval, claiming a lease, or resolving a provider outcome. A foreign run and
+a missing run both raise the same `KeyError`.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
