@@ -42,7 +42,7 @@ from career_agent_ai.application.jobs.job_application_repository import (
 )
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
-from career_agent_ai.application.observability import redact_text
+from career_agent_ai.application.observability.structured_logging import redact_text
 from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
 
 
