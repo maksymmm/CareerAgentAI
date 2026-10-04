@@ -163,10 +163,22 @@ class CareerOrchestrator:
                 raise
 
     def _continue_running_state(self, state: CareerRunState) -> CareerRunResult:
-        """Validate and continue a state that must already be RUNNING."""
+        """Continue a running state or idempotently finalize a completed checkpoint."""
         engine = state.workflow_engine
         if engine.workflow is None:
             raise RuntimeError("Career run has no workflow.")
+        if engine.workflow.status == WorkflowState.COMPLETED:
+            result = CareerRunResult(
+                run_id=state.run_id,
+                objective=state.objective,
+                plan=state.plan,
+                steps=tuple(state.steps),
+                success=True,
+                stopped_reason=None,
+            )
+            self._remember_run(state.user_id, result)
+            self._forget_state(state.run_id)
+            return result
         if engine.workflow.status != WorkflowState.RUNNING:
             raise RuntimeError("Only a durable running career run can be continued.")
         return self._continue(state)
