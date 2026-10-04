@@ -75,8 +75,15 @@ def correlation_scope(correlation_id: str | None = None) -> Iterator[str]:
     identifier = identifier.strip()
     if not identifier or len(identifier) > 200:
         raise ValueError("correlation_id must be a non-empty string of at most 200 characters.")
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in identifier):
-        raise ValueError("correlation_id contains forbidden control characters.")
+    if any(
+        ord(ch) < 32
+        or ord(ch) == 127
+        or 0xD800 <= ord(ch) <= 0xDFFF
+        for ch in identifier
+    ):
+        raise ValueError(
+            "correlation_id contains forbidden control or Unicode surrogate characters."
+        )
     token = _correlation_id.set(identifier)
     try:
         yield identifier
