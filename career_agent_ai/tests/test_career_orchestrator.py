@@ -15,6 +15,7 @@ from career_agent_ai.application.agents.agent_result import AgentResult
 from career_agent_ai.application.career.career_orchestrator import CareerOrchestrator
 from career_agent_ai.application.career.career_run_repository import CareerRunConflictError
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.memory.in_memory_memory_repository import InMemoryMemoryRepository
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
 from career_agent_ai.application.memory.memory_record import MemoryRecord
 from career_agent_ai.application.storage.sqlite_career_run_repository import (
@@ -1107,3 +1108,62 @@ def test_resume_accepts_boolean_true_as_explicit_approval():
     assert resumed.success is True
     assert next_agent.last_context is not None
     assert next_agent.last_context.payload["human_result"] is True
+
+
+def test_completed_run_finalization_can_retry_after_memory_failure(tmp_path):
+    path = str(tmp_path / "completed-finalization-retry.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerRunRepository(database)
+
+    class FailOnceMemoryRepository(InMemoryMemoryRepository):
+        def __init__(self):
+            super().__init__()
+            self.fail_once = True
+
+        def save(self, record):
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("memory temporarily unavailable")
+            return super().save(record)
+
+    memory_repository = FailOnceMemoryRepository()
+    memory = MemoryEngine(memory_repository)
+    agent = FakeAgent("job_search")
+    registry = AgentRegistry()
+    registry.register(agent)
+    orchestrator = CareerOrchestrator(
+        memory_engine=memory,
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+
+    with pytest.raises(RuntimeError, match="memory temporarily unavailable"):
+        orchestrator.run("user-1", "Find a job")
+
+    row = database.connection.execute(
+        "SELECT run_id FROM career_runs"
+    ).fetchone()
+    assert row is not None
+    run_id = str(row[0])
+    durable = repository.get(run_id)
+    assert durable is not None
+    assert durable.workflow_engine.workflow is not None
+    assert durable.workflow_engine.workflow.status == WorkflowState.COMPLETED
+    assert agent.last_context is not None
+
+    restarted = CareerOrchestrator(
+        memory_engine=memory,
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(AgentRegistry()),
+        run_repository=repository,
+    )
+    result = restarted.continue_run(run_id)
+
+    assert result.success is True
+    assert tuple(step.action for step in result.steps) == ("job_search",)
+    summary = memory.get(f"career_run:user-1:{run_id}", user_id="user-1")
+    assert summary is not None
+    assert summary.value["success"] is True
+    assert repository.get(run_id) is None
+    database.close()
