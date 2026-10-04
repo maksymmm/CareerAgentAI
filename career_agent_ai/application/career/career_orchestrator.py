@@ -24,7 +24,7 @@ from career_agent_ai.application.career.career_run_state import CareerRunState
 from career_agent_ai.application.career.career_step_result import CareerStepResult
 from career_agent_ai.application.memory.memory_engine import MemoryEngine
 from career_agent_ai.application.memory.memory_record import MemoryRecord
-from career_agent_ai.application.observability import redact_text
+from career_agent_ai.application.observability.structured_logging import redact_text
 from career_agent_ai.application.workflow.workflow import Workflow
 from career_agent_ai.application.workflow.workflow_engine import WorkflowEngine
 from career_agent_ai.application.workflow.workflow_state import WorkflowState
