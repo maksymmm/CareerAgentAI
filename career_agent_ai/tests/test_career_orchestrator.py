@@ -984,6 +984,24 @@ def test_anonymous_temporary_sqlite_disables_background_lease_renewal():
     database.close()
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        ":memory:",
+        "file::memory:",
+        "file:career?mode=memory",
+        "file:career?cache=shared&mode=memory",
+    ],
+)
+def test_private_memory_sqlite_disables_background_lease_renewal(path):
+    database = SQLiteDatabase(path)
+    repository = SQLiteCareerRunRepository(database)
+
+    assert repository.supports_background_lease_renewal is False
+
+    database.close()
+
+
 def test_anonymous_temporary_sqlite_run_does_not_open_separate_heartbeat_database():
     database = SQLiteDatabase("")
     repository = SQLiteCareerRunRepository(database)
