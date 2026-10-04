@@ -291,6 +291,32 @@ def test_run_contains_agent_failure_without_raising():
     assert "provider unavailable" in result.steps[0].messages[0]
 
 
+def test_agent_exception_credentials_are_redacted_from_result_and_memory():
+    memory = MemoryEngine()
+    registry = AgentRegistry()
+    registry.register(
+        FakeAgent(
+            "job_search",
+            error=RuntimeError("api_key=super-secret-value"),
+        )
+    )
+    orchestrator = CareerOrchestrator(
+        memory_engine=memory,
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+    )
+
+    result = orchestrator.run("user-1", "Find a job")
+    summary = memory.get(f"career_run:user-1:{result.run_id}", user_id="user-1")
+
+    assert "super-secret-value" not in result.steps[0].messages[0]
+    assert "[REDACTED]" in result.steps[0].messages[0]
+    assert summary is not None
+    serialized_summary = str(summary.value)
+    assert "super-secret-value" not in serialized_summary
+    assert "[REDACTED]" in serialized_summary
+
+
 def test_empty_objective_is_rejected():
     with pytest.raises(ValueError):
         make_orchestrator().plan("   ")
