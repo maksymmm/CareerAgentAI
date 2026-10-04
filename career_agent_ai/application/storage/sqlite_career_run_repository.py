@@ -28,8 +28,26 @@ class SQLiteCareerRunRepository(CareerRunRepository):
 
     @property
     def supports_background_lease_renewal(self) -> bool:
-        """Use a separate SQLite connection for file-backed lease heartbeats."""
-        return bool(self._database.path) and self._database.path != ":memory:"
+        """Use a separate SQLite connection only for durable file-backed databases."""
+        return bool(self._database.path) and not self._is_private_memory_path(
+            self._database.path
+        )
+
+    @staticmethod
+    def _is_private_memory_path(value: str) -> bool:
+        """Return whether SQLite opens value as a private in-memory database."""
+        normalized = value.strip().lower()
+        if normalized == ":memory:" or normalized.startswith("file::memory:"):
+            return True
+        if not normalized.startswith("file:"):
+            return False
+        query = normalized.partition("?")[2]
+        return any(
+            key == "mode" and setting == "memory"
+            for part in query.split("&")
+            if part
+            for key, _, setting in (part.partition("="),)
+        )
 
     def save(self, state: CareerRunState, *, lease_owner: str | None = None) -> None:
         """Persist one run snapshot with optimistic version and lease fencing."""
