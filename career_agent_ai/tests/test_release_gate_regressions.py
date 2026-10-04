@@ -11,6 +11,9 @@ from career_agent_ai.application.runtime import RuntimeConfig
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
     SQLiteCareerLoopRepository,
 )
+from career_agent_ai.application.storage.sqlite_career_run_repository import (
+    SQLiteCareerRunRepository,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -86,7 +89,6 @@ def test_operational_openapi_documents_sanitized_500_response():
     "database_path",
     [
         "file::memory:",
-        "FILE::MEMORY:",
         "file:career?mode=memory",
         "file:career?cache=shared&mode=memory",
     ],
@@ -102,3 +104,25 @@ def test_private_sqlite_memory_uri_skips_independent_heartbeat_connection(databa
     )
 
     database.close()
+
+
+def test_sqlite_memory_detection_respects_case_sensitive_uri_prefix():
+    assert SQLiteCareerLoopRepository._is_private_memory_path(":memory:") is True
+    assert SQLiteCareerLoopRepository._is_private_memory_path("file::memory:") is True
+    assert (
+        SQLiteCareerLoopRepository._is_private_memory_path(
+            "file:career?cache=shared&mode=memory"
+        )
+        is True
+    )
+    assert SQLiteCareerLoopRepository._is_private_memory_path("FILE::MEMORY:") is False
+
+    assert SQLiteCareerRunRepository._is_private_memory_path(":memory:") is True
+    assert SQLiteCareerRunRepository._is_private_memory_path("file::memory:") is True
+    assert (
+        SQLiteCareerRunRepository._is_private_memory_path(
+            "file:career?cache=shared&mode=memory"
+        )
+        is True
+    )
+    assert SQLiteCareerRunRepository._is_private_memory_path("FILE::MEMORY:") is False
