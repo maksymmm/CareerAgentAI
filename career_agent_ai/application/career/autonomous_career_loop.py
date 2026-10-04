@@ -6,6 +6,7 @@ import sqlite3
 from datetime import timezone
 from hashlib import sha256
 from threading import Event, Thread
+from time import monotonic
 from typing import Any
 from uuid import uuid4
 
@@ -98,17 +99,38 @@ class _ExecutionLeaseHeartbeat:
             ) from self._error
 
     def _run(self) -> None:
+        """Renew the lease, retrying transient SQLite lock/busy contention safely."""
+        retry_delay = min(1.0, max(0.05, self._interval_seconds / 4))
+        retry_budget = max(
+            retry_delay,
+            self._lease_seconds - self._interval_seconds,
+        )
         while not self._stop.wait(self._interval_seconds):
-            try:
-                self._repository.renew_execution(
-                    self._run_id,
-                    self._owner_id,
-                    lease_seconds=self._lease_seconds,
-                )
-            except Exception as exc:
-                self._error = exc
-                self._stop.set()
-                return
+            deadline = monotonic() + retry_budget
+            while True:
+                try:
+                    self._repository.renew_execution(
+                        self._run_id,
+                        self._owner_id,
+                        lease_seconds=self._lease_seconds,
+                    )
+                    break
+                except sqlite3.OperationalError as exc:
+                    message = str(exc).lower()
+                    if "locked" not in message and "busy" not in message:
+                        self._error = exc
+                        self._stop.set()
+                        return
+                    if monotonic() >= deadline:
+                        self._error = exc
+                        self._stop.set()
+                        return
+                    if self._stop.wait(retry_delay):
+                        return
+                except Exception as exc:
+                    self._error = exc
+                    self._stop.set()
+                    return
 
 
 class AutonomousCareerLoop:
