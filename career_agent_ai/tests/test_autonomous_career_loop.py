@@ -1542,6 +1542,36 @@ def test_post_message_send_snapshot_failure_remains_resumable_without_duplicate_
     database.close()
 
 
+def test_execution_lease_heartbeat_retries_transient_sqlite_lock():
+    renewed = Event()
+
+    class TransientLockRepository:
+        def __init__(self):
+            self.attempts = 0
+
+        def renew_execution(self, run_id, owner_id, *, lease_seconds):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise sqlite3.OperationalError("database is locked")
+            renewed.set()
+
+    repository = TransientLockRepository()
+    heartbeat = autonomous_loop_module._ExecutionLeaseHeartbeat(
+        repository,
+        "run-1",
+        "worker-1",
+        lease_seconds=4,
+        interval_seconds=1,
+    )
+
+    heartbeat.start()
+    assert renewed.wait(timeout=4)
+    heartbeat.stop()
+    heartbeat.raise_if_failed()
+
+    assert repository.attempts >= 2
+
+
 def test_execution_lease_heartbeat_blocks_reclaim_during_long_provider_call(
     tmp_path, monkeypatch
 ):
