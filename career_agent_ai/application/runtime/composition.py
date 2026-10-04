@@ -15,6 +15,8 @@ from career_agent_ai.application.external_actions import (
 from career_agent_ai.application.external_actions.external_action_repository import (
     ExternalActionOperationRepository,
 )
+from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.search.job_provider import JobProvider
 
 from .config import RuntimeConfig
 
@@ -31,6 +33,20 @@ class RuntimeGuardedSignalProvider:
         if not self.config.allow_network_providers:
             raise PermissionError("Network providers are disabled by runtime policy.")
         return self.provider.collect()
+
+
+@dataclass(frozen=True)
+class RuntimeGuardedJobProvider(JobProvider):
+    """Block live job searches unless runtime policy enables network providers."""
+
+    config: RuntimeConfig
+    provider: JobProvider
+
+    def search(self, query: str) -> tuple[Job, ...]:
+        """Search only when the runtime network-provider flag is enabled."""
+        if not self.config.allow_network_providers:
+            raise PermissionError("Network providers are disabled by runtime policy.")
+        return self.provider.search(query)
 
 
 def build_external_action_service(
@@ -56,3 +72,13 @@ def guard_signal_provider(
     if not isinstance(config, RuntimeConfig):
         raise TypeError("config must be a RuntimeConfig.")
     return RuntimeGuardedSignalProvider(config=config, provider=provider)
+
+
+def guard_job_provider(
+    config: RuntimeConfig,
+    provider: JobProvider,
+) -> RuntimeGuardedJobProvider:
+    """Wrap a job provider so disabled network policy prevents live search."""
+    if not isinstance(config, RuntimeConfig):
+        raise TypeError("config must be a RuntimeConfig.")
+    return RuntimeGuardedJobProvider(config=config, provider=provider)

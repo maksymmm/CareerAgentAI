@@ -37,6 +37,8 @@ provider for those actions is not included in this release.
 
 Production composition must use validated `RuntimeConfig`, durable SQLite storage,
 guarded provider execution, and structured logging with bounded secret redaction.
+Both live job discovery and employer-signal collection enforce the disabled-by-default
+network-provider flag at the provider call boundary.
 The read-only WSGI API exposes public liveness at `/healthz` and bearer-authenticated
 operational issues at `/v1/operational/issues`. Its schema is OpenAPI 3.1.
 This operational API is not a candidate-facing workflow API.

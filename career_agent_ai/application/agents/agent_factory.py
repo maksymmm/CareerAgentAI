@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from career_agent_ai.application.agents.agent import Agent
 from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.jobs.job_application_repository import (
     JobApplicationRepository,
 )
 from career_agent_ai.application.search.search_service import SearchService
+
+if TYPE_CHECKING:
+    from career_agent_ai.application.runtime import RuntimeConfig
 
 
 class AgentFactory:
@@ -20,7 +25,12 @@ class AgentFactory:
         self._job_application_repository = job_application_repository
 
     @classmethod
-    def create(cls, agent_id: str) -> Agent:
+    def create(
+        cls,
+        agent_id: str,
+        runtime_config: RuntimeConfig | None = None,
+    ) -> Agent:
+        from career_agent_ai.application.runtime import RuntimeConfig
         from career_agent_ai.application.agents.resume.resume_agent import (
             ResumeAgent,
         )
@@ -35,7 +45,9 @@ class AgentFactory:
             return ResumeAgent()
 
         if agent_id == "job_search":
-            return cls._create_job_search_agent()
+            return cls._create_job_search_agent(
+                runtime_config or RuntimeConfig.from_env()
+            )
 
         if agent_id == "job_application":
             return JobApplicationAgent()
@@ -45,7 +57,8 @@ class AgentFactory:
         )
 
     @classmethod
-    def _create_job_search_agent(cls) -> Agent:
+    def _create_job_search_agent(cls, runtime_config: RuntimeConfig) -> Agent:
+        from career_agent_ai.application.runtime import guard_job_provider
         from career_agent_ai.application.agents.job_search.job_search_agent import (
             JobSearchAgent,
         )
@@ -56,7 +69,7 @@ class AgentFactory:
             ArbeitnowProvider,
         )
 
-        provider = ArbeitnowProvider()
+        provider = guard_job_provider(runtime_config, ArbeitnowProvider())
 
         repository = ProviderJobRepository(
             providers=(provider,),
