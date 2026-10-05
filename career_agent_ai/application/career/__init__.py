@@ -21,7 +21,7 @@ from .autonomous_loop_models import (
     HumanActionEvent,
     HumanActionKind,
 )
-from .autonomous_loop_repository import CareerLoopRepository
+from .autonomous_loop_repository import CareerLoopConflictError, CareerLoopRepository
 from .career_orchestrator import CareerOrchestrator, CareerRunResult
 from .career_plan import CareerPlan, CareerPlanStep
 from .career_step_result import CareerStepResult
@@ -32,6 +32,7 @@ __all__ = [
     "ApplicationSubmissionService",
     "AutonomousCareerLoop",
     "CareerLoopPhase",
+    "CareerLoopConflictError",
     "CareerLoopRepository",
     "CareerLoopRequest",
     "CareerLoopResult",
