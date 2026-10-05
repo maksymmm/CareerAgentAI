@@ -6,6 +6,13 @@ from .application_submission import (
     FakeApplicationSubmissionAdapter,
     PreSubmissionError,
 )
+from .approval_contract import (
+    ApprovalDecision,
+    CandidateApprovalPrompt,
+    CandidateApprovalSubmission,
+    build_candidate_approval_prompt,
+    validate_candidate_approval_submission,
+)
 from .autonomous_career_loop import AutonomousCareerLoop
 from .autonomous_loop_models import (
     CareerLoopPhase,
@@ -20,6 +27,7 @@ from .career_plan import CareerPlan, CareerPlanStep
 from .career_step_result import CareerStepResult
 
 __all__ = [
+    "ApprovalDecision",
     "ApplicationSubmissionAdapter",
     "ApplicationSubmissionService",
     "AutonomousCareerLoop",
@@ -32,8 +40,12 @@ __all__ = [
     "CareerPlanStep",
     "CareerRunResult",
     "CareerStepResult",
+    "CandidateApprovalPrompt",
+    "CandidateApprovalSubmission",
     "FakeApplicationSubmissionAdapter",
     "HumanActionEvent",
     "HumanActionKind",
     "PreSubmissionError",
+    "build_candidate_approval_prompt",
+    "validate_candidate_approval_submission",
 ]
