@@ -105,7 +105,7 @@ def test_post_rejects_url_mismatch_and_oversized_body():
     assert json.loads(b"".join(response))["error"] == "invalid_request"
 
 
-def test_foreign_owner_is_hidden_and_conflicts_are_sanitized():
+def test_foreign_or_missing_owner_is_hidden():
     class ForeignLoop:
         def get_candidate_approval_prompt(self, *args, **kwargs):
             raise PermissionError("foreign candidate secret")
@@ -113,3 +113,37 @@ def test_foreign_owner_is_hidden_and_conflicts_are_sanitized():
     (status, _), payload = request(app(ForeignLoop()))
     assert status == "404 Not Found"
     assert payload == {"error": "not_found"}
+
+    class MissingLoop:
+        def get_candidate_approval_prompt(self, *args, **kwargs):
+            raise KeyError("run does not exist or belongs to another user")
+
+    (status, _), payload = request(app(MissingLoop()))
+    assert status == "404 Not Found"
+    assert payload == {"error": "not_found"}
+
+
+def test_post_rejects_short_body_even_when_prefix_is_valid_json():
+    encoded = json.dumps(
+        {
+            "schema_version": 1,
+            "run_id": "run-1",
+            "state_version": 3,
+            "action_fingerprint": "0" * 64,
+            "decision": "approve",
+        }
+    ).encode()
+    statuses = []
+    response = app(Loop())(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/v1/candidate/runs/run-1/approval",
+            "HTTP_AUTHORIZATION": "Bearer valid",
+            "CONTENT_LENGTH": str(len(encoded) + 1),
+            "wsgi.input": BytesIO(encoded),
+        },
+        lambda status, headers: statuses.append(status),
+    )
+
+    assert statuses == ["400 Bad Request"]
+    assert json.loads(b"".join(response))["error"] == "invalid_request"
