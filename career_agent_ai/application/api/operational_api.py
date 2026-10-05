@@ -63,6 +63,13 @@ class OperationalWSGIApp:
     """Serve the read-only operational API using the standard WSGI contract."""
 
     def __init__(self, service: OperationalApiService, *, bearer_token: str) -> None:
+        token_bytes = self.validate_bearer_token(bearer_token)
+        self._service = service
+        self._bearer_token = token_bytes
+
+    @staticmethod
+    def validate_bearer_token(bearer_token: str) -> bytes:
+        """Validate and encode an operational API bearer token."""
         if not isinstance(bearer_token, str):
             raise TypeError("bearer_token must be text.")
         if len(bearer_token) < 32 or len(bearer_token) > 4096:
@@ -73,8 +80,7 @@ class OperationalWSGIApp:
             token_bytes = bearer_token.encode("ascii")
         except UnicodeEncodeError as exc:
             raise ValueError("bearer_token must contain ASCII characters only.") from exc
-        self._service = service
-        self._bearer_token = token_bytes
+        return token_bytes
 
     def __call__(
         self,

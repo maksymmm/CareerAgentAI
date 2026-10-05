@@ -288,8 +288,30 @@ cycle-safe config module at module scope, with regression coverage for
 The runtime package also advertises and caches its lazy composition exports so
 `dir()` and `inspect.getmembers()` preserve the established public API surface.
 
-Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
-review before integrating the network-guard fix. Merge into `main` still requires
-explicit user approval.
+## 9. Operational service composition
+
+Status: **COMPLETED**
+
+Goal: turn the existing read-only operational API into a safely composable deployment
+unit without adding a real provider or crossing an external-action boundary.
+
+Acceptance criteria:
+- [x] Validate production runtime configuration before opening the service database.
+- [x] Require a deployment-secret bearer token without storing it in `RuntimeConfig`.
+- [x] Compose the SQLite probe, API service, and WSGI adapter through one public root.
+- [x] Own and explicitly close the SQLite connection at process shutdown.
+- [x] Add regression tests for health, authenticated inspection, invalid secrets, and cleanup.
+- [x] Document the deployment contract.
+
+Delivered: `build_operational_app_from_env()` validates environment and operational
+authentication, then wires the configured SQLite database to the read-only probe and
+WSGI API. The returned runtime is callable as a WSGI application, rejects use after
+shutdown, and closes its database idempotently. Invalid bearer tokens fail before a
+database file is created. No network provider, consequential action, production
+credential, or server process is enabled by this composition.
+
+Next priority: define a candidate-facing approval UI contract before implementing a
+web interface; real provider adapters remain separately sandbox-gated. Merge into
+`main` still requires explicit user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.

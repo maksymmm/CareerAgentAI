@@ -36,6 +36,7 @@ from career_agent_ai.application.observability import (
 from career_agent_ai.application.runtime import (
     RuntimeConfig,
     RuntimeEnvironment,
+    build_operational_app_from_env,
     build_external_action_service,
     guard_job_provider,
     guard_signal_provider,
@@ -118,6 +119,54 @@ def test_runtime_config_test_environment_rejects_external_effects(field):
 def test_runtime_config_rejects_malformed_environment(values):
     with pytest.raises(ValueError):
         RuntimeConfig.from_env(values)
+
+
+def test_operational_runtime_composes_from_environment_and_closes(tmp_path):
+    database_path = str(tmp_path / "runtime.sqlite")
+    token = "a" * 32
+
+    with build_operational_app_from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": database_path,
+            "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+        }
+    ) as app:
+        health_meta, health = _wsgi_call(app, "/healthz")
+        issues_meta, issues = _wsgi_call(
+            app,
+            "/v1/operational/issues",
+            token=token,
+        )
+
+        assert health_meta["status"] == "200 OK"
+        assert health == {"status": "ok"}
+        assert issues_meta["status"] == "200 OK"
+        assert issues["issues"] == []
+
+    with pytest.raises(RuntimeError, match="closed"):
+        _wsgi_call(app, "/healthz")
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "too-short", "x" * 31, "non-ascii-é" + "x" * 32],
+)
+def test_operational_runtime_rejects_invalid_token_before_creating_database(
+    tmp_path, token
+):
+    database_path = tmp_path / "must-not-exist.sqlite"
+
+    with pytest.raises(ValueError, match="bearer_token"):
+        build_operational_app_from_env(
+            {
+                "CAREER_AGENT_ENV": "production",
+                "CAREER_AGENT_DB_PATH": str(database_path),
+                "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+            }
+        )
+
+    assert not database_path.exists()
 
 
 

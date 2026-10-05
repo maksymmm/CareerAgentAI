@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Mapping
+
+from career_agent_ai.application.api import OperationalApiService, OperationalWSGIApp
 
 from career_agent_ai.application.career.opportunity_signal_provider import (
     OpportunitySignalProvider,
@@ -17,8 +21,67 @@ from career_agent_ai.application.external_actions.external_action_repository imp
 )
 from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.search.job_provider import JobProvider
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_operational_probe import (
+    SQLiteOperationalProbe,
+)
 
 from .config import RuntimeConfig
+
+
+class RuntimeOperationalApp:
+    """Own the database lifecycle for the composed operational WSGI app."""
+
+    def __init__(self, app: OperationalWSGIApp, database: SQLiteDatabase) -> None:
+        self._app = app
+        self._database = database
+        self._closed = False
+
+    def __call__(
+        self,
+        environ: Mapping[str, Any],
+        start_response: Callable[[str, list[tuple[str, str]]], Any],
+    ) -> Iterable[bytes]:
+        """Delegate a WSGI request while the runtime remains open."""
+        if self._closed:
+            raise RuntimeError("Operational runtime is closed.")
+        return self._app(environ, start_response)
+
+    def close(self) -> None:
+        """Close the owned database connection idempotently."""
+        if not self._closed:
+            self._database.close()
+            self._closed = True
+
+    def __enter__(self) -> "RuntimeOperationalApp":
+        """Return this runtime for context-managed deployment checks."""
+        if self._closed:
+            raise RuntimeError("Operational runtime is closed.")
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Close the owned database connection on context exit."""
+        self.close()
+
+
+def build_operational_app_from_env(
+    environ: Mapping[str, str] | None = None,
+) -> RuntimeOperationalApp:
+    """Compose the operational WSGI app from validated runtime environment values."""
+    config = RuntimeConfig.from_env(environ)
+    source = environ if environ is not None else os.environ
+    bearer_token = source.get("CAREER_AGENT_OPERATIONAL_BEARER_TOKEN", "")
+    OperationalWSGIApp.validate_bearer_token(bearer_token)
+
+    database = SQLiteDatabase(config.database_path)
+    try:
+        probe = SQLiteOperationalProbe(database)
+        service = OperationalApiService(probe)
+        app = OperationalWSGIApp(service, bearer_token=bearer_token)
+        return RuntimeOperationalApp(app, database)
+    except Exception:
+        database.close()
+        raise
 
 
 @dataclass(frozen=True)
