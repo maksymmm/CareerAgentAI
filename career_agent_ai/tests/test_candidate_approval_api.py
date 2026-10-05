@@ -8,7 +8,7 @@ from career_agent_ai.application.api import (
     CandidateApprovalWSGIApp,
     candidate_approval_openapi_document,
 )
-from career_agent_ai.application.career import ApprovalDecision
+from career_agent_ai.application.career import ApprovalDecision, CareerLoopConflictError
 
 
 class Loop:
@@ -172,4 +172,35 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
     assert request_schema["properties"]["action_fingerprint"]["pattern"] == (
         "^[0-9a-fA-F]{64}$"
     )
-    assert {"400", "401", "404", "409"} <= set(route["post"]["responses"])
+    assert {"400", "401", "404", "409", "500"} <= set(route["post"]["responses"])
+    assert "409" not in route["get"]["responses"]
+    assert "500" in route["get"]["responses"]
+
+
+def test_only_durable_state_conflicts_return_409():
+    class ConflictLoop(Loop):
+        def resume_candidate_submission(self, *, user_id, submission):
+            raise CareerLoopConflictError("stale durable state secret")
+
+    body = {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "state_version": 3,
+        "action_fingerprint": "0" * 64,
+        "decision": "approve",
+    }
+    (status, _), payload = request(app(ConflictLoop()), method="POST", body=body)
+
+    assert status == "409 Conflict"
+    assert payload == {"error": "approval_conflict"}
+
+
+def test_unexpected_loop_failure_is_sanitized_as_500():
+    class BrokenLoop:
+        def get_candidate_approval_prompt(self, *args, **kwargs):
+            raise RuntimeError("database credential=do-not-expose")
+
+    (status, _), payload = request(app(BrokenLoop()))
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
