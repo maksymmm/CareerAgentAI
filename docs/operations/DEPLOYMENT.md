@@ -34,12 +34,12 @@ Deployments that previously relied on a literal filename beginning with `file:`
 must move that database to an ordinary filesystem path before adopting this release;
 URI-looking paths now have explicit URI meaning.
 
-Production configuration classifies URI databases using SQLite's own
-`PRAGMA database_list`, rejecting encoded or fragment-bearing memory URIs.
-URI text is preserved unchanged for the worker connection. Validation opens and
-closes URI databases and may create a new empty file for a valid writable URI;
-ensure its parent directory exists and deployment permissions are appropriate.
-Invalid or unopenable URIs fail configuration validation.
+Production configuration classifies URI databases from SQLite's case-sensitive,
+percent-decoded path and last-value-wins `mode` semantics, rejecting encoded or
+fragment-bearing memory URIs. URI text is preserved unchanged for worker connections.
+Configuration validation never opens or creates the URI target. Unsupported `mode`
+values fail validation; actual accessibility is checked when a component opens its
+required connection.
 Raw and percent-encoded NUL bytes are rejected before SQLite opens the URI, so
 configuration text cannot be silently truncated to a different database filename.
 

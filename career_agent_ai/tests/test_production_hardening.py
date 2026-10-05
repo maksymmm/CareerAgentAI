@@ -282,6 +282,29 @@ def test_operational_runtime_rejects_invalid_token_before_probing_sqlite_uri(tmp
     assert not database_path.exists()
 
 
+def test_operational_runtime_valid_token_does_not_create_missing_sqlite_uri(tmp_path):
+    database_path = tmp_path / "must-not-exist-valid-uri.sqlite"
+    token = "a" * 32
+    app = build_operational_app_from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": f"file:{database_path}?mode=rwc",
+            "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+        }
+    )
+
+    assert not database_path.exists()
+    issues_meta, issues = _wsgi_call(
+        app,
+        "/v1/operational/issues",
+        token=token,
+    )
+    assert issues_meta["status"] == "500 Internal Server Error"
+    assert issues == {"error": "internal_error"}
+    assert not database_path.exists()
+    app.close()
+
+
 
 def test_runtime_composition_blocks_consequential_actions_by_default():
     class RecordingAdapter:

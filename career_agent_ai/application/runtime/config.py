@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
-from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -86,16 +84,25 @@ class RuntimeConfig:
 
     @staticmethod
     def _is_sqlite_memory_path(value: str) -> bool:
-        """Return whether SQLite would treat the configured path as in-memory."""
+        """Classify SQLite memory URIs without opening or creating their target."""
         if value == ":memory:":
             return True
         if not value.startswith("file:"):
             return False
-        try:
-            with closing(sqlite3.connect(value, uri=True)) as connection:
-                return not connection.execute("PRAGMA database_list").fetchone()[2]
-        except sqlite3.Error as exc:
-            raise ValueError("CAREER_AGENT_DB_PATH is not an openable SQLite URI.") from exc
+
+        without_fragment = value.split("#", 1)[0]
+        path_and_query = without_fragment[5:]
+        raw_path, separator, raw_query = path_and_query.partition("?")
+        decoded_path = unquote(raw_path)
+        mode: str | None = None
+        if separator:
+            for field in raw_query.split("&"):
+                raw_key, has_value, raw_value = field.partition("=")
+                if unquote(raw_key) == "mode":
+                    mode = unquote(raw_value) if has_value else ""
+        if mode not in {None, "ro", "rw", "rwc", "memory"}:
+            raise ValueError("CAREER_AGENT_DB_PATH is not an openable SQLite URI.")
+        return mode == "memory" or (mode is None and decoded_path == ":memory:")
 
     @staticmethod
     def _parse_bool(value: str, field: str) -> bool:

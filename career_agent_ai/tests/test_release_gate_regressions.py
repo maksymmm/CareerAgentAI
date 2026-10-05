@@ -188,3 +188,18 @@ def test_production_config_rejects_invalid_sqlite_uri(tmp_path):
             "CAREER_AGENT_ENV": "production",
             "CAREER_AGENT_DB_PATH": f"file:{tmp_path}/career?mode=invalid",
         })
+
+
+def test_production_config_does_not_create_writable_sqlite_uri(tmp_path):
+    database_path = tmp_path / "not-created-by-validation.sqlite"
+    uri = f"file:{database_path}?mode=rwc"
+
+    config = RuntimeConfig.from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": uri,
+        }
+    )
+
+    assert config.database_path == uri
+    assert not database_path.exists()

@@ -311,7 +311,9 @@ runtime rejects new requests after idempotent shutdown. Invalid bearer tokens fa
 before runtime validation can probe a SQLite URI or create a database file. Liveness
 and routing do not open SQLite; inspection failures stay inside the sanitized API error
 boundary. Inspection uses SQLite read-only mode, so lost storage is never replaced by
-an empty database. No network
+an empty database. Runtime URI classification is side-effect free, including for
+valid writable URI text, so composition cannot recreate lost storage before the
+read-only probe executes. No network
 provider, consequential action, production
 credential, or server process is enabled by this composition.
 
