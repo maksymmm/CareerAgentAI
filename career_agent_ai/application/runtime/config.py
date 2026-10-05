@@ -95,14 +95,19 @@ class RuntimeConfig:
         raw_path, separator, raw_query = path_and_query.partition("?")
         decoded_path = unquote(raw_path)
         mode: str | None = None
+        vfs: str | None = None
         if separator:
             for field in raw_query.split("&"):
                 raw_key, has_value, raw_value = field.partition("=")
-                if unquote(raw_key) == "mode":
-                    mode = unquote(raw_value) if has_value else ""
+                key = unquote(raw_key)
+                value = unquote(raw_value) if has_value else ""
+                if key == "mode":
+                    mode = value
+                elif key == "vfs":
+                    vfs = value
         if mode not in {None, "ro", "rw", "rwc", "memory"}:
             raise ValueError("CAREER_AGENT_DB_PATH is not an openable SQLite URI.")
-        return mode == "memory" or decoded_path in {"", ":memory:"}
+        return mode == "memory" or vfs == "memdb" or decoded_path in {"", ":memory:"}
 
     @staticmethod
     def _parse_bool(value: str, field: str) -> bool:

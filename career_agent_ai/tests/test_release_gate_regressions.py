@@ -63,6 +63,9 @@ def test_sqlite_uri_detection_matches_actual_database_and_lease_renewal(
         "file::memory:?mode=ro",
         "file::memory:?mode=rw",
         "file::memory:?mode=rwc",
+        "file:career?vfs=memdb",
+        "file:career?%76fs=%6demdb",
+        "file:career?vfs=unix&vfs=memdb",
     ],
 )
 def test_production_runtime_rejects_all_sqlite_memory_paths(database_path):
@@ -73,6 +76,19 @@ def test_production_runtime_rejects_all_sqlite_memory_paths(database_path):
                 "CAREER_AGENT_DB_PATH": database_path,
             }
         )
+
+
+def test_production_runtime_uses_last_sqlite_vfs_value(tmp_path):
+    database_path = f"file:{tmp_path / 'career.sqlite'}?vfs=memdb&vfs=unix"
+
+    config = RuntimeConfig.from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": database_path,
+        }
+    )
+
+    assert config.database_path == database_path
 
 
 @pytest.mark.parametrize(

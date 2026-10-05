@@ -35,8 +35,9 @@ must move that database to an ordinary filesystem path before adopting this rele
 URI-looking paths now have explicit URI meaning.
 
 Production configuration classifies URI databases from SQLite's case-sensitive,
-percent-decoded path and last-value-wins `mode` semantics, rejecting encoded or
-fragment-bearing memory URIs. URI text is preserved unchanged for worker connections.
+percent-decoded path and last-value-wins `mode` and `vfs` semantics, rejecting encoded
+or fragment-bearing memory URIs and the ephemeral `vfs=memdb` backend. URI text is
+preserved unchanged for worker connections.
 Configuration validation never opens or creates the URI target. Unsupported `mode`
 values fail validation, while empty and `:memory:` URI paths remain classified as
 ephemeral regardless of an explicit non-memory mode. Actual accessibility is checked

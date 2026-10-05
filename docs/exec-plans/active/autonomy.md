@@ -318,6 +318,11 @@ gate regardless of an explicit `ro`, `rw`, or `rwc` mode. No network
 provider, consequential action, production
 credential, or server process is enabled by this composition.
 
+The latest exact-head review also identified SQLite's `vfs=memdb` backend as an
+ephemeral database despite its non-empty URI path. Production validation now rejects
+that VFS using SQLite's percent-decoded, last-value-wins query semantics, with
+regression coverage for encoded and repeated parameters.
+
 Next priority: define a candidate-facing approval UI contract before implementing a
 web interface; real provider adapters remain separately sandbox-gated. Merge into
 `main` still requires explicit user approval.
