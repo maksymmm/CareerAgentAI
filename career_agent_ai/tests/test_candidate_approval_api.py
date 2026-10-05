@@ -4,7 +4,10 @@ from io import BytesIO
 import json
 from types import SimpleNamespace
 
-from career_agent_ai.application.api import CandidateApprovalWSGIApp
+from career_agent_ai.application.api import (
+    CandidateApprovalWSGIApp,
+    candidate_approval_openapi_document,
+)
 from career_agent_ai.application.career import ApprovalDecision
 
 
@@ -147,3 +150,26 @@ def test_post_rejects_short_body_even_when_prefix_is_valid_json():
 
     assert statuses == ["400 Bad Request"]
     assert json.loads(b"".join(response))["error"] == "invalid_request"
+
+
+def test_openapi_contract_documents_authenticated_get_and_strict_post():
+    document = candidate_approval_openapi_document()
+    route = document["paths"]["/v1/candidate/runs/{run_id}/approval"]
+
+    assert document["openapi"] == "3.1.0"
+    assert document["components"]["securitySchemes"]["bearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+    }
+    assert route["get"]["security"] == [{"bearerAuth": []}]
+    assert route["post"]["security"] == [{"bearerAuth": []}]
+    request_schema = route["post"]["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["additionalProperties"] is False
+    assert request_schema["required"] == [
+        "schema_version", "run_id", "state_version", "action_fingerprint", "decision",
+    ]
+    assert request_schema["properties"]["decision"]["enum"] == ["approve", "decline"]
+    assert request_schema["properties"]["action_fingerprint"]["pattern"] == (
+        "^[0-9a-fA-F]{64}$"
+    )
+    assert {"400", "401", "404", "409"} <= set(route["post"]["responses"])
