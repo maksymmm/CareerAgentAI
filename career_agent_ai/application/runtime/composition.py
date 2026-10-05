@@ -75,7 +75,7 @@ class _RequestSQLiteOperationalProbe:
         self, *, now: datetime, stale_after_seconds: int
     ) -> tuple[OperationalIssue, ...]:
         """Inspect through a connection owned by the current request thread."""
-        database = SQLiteDatabase(self._database_path)
+        database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteOperationalProbe(database).inspect(
                 now=now,

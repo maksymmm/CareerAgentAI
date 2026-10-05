@@ -296,8 +296,10 @@ responses.
 root. It validates `RuntimeConfig`, requires a 32-to-4096-character ASCII token from
 `CAREER_AGENT_OPERATIONAL_BEARER_TOKEN`, opens the configured SQLite database, and
 wires the probe, service, and WSGI adapter without exposing the token through runtime
-configuration. Database-backed requests open and close an isolated SQLite connection
-inside their request thread, while liveness and routing remain database-independent.
+configuration. Database-backed requests open and close an isolated read-only SQLite
+connection inside their request thread, while liveness and routing remain
+database-independent. A missing database fails inspection instead of creating an empty
+replacement that could mask lost storage.
 The application provides an idempotent `close()` plus context-manager shutdown control
 for deployment lifecycle hooks.
 

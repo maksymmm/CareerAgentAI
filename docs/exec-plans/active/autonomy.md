@@ -300,6 +300,7 @@ Acceptance criteria:
 - [x] Require a deployment-secret bearer token without storing it in `RuntimeConfig`.
 - [x] Compose the SQLite probe, API service, and WSGI adapter through one public root.
 - [x] Use request-local SQLite connections that are safe under threaded WSGI servers.
+- [x] Open operational inspection read-only so missing storage cannot be masked.
 - [x] Add regression tests for health, authenticated inspection, invalid secrets, and cleanup.
 - [x] Document the deployment contract.
 
@@ -309,7 +310,8 @@ WSGI API. Each request opens and closes SQLite in its own execution thread, and 
 runtime rejects new requests after idempotent shutdown. Invalid bearer tokens fail
 before runtime validation can probe a SQLite URI or create a database file. Liveness
 and routing do not open SQLite; inspection failures stay inside the sanitized API error
-boundary. No network
+boundary. Inspection uses SQLite read-only mode, so lost storage is never replaced by
+an empty database. No network
 provider, consequential action, production
 credential, or server process is enabled by this composition.
 

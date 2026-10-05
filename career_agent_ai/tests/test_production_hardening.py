@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Barrier
@@ -124,6 +125,7 @@ def test_runtime_config_rejects_malformed_environment(values):
 def test_operational_runtime_composes_from_environment_and_closes(tmp_path):
     database_path = str(tmp_path / "runtime.sqlite")
     token = "a" * 32
+    SQLiteDatabase(database_path).close()
 
     with build_operational_app_from_env(
         {
@@ -150,10 +152,12 @@ def test_operational_runtime_composes_from_environment_and_closes(tmp_path):
 
 def test_operational_runtime_uses_request_thread_sqlite_connections(tmp_path):
     token = "a" * 32
+    database_path = str(tmp_path / "threaded.sqlite")
+    SQLiteDatabase(database_path).close()
     app = build_operational_app_from_env(
         {
             "CAREER_AGENT_ENV": "production",
-            "CAREER_AGENT_DB_PATH": str(tmp_path / "threaded.sqlite"),
+            "CAREER_AGENT_DB_PATH": database_path,
             "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
         }
     )
@@ -173,6 +177,24 @@ def test_operational_runtime_uses_request_thread_sqlite_connections(tmp_path):
     assert [metadata["status"] for metadata, _ in results] == ["200 OK", "200 OK"]
     assert [payload["issues"] for _, payload in results] == [[], []]
     app.close()
+
+
+def test_read_only_sqlite_connection_rejects_writes(tmp_path):
+    database_path = str(tmp_path / "read-only.sqlite")
+    writable = SQLiteDatabase(database_path)
+    writable.connection.execute("CREATE TABLE sample(value TEXT)")
+    writable.connection.commit()
+    writable.close()
+
+    read_only = SQLiteDatabase.open_read_only(database_path)
+    try:
+        assert read_only.connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'sample'"
+        ).fetchone() == ("sample",)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            read_only.connection.execute("INSERT INTO sample VALUES ('blocked')")
+    finally:
+        read_only.close()
 
 
 def test_operational_runtime_keeps_liveness_and_sanitizes_database_failure(tmp_path):
@@ -199,6 +221,29 @@ def test_operational_runtime_keeps_liveness_and_sanitizes_database_failure(tmp_p
     assert health == {"status": "ok"}
     assert issues_meta["status"] == "500 Internal Server Error"
     assert issues == {"error": "internal_error"}
+    app.close()
+
+
+def test_operational_runtime_never_creates_a_missing_database(tmp_path):
+    token = "a" * 32
+    database_path = tmp_path / "missing.sqlite"
+    app = build_operational_app_from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": str(database_path),
+            "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+        }
+    )
+
+    issues_meta, issues = _wsgi_call(
+        app,
+        "/v1/operational/issues",
+        token=token,
+    )
+
+    assert issues_meta["status"] == "500 Internal Server Error"
+    assert issues == {"error": "internal_error"}
+    assert not database_path.exists()
     app.close()
 
 

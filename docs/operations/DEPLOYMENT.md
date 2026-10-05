@@ -68,7 +68,8 @@ The issues endpoint requires a bearer token supplied at composition time. Serve 
 Use `build_operational_app_from_env()` as the operational API composition root and set
 `CAREER_AGENT_OPERATIONAL_BEARER_TOKEN` through the deployment secret store. The token
 must contain 32 to 4096 ASCII characters. Database-backed requests open and close an
-isolated SQLite connection within their execution context; liveness remains available
+isolated read-only SQLite connection within their execution context; a missing database
+is never recreated by the inspection endpoint. Liveness remains available
 when SQLite cannot be opened, while inspection returns a sanitized JSON error. Register
 the application's idempotent `close()` with the process shutdown hook to reject later requests.
 Invalid token input fails before runtime validation can probe or create a SQLite URI.
