@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from .composition import (
         RuntimeGuardedJobProvider,
         RuntimeGuardedSignalProvider,
+        RuntimeOperationalApp,
+        build_operational_app_from_env,
         build_external_action_service,
         guard_job_provider,
         guard_signal_provider,
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
 _COMPOSITION_EXPORTS = {
     "RuntimeGuardedJobProvider",
     "RuntimeGuardedSignalProvider",
+    "RuntimeOperationalApp",
+    "build_operational_app_from_env",
     "build_external_action_service",
     "guard_job_provider",
     "guard_signal_provider",
@@ -42,6 +46,8 @@ __all__ = [
     "RuntimeEnvironment",
     "RuntimeGuardedJobProvider",
     "RuntimeGuardedSignalProvider",
+    "RuntimeOperationalApp",
+    "build_operational_app_from_env",
     "build_external_action_service",
     "guard_job_provider",
     "guard_signal_provider",

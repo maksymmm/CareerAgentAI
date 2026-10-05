@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable, Iterable, Mapping
+
+from career_agent_ai.application.api import OperationalApiService, OperationalWSGIApp
 
 from career_agent_ai.application.career.opportunity_signal_provider import (
     OpportunitySignalProvider,
@@ -16,9 +21,82 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     ExternalActionOperationRepository,
 )
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_operational_probe import (
+    SQLiteOperationalProbe,
+)
 
 from .config import RuntimeConfig
+
+
+class RuntimeOperationalApp:
+    """Open an isolated SQLite connection for each operational WSGI request."""
+
+    def __init__(self, *, database_path: str, bearer_token: str) -> None:
+        probe = _RequestSQLiteOperationalProbe(database_path)
+        service = OperationalApiService(probe)
+        self._app = OperationalWSGIApp(service, bearer_token=bearer_token)
+        self._closed = False
+
+    def __call__(
+        self,
+        environ: Mapping[str, Any],
+        start_response: Callable[[str, list[tuple[str, str]]], Any],
+    ) -> Iterable[bytes]:
+        """Delegate a WSGI request while the runtime remains open."""
+        if self._closed:
+            raise RuntimeError("Operational runtime is closed.")
+        return self._app(environ, start_response)
+
+    def close(self) -> None:
+        """Prevent new requests after all active request calls have returned."""
+        self._closed = True
+
+    def __enter__(self) -> "RuntimeOperationalApp":
+        """Return this runtime for context-managed deployment checks."""
+        if self._closed:
+            raise RuntimeError("Operational runtime is closed.")
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Prevent new requests on context exit."""
+        self.close()
+
+
+class _RequestSQLiteOperationalProbe:
+    """Open SQLite only when a routed request needs durable inspection."""
+
+    def __init__(self, database_path: str) -> None:
+        self._database_path = database_path
+
+    def inspect(
+        self, *, now: datetime, stale_after_seconds: int
+    ) -> tuple[OperationalIssue, ...]:
+        """Inspect through a connection owned by the current request thread."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteOperationalProbe(database).inspect(
+                now=now,
+                stale_after_seconds=stale_after_seconds,
+            )
+        finally:
+            database.close()
+
+
+def build_operational_app_from_env(
+    environ: Mapping[str, str] | None = None,
+) -> RuntimeOperationalApp:
+    """Compose the operational WSGI app from validated runtime environment values."""
+    source = environ if environ is not None else os.environ
+    bearer_token = source.get("CAREER_AGENT_OPERATIONAL_BEARER_TOKEN", "")
+    OperationalWSGIApp.validate_bearer_token(bearer_token)
+    config = RuntimeConfig.from_env(environ)
+    return RuntimeOperationalApp(
+        database_path=config.database_path,
+        bearer_token=bearer_token,
+    )
 
 
 @dataclass(frozen=True)

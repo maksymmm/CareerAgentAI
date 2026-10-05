@@ -58,6 +58,14 @@ def test_sqlite_uri_detection_matches_actual_database_and_lease_renewal(
         "file:career?mode=memory#fragment",
         "file:career?%6dode=%6demory",
         "file:career?mode=rwc&mode=memory",
+        "file:",
+        "file:?mode=rwc",
+        "file::memory:?mode=ro",
+        "file::memory:?mode=rw",
+        "file::memory:?mode=rwc",
+        "file:career?vfs=memdb",
+        "file:career?%76fs=%6demdb",
+        "file:career?vfs=unix&vfs=memdb",
     ],
 )
 def test_production_runtime_rejects_all_sqlite_memory_paths(database_path):
@@ -68,6 +76,19 @@ def test_production_runtime_rejects_all_sqlite_memory_paths(database_path):
                 "CAREER_AGENT_DB_PATH": database_path,
             }
         )
+
+
+def test_production_runtime_uses_last_sqlite_vfs_value(tmp_path):
+    database_path = f"file:{tmp_path / 'career.sqlite'}?vfs=memdb&vfs=unix"
+
+    config = RuntimeConfig.from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": database_path,
+        }
+    )
+
+    assert config.database_path == database_path
 
 
 @pytest.mark.parametrize(
@@ -188,3 +209,18 @@ def test_production_config_rejects_invalid_sqlite_uri(tmp_path):
             "CAREER_AGENT_ENV": "production",
             "CAREER_AGENT_DB_PATH": f"file:{tmp_path}/career?mode=invalid",
         })
+
+
+def test_production_config_does_not_create_writable_sqlite_uri(tmp_path):
+    database_path = tmp_path / "not-created-by-validation.sqlite"
+    uri = f"file:{database_path}?mode=rwc"
+
+    config = RuntimeConfig.from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": uri,
+        }
+    )
+
+    assert config.database_path == uri
+    assert not database_path.exists()
