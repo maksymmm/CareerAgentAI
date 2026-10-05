@@ -117,3 +117,114 @@ class CandidateApprovalWSGIApp:
         headers.extend(extra or [])
         start_response(status, headers)
         return (body,)
+
+
+def candidate_approval_openapi_document() -> dict[str, Any]:
+    """Return the OpenAPI 3.1 contract for the candidate approval boundary."""
+    error_schema = {
+        "type": "object",
+        "required": ["error"],
+        "properties": {"error": {"type": "string"}},
+        "additionalProperties": True,
+    }
+    prompt_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "run_id", "state_version", "action_kind", "title",
+            "details", "action_fingerprint", "allowed_decisions",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {"type": "string", "minLength": 1},
+            "state_version": {"type": "integer", "minimum": 0},
+            "action_kind": {"type": "string"},
+            "title": {"type": "string"},
+            "details": {"type": "object", "additionalProperties": True},
+            "action_fingerprint": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+            "allowed_decisions": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["approve", "decline"]},
+                "uniqueItems": True,
+            },
+        },
+        "additionalProperties": False,
+    }
+    submission_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "run_id", "state_version", "action_fingerprint", "decision",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {"type": "string", "minLength": 1},
+            "state_version": {"type": "integer", "minimum": 0},
+            "action_fingerprint": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+            "decision": {"type": "string", "enum": ["approve", "decline"]},
+        },
+        "additionalProperties": False,
+    }
+
+    def content(schema: Mapping[str, Any]) -> dict[str, Any]:
+        return {"application/json": {"schema": schema}}
+
+    common_responses = {
+        "400": {"description": "Malformed approval request", "content": content(error_schema)},
+        "401": {"description": "Missing or invalid bearer token", "content": content(error_schema)},
+        "404": {
+            "description": "Run is missing or not owned by the candidate",
+            "content": content(error_schema),
+        },
+    }
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "CareerAgentAI Candidate Approval API", "version": "1.0.0"},
+        "components": {
+            "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}}
+        },
+        "paths": {
+            "/v1/candidate/runs/{run_id}/approval": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {"type": "string", "minLength": 1},
+                }],
+                "get": {
+                    "operationId": "getCandidateApprovalPrompt",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Pending candidate approval prompt",
+                            "content": content(prompt_schema),
+                        },
+                        **common_responses,
+                    },
+                },
+                "post": {
+                    "operationId": "submitCandidateApproval",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": content(submission_schema),
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Approval accepted and loop resumed",
+                            "content": content({
+                                "type": "object",
+                                "required": ["run_id", "phase"],
+                                "properties": {
+                                    "run_id": {"type": "string"},
+                                    "phase": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "Approval conflicts with durable state",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            }
+        },
+    }
