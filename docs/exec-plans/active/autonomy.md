@@ -285,6 +285,8 @@ Release review of `87696564b7` found the new public `RuntimeConfig` annotation w
 unavailable to runtime introspection. The factory now imports that type from the
 cycle-safe config module at module scope, with regression coverage for
 `typing.get_type_hints()` on both annotated factory methods.
+The runtime package also advertises and caches its lazy composition exports so
+`dir()` and `inspect.getmembers()` preserve the established public API surface.
 
 Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
 review before integrating the network-guard fix. Merge into `main` still requires

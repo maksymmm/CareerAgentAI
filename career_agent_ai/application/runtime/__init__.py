@@ -28,7 +28,14 @@ def __getattr__(name: str) -> Any:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     from . import composition
 
-    return getattr(composition, name)
+    value = getattr(composition, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Expose lazy composition helpers to documentation and plugin discovery."""
+    return sorted(set(globals()) | _COMPOSITION_EXPORTS)
 
 __all__ = [
     "RuntimeConfig",
