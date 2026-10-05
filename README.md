@@ -296,9 +296,10 @@ responses.
 root. It validates `RuntimeConfig`, requires a 32-to-4096-character ASCII token from
 `CAREER_AGENT_OPERATIONAL_BEARER_TOKEN`, opens the configured SQLite database, and
 wires the probe, service, and WSGI adapter without exposing the token through runtime
-configuration. The returned application opens and closes an isolated SQLite connection
-inside each request thread, and provides an idempotent `close()` plus context-manager
-shutdown control for deployment lifecycle hooks.
+configuration. Database-backed requests open and close an isolated SQLite connection
+inside their request thread, while liveness and routing remain database-independent.
+The application provides an idempotent `close()` plus context-manager shutdown control
+for deployment lifecycle hooks.
 
 Coordinated schema changes use `SQLiteMigrationRunner`. Migration versions are
 ordered, transactionally applied, and recorded with immutable SHA-256 checksums.

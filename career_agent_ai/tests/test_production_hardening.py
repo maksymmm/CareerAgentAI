@@ -175,6 +175,33 @@ def test_operational_runtime_uses_request_thread_sqlite_connections(tmp_path):
     app.close()
 
 
+def test_operational_runtime_keeps_liveness_and_sanitizes_database_failure(tmp_path):
+    token = "a" * 32
+    database_directory = tmp_path / "database-directory"
+    database_directory.mkdir()
+    app = build_operational_app_from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": str(database_directory / "runtime.sqlite"),
+            "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+        }
+    )
+    database_directory.rmdir()
+
+    health_meta, health = _wsgi_call(app, "/healthz")
+    issues_meta, issues = _wsgi_call(
+        app,
+        "/v1/operational/issues",
+        token=token,
+    )
+
+    assert health_meta["status"] == "200 OK"
+    assert health == {"status": "ok"}
+    assert issues_meta["status"] == "500 Internal Server Error"
+    assert issues == {"error": "internal_error"}
+    app.close()
+
+
 @pytest.mark.parametrize(
     "token",
     ["", "too-short", "x" * 31, "non-ascii-é" + "x" * 32],

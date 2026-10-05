@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 
 from career_agent_ai.application.api import OperationalApiService, OperationalWSGIApp
@@ -20,6 +21,7 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     ExternalActionOperationRepository,
 )
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_operational_probe import (
@@ -33,8 +35,9 @@ class RuntimeOperationalApp:
     """Open an isolated SQLite connection for each operational WSGI request."""
 
     def __init__(self, *, database_path: str, bearer_token: str) -> None:
-        self._database_path = database_path
-        self._bearer_token = bearer_token
+        probe = _RequestSQLiteOperationalProbe(database_path)
+        service = OperationalApiService(probe)
+        self._app = OperationalWSGIApp(service, bearer_token=bearer_token)
         self._closed = False
 
     def __call__(
@@ -45,14 +48,7 @@ class RuntimeOperationalApp:
         """Delegate a WSGI request while the runtime remains open."""
         if self._closed:
             raise RuntimeError("Operational runtime is closed.")
-        database = SQLiteDatabase(self._database_path)
-        try:
-            probe = SQLiteOperationalProbe(database)
-            service = OperationalApiService(probe)
-            app = OperationalWSGIApp(service, bearer_token=self._bearer_token)
-            return tuple(app(environ, start_response))
-        finally:
-            database.close()
+        return self._app(environ, start_response)
 
     def close(self) -> None:
         """Prevent new requests after all active request calls have returned."""
@@ -65,8 +61,28 @@ class RuntimeOperationalApp:
         return self
 
     def __exit__(self, *_: object) -> None:
-        """Close the owned database connection on context exit."""
+        """Prevent new requests on context exit."""
         self.close()
+
+
+class _RequestSQLiteOperationalProbe:
+    """Open SQLite only when a routed request needs durable inspection."""
+
+    def __init__(self, database_path: str) -> None:
+        self._database_path = database_path
+
+    def inspect(
+        self, *, now: datetime, stale_after_seconds: int
+    ) -> tuple[OperationalIssue, ...]:
+        """Inspect through a connection owned by the current request thread."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return SQLiteOperationalProbe(database).inspect(
+                now=now,
+                stale_after_seconds=stale_after_seconds,
+            )
+        finally:
+            database.close()
 
 
 def build_operational_app_from_env(

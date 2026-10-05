@@ -307,7 +307,9 @@ Delivered: `build_operational_app_from_env()` validates environment and operatio
 authentication, then wires the configured SQLite database to the read-only probe and
 WSGI API. Each request opens and closes SQLite in its own execution thread, and the
 runtime rejects new requests after idempotent shutdown. Invalid bearer tokens fail
-before runtime validation can probe a SQLite URI or create a database file. No network
+before runtime validation can probe a SQLite URI or create a database file. Liveness
+and routing do not open SQLite; inspection failures stay inside the sanitized API error
+boundary. No network
 provider, consequential action, production
 credential, or server process is enabled by this composition.
 
