@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
-from career_agent_ai.application.career import CandidateApprovalSubmission
+from career_agent_ai.application.career import (
+    CandidateApprovalSubmission,
+    CareerLoopConflictError,
+)
 
 
 class CandidateApprovalLoop(Protocol):
@@ -80,11 +83,17 @@ class CandidateApprovalWSGIApp:
                 "400 Bad Request",
                 {"error": "invalid_request", "message": str(exc)[:500]},
             )
-        except Exception:
+        except CareerLoopConflictError:
             return self._respond(
                 start_response,
                 "409 Conflict",
                 {"error": "approval_conflict"},
+            )
+        except Exception:
+            return self._respond(
+                start_response,
+                "500 Internal Server Error",
+                {"error": "internal_error"},
             )
 
     def _read_json(self, environ: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -172,6 +181,10 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "401": {"description": "Missing or invalid bearer token", "content": content(error_schema)},
         "404": {
             "description": "Run is missing or not owned by the candidate",
+            "content": content(error_schema),
+        },
+        "500": {
+            "description": "Sanitized internal service failure",
             "content": content(error_schema),
         },
     }
