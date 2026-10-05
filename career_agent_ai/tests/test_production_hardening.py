@@ -148,6 +148,33 @@ def test_operational_runtime_composes_from_environment_and_closes(tmp_path):
         _wsgi_call(app, "/healthz")
 
 
+def test_operational_runtime_uses_request_thread_sqlite_connections(tmp_path):
+    token = "a" * 32
+    app = build_operational_app_from_env(
+        {
+            "CAREER_AGENT_ENV": "production",
+            "CAREER_AGENT_DB_PATH": str(tmp_path / "threaded.sqlite"),
+            "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+        }
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(
+            executor.map(
+                lambda _: _wsgi_call(
+                    app,
+                    "/v1/operational/issues",
+                    token=token,
+                ),
+                range(2),
+            )
+        )
+
+    assert [metadata["status"] for metadata, _ in results] == ["200 OK", "200 OK"]
+    assert [payload["issues"] for _, payload in results] == [[], []]
+    app.close()
+
+
 @pytest.mark.parametrize(
     "token",
     ["", "too-short", "x" * 31, "non-ascii-é" + "x" * 32],
@@ -163,6 +190,20 @@ def test_operational_runtime_rejects_invalid_token_before_creating_database(
                 "CAREER_AGENT_ENV": "production",
                 "CAREER_AGENT_DB_PATH": str(database_path),
                 "CAREER_AGENT_OPERATIONAL_BEARER_TOKEN": token,
+            }
+        )
+
+    assert not database_path.exists()
+
+
+def test_operational_runtime_rejects_invalid_token_before_probing_sqlite_uri(tmp_path):
+    database_path = tmp_path / "must-not-exist-uri.sqlite"
+
+    with pytest.raises(ValueError, match="bearer_token"):
+        build_operational_app_from_env(
+            {
+                "CAREER_AGENT_ENV": "production",
+                "CAREER_AGENT_DB_PATH": f"file:{database_path}?mode=rwc",
             }
         )
 

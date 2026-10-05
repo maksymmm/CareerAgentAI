@@ -296,8 +296,9 @@ responses.
 root. It validates `RuntimeConfig`, requires a 32-to-4096-character ASCII token from
 `CAREER_AGENT_OPERATIONAL_BEARER_TOKEN`, opens the configured SQLite database, and
 wires the probe, service, and WSGI adapter without exposing the token through runtime
-configuration. The returned application owns the database connection and provides an
-idempotent `close()` plus context-manager cleanup for deployment lifecycle hooks.
+configuration. The returned application opens and closes an isolated SQLite connection
+inside each request thread, and provides an idempotent `close()` plus context-manager
+shutdown control for deployment lifecycle hooks.
 
 Coordinated schema changes use `SQLiteMigrationRunner`. Migration versions are
 ordered, transactionally applied, and recorded with immutable SHA-256 checksums.
@@ -383,7 +384,7 @@ Implemented foundations:
 - Validated runtime configuration with safe external-effect defaults
 - Read-only operational observability API with OpenAPI 3.1
 - Versioned checksum-verified SQLite migration runner and deployment/security runbooks
-- Environment-composed operational WSGI runtime with explicit database lifecycle
+- Environment-composed operational WSGI runtime with request-local database lifecycle
 - Continuous integration workflow
 
 The eight-item autonomous-core execution plan is implemented on the integration branch.

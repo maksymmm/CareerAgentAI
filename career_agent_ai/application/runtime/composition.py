@@ -30,11 +30,11 @@ from .config import RuntimeConfig
 
 
 class RuntimeOperationalApp:
-    """Own the database lifecycle for the composed operational WSGI app."""
+    """Open an isolated SQLite connection for each operational WSGI request."""
 
-    def __init__(self, app: OperationalWSGIApp, database: SQLiteDatabase) -> None:
-        self._app = app
-        self._database = database
+    def __init__(self, *, database_path: str, bearer_token: str) -> None:
+        self._database_path = database_path
+        self._bearer_token = bearer_token
         self._closed = False
 
     def __call__(
@@ -45,13 +45,18 @@ class RuntimeOperationalApp:
         """Delegate a WSGI request while the runtime remains open."""
         if self._closed:
             raise RuntimeError("Operational runtime is closed.")
-        return self._app(environ, start_response)
+        database = SQLiteDatabase(self._database_path)
+        try:
+            probe = SQLiteOperationalProbe(database)
+            service = OperationalApiService(probe)
+            app = OperationalWSGIApp(service, bearer_token=self._bearer_token)
+            return tuple(app(environ, start_response))
+        finally:
+            database.close()
 
     def close(self) -> None:
-        """Close the owned database connection idempotently."""
-        if not self._closed:
-            self._database.close()
-            self._closed = True
+        """Prevent new requests after all active request calls have returned."""
+        self._closed = True
 
     def __enter__(self) -> "RuntimeOperationalApp":
         """Return this runtime for context-managed deployment checks."""
@@ -68,20 +73,14 @@ def build_operational_app_from_env(
     environ: Mapping[str, str] | None = None,
 ) -> RuntimeOperationalApp:
     """Compose the operational WSGI app from validated runtime environment values."""
-    config = RuntimeConfig.from_env(environ)
     source = environ if environ is not None else os.environ
     bearer_token = source.get("CAREER_AGENT_OPERATIONAL_BEARER_TOKEN", "")
     OperationalWSGIApp.validate_bearer_token(bearer_token)
-
-    database = SQLiteDatabase(config.database_path)
-    try:
-        probe = SQLiteOperationalProbe(database)
-        service = OperationalApiService(probe)
-        app = OperationalWSGIApp(service, bearer_token=bearer_token)
-        return RuntimeOperationalApp(app, database)
-    except Exception:
-        database.close()
-        raise
+    config = RuntimeConfig.from_env(environ)
+    return RuntimeOperationalApp(
+        database_path=config.database_path,
+        bearer_token=bearer_token,
+    )
 
 
 @dataclass(frozen=True)

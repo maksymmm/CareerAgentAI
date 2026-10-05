@@ -67,9 +67,10 @@ The issues endpoint requires a bearer token supplied at composition time. Serve 
 
 Use `build_operational_app_from_env()` as the operational API composition root and set
 `CAREER_AGENT_OPERATIONAL_BEARER_TOKEN` through the deployment secret store. The token
-must contain 32 to 4096 ASCII characters. The returned WSGI application owns its
-SQLite connection; register its idempotent `close()` with the process shutdown hook.
-Invalid configuration or token input fails before the runtime is returned.
+must contain 32 to 4096 ASCII characters. The returned WSGI application opens and
+closes an isolated SQLite connection within each request execution context; register
+its idempotent `close()` with the process shutdown hook to reject later requests.
+Invalid token input fails before runtime validation can probe or create a SQLite URI.
 
 ## Release procedure
 

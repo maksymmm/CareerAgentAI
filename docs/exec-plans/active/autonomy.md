@@ -299,15 +299,16 @@ Acceptance criteria:
 - [x] Validate production runtime configuration before opening the service database.
 - [x] Require a deployment-secret bearer token without storing it in `RuntimeConfig`.
 - [x] Compose the SQLite probe, API service, and WSGI adapter through one public root.
-- [x] Own and explicitly close the SQLite connection at process shutdown.
+- [x] Use request-local SQLite connections that are safe under threaded WSGI servers.
 - [x] Add regression tests for health, authenticated inspection, invalid secrets, and cleanup.
 - [x] Document the deployment contract.
 
 Delivered: `build_operational_app_from_env()` validates environment and operational
 authentication, then wires the configured SQLite database to the read-only probe and
-WSGI API. The returned runtime is callable as a WSGI application, rejects use after
-shutdown, and closes its database idempotently. Invalid bearer tokens fail before a
-database file is created. No network provider, consequential action, production
+WSGI API. Each request opens and closes SQLite in its own execution thread, and the
+runtime rejects new requests after idempotent shutdown. Invalid bearer tokens fail
+before runtime validation can probe a SQLite URI or create a database file. No network
+provider, consequential action, production
 credential, or server process is enabled by this composition.
 
 Next priority: define a candidate-facing approval UI contract before implementing a
