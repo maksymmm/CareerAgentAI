@@ -39,17 +39,17 @@ class CandidateApprovalWSGIApp:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         token = authorization[7:] if authorization.startswith("Bearer ") else ""
-        user_id = self._resolve_bearer(token) if token else None
-        if not user_id:
-            return self._respond(
-                start_response,
-                "401 Unauthorized",
-                {"error": "unauthorized"},
-                [("WWW-Authenticate", "Bearer")],
-            )
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
         run_id = parts[3]
         try:
+            user_id = self._resolve_bearer(token) if token else None
+            if not user_id:
+                return self._respond(
+                    start_response,
+                    "401 Unauthorized",
+                    {"error": "unauthorized"},
+                    [("WWW-Authenticate", "Bearer")],
+                )
             if method == "GET":
                 return self._respond(
                     start_response,
@@ -57,10 +57,19 @@ class CandidateApprovalWSGIApp:
                     self._loop.get_candidate_approval_prompt(run_id, user_id=user_id).to_dict(),
                 )
             if method == "POST":
-                payload = self._read_json(environ)
-                submission = CandidateApprovalSubmission.from_mapping(payload)
-                if submission.run_id != run_id:
-                    raise ValueError("approval payload run_id does not match the URL.")
+                try:
+                    payload = self._read_json(environ)
+                    submission = CandidateApprovalSubmission.from_mapping(payload)
+                    if submission.run_id != run_id:
+                        raise ValueError(
+                            "approval payload run_id does not match the URL."
+                        )
+                except (TypeError, ValueError) as exc:
+                    return self._respond(
+                        start_response,
+                        "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
                 result = self._loop.resume_candidate_submission(
                     user_id=user_id, submission=submission
                 )
@@ -77,12 +86,6 @@ class CandidateApprovalWSGIApp:
             )
         except (KeyError, PermissionError):
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-        except (TypeError, ValueError) as exc:
-            return self._respond(
-                start_response,
-                "400 Bad Request",
-                {"error": "invalid_request", "message": str(exc)[:500]},
-            )
         except CareerLoopConflictError:
             return self._respond(
                 start_response,
