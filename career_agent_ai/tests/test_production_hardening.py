@@ -37,6 +37,7 @@ from career_agent_ai.application.runtime import (
     RuntimeConfig,
     RuntimeEnvironment,
     build_external_action_service,
+    guard_job_provider,
     guard_signal_provider,
 )
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
@@ -164,6 +165,24 @@ def test_runtime_composition_blocks_network_signal_provider_by_default():
     assert provider.calls == 0
 
 
+def test_runtime_composition_blocks_network_job_provider_by_default():
+    class RecordingJobProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def search(self, query):
+            self.calls += 1
+            return ()
+
+    provider = RecordingJobProvider()
+    guarded = guard_job_provider(RuntimeConfig.from_env({}), provider)
+
+    with pytest.raises(PermissionError, match="Network providers are disabled"):
+        guarded.search("python")
+
+    assert provider.calls == 0
+
+
 def test_runtime_composition_allows_explicitly_enabled_external_effects():
     class RecordingAdapter:
         def __init__(self):
@@ -181,6 +200,14 @@ def test_runtime_composition_allows_explicitly_enabled_external_effects():
             self.calls += 1
             return ()
 
+    class RecordingJobProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def search(self, query):
+            self.calls += 1
+            return ()
+
     config = RuntimeConfig.from_env(
         {
             "CAREER_AGENT_ALLOW_NETWORK_PROVIDERS": "true",
@@ -195,10 +222,13 @@ def test_runtime_composition_allows_explicitly_enabled_external_effects():
     result = actions.execute("runtime-enabled-action", human_approved=True)
 
     signals = RecordingSignalProvider()
+    jobs = RecordingJobProvider()
     assert guard_signal_provider(config, signals).collect() == ()
+    assert guard_job_provider(config, jobs).search("python") == ()
     assert result.status == ExternalActionStatus.SUCCEEDED
     assert adapter.calls == 1
     assert signals.calls == 1
+    assert jobs.calls == 1
 
 def test_structured_logging_includes_correlation_id_and_redacts_secrets():
     stream = io.StringIO()

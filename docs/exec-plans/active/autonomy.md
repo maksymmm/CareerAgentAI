@@ -276,8 +276,13 @@ The subsequent exact-head review found percent-encoded NUL bytes could make SQLi
 truncate a URI filename. Runtime validation now rejects raw or decoded NUL bytes
 before opening the database URI, with coverage in every runtime environment.
 
+Release review of `c61a1a6fe6` found live job discovery bypassed the runtime network
+kill switch. Job providers now use the same execution-boundary guard as employer
+signals, and default `AgentFactory` job-search composition is network-disabled unless
+an explicitly enabled validated runtime configuration is supplied.
+
 Next priority: verify the full suite and exact fix HEAD in CI, then obtain a fresh
-review before integrating the release fixes. Merge into `main` still requires
+review before integrating the network-guard fix. Merge into `main` still requires
 explicit user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
