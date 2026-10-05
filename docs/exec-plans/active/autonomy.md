@@ -348,9 +348,15 @@ cannot approve a later gate. Reconciliation actions remain excluded because they
 provider-verified, kind-specific outcomes. No write endpoint, provider, or action
 execution is introduced.
 
-Next priority: compose an authenticated candidate API that reloads durable state and
-uses this contract immediately before the existing loop resume gate. Real provider
-adapters remain separately sandbox-gated. Merge into `main` still requires explicit
+Delivered: an authenticated dependency-free WSGI boundary reloads the owner-scoped
+durable prompt and submits the strict approval contract immediately before the existing
+atomic resume gate. It fails closed on incomplete or oversized bodies, hides foreign
+and missing runs identically, returns no-store responses, and publishes a matching
+OpenAPI 3.1 contract. Regression tests cover authentication-before-storage, owner
+isolation, URL/payload binding, bounded parsing, incomplete reads, and API discovery.
+
+Next priority: add a sandbox-gated candidate-service composition root without enabling
+real providers or consequential actions. Merge into `main` still requires explicit
 user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
