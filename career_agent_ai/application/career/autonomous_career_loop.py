@@ -15,6 +15,13 @@ from career_agent_ai.application.brain.agent_context import AgentContext
 from career_agent_ai.application.career.application_submission import (
     ApplicationSubmissionService,
 )
+from career_agent_ai.application.career.approval_contract import (
+    ApprovalDecision,
+    CandidateApprovalPrompt,
+    CandidateApprovalSubmission,
+    build_candidate_approval_prompt,
+    validate_candidate_approval_submission,
+)
 from career_agent_ai.application.career.career_decision_engine import CareerDecisionEngine
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
@@ -196,12 +203,67 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Use the dedicated reconciliation resolver for ambiguous external outcomes."
             )
+        return self._apply_human_decision(state, approved=approved)
+
+    def get_candidate_approval_prompt(
+        self, run_id: str, *, user_id: str
+    ) -> CandidateApprovalPrompt:
+        """Return the owner-scoped immutable prompt for one ordinary approval gate."""
+        return build_candidate_approval_prompt(
+            self._owned_state(run_id, user_id), user_id=user_id
+        )
+
+    def resume_candidate_submission(
+        self,
+        *,
+        user_id: str,
+        submission: CandidateApprovalSubmission,
+    ) -> CareerLoopResult:
+        """Atomically validate and persist a prompt-bound candidate decision."""
+        if not isinstance(submission, CandidateApprovalSubmission):
+            raise TypeError("submission must be a CandidateApprovalSubmission.")
+        state = self._owned_state(submission.run_id, user_id)
+        approval_owner = f"approval:{uuid4().hex}"
+        self._states.claim_execution(
+            state.run_id,
+            approval_owner,
+            expected_version=submission.state_version,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
+        )
+        try:
+            decision = validate_candidate_approval_submission(
+                state, user_id=user_id, submission=submission
+            )
+            result = self._apply_human_decision(
+                state,
+                approved=decision is ApprovalDecision.APPROVE,
+                expected_owner_id=approval_owner,
+                continue_after_approval=False,
+            )
+        finally:
+            try:
+                self._states.release_execution(state.run_id, approval_owner)
+            except CareerLoopConflictError:
+                pass
+        if result.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
+            return result
+        return self._continue(state)
+
+    def _apply_human_decision(
+        self,
+        state: CareerLoopState,
+        *,
+        approved: bool,
+        expected_owner_id: str | None = None,
+        continue_after_approval: bool = True,
+    ) -> CareerLoopResult:
+        """Persist one already-authorized ordinary decision and continue the loop."""
         if not approved:
             state.last_error = f"human_declined:{state.pending_human_action.kind.value}"
             state.pending_human_action = None
             state.phase = CareerLoopPhase.FAILED
             state.touch()
-            self._persist(state)
+            self._persist(state, expected_owner_id=expected_owner_id)
             return self._result(state)
 
         approved_action = state.pending_human_action
@@ -217,8 +279,10 @@ class AutonomousCareerLoop:
         else:
             raise ValueError("Unsupported pending human action.")
         state.touch()
-        self._persist(state)
-        return self._continue(state)
+        self._persist(state, expected_owner_id=expected_owner_id)
+        if continue_after_approval:
+            return self._continue(state)
+        return self._result(state)
 
     def resolve_application_reconciliation(
         self,

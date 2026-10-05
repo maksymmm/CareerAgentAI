@@ -323,8 +323,34 @@ ephemeral database despite its non-empty URI path. Production validation now rej
 that VFS using SQLite's percent-decoded, last-value-wins query semantics, with
 regression coverage for encoded and repeated parameters.
 
-Next priority: define a candidate-facing approval UI contract before implementing a
-web interface; real provider adapters remain separately sandbox-gated. Merge into
-`main` still requires explicit user approval.
+## 10. Candidate-facing approval contract
+
+Status: **COMPLETED**
+
+Goal: define the security boundary a future approval UI must use before adding any
+web interface or write endpoint.
+
+Acceptance criteria:
+- [x] Expose only the pending action, not the full candidate profile or loop request.
+- [x] Bind each response to the owner, run, durable state version, and displayed action.
+- [x] Use a strict versioned response schema with explicit approve/decline values.
+- [x] Reject stale, foreign, malformed, or action-mismatched responses.
+- [x] Keep the contract independent of HTTP and consequential provider adapters.
+
+Delivered: `CandidateApprovalPrompt` produces a minimal JSON-safe view of the pending
+human action. Its SHA-256 fingerprint covers the exact action kind, title, and details
+shown to the candidate. `CandidateApprovalSubmission` rejects ambiguous booleans,
+unknown fields, unsupported schema versions, malformed digests, and non-explicit
+decisions. The prompt is a deeply immutable canonical snapshot. Ordinary approvals are
+atomically revalidated and persisted under the existing execution lease without
+reducing the response to an unbound boolean; stale concurrent responses therefore
+cannot approve a later gate. Reconciliation actions remain excluded because they need
+provider-verified, kind-specific outcomes. No write endpoint, provider, or action
+execution is introduced.
+
+Next priority: compose an authenticated candidate API that reloads durable state and
+uses this contract immediately before the existing loop resume gate. Real provider
+adapters remain separately sandbox-gated. Merge into `main` still requires explicit
+user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
