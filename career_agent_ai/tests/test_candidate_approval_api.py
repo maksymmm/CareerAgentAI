@@ -204,3 +204,26 @@ def test_unexpected_loop_failure_is_sanitized_as_500():
 
     assert status == "500 Internal Server Error"
     assert payload == {"error": "internal_error"}
+
+
+def test_bearer_resolver_failure_is_sanitized_as_500():
+    def broken_resolver(token):
+        raise RuntimeError("identity provider credential=do-not-expose")
+
+    candidate_app = CandidateApprovalWSGIApp(Loop(), resolve_bearer=broken_resolver)
+    (status, headers), payload = request(candidate_app)
+
+    assert status == "500 Internal Server Error"
+    assert ("Cache-Control", "no-store") in headers
+    assert payload == {"error": "internal_error"}
+
+
+def test_durable_state_value_error_is_sanitized_as_500():
+    class CorruptStateLoop:
+        def get_candidate_approval_prompt(self, *args, **kwargs):
+            raise ValueError("persisted candidate secret=do-not-expose")
+
+    (status, _), payload = request(app(CorruptStateLoop()))
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
