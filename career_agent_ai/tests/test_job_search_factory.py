@@ -1,3 +1,6 @@
+import inspect
+from typing import get_type_hints
+
 import pytest
 
 from career_agent_ai.application.agents.agent_factory import AgentFactory
@@ -8,6 +11,7 @@ from career_agent_ai.application.runtime import RuntimeConfig
 from career_agent_ai.application.search.providers.arbeitnow_provider import (
     ArbeitnowProvider,
 )
+import career_agent_ai.application.runtime as runtime
 
 
 def test_factory_creates_job_search_agent():
@@ -15,6 +19,22 @@ def test_factory_creates_job_search_agent():
 
     assert isinstance(agent, JobSearchAgent)
     assert agent.id == "job_search"
+
+
+def test_factory_runtime_config_annotations_resolve_at_runtime():
+    create_hints = get_type_hints(AgentFactory.create)
+    job_search_hints = get_type_hints(AgentFactory._create_job_search_agent)
+
+    assert create_hints["runtime_config"] == RuntimeConfig | None
+    assert job_search_hints["runtime_config"] is RuntimeConfig
+
+
+def test_runtime_lazy_exports_remain_discoverable():
+    exported_names = set(runtime.__all__)
+    discovered_names = {name for name, _ in inspect.getmembers(runtime)}
+
+    assert exported_names <= set(dir(runtime))
+    assert exported_names <= discovered_names
 
 
 def test_factory_job_search_obeys_disabled_runtime_network_policy(monkeypatch):

@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from career_agent_ai.application.agents.agent import Agent
 from career_agent_ai.application.agents.agent_registry import AgentRegistry
 from career_agent_ai.application.jobs.job_application_repository import (
     JobApplicationRepository,
 )
 from career_agent_ai.application.search.search_service import SearchService
-
-if TYPE_CHECKING:
-    from career_agent_ai.application.runtime import RuntimeConfig
+from career_agent_ai.application.runtime.config import RuntimeConfig
 
 
 class AgentFactory:
@@ -30,7 +26,6 @@ class AgentFactory:
         agent_id: str,
         runtime_config: RuntimeConfig | None = None,
     ) -> Agent:
-        from career_agent_ai.application.runtime import RuntimeConfig
         from career_agent_ai.application.agents.resume.resume_agent import (
             ResumeAgent,
         )
