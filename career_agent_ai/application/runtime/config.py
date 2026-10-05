@@ -102,7 +102,7 @@ class RuntimeConfig:
                     mode = unquote(raw_value) if has_value else ""
         if mode not in {None, "ro", "rw", "rwc", "memory"}:
             raise ValueError("CAREER_AGENT_DB_PATH is not an openable SQLite URI.")
-        return mode == "memory" or (mode is None and decoded_path == ":memory:")
+        return mode == "memory" or decoded_path in {"", ":memory:"}
 
     @staticmethod
     def _parse_bool(value: str, field: str) -> bool:

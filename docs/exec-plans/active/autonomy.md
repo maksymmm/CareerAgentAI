@@ -313,7 +313,8 @@ and routing do not open SQLite; inspection failures stay inside the sanitized AP
 boundary. Inspection uses SQLite read-only mode, so lost storage is never replaced by
 an empty database. Runtime URI classification is side-effect free, including for
 valid writable URI text, so composition cannot recreate lost storage before the
-read-only probe executes. No network
+read-only probe executes. Empty and `:memory:` URI paths fail the production durability
+gate regardless of an explicit `ro`, `rw`, or `rwc` mode. No network
 provider, consequential action, production
 credential, or server process is enabled by this composition.
 

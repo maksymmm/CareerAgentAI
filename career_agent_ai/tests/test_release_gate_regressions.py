@@ -58,6 +58,11 @@ def test_sqlite_uri_detection_matches_actual_database_and_lease_renewal(
         "file:career?mode=memory#fragment",
         "file:career?%6dode=%6demory",
         "file:career?mode=rwc&mode=memory",
+        "file:",
+        "file:?mode=rwc",
+        "file::memory:?mode=ro",
+        "file::memory:?mode=rw",
+        "file::memory:?mode=rwc",
     ],
 )
 def test_production_runtime_rejects_all_sqlite_memory_paths(database_path):
