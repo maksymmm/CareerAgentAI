@@ -120,11 +120,13 @@ class CandidateApprovalSubmission:
         ) != 64:
             raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
         try:
-            bytes.fromhex(self.action_fingerprint)
+            decoded_fingerprint = bytes.fromhex(self.action_fingerprint)
         except ValueError as exc:
             raise ValueError(
                 "approval action_fingerprint must be a SHA-256 digest."
             ) from exc
+        if len(decoded_fingerprint) != 32:
+            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
         try:
             decision = ApprovalDecision(self.decision)
         except (TypeError, ValueError) as exc:
@@ -161,11 +163,13 @@ class CandidateApprovalSubmission:
         if not isinstance(fingerprint, str) or len(fingerprint) != 64:
             raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
         try:
-            bytes.fromhex(fingerprint)
+            decoded_fingerprint = bytes.fromhex(fingerprint)
         except ValueError as exc:
             raise ValueError(
                 "approval action_fingerprint must be a SHA-256 digest."
             ) from exc
+        if len(decoded_fingerprint) != 32:
+            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
         try:
             decision = ApprovalDecision(payload["decision"])
         except (TypeError, ValueError) as exc:
