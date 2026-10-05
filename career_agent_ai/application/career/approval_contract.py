@@ -106,6 +106,33 @@ class CandidateApprovalSubmission:
     action_fingerprint: str
     decision: ApprovalDecision
 
+    def __post_init__(self) -> None:
+        """Validate direct construction as strictly as the wire parser."""
+        object.__setattr__(self, "run_id", validate_loop_identifier(self.run_id, "run_id"))
+        if (
+            not isinstance(self.state_version, int)
+            or isinstance(self.state_version, bool)
+            or self.state_version < 0
+        ):
+            raise ValueError("approval state_version must be a non-negative integer.")
+        if not isinstance(self.action_fingerprint, str) or len(
+            self.action_fingerprint
+        ) != 64:
+            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
+        try:
+            decoded_fingerprint = bytes.fromhex(self.action_fingerprint)
+        except ValueError as exc:
+            raise ValueError(
+                "approval action_fingerprint must be a SHA-256 digest."
+            ) from exc
+        if len(decoded_fingerprint) != 32:
+            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
+        try:
+            decision = ApprovalDecision(self.decision)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("approval decision must be approve or decline.") from exc
+        object.__setattr__(self, "decision", decision)
+
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "CandidateApprovalSubmission":
         """Parse a strict versioned approval response from untrusted JSON data."""
@@ -136,11 +163,13 @@ class CandidateApprovalSubmission:
         if not isinstance(fingerprint, str) or len(fingerprint) != 64:
             raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
         try:
-            bytes.fromhex(fingerprint)
+            decoded_fingerprint = bytes.fromhex(fingerprint)
         except ValueError as exc:
             raise ValueError(
                 "approval action_fingerprint must be a SHA-256 digest."
             ) from exc
+        if len(decoded_fingerprint) != 32:
+            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
         try:
             decision = ApprovalDecision(payload["decision"])
         except (TypeError, ValueError) as exc:

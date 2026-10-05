@@ -130,6 +130,7 @@ def test_submission_rejects_different_run_and_foreign_owner():
         ("state_version", True, "state_version"),
         ("state_version", -1, "state_version"),
         ("action_fingerprint", "not-a-digest", "SHA-256"),
+        ("action_fingerprint", "0" * 62 + "  ", "SHA-256"),
         ("decision", True, "decision"),
         ("decision", "later", "decision"),
     ],
@@ -162,6 +163,53 @@ def test_submission_parser_rejects_unknown_fields():
 
     with pytest.raises(ValueError, match="fields"):
         CandidateApprovalSubmission.from_mapping(payload)
+
+
+def test_direct_submission_construction_normalizes_decision_before_validation():
+    state = _state()
+    prompt = build_candidate_approval_prompt(state, user_id="candidate-1")
+    submission = CandidateApprovalSubmission(
+        run_id=prompt.run_id,
+        state_version=prompt.state_version,
+        action_fingerprint=prompt.action_fingerprint,
+        decision="approve",
+    )
+
+    assert submission.decision is ApprovalDecision.APPROVE
+    assert (
+        validate_candidate_approval_submission(
+            state,
+            user_id="candidate-1",
+            submission=submission,
+        )
+        is ApprovalDecision.APPROVE
+    )
+
+
+@pytest.mark.parametrize(
+    "field, value, message",
+    [
+        ("run_id", "not valid!", "run_id"),
+        ("state_version", True, "state_version"),
+        ("state_version", -1, "state_version"),
+        ("action_fingerprint", "not-a-digest", "SHA-256"),
+        ("action_fingerprint", "0" * 62 + "  ", "SHA-256"),
+        ("decision", True, "decision"),
+        ("decision", "later", "decision"),
+    ],
+)
+def test_direct_submission_construction_rejects_invalid_values(field, value, message):
+    prompt = build_candidate_approval_prompt(_state(), user_id="candidate-1")
+    values = {
+        "run_id": prompt.run_id,
+        "state_version": prompt.state_version,
+        "action_fingerprint": prompt.action_fingerprint,
+        "decision": ApprovalDecision.APPROVE,
+    }
+    values[field] = value
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        CandidateApprovalSubmission(**values)
 
 
 def test_prompt_details_are_deeply_immutable_and_wire_output_is_detached():
