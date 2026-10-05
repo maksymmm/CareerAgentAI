@@ -1,3 +1,5 @@
+from typing import get_type_hints
+
 import pytest
 
 from career_agent_ai.application.agents.agent_factory import AgentFactory
@@ -15,6 +17,14 @@ def test_factory_creates_job_search_agent():
 
     assert isinstance(agent, JobSearchAgent)
     assert agent.id == "job_search"
+
+
+def test_factory_runtime_config_annotations_resolve_at_runtime():
+    create_hints = get_type_hints(AgentFactory.create)
+    job_search_hints = get_type_hints(AgentFactory._create_job_search_agent)
+
+    assert create_hints["runtime_config"] == RuntimeConfig | None
+    assert job_search_hints["runtime_config"] is RuntimeConfig
 
 
 def test_factory_job_search_obeys_disabled_runtime_network_policy(monkeypatch):
