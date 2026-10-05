@@ -341,9 +341,12 @@ Delivered: `CandidateApprovalPrompt` produces a minimal JSON-safe view of the pe
 human action. Its SHA-256 fingerprint covers the exact action kind, title, and details
 shown to the candidate. `CandidateApprovalSubmission` rejects ambiguous booleans,
 unknown fields, unsupported schema versions, malformed digests, and non-explicit
-decisions. Validation rechecks candidate ownership plus the run ID, durable state
-version, and action fingerprint before returning a boolean decision to the existing
-human gate. No write endpoint, provider, or action execution is introduced.
+decisions. The prompt is a deeply immutable canonical snapshot. Ordinary approvals are
+atomically revalidated and persisted under the existing execution lease without
+reducing the response to an unbound boolean; stale concurrent responses therefore
+cannot approve a later gate. Reconciliation actions remain excluded because they need
+provider-verified, kind-specific outcomes. No write endpoint, provider, or action
+execution is introduced.
 
 Next priority: compose an authenticated candidate API that reloads durable state and
 uses this contract immediately before the existing loop resume gate. Real provider

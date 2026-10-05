@@ -72,18 +72,15 @@ def test_prompt_rejects_foreign_owner_and_missing_action():
 
 
 @pytest.mark.parametrize("decision, expected", [("approve", True), ("decline", False)])
-def test_submission_returns_only_an_explicit_current_decision(decision, expected):
+def test_submission_preserves_the_explicit_current_decision(decision, expected):
     state = _state()
     prompt = build_candidate_approval_prompt(state, user_id="candidate-1")
 
-    assert (
-        validate_candidate_approval_submission(
+    assert validate_candidate_approval_submission(
             state,
             user_id="candidate-1",
             submission=_submission(prompt, decision),
-        )
-        is expected
-    )
+        ) is (ApprovalDecision.APPROVE if expected else ApprovalDecision.DECLINE)
 
 
 def test_submission_rejects_stale_state_and_changed_displayed_action():
@@ -165,3 +162,42 @@ def test_submission_parser_rejects_unknown_fields():
 
     with pytest.raises(ValueError, match="fields"):
         CandidateApprovalSubmission.from_mapping(payload)
+
+
+def test_prompt_details_are_deeply_immutable_and_wire_output_is_detached():
+    state = _state()
+    state.pending_human_action = HumanActionEvent(
+        kind=HumanActionKind.APPROVE_APPLICATION,
+        title="Approve application",
+        details={"document": {"sections": ["summary"]}},
+    )
+    prompt = build_candidate_approval_prompt(state, user_id="candidate-1")
+
+    with pytest.raises(TypeError):
+        prompt.details["document"] = {}
+    with pytest.raises(TypeError):
+        prompt.details["document"]["sections"][0] = "changed"
+    wire = prompt.to_dict()
+    wire["details"]["document"]["sections"][0] = "changed"
+
+    assert prompt.to_dict()["details"]["document"]["sections"] == ["summary"]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        HumanActionKind.RECONCILE_APPLICATION_SUBMISSION,
+        HumanActionKind.RECONCILE_MESSAGE_DELIVERY,
+        HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
+    ],
+)
+def test_prompt_rejects_reconciliation_actions(kind):
+    state = _state()
+    state.pending_human_action = HumanActionEvent(
+        kind=kind,
+        title="Reconcile outcome",
+        details={"operation_id": "operation-1"},
+    )
+
+    with pytest.raises(ValueError, match="reconciliation contract"):
+        build_candidate_approval_prompt(state, user_id="candidate-1")

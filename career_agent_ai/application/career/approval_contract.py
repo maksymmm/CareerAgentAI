@@ -7,11 +7,13 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .autonomous_loop_models import (
     CareerLoopState,
     HumanActionEvent,
+    HumanActionKind,
     validate_loop_identifier,
 )
 
@@ -23,15 +25,43 @@ class ApprovalDecision(str, Enum):
     DECLINE = "decline"
 
 
-def _action_fingerprint(action: HumanActionEvent) -> str:
-    """Bind approval to the exact action payload shown to the candidate."""
+_APPROVAL_KINDS = {
+    HumanActionKind.APPROVE_APPLICATION,
+    HumanActionKind.APPROVE_MESSAGE,
+    HumanActionKind.APPROVE_INTERVIEW,
+}
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
+def _action_snapshot(action: HumanActionEvent) -> tuple[Mapping[str, Any], str]:
+    """Return one immutable snapshot and its exact candidate-visible fingerprint."""
     try:
+        canonical_details = json.loads(
+            json.dumps(
+                dict(action.details),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
         encoded = json.dumps(
-            {
-                "kind": action.kind.value,
-                "title": action.title,
-                "details": dict(action.details),
-            },
+            {"kind": action.kind.value, "title": action.title, "details": canonical_details},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -39,7 +69,7 @@ def _action_fingerprint(action: HumanActionEvent) -> str:
         ).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
         raise ValueError("pending human action must be JSON-safe.") from exc
-    return sha256(encoded).hexdigest()
+    return _freeze_json(canonical_details), sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -61,7 +91,7 @@ class CandidateApprovalPrompt:
             "state_version": self.state_version,
             "action_kind": self.action_kind,
             "title": self.title,
-            "details": dict(self.details),
+            "details": _thaw_json(self.details),
             "action_fingerprint": self.action_fingerprint,
             "allowed_decisions": [decision.value for decision in ApprovalDecision],
         }
@@ -133,13 +163,16 @@ def build_candidate_approval_prompt(
     action = state.pending_human_action
     if action is None:
         raise ValueError("career loop has no pending human action.")
+    if action.kind not in _APPROVAL_KINDS:
+        raise ValueError("pending human action requires a reconciliation contract.")
+    details, fingerprint = _action_snapshot(action)
     return CandidateApprovalPrompt(
-        run_id=state.run_id,
+        run_id=validate_loop_identifier(state.run_id, "run_id", maximum=120),
         state_version=state.version,
         action_kind=action.kind.value,
         title=action.title,
-        details=dict(action.details),
-        action_fingerprint=_action_fingerprint(action),
+        details=details,
+        action_fingerprint=fingerprint,
     )
 
 
@@ -148,8 +181,8 @@ def validate_candidate_approval_submission(
     *,
     user_id: str,
     submission: CandidateApprovalSubmission,
-) -> bool:
-    """Validate ownership and freshness, then return the explicit boolean decision."""
+) -> ApprovalDecision:
+    """Validate ownership and freshness without discarding snapshot binding."""
     prompt = build_candidate_approval_prompt(state, user_id=user_id)
     if not hmac.compare_digest(prompt.run_id, submission.run_id):
         raise ValueError("approval response is for a different career loop.")
@@ -159,4 +192,4 @@ def validate_candidate_approval_submission(
         prompt.action_fingerprint, submission.action_fingerprint
     ):
         raise ValueError("approval response does not match the pending action.")
-    return submission.decision is ApprovalDecision.APPROVE
+    return submission.decision

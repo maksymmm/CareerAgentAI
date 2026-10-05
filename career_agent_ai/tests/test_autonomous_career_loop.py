@@ -18,6 +18,9 @@ from career_agent_ai.application.career.application_submission import (
     ApplicationSubmissionService,
     FakeApplicationSubmissionAdapter,
 )
+from career_agent_ai.application.career.approval_contract import (
+    CandidateApprovalSubmission,
+)
 from career_agent_ai.application.career.autonomous_career_loop import AutonomousCareerLoop
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
@@ -189,6 +192,38 @@ def request(*, with_schedule: bool = True) -> CareerLoopRequest:
         message_body="Thank you for considering my application.",
         schedule_event_id="interview-1" if with_schedule else None,
     )
+
+
+def _submission_for(prompt, decision="approve") -> CandidateApprovalSubmission:
+    return CandidateApprovalSubmission.from_mapping(
+        {
+            "schema_version": 1,
+            "run_id": prompt.run_id,
+            "state_version": prompt.state_version,
+            "action_fingerprint": prompt.action_fingerprint,
+            "decision": decision,
+        }
+    )
+
+
+def test_candidate_submission_cannot_approve_a_later_gate(tmp_path):
+    database, loop, _, _, scheduling, _, communication, _ = build_stack(
+        str(tmp_path / "candidate-approval.sqlite")
+    )
+    add_interview(scheduling, "bound:application")
+    loop.start(request(), run_id="bound")
+    prompt = loop.get_candidate_approval_prompt("bound", user_id="user-1")
+    submission = _submission_for(prompt)
+
+    result = loop.resume_candidate_submission(user_id="user-1", submission=submission)
+    assert result.phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    with pytest.raises(CareerLoopConflictError):
+        loop.resume_candidate_submission(user_id="user-1", submission=submission)
+
+    assert [call for call in communication.calls if call[0] == "send"] == []
+    assert loop.get("bound", user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    database.close()
 
 
 @pytest.mark.parametrize("gate", ["application", "message", "interview"])
