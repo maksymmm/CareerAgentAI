@@ -72,7 +72,7 @@ class CandidateApprovalWSGIApp:
                 {"error": "method_not_allowed"},
                 [("Allow", "GET, POST")],
             )
-        except PermissionError:
+        except (KeyError, PermissionError):
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         except (TypeError, ValueError) as exc:
             return self._respond(
@@ -95,6 +95,8 @@ class CandidateApprovalWSGIApp:
         if length < 1 or length > self.MAX_BODY_BYTES:
             raise ValueError("approval body size is invalid.")
         body = environ["wsgi.input"].read(length)
+        if len(body) != length:
+            raise ValueError("approval body is incomplete.")
         try:
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
