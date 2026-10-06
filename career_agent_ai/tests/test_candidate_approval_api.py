@@ -218,6 +218,17 @@ def test_bearer_resolver_failure_is_sanitized_as_500():
     assert payload == {"error": "internal_error"}
 
 
+def test_bearer_resolver_ownership_shaped_failure_is_still_500():
+    def broken_resolver(token):
+        raise KeyError("identity record disappeared")
+
+    candidate_app = CandidateApprovalWSGIApp(Loop(), resolve_bearer=broken_resolver)
+    (status, _), payload = request(candidate_app)
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+
+
 def test_durable_state_value_error_is_sanitized_as_500():
     class CorruptStateLoop:
         def get_candidate_approval_prompt(self, *args, **kwargs):
@@ -227,3 +238,38 @@ def test_durable_state_value_error_is_sanitized_as_500():
 
     assert status == "500 Internal Server Error"
     assert payload == {"error": "internal_error"}
+
+
+def test_get_rejects_malformed_run_id_before_loop_access():
+    class ForbiddenLoop:
+        def get_candidate_approval_prompt(self, *args, **kwargs):
+            raise AssertionError("loop must not be accessed")
+
+    (status, _), payload = request(
+        app(ForbiddenLoop()), path="/v1/candidate/runs/bad id/approval"
+    )
+
+    assert status == "400 Bad Request"
+    assert payload["error"] == "invalid_request"
+
+
+def test_prompt_fingerprint_mismatch_is_an_approval_conflict():
+    class PromptConflictLoop(Loop):
+        def resume_candidate_submission(self, *, user_id, submission):
+            from career_agent_ai.application.career import (
+                CandidateApprovalConflictError,
+            )
+
+            raise CandidateApprovalConflictError("pending action changed")
+
+    body = {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "state_version": 3,
+        "action_fingerprint": "f" * 64,
+        "decision": "approve",
+    }
+    (status, _), payload = request(app(PromptConflictLoop()), method="POST", body=body)
+
+    assert status == "409 Conflict"
+    assert payload == {"error": "approval_conflict"}
