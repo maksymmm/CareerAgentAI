@@ -8,6 +8,7 @@ from .application_submission import (
 )
 from .approval_contract import (
     ApprovalDecision,
+    CandidateApprovalConflictError,
     CandidateApprovalPrompt,
     CandidateApprovalSubmission,
     build_candidate_approval_prompt,
@@ -42,6 +43,7 @@ __all__ = [
     "CareerRunResult",
     "CareerStepResult",
     "CandidateApprovalPrompt",
+    "CandidateApprovalConflictError",
     "CandidateApprovalSubmission",
     "FakeApplicationSubmissionAdapter",
     "HumanActionEvent",
