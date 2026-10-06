@@ -170,10 +170,10 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
     ]
     assert request_schema["properties"]["decision"]["enum"] == ["approve", "decline"]
     assert request_schema["properties"]["action_fingerprint"]["pattern"] == (
-        "^[0-9a-fA-F]{64}$"
+        "^[0-9a-f]{64}$"
     )
     assert {"400", "401", "404", "409", "500"} <= set(route["post"]["responses"])
-    assert "409" not in route["get"]["responses"]
+    assert "409" in route["get"]["responses"]
     assert "500" in route["get"]["responses"]
 
 
@@ -273,3 +273,16 @@ def test_prompt_fingerprint_mismatch_is_an_approval_conflict():
 
     assert status == "409 Conflict"
     assert payload == {"error": "approval_conflict"}
+
+
+def test_get_without_an_ordinary_pending_prompt_returns_client_state_conflict():
+    from career_agent_ai.application.career import CandidateApprovalUnavailableError
+
+    class CompletedLoop:
+        def get_candidate_approval_prompt(self, *args, **kwargs):
+            raise CandidateApprovalUnavailableError("run is complete")
+
+    (status, _), payload = request(app(CompletedLoop()))
+
+    assert status == "409 Conflict"
+    assert payload == {"error": "approval_unavailable"}
