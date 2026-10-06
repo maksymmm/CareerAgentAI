@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
@@ -34,6 +35,21 @@ _APPROVAL_KINDS = {
 
 class CandidateApprovalConflictError(ValueError):
     """Signal that a valid submission no longer matches its durable prompt."""
+
+
+class CandidateApprovalUnavailableError(ValueError):
+    """Signal that a run has no ordinary candidate approval prompt."""
+
+
+_SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+
+def _validate_action_fingerprint(value: Any) -> str:
+    if not isinstance(value, str) or _SHA256_HEX_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            "approval action_fingerprint must be a lowercase SHA-256 digest."
+        )
+    return value
 
 
 def _freeze_json(value: Any) -> Any:
@@ -119,18 +135,11 @@ class CandidateApprovalSubmission:
             or self.state_version < 0
         ):
             raise ValueError("approval state_version must be a non-negative integer.")
-        if not isinstance(self.action_fingerprint, str) or len(
-            self.action_fingerprint
-        ) != 64:
-            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
-        try:
-            decoded_fingerprint = bytes.fromhex(self.action_fingerprint)
-        except ValueError as exc:
-            raise ValueError(
-                "approval action_fingerprint must be a SHA-256 digest."
-            ) from exc
-        if len(decoded_fingerprint) != 32:
-            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
+        object.__setattr__(
+            self,
+            "action_fingerprint",
+            _validate_action_fingerprint(self.action_fingerprint),
+        )
         try:
             decision = ApprovalDecision(self.decision)
         except (TypeError, ValueError) as exc:
@@ -163,17 +172,7 @@ class CandidateApprovalSubmission:
             or state_version < 0
         ):
             raise ValueError("approval state_version must be a non-negative integer.")
-        fingerprint = payload["action_fingerprint"]
-        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
-            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
-        try:
-            decoded_fingerprint = bytes.fromhex(fingerprint)
-        except ValueError as exc:
-            raise ValueError(
-                "approval action_fingerprint must be a SHA-256 digest."
-            ) from exc
-        if len(decoded_fingerprint) != 32:
-            raise ValueError("approval action_fingerprint must be a SHA-256 digest.")
+        fingerprint = _validate_action_fingerprint(payload["action_fingerprint"])
         try:
             decision = ApprovalDecision(payload["decision"])
         except (TypeError, ValueError) as exc:
@@ -195,9 +194,13 @@ def build_candidate_approval_prompt(
         raise PermissionError("approval request does not belong to this user.")
     action = state.pending_human_action
     if action is None:
-        raise ValueError("career loop has no pending human action.")
+        raise CandidateApprovalUnavailableError(
+            "career loop has no pending human action."
+        )
     if action.kind not in _APPROVAL_KINDS:
-        raise ValueError("pending human action requires a reconciliation contract.")
+        raise CandidateApprovalUnavailableError(
+            "pending human action requires a reconciliation contract."
+        )
     details, fingerprint = _action_snapshot(action)
     return CandidateApprovalPrompt(
         run_id=validate_loop_identifier(state.run_id, "run_id", maximum=120),
