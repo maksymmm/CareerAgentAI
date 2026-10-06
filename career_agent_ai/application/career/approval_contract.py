@@ -32,6 +32,10 @@ _APPROVAL_KINDS = {
 }
 
 
+class CandidateApprovalConflictError(ValueError):
+    """Signal that a valid submission no longer matches its durable prompt."""
+
+
 def _freeze_json(value: Any) -> Any:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
@@ -214,11 +218,15 @@ def validate_candidate_approval_submission(
     """Validate ownership and freshness without discarding snapshot binding."""
     prompt = build_candidate_approval_prompt(state, user_id=user_id)
     if not hmac.compare_digest(prompt.run_id, submission.run_id):
-        raise ValueError("approval response is for a different career loop.")
+        raise CandidateApprovalConflictError(
+            "approval response is for a different career loop."
+        )
     if prompt.state_version != submission.state_version:
-        raise ValueError("approval response is stale.")
+        raise CandidateApprovalConflictError("approval response is stale.")
     if not hmac.compare_digest(
         prompt.action_fingerprint, submission.action_fingerprint
     ):
-        raise ValueError("approval response does not match the pending action.")
+        raise CandidateApprovalConflictError(
+            "approval response does not match the pending action."
+        )
     return submission.decision
