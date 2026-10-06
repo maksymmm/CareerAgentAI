@@ -11,6 +11,7 @@ from .approval_contract import (
     CandidateApprovalConflictError,
     CandidateApprovalPrompt,
     CandidateApprovalSubmission,
+    CandidateApprovalUnavailableError,
     build_candidate_approval_prompt,
     validate_candidate_approval_submission,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "CandidateApprovalPrompt",
     "CandidateApprovalConflictError",
     "CandidateApprovalSubmission",
+    "CandidateApprovalUnavailableError",
     "FakeApplicationSubmissionAdapter",
     "HumanActionEvent",
     "HumanActionKind",
