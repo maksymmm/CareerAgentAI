@@ -8,8 +8,10 @@ from .application_submission import (
 )
 from .approval_contract import (
     ApprovalDecision,
+    CandidateApprovalConflictError,
     CandidateApprovalPrompt,
     CandidateApprovalSubmission,
+    CandidateApprovalUnavailableError,
     build_candidate_approval_prompt,
     validate_candidate_approval_submission,
 )
@@ -21,7 +23,7 @@ from .autonomous_loop_models import (
     HumanActionEvent,
     HumanActionKind,
 )
-from .autonomous_loop_repository import CareerLoopRepository
+from .autonomous_loop_repository import CareerLoopConflictError, CareerLoopRepository
 from .career_orchestrator import CareerOrchestrator, CareerRunResult
 from .career_plan import CareerPlan, CareerPlanStep
 from .career_step_result import CareerStepResult
@@ -32,6 +34,7 @@ __all__ = [
     "ApplicationSubmissionService",
     "AutonomousCareerLoop",
     "CareerLoopPhase",
+    "CareerLoopConflictError",
     "CareerLoopRepository",
     "CareerLoopRequest",
     "CareerLoopResult",
@@ -41,7 +44,9 @@ __all__ = [
     "CareerRunResult",
     "CareerStepResult",
     "CandidateApprovalPrompt",
+    "CandidateApprovalConflictError",
     "CandidateApprovalSubmission",
+    "CandidateApprovalUnavailableError",
     "FakeApplicationSubmissionAdapter",
     "HumanActionEvent",
     "HumanActionKind",

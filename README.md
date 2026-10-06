@@ -251,6 +251,11 @@ must derive it from the authenticated principal, never an untrusted request body
 The loop checks it against the durable request owner before exposing state, changing
 an approval, claiming a lease, or resolving a provider outcome. A foreign run and
 a missing run both raise the same `KeyError`.
+`CandidateApprovalWSGIApp` exposes the minimal prompt and strict approval submission
+at `GET`/`POST /v1/candidate/runs/{run_id}/approval`. Authentication is resolved before
+durable state access, foreign and missing runs share a tenant-hiding `404`, request
+bodies are bounded and must match their declared length, and
+`candidate_approval_openapi_document()` publishes the matching OpenAPI 3.1 contract.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
