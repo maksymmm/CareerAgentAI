@@ -6,8 +6,12 @@ import json
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from career_agent_ai.application.career import (
+    CandidateApprovalConflictError,
     CandidateApprovalSubmission,
     CareerLoopConflictError,
+)
+from career_agent_ai.application.career.autonomous_loop_models import (
+    validate_loop_identifier,
 )
 
 
@@ -40,16 +44,30 @@ class CandidateApprovalWSGIApp:
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         token = authorization[7:] if authorization.startswith("Bearer ") else ""
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
-        run_id = parts[3]
         try:
             user_id = self._resolve_bearer(token) if token else None
-            if not user_id:
-                return self._respond(
-                    start_response,
-                    "401 Unauthorized",
-                    {"error": "unauthorized"},
-                    [("WWW-Authenticate", "Bearer")],
-                )
+        except Exception:
+            return self._respond(
+                start_response,
+                "500 Internal Server Error",
+                {"error": "internal_error"},
+            )
+        if not user_id:
+            return self._respond(
+                start_response,
+                "401 Unauthorized",
+                {"error": "unauthorized"},
+                [("WWW-Authenticate", "Bearer")],
+            )
+        try:
+            run_id = validate_loop_identifier(parts[3], "run_id", maximum=120)
+        except (TypeError, ValueError) as exc:
+            return self._respond(
+                start_response,
+                "400 Bad Request",
+                {"error": "invalid_request", "message": str(exc)[:500]},
+            )
+        try:
             if method == "GET":
                 return self._respond(
                     start_response,
@@ -86,7 +104,7 @@ class CandidateApprovalWSGIApp:
             )
         except (KeyError, PermissionError):
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-        except CareerLoopConflictError:
+        except (CandidateApprovalConflictError, CareerLoopConflictError):
             return self._respond(
                 start_response,
                 "409 Conflict",
@@ -201,7 +219,12 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "/v1/candidate/runs/{run_id}/approval": {
                 "parameters": [{
                     "name": "run_id", "in": "path", "required": True,
-                    "schema": {"type": "string", "minLength": 1},
+                    "schema": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
                 }],
                 "get": {
                     "operationId": "getCandidateApprovalPrompt",
