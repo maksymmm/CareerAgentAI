@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable, Mapping, Protocol
 from career_agent_ai.application.career import (
     CandidateApprovalConflictError,
     CandidateApprovalSubmission,
+    CandidateApprovalUnavailableError,
     CareerLoopConflictError,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
@@ -110,6 +111,12 @@ class CandidateApprovalWSGIApp:
                 "409 Conflict",
                 {"error": "approval_conflict"},
             )
+        except CandidateApprovalUnavailableError:
+            return self._respond(
+                start_response,
+                "409 Conflict",
+                {"error": "approval_unavailable"},
+            )
         except Exception:
             return self._respond(
                 start_response,
@@ -170,7 +177,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "action_kind": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "object", "additionalProperties": True},
-            "action_fingerprint": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+            "action_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "allowed_decisions": {
                 "type": "array",
                 "items": {"type": "string", "enum": ["approve", "decline"]},
@@ -188,7 +195,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "schema_version": {"type": "integer", "const": 1},
             "run_id": {"type": "string", "minLength": 1},
             "state_version": {"type": "integer", "minimum": 0},
-            "action_fingerprint": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+            "action_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "decision": {"type": "string", "enum": ["approve", "decline"]},
         },
         "additionalProperties": False,
@@ -235,6 +242,10 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "content": content(prompt_schema),
                         },
                         **common_responses,
+                        "409": {
+                            "description": "Run has no ordinary approval prompt",
+                            "content": content(error_schema),
+                        },
                     },
                 },
                 "post": {
