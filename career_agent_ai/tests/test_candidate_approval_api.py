@@ -28,13 +28,21 @@ class Loop:
         return SimpleNamespace(run_id="run-1", phase=SimpleNamespace(value="message_approval"))
 
 
-def request(app, *, method="GET", token="valid", body=None, path="/v1/candidate/runs/run-1/approval"):
+def request(
+    app,
+    *,
+    method="GET",
+    token="valid",
+    auth_scheme="Bearer",
+    body=None,
+    path="/v1/candidate/runs/run-1/approval",
+):
     statuses = []
     encoded = b"" if body is None else json.dumps(body).encode()
     environ = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
-        "HTTP_AUTHORIZATION": f"Bearer {token}" if token else "",
+        "HTTP_AUTHORIZATION": f"{auth_scheme} {token}" if token else "",
         "CONTENT_LENGTH": str(len(encoded)),
         "wsgi.input": BytesIO(encoded),
     }
@@ -62,6 +70,13 @@ def test_authentication_happens_before_durable_prompt_access():
 
 def test_get_returns_only_candidate_prompt():
     (status, _), payload = request(app(Loop()))
+    assert status == "200 OK"
+    assert payload == {"run_id": "run-1", "state_version": 3}
+
+
+def test_bearer_authentication_scheme_is_case_insensitive():
+    (status, _), payload = request(app(Loop()), auth_scheme="bEaReR")
+
     assert status == "200 OK"
     assert payload == {"run_id": "run-1", "state_version": 3}
 
