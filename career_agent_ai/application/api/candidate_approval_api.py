@@ -43,7 +43,8 @@ class CandidateApprovalWSGIApp:
         if len(parts) != 5 or parts[:3] != ["v1", "candidate", "runs"] or parts[4] != "approval":
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
-        token = authorization[7:] if authorization.startswith("Bearer ") else ""
+        scheme, separator, credentials = authorization.partition(" ")
+        token = credentials.strip() if separator and scheme.casefold() == "bearer" else ""
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
         try:
             user_id = self._resolve_bearer(token) if token else None
