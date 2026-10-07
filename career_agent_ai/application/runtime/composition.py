@@ -185,6 +185,16 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def continue_run(self, run_id: str, *, user_id: str):
+        """Recover one owner-scoped non-human phase using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).continue_run(
+                run_id, user_id=user_id
+            )
+        finally:
+            database.close()
+
 
 def build_candidate_sandbox_app_from_env(
     *,

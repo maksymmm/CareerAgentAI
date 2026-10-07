@@ -62,6 +62,10 @@ class _PostStepPersistenceError(RuntimeError):
     """Signal that work finished but the advanced loop snapshot was not confirmed."""
 
 
+class HumanActionRequiredError(RuntimeError):
+    """Signal that automatic recovery cannot cross a pending human-action gate."""
+
+
 class _ExecutionLeaseHeartbeat:
     """Renew one durable execution lease while a potentially slow step is running."""
 
@@ -442,7 +446,9 @@ class AutonomousCareerLoop:
         """
         state = self._owned_state(run_id, user_id)
         if state.pending_human_action is not None:
-            raise RuntimeError("Career loop is waiting for explicit human action.")
+            raise HumanActionRequiredError(
+                "Career loop is waiting for explicit human action."
+            )
         if state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
             return self._result(state)
         return self._continue(state)

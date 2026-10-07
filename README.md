@@ -256,6 +256,11 @@ at `GET`/`POST /v1/candidate/runs/{run_id}/approval`. Authentication is resolved
 durable state access, foreign and missing runs share a tenant-hiding `404`, request
 bodies are bounded and must match their declared length, and
 `candidate_approval_openapi_document()` publishes the matching OpenAPI 3.1 contract.
+The recovery endpoint maps only an explicit pending-human-action signal to
+`recovery_unavailable`; execution-lease conflicts keep their conflict response and
+unexpected runtime failures remain sanitized internal errors. Its OpenAPI `409`
+contract documents both `recovery_unavailable` and retryable `approval_conflict`
+payloads.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
@@ -397,6 +402,7 @@ Implemented foundations:
   authentication, request-local SQLite connections and deterministic no-I/O application,
   messaging and calendar adapters; authentication and routing occur before storage is
   opened, and memory-backed storage is rejected
+- Owner-scoped candidate recovery endpoint for approved non-human phases after restart
 - Continuous integration workflow
 
 The eight-item autonomous-core execution plan is implemented on the integration branch.
