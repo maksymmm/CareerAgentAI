@@ -369,6 +369,8 @@ Crash recovery hardening: authenticated candidates can invoke the owner-scoped
 `POST /v1/candidate/runs/{run_id}/continue` endpoint to resume an already-approved
 non-human phase after process failure. Human-gated runs remain blocked with 409,
 foreign runs remain undisclosed, and the operation opens storage only after auth.
+Recovery refusal uses a dedicated human-gate error so a concurrent execution lease
+or unexpected runtime failure cannot be mislabeled as pending human action.
 
 Next priority: package a sandbox-only candidate workflow start endpoint while retaining
 strict candidate ownership and bounded input validation. Merge into `main` still

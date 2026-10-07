@@ -10,6 +10,7 @@ from career_agent_ai.application.career import (
     CandidateApprovalSubmission,
     CandidateApprovalUnavailableError,
     CareerLoopConflictError,
+    HumanActionRequiredError,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
     validate_loop_identifier,
@@ -85,7 +86,7 @@ class CandidateApprovalWSGIApp:
                     )
                 try:
                     result = self._loop.continue_run(run_id, user_id=user_id)
-                except RuntimeError:
+                except HumanActionRequiredError:
                     return self._respond(
                         start_response,
                         "409 Conflict",

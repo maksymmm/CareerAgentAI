@@ -10,7 +10,11 @@ from career_agent_ai.application.api import (
     CandidateApprovalWSGIApp,
     candidate_approval_openapi_document,
 )
-from career_agent_ai.application.career import ApprovalDecision, CareerLoopConflictError
+from career_agent_ai.application.career import (
+    ApprovalDecision,
+    CareerLoopConflictError,
+    HumanActionRequiredError,
+)
 
 
 class Loop:
@@ -124,7 +128,7 @@ def test_continue_rejects_get_and_human_gated_run():
 
     class WaitingLoop(Loop):
         def continue_run(self, run_id, *, user_id):
-            raise RuntimeError("private pending action")
+            raise HumanActionRequiredError("private pending action")
 
     (status, _), payload = request(
         app(WaitingLoop()),
@@ -133,6 +137,36 @@ def test_continue_rejects_get_and_human_gated_run():
     )
     assert status == "409 Conflict"
     assert payload == {"error": "recovery_unavailable"}
+
+
+def test_continue_distinguishes_execution_conflict_from_human_gate():
+    class ConflictingLoop(Loop):
+        def continue_run(self, run_id, *, user_id):
+            raise CareerLoopConflictError("private execution lease")
+
+    (status, _), payload = request(
+        app(ConflictingLoop()),
+        method="POST",
+        path="/v1/candidate/runs/run-1/continue",
+    )
+
+    assert status == "409 Conflict"
+    assert payload == {"error": "approval_conflict"}
+
+
+def test_continue_does_not_mask_unexpected_runtime_failure():
+    class BrokenLoop(Loop):
+        def continue_run(self, run_id, *, user_id):
+            raise RuntimeError("database credential=do-not-expose")
+
+    (status, _), payload = request(
+        app(BrokenLoop()),
+        method="POST",
+        path="/v1/candidate/runs/run-1/continue",
+    )
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
 
 
 def test_post_rejects_non_json_media_type_before_reading_or_resuming():

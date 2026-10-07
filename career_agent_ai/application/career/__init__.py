@@ -15,7 +15,7 @@ from .approval_contract import (
     build_candidate_approval_prompt,
     validate_candidate_approval_submission,
 )
-from .autonomous_career_loop import AutonomousCareerLoop
+from .autonomous_career_loop import AutonomousCareerLoop, HumanActionRequiredError
 from .autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
@@ -50,6 +50,7 @@ __all__ = [
     "FakeApplicationSubmissionAdapter",
     "HumanActionEvent",
     "HumanActionKind",
+    "HumanActionRequiredError",
     "PreSubmissionError",
     "build_candidate_approval_prompt",
     "validate_candidate_approval_submission",
