@@ -21,6 +21,10 @@ from career_agent_ai.application.career import (
     AutonomousCareerLoop,
     FakeApplicationSubmissionAdapter,
 )
+from career_agent_ai.application.career.autonomous_loop_models import (
+    CareerLoopRequest,
+    CareerLoopResult,
+)
 from career_agent_ai.application.communication import (
     CommunicationService,
     FakeCommunicationAdapter,
@@ -101,31 +105,51 @@ class RuntimeOperationalApp:
 
 
 class RuntimeCandidateApp:
-    """Own the sandbox candidate API and its durable SQLite connection."""
+    """Create request-local candidate loops over one durable SQLite database."""
 
     def __init__(
         self,
         *,
-        database: SQLiteDatabase,
-        loop: AutonomousCareerLoop,
+        database_path: str,
+        jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
     ) -> None:
-        self.loop = loop
-        self._database = database
-        self._app = CandidateApprovalWSGIApp(loop, resolve_bearer=resolve_bearer)
+        self._database_path = database_path
+        self._jobs = jobs
+        self._resolve_bearer = resolve_bearer
         self._closed = False
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
         """Serve a candidate approval request while the sandbox is open."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
-        return self._app(environ, start_response)
+        database = SQLiteDatabase(self._database_path)
+        try:
+            app = CandidateApprovalWSGIApp(
+                _build_candidate_loop(database, self._jobs),
+                resolve_bearer=self._resolve_bearer,
+            )
+            return app(environ, start_response)
+        finally:
+            database.close()
+
+    def start(
+        self, request: CareerLoopRequest, *, run_id: str | None = None
+    ) -> CareerLoopResult:
+        """Start a sandbox run using a short-lived connection."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).start(
+                request, run_id=run_id
+            )
+        finally:
+            database.close()
 
     def close(self) -> None:
-        """Close the owned database connection exactly once."""
-        if not self._closed:
-            self._database.close()
-            self._closed = True
+        """Prevent new requests and sandbox runs."""
+        self._closed = True
 
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
@@ -159,67 +183,76 @@ def build_candidate_sandbox_app_from_env(
     if not callable(resolve_bearer):
         raise TypeError("resolve_bearer must be callable.")
 
+    configured_jobs = tuple(jobs)
+    for job in configured_jobs:
+        if not isinstance(job, Job):
+            raise TypeError("jobs must contain Job instances.")
     database = SQLiteDatabase(config.database_path)
     try:
-        job_repository = InMemoryJobRepository()
-        for job in jobs:
-            if not isinstance(job, Job):
-                raise TypeError("jobs must contain Job instances.")
-            job_repository.add(job)
-        search = SearchService(job_repository)
-        registry = AgentRegistry()
-        registry.register(JobSearchAgent(search_service=search))
-        registry.register(ResumeAgent())
-        factory = AgentFactory(registry, search_service=search)
-        applications = SQLiteJobApplicationRepository(database)
-        operations = SQLiteExternalActionOperationRepository(database)
-
-        submission_adapter = FakeApplicationSubmissionAdapter()
-        submission = ApplicationSubmissionService(
-            submission_adapter,
-            ExternalActionService(
-                operations,
-                ApplicationSubmissionService.action_adapter(submission_adapter),
-            ),
-        )
-        communication_repository = SQLiteCommunicationRepository(database)
-        communication_adapter = FakeCommunicationAdapter()
-        communication = CommunicationService(
-            communication_repository,
-            communication_adapter,
-            ExternalActionService(
-                operations,
-                CommunicationService.action_adapter(
-                    communication_adapter, communication_repository
-                ),
-            ),
-        )
-        scheduling_repository = SQLiteSchedulingRepository(database)
-        calendar_adapter = FakeCalendarAdapter()
-        scheduling = SchedulingService(
-            scheduling_repository,
-            calendar_adapter,
-            ExternalActionService(
-                operations,
-                SchedulingService.action_adapter(
-                    calendar_adapter, scheduling_repository
-                ),
-            ),
-        )
-        loop = AutonomousCareerLoop(
-            agent_factory=factory,
-            application_repository=applications,
-            submission_service=submission,
-            communication_service=communication,
-            scheduling_service=scheduling,
-            state_repository=SQLiteCareerLoopRepository(database),
-        )
-        return RuntimeCandidateApp(
-            database=database, loop=loop, resolve_bearer=resolve_bearer
-        )
-    except Exception:
+        if database.is_memory:
+            raise ValueError("Candidate sandbox requires durable SQLite storage.")
+        _build_candidate_loop(database, configured_jobs)
+    finally:
         database.close()
-        raise
+    return RuntimeCandidateApp(
+        database_path=config.database_path,
+        jobs=configured_jobs,
+        resolve_bearer=resolve_bearer,
+    )
+
+
+def _build_candidate_loop(
+    database: SQLiteDatabase, jobs: tuple[Job, ...]
+) -> AutonomousCareerLoop:
+    """Build one loop whose repositories share a request-owned connection."""
+    job_repository = InMemoryJobRepository()
+    for job in jobs:
+        job_repository.add(job)
+    search = SearchService(job_repository)
+    registry = AgentRegistry()
+    registry.register(JobSearchAgent(search_service=search))
+    registry.register(ResumeAgent())
+    factory = AgentFactory(registry, search_service=search)
+    applications = SQLiteJobApplicationRepository(database)
+    operations = SQLiteExternalActionOperationRepository(database)
+    submission_adapter = FakeApplicationSubmissionAdapter()
+    submission = ApplicationSubmissionService(
+        submission_adapter,
+        ExternalActionService(
+            operations,
+            ApplicationSubmissionService.action_adapter(submission_adapter),
+        ),
+    )
+    communication_repository = SQLiteCommunicationRepository(database)
+    communication_adapter = FakeCommunicationAdapter()
+    communication = CommunicationService(
+        communication_repository,
+        communication_adapter,
+        ExternalActionService(
+            operations,
+            CommunicationService.action_adapter(
+                communication_adapter, communication_repository
+            ),
+        ),
+    )
+    scheduling_repository = SQLiteSchedulingRepository(database)
+    calendar_adapter = FakeCalendarAdapter()
+    scheduling = SchedulingService(
+        scheduling_repository,
+        calendar_adapter,
+        ExternalActionService(
+            operations,
+            SchedulingService.action_adapter(calendar_adapter, scheduling_repository),
+        ),
+    )
+    return AutonomousCareerLoop(
+        agent_factory=factory,
+        application_repository=applications,
+        submission_service=submission,
+        communication_service=communication,
+        scheduling_service=scheduling,
+        state_repository=SQLiteCareerLoopRepository(database),
+    )
 
 
 class _RequestSQLiteOperationalProbe:
