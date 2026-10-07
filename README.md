@@ -397,6 +397,7 @@ Implemented foundations:
   authentication, request-local SQLite connections and deterministic no-I/O application,
   messaging and calendar adapters; authentication and routing occur before storage is
   opened, and memory-backed storage is rejected
+- Owner-scoped candidate recovery endpoint for approved non-human phases after restart
 - Continuous integration workflow
 
 The eight-item autonomous-core execution plan is implemented on the integration branch.
