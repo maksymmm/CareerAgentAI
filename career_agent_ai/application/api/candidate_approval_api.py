@@ -23,7 +23,7 @@ _STRICT_START_TEXT_PATTERN = (
     r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF])"
     r"(?![\s\S]*[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680"
     r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]$)"
-    r"(?![\s\S]*[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF])"
+    r"(?![\s\S]*[\u0000-\u0008\u000B-\u001F\uD800-\uDFFF])"
     r"[\s\S]+$"
 )
 
