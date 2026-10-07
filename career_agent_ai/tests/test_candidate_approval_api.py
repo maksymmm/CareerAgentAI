@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+
+import pytest
 from types import SimpleNamespace
 
 from career_agent_ai.application.api import (
@@ -327,3 +329,31 @@ def test_get_without_an_ordinary_pending_prompt_returns_client_state_conflict():
 
     assert status == "409 Conflict"
     assert payload == {"error": "approval_unavailable"}
+
+
+@pytest.mark.parametrize("duplicate", [
+    '"decision":"decline","decision":"approve"',
+    '"decision":"approve","decision":"approve"',
+    '"decision":"decline","\\u0064ecision":"approve"',
+    '"state_version":2,"state_version":3,"decision":"approve"',
+])
+def test_post_rejects_duplicate_json_members_before_resuming(duplicate):
+    loop = Loop()
+    encoded = (
+        '{"schema_version":1,"run_id":"run-1",'
+        '"action_fingerprint":"' + "0" * 64 + '",' + duplicate + '}'
+    ).encode()
+    statuses = []
+    response = app(loop)({
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/v1/candidate/runs/run-1/approval",
+        "HTTP_AUTHORIZATION": "Bearer valid",
+        "CONTENT_TYPE": "application/json",
+        "CONTENT_LENGTH": str(len(encoded)),
+        "wsgi.input": BytesIO(encoded),
+    }, lambda status, headers: statuses.append(status))
+    assert statuses == ["400 Bad Request"]
+    assert json.loads(b"".join(response))["message"] == (
+        "approval body contains duplicate JSON members."
+    )
+    assert loop.submission is None

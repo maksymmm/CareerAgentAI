@@ -143,12 +143,24 @@ class CandidateApprovalWSGIApp:
         if len(body) != length:
             raise ValueError("approval body is incomplete.")
         try:
-            payload = json.loads(body.decode("utf-8"))
+            payload = json.loads(
+                body.decode("utf-8"), object_pairs_hook=self._unique_json_object
+            )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("approval body must be valid UTF-8 JSON.") from exc
         if not isinstance(payload, Mapping):
             raise ValueError("approval body must be a JSON object.")
         return payload
+
+    @staticmethod
+    def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Reject ambiguous JSON members, including escaped equivalent names."""
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("approval body contains duplicate JSON members.")
+            result[key] = value
+        return result
 
     @staticmethod
     def _respond(start_response, status: str, payload: Mapping[str, Any], extra=None):
