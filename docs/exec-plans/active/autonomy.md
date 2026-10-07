@@ -355,9 +355,19 @@ and missing runs identically, returns no-store responses, and publishes a matchi
 OpenAPI 3.1 contract. Regression tests cover authentication-before-storage, owner
 isolation, URL/payload binding, bounded parsing, incomplete reads, and API discovery.
 
-Next priority: add a sandbox-gated candidate-service composition root without enabling
-real providers or consequential actions. Merge into `main` still requires explicit
-user approval.
+Delivered: a candidate-service composition root requires the explicit
+`CAREER_AGENT_CANDIDATE_SANDBOX=true` gate and refuses network-provider or
+consequential-action runtime flags. It owns durable SQLite loop state, accepts only an
+injected bearer resolver and job seeds, and wires deterministic no-I/O application,
+communication and calendar adapters. Runtime lifecycle and fail-closed configuration
+paths have regression coverage. Memory-backed storage is rejected, and each WSGI
+request builds repositories over a connection opened in its own worker thread. No
+storage is opened for unauthenticated or unroutable API requests. No production
+credentials or real providers are used.
+
+Next priority: package a sandbox-only candidate workflow start endpoint while retaining
+strict candidate ownership and bounded input validation. Merge into `main` still
+requires explicit user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
 
