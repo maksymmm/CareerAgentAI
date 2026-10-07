@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import re
 
 import pytest
 from types import SimpleNamespace
@@ -156,6 +157,8 @@ def test_post_runs_starts_versioned_request_as_authenticated_owner():
         {"keyword": ""},
         {"keyword": " "},
         {"keyword": f" {'x' * 500} "},
+        {"keyword": "a\u0000b"},
+        {"keyword": "\ufefflogistics"},
         {"run_id": "bad/run"},
         {"run_id": " run-new "},
         {"candidate_profile": " "},
@@ -415,6 +418,10 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
         "schema_version", "run_id", "keyword", "candidate_profile",
     ]
     assert "user_id" not in start_schema["properties"]
+    keyword_pattern = re.compile(start_schema["properties"]["keyword"]["pattern"])
+    assert keyword_pattern.fullmatch("logistics\ncoordinator")
+    assert keyword_pattern.fullmatch("a\u0000b") is None
+    assert keyword_pattern.fullmatch("\ufefflogistics") is None
     assert {"201", "400", "401", "404", "409", "415", "500"} <= set(
         start["responses"]
     )

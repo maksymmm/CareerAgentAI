@@ -18,6 +18,16 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 )
 
 
+_STRICT_START_TEXT_PATTERN = (
+    r"^(?![\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680"
+    r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF])"
+    r"(?![\s\S]*[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680"
+    r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]$)"
+    r"(?![\s\S]*[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF])"
+    r"[\s\S]+$"
+)
+
+
 class CandidateApprovalLoop(Protocol):
     def start(self, request: CareerLoopRequest, *, run_id: str | None = None): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
@@ -248,8 +258,14 @@ class CandidateApprovalWSGIApp:
             raise ValueError(f"{field} must not exceed {maximum} characters.")
         if value == "" and allow_empty:
             return value
-        if not value or value != value.strip():
+        if not value or value[0].isspace() or value[-1].isspace() or "\ufeff" in {
+            value[0], value[-1]
+        }:
             raise ValueError(f"{field} must be non-empty without outer whitespace.")
+        if any(ord(ch) < 32 and ch not in "\n\t" for ch in value):
+            raise ValueError(f"{field} contains forbidden control characters.")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
         return value
 
     def _read_json(self, environ: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -355,15 +371,15 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             },
             "keyword": {
                 "type": "string", "minLength": 1, "maxLength": 500,
-                "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
+                "pattern": _STRICT_START_TEXT_PATTERN,
             },
             "candidate_profile": {
                 "type": "string", "minLength": 1, "maxLength": 12_000,
-                "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
+                "pattern": _STRICT_START_TEXT_PATTERN,
             },
             "location": {
                 "type": "string", "maxLength": 500,
-                "pattern": "^(?:|\\S(?:[\\s\\S]*\\S)?)$",
+                "pattern": f"^(?:|{_STRICT_START_TEXT_PATTERN[1:-1]})$",
             },
         },
         "additionalProperties": False,
