@@ -7,7 +7,24 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 
-from career_agent_ai.application.api import OperationalApiService, OperationalWSGIApp
+from career_agent_ai.application.api import (
+    CandidateApprovalWSGIApp,
+    OperationalApiService,
+    OperationalWSGIApp,
+)
+from career_agent_ai.application.agents.agent_factory import AgentFactory
+from career_agent_ai.application.agents.agent_registry import AgentRegistry
+from career_agent_ai.application.agents.job_search.job_search_agent import JobSearchAgent
+from career_agent_ai.application.agents.resume.resume_agent import ResumeAgent
+from career_agent_ai.application.career import (
+    ApplicationSubmissionService,
+    AutonomousCareerLoop,
+    FakeApplicationSubmissionAdapter,
+)
+from career_agent_ai.application.communication import (
+    CommunicationService,
+    FakeCommunicationAdapter,
+)
 
 from career_agent_ai.application.career.opportunity_signal_provider import (
     OpportunitySignalProvider,
@@ -21,11 +38,29 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     ExternalActionOperationRepository,
 )
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
+from career_agent_ai.application.search.search_service import SearchService
+from career_agent_ai.application.scheduling import FakeCalendarAdapter, SchedulingService
+from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+    SQLiteCareerLoopRepository,
+)
+from career_agent_ai.application.storage.sqlite_communication_repository import (
+    SQLiteCommunicationRepository,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_operational_probe import (
     SQLiteOperationalProbe,
+)
+from career_agent_ai.application.storage.sqlite_external_action_repository import (
+    SQLiteExternalActionOperationRepository,
+)
+from career_agent_ai.application.storage.sqlite_job_application_repository import (
+    SQLiteJobApplicationRepository,
+)
+from career_agent_ai.application.storage.sqlite_scheduling_repository import (
+    SQLiteSchedulingRepository,
 )
 
 from .config import RuntimeConfig
@@ -63,6 +98,128 @@ class RuntimeOperationalApp:
     def __exit__(self, *_: object) -> None:
         """Prevent new requests on context exit."""
         self.close()
+
+
+class RuntimeCandidateApp:
+    """Own the sandbox candidate API and its durable SQLite connection."""
+
+    def __init__(
+        self,
+        *,
+        database: SQLiteDatabase,
+        loop: AutonomousCareerLoop,
+        resolve_bearer: Callable[[str], str | None],
+    ) -> None:
+        self.loop = loop
+        self._database = database
+        self._app = CandidateApprovalWSGIApp(loop, resolve_bearer=resolve_bearer)
+        self._closed = False
+
+    def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
+        """Serve a candidate approval request while the sandbox is open."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return self._app(environ, start_response)
+
+    def close(self) -> None:
+        """Close the owned database connection exactly once."""
+        if not self._closed:
+            self._database.close()
+            self._closed = True
+
+    def __enter__(self) -> "RuntimeCandidateApp":
+        """Return this open candidate sandbox runtime."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        """Close the sandbox on context exit."""
+        self.close()
+
+
+def build_candidate_sandbox_app_from_env(
+    *,
+    resolve_bearer: Callable[[str], str | None],
+    jobs: Iterable[Job] = (),
+    environ: Mapping[str, str] | None = None,
+) -> RuntimeCandidateApp:
+    """Compose a durable candidate API using only deterministic no-I/O adapters."""
+    source = environ if environ is not None else os.environ
+    if not RuntimeConfig._parse_bool(
+        source.get("CAREER_AGENT_CANDIDATE_SANDBOX", "false"),
+        "CAREER_AGENT_CANDIDATE_SANDBOX",
+    ):
+        raise PermissionError("Candidate sandbox must be explicitly enabled.")
+    config = RuntimeConfig.from_env(environ)
+    if config.allow_network_providers or config.allow_consequential_actions:
+        raise ValueError(
+            "Candidate sandbox forbids network providers and consequential actions."
+        )
+    if not callable(resolve_bearer):
+        raise TypeError("resolve_bearer must be callable.")
+
+    database = SQLiteDatabase(config.database_path)
+    try:
+        job_repository = InMemoryJobRepository()
+        for job in jobs:
+            if not isinstance(job, Job):
+                raise TypeError("jobs must contain Job instances.")
+            job_repository.add(job)
+        search = SearchService(job_repository)
+        registry = AgentRegistry()
+        registry.register(JobSearchAgent(search_service=search))
+        registry.register(ResumeAgent())
+        factory = AgentFactory(registry, search_service=search)
+        applications = SQLiteJobApplicationRepository(database)
+        operations = SQLiteExternalActionOperationRepository(database)
+
+        submission_adapter = FakeApplicationSubmissionAdapter()
+        submission = ApplicationSubmissionService(
+            submission_adapter,
+            ExternalActionService(
+                operations,
+                ApplicationSubmissionService.action_adapter(submission_adapter),
+            ),
+        )
+        communication_repository = SQLiteCommunicationRepository(database)
+        communication_adapter = FakeCommunicationAdapter()
+        communication = CommunicationService(
+            communication_repository,
+            communication_adapter,
+            ExternalActionService(
+                operations,
+                CommunicationService.action_adapter(
+                    communication_adapter, communication_repository
+                ),
+            ),
+        )
+        scheduling_repository = SQLiteSchedulingRepository(database)
+        calendar_adapter = FakeCalendarAdapter()
+        scheduling = SchedulingService(
+            scheduling_repository,
+            calendar_adapter,
+            ExternalActionService(
+                operations,
+                SchedulingService.action_adapter(
+                    calendar_adapter, scheduling_repository
+                ),
+            ),
+        )
+        loop = AutonomousCareerLoop(
+            agent_factory=factory,
+            application_repository=applications,
+            submission_service=submission,
+            communication_service=communication,
+            scheduling_service=scheduling,
+            state_repository=SQLiteCareerLoopRepository(database),
+        )
+        return RuntimeCandidateApp(
+            database=database, loop=loop, resolve_bearer=resolve_bearer
+        )
+    except Exception:
+        database.close()
+        raise
 
 
 class _RequestSQLiteOperationalProbe:
