@@ -34,6 +34,7 @@ def request(
     method="GET",
     token="valid",
     auth_scheme="Bearer",
+    content_type="application/json",
     body=None,
     path="/v1/candidate/runs/run-1/approval",
 ):
@@ -44,6 +45,7 @@ def request(
         "PATH_INFO": path,
         "HTTP_AUTHORIZATION": f"{auth_scheme} {token}" if token else "",
         "CONTENT_LENGTH": str(len(encoded)),
+        "CONTENT_TYPE": content_type,
         "wsgi.input": BytesIO(encoded),
     }
     response = b"".join(app(environ, lambda status, headers: statuses.append((status, headers))))
@@ -96,6 +98,26 @@ def test_post_parses_bound_submission_and_resumes_as_authenticated_owner():
     assert loop.submission.decision is ApprovalDecision.APPROVE
 
 
+def test_post_rejects_non_json_media_type_before_reading_or_resuming():
+    class ForbiddenLoop:
+        def resume_candidate_submission(self, *args, **kwargs):
+            raise AssertionError("loop must not be resumed")
+
+    body = {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "state_version": 3,
+        "action_fingerprint": "0" * 64,
+        "decision": "approve",
+    }
+    (status, _), payload = request(
+        app(ForbiddenLoop()), method="POST", body=body, content_type="text/plain"
+    )
+
+    assert status == "415 Unsupported Media Type"
+    assert payload == {"error": "unsupported_media_type"}
+
+
 def test_post_rejects_url_mismatch_and_oversized_body():
     body = {
         "schema_version": 1,
@@ -113,8 +135,9 @@ def test_post_rejects_url_mismatch_and_oversized_body():
         {
             "REQUEST_METHOD": "POST",
             "PATH_INFO": "/v1/candidate/runs/run-1/approval",
-            "HTTP_AUTHORIZATION": "Bearer valid",
-            "CONTENT_LENGTH": "16385",
+                "HTTP_AUTHORIZATION": "Bearer valid",
+                "CONTENT_TYPE": "application/json",
+                "CONTENT_LENGTH": "16385",
             "wsgi.input": BytesIO(),
         },
         lambda status, headers: statuses.append(status),
@@ -157,6 +180,7 @@ def test_post_rejects_short_body_even_when_prefix_is_valid_json():
             "REQUEST_METHOD": "POST",
             "PATH_INFO": "/v1/candidate/runs/run-1/approval",
             "HTTP_AUTHORIZATION": "Bearer valid",
+            "CONTENT_TYPE": "application/json",
             "CONTENT_LENGTH": str(len(encoded) + 1),
             "wsgi.input": BytesIO(encoded),
         },
@@ -187,7 +211,9 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
     assert request_schema["properties"]["action_fingerprint"]["pattern"] == (
         "^[0-9a-f]{64}$"
     )
-    assert {"400", "401", "404", "409", "500"} <= set(route["post"]["responses"])
+    assert {"400", "401", "404", "409", "415", "500"} <= set(
+        route["post"]["responses"]
+    )
     assert "409" in route["get"]["responses"]
     assert "500" in route["get"]["responses"]
 

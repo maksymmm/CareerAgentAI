@@ -77,6 +77,13 @@ class CandidateApprovalWSGIApp:
                     self._loop.get_candidate_approval_prompt(run_id, user_id=user_id).to_dict(),
                 )
             if method == "POST":
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response,
+                        "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
                 try:
                     payload = self._read_json(environ)
                     submission = CandidateApprovalSubmission.from_mapping(payload)
@@ -270,6 +277,10 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             }),
                         },
                         **common_responses,
+                        "415": {
+                            "description": "Request body is not application/json",
+                            "content": content(error_schema),
+                        },
                         "409": {
                             "description": "Approval conflicts with durable state",
                             "content": content(error_schema),
