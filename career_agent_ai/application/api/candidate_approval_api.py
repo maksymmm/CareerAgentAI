@@ -28,9 +28,9 @@ class CandidateApprovalLoop(Protocol):
 class CandidateApprovalWSGIApp:
     """Authenticate a candidate before reading or changing durable loop state."""
 
-    # Accommodate every schema-valid string even when JSON escaping expands a
-    # Unicode/control character to six ASCII bytes, while retaining a hard cap.
-    MAX_BODY_BYTES = 100_000
+    # Accommodate every schema-valid string even when an astral code point is
+    # encoded as two six-byte JSON surrogate escapes, while retaining a hard cap.
+    MAX_BODY_BYTES = 180_000
 
     def __init__(
         self,
@@ -222,18 +222,35 @@ class CandidateApprovalWSGIApp:
         run_id = validate_loop_identifier(raw_run_id, "run_id", maximum=120)
         if run_id != raw_run_id:
             raise ValueError("run_id must match the published identifier pattern.")
-        if (
-            not isinstance(payload["candidate_profile"], str)
-            or len(payload["candidate_profile"]) > 12_000
-        ):
-            raise ValueError("candidate_profile must not exceed 12000 characters.")
+        keyword = CandidateApprovalWSGIApp._strict_start_text(
+            payload["keyword"], "keyword", maximum=500
+        )
+        candidate_profile = CandidateApprovalWSGIApp._strict_start_text(
+            payload["candidate_profile"], "candidate_profile", maximum=12_000
+        )
+        location = CandidateApprovalWSGIApp._strict_start_text(
+            payload.get("location", ""), "location", maximum=500, allow_empty=True
+        )
         request = CareerLoopRequest(
             user_id=user_id,
-            keyword=payload["keyword"],
-            candidate_profile=payload["candidate_profile"],
-            location=payload.get("location", ""),
+            keyword=keyword,
+            candidate_profile=candidate_profile,
+            location=location,
         )
         return request, run_id
+
+    @staticmethod
+    def _strict_start_text(
+        value: Any, field: str, *, maximum: int, allow_empty: bool = False
+    ) -> str:
+        """Validate raw text exactly as published, without hidden normalization."""
+        if not isinstance(value, str) or len(value) > maximum:
+            raise ValueError(f"{field} must not exceed {maximum} characters.")
+        if value == "" and allow_empty:
+            return value
+        if not value or value != value.strip():
+            raise ValueError(f"{field} must be non-empty without outer whitespace.")
+        return value
 
     def _read_json(self, environ: Mapping[str, Any]) -> Mapping[str, Any]:
         try:
@@ -336,11 +353,18 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                 "maxLength": 120,
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
             },
-            "keyword": {"type": "string", "minLength": 1, "maxLength": 500},
+            "keyword": {
+                "type": "string", "minLength": 1, "maxLength": 500,
+                "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
+            },
             "candidate_profile": {
                 "type": "string", "minLength": 1, "maxLength": 12_000,
+                "pattern": "^\\S(?:[\\s\\S]*\\S)?$",
             },
-            "location": {"type": "string", "maxLength": 500},
+            "location": {
+                "type": "string", "maxLength": 500,
+                "pattern": "^(?:|\\S(?:[\\s\\S]*\\S)?)$",
+            },
         },
         "additionalProperties": False,
     }
