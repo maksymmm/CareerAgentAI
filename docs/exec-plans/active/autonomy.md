@@ -362,7 +362,8 @@ injected bearer resolver and job seeds, and wires deterministic no-I/O applicati
 communication and calendar adapters. Runtime lifecycle and fail-closed configuration
 paths have regression coverage. Memory-backed storage is rejected, and each WSGI
 request builds repositories over a connection opened in its own worker thread. No
-production credentials or real providers are used.
+storage is opened for unauthenticated or unroutable API requests. No production
+credentials or real providers are used.
 
 Next priority: package a sandbox-only candidate workflow start endpoint while retaining
 strict candidate ownership and bounded input validation. Merge into `main` still
