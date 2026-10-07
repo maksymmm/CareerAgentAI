@@ -107,6 +107,11 @@ def test_candidate_sandbox_requires_explicit_safe_runtime_flags(tmp_path):
             resolve_bearer=None,  # type: ignore[arg-type]
             environ=base,
         )
+    with pytest.raises(ValueError, match="durable SQLite"):
+        build_candidate_sandbox_app_from_env(
+            resolve_bearer=lambda token: token,
+            environ={"CAREER_AGENT_CANDIDATE_SANDBOX": "true"},
+        )
 
 
 def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
@@ -127,7 +132,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
             "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
         },
     )
-    result = app.loop.start(request(), run_id="candidate-run")
+    result = app.start(request(), run_id="candidate-run")
     assert result.phase == CareerLoopPhase.APPLICATION_APPROVAL
 
     statuses = []
@@ -147,12 +152,31 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
     assert payload["run_id"] == "candidate-run"
     assert payload["action_kind"] == "approve_application"
 
+    def threaded_get() -> str:
+        threaded_statuses = []
+        b"".join(
+            app(
+                {
+                    "REQUEST_METHOD": "GET",
+                    "PATH_INFO": "/v1/candidate/runs/candidate-run/approval",
+                    "HTTP_AUTHORIZATION": "Bearer sandbox-token",
+                },
+                lambda status, headers: threaded_statuses.append(status),
+            )
+        )
+        return threaded_statuses[0]
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(threaded_get).result() == "200 OK"
+
     app.close()
     app.close()
     with pytest.raises(RuntimeError, match="closed"):
         app({}, lambda status, headers: None)
     with pytest.raises(RuntimeError, match="closed"):
         app.__enter__()
+    with pytest.raises(RuntimeError, match="closed"):
+        app.start(request())
 
 
 def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
