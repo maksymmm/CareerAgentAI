@@ -192,7 +192,16 @@ class AutonomousCareerLoop:
                 return self._result(existing)
             raise CareerLoopConflictError("run_id already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
-        self._persist(state)
+        try:
+            self._persist(state)
+        except CareerLoopConflictError:
+            # Another identical start may have won the create race after our
+            # initial read. Treat that durable winner like any other replay,
+            # while preserving conflicts for a reused ID with different input.
+            existing = self._states.get(identifier)
+            if existing is not None and existing.request == request:
+                return self._result(existing)
+            raise
         return self._continue(state)
 
     def resume(self, run_id: str, *, user_id: str, approved: bool) -> CareerLoopResult:

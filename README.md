@@ -268,8 +268,9 @@ always comes from the bearer identity; messaging, calendar, provider, credential
 consequential-action controls are not accepted from the request. The caller-supplied
 ID is deterministically scoped to that owner and returned as an opaque durable run ID,
 so equal client IDs from different candidates neither conflict nor disclose existence.
-An identical retry returns the existing owned run and durable ID; reuse with changed
-request content remains a conflict.
+An identical retry, including one that loses a concurrent create race, returns the
+existing owned run and durable ID; reuse with changed request content remains a
+conflict.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

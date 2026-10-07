@@ -388,6 +388,8 @@ Runtime schema-version parsing also accepts every JSON numeric representation of
 OpenAPI integer constant `1`, while continuing to reject booleans and other values.
 Numeric JSON lexemes are parsed exactly, canonical owner identities feed the scope,
 and an identical lost-response retry returns the existing run without new execution.
+If two identical starts race between lookup and insert, the losing request reloads and
+returns the durable winner; a different request still fails closed as a conflict.
 
 Next priority: define authenticated read-only run-status discovery without exposing
 the stored candidate profile or provider details. Merge into `main` still requires
