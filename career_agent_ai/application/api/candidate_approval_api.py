@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from hashlib import sha256
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from career_agent_ai.application.career import (
@@ -32,6 +32,9 @@ _STRICT_START_TEXT_PATTERN = (
 
 class CandidateApprovalLoop(Protocol):
     def start(self, request: CareerLoopRequest, *, run_id: str | None = None): ...
+    def replay_existing_start(
+        self, request: CareerLoopRequest, *, run_id: str, user_id: str
+    ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
@@ -113,12 +116,32 @@ class CandidateApprovalWSGIApp:
                 try:
                     payload = self._read_json(environ)
                     request, run_id = self._start_request(payload, user_id=user_id)
-                except (TypeError, ValueError) as exc:
+                except (TypeError, ValueError, InvalidOperation) as exc:
                     return self._respond(
                         start_response,
                         "400 Bad Request",
                         {"error": "invalid_request", "message": str(exc)[:500]},
                     )
+                legacy_run_id = payload["run_id"]
+                if legacy_run_id != run_id:
+                    try:
+                        result = self._loop.replay_existing_start(
+                            request, run_id=legacy_run_id, user_id=user_id
+                        )
+                    except (KeyError, PermissionError):
+                        pass
+                    except CareerLoopConflictError:
+                        return self._respond(
+                            start_response,
+                            "409 Conflict",
+                            {"error": "run_conflict"},
+                        )
+                    else:
+                        return self._respond(
+                            start_response,
+                            "201 Created",
+                            {"run_id": result.run_id, "phase": result.phase.value},
+                        )
                 try:
                     result = self._loop.start(request, run_id=run_id)
                 except CareerLoopConflictError:
@@ -174,7 +197,7 @@ class CandidateApprovalWSGIApp:
                         raise ValueError(
                             "approval payload run_id does not match the URL."
                         )
-                except (TypeError, ValueError) as exc:
+                except (TypeError, ValueError, InvalidOperation) as exc:
                     return self._respond(
                         start_response,
                         "400 Bad Request",

@@ -175,6 +175,18 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def replay_existing_start(
+        self, request: CareerLoopRequest, *, run_id: str, user_id: str
+    ):
+        """Replay an owned legacy start using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).replay_existing_start(
+                request, run_id=run_id, user_id=user_id
+            )
+        finally:
+            database.close()
+
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str):
         """Load one owner-scoped prompt using request-thread storage."""
         database = SQLiteDatabase(self._database_path)

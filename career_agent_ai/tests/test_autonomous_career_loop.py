@@ -282,6 +282,33 @@ def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database.close()
 
 
+def test_legacy_start_replay_requires_same_owner_and_canonical_request(tmp_path):
+    database, loop, *_ = build_stack(str(tmp_path / "legacy-start-replay.sqlite"))
+    original_request = request(with_schedule=False)
+    first = loop.start(original_request, run_id="legacy-client-id")
+
+    replay = loop.replay_existing_start(
+        original_request, run_id="legacy-client-id", user_id="user-1"
+    )
+
+    assert replay == first
+    with pytest.raises(KeyError):
+        loop.replay_existing_start(
+            original_request, run_id="legacy-client-id", user_id="other-user"
+        )
+    with pytest.raises(CareerLoopConflictError, match="already exists"):
+        loop.replay_existing_start(
+            CareerLoopRequest(
+                user_id="user-1",
+                keyword="different",
+                candidate_profile=original_request.candidate_profile,
+            ),
+            run_id="legacy-client-id",
+            user_id="user-1",
+        )
+    database.close()
+
+
 @pytest.mark.parametrize("gate", ["application", "message", "interview"])
 @pytest.mark.parametrize("approved", [True, False])
 def test_approval_owner_is_required_after_restart(tmp_path, gate, approved):

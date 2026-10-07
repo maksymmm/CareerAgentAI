@@ -30,6 +30,9 @@ class Loop:
         self.started = (request, run_id)
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="application_approval"))
 
+    def replay_existing_start(self, request, *, run_id, user_id):
+        raise KeyError(run_id)
+
     def get_candidate_approval_prompt(self, run_id, *, user_id):
         assert (run_id, user_id) == ("run-1", "candidate-1")
         return self.prompt
@@ -149,6 +152,83 @@ def test_post_runs_starts_versioned_request_as_authenticated_owner():
     assert started.location == "Karlsruhe"
     assert started.sender == ""
     assert started.schedule_event_id is None
+
+
+def test_post_runs_replays_owned_legacy_identifier_without_creating_scoped_duplicate():
+    class LegacyLoop(Loop):
+        def replay_existing_start(self, request, *, run_id, user_id):
+            assert run_id == "run-legacy"
+            assert user_id == request.user_id == "candidate-1"
+            return SimpleNamespace(
+                run_id=run_id, phase=SimpleNamespace(value="application_approval")
+            )
+
+        def start(self, request, *, run_id=None):
+            raise AssertionError("legacy replay must not create a scoped duplicate")
+
+    (status, _), payload = request(
+        app(LegacyLoop()),
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": "run-legacy",
+            "keyword": "logistics",
+            "candidate_profile": "Warehouse coordinator",
+        },
+        path="/v1/candidate/runs",
+    )
+
+    assert status == "201 Created"
+    assert payload == {"phase": "application_approval", "run_id": "run-legacy"}
+
+
+def test_post_runs_maps_unsupported_decimal_exponent_to_invalid_request():
+    encoded = (
+        b'{"schema_version":1e999999999999999999999999999999999999999999,'
+        b'"run_id":"run-exponent","keyword":"logistics",'
+        b'"candidate_profile":"Warehouse coordinator"}'
+    )
+    statuses = []
+
+    response = app(Loop())(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/v1/candidate/runs",
+            "HTTP_AUTHORIZATION": "Bearer valid",
+            "CONTENT_TYPE": "application/json",
+            "CONTENT_LENGTH": str(len(encoded)),
+            "wsgi.input": BytesIO(encoded),
+        },
+        lambda status, headers: statuses.append(status),
+    )
+
+    assert statuses == ["400 Bad Request"]
+    assert json.loads(b"".join(response))["error"] == "invalid_request"
+
+
+def test_post_approval_maps_unsupported_decimal_exponent_to_invalid_request():
+    encoded = (
+        b'{"schema_version":1e999999999999999999999999999999999999999999,'
+        b'"run_id":"run-1","state_version":3,"action_fingerprint":"'
+        + (b"0" * 64)
+        + b'","decision":"approve"}'
+    )
+    statuses = []
+
+    response = app(Loop())(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/v1/candidate/runs/run-1/approval",
+            "HTTP_AUTHORIZATION": "Bearer valid",
+            "CONTENT_TYPE": "application/json",
+            "CONTENT_LENGTH": str(len(encoded)),
+            "wsgi.input": BytesIO(encoded),
+        },
+        lambda status, headers: statuses.append(status),
+    )
+
+    assert statuses == ["400 Bad Request"]
+    assert json.loads(b"".join(response))["error"] == "invalid_request"
 
 
 @pytest.mark.parametrize(

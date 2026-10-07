@@ -450,6 +450,17 @@ class AutonomousCareerLoop:
         state = self._owned_state(run_id, user_id)
         return self._result(state)
 
+    def replay_existing_start(
+        self, request: CareerLoopRequest, *, run_id: str, user_id: str
+    ) -> CareerLoopResult:
+        """Return an owned pre-existing run only when its start request is identical."""
+        if not isinstance(request, CareerLoopRequest):
+            raise TypeError("request must be a CareerLoopRequest.")
+        state = self._owned_state(run_id, user_id)
+        if state.request != request:
+            raise CareerLoopConflictError("run_id already exists.")
+        return self._result(state)
+
     def continue_run(self, run_id: str, *, user_id: str) -> CareerLoopResult:
         """Continue a persisted non-human phase after a process restart.
 
