@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Barrier
 
 import pytest
+import career_agent_ai.application.runtime.composition as runtime_composition
 
 from career_agent_ai.application.api import (
     OperationalApiService,
@@ -189,6 +190,37 @@ def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
                 "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
             },
         )
+
+
+def test_candidate_sandbox_authenticates_before_opening_storage(tmp_path, monkeypatch):
+    app = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: None,
+        environ={
+            "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        },
+    )
+
+    class ForbiddenDatabase:
+        def __init__(self, path):
+            raise AssertionError("storage must not be opened before authentication")
+
+    monkeypatch.setattr(runtime_composition, "SQLiteDatabase", ForbiddenDatabase)
+    statuses = []
+    payload = json.loads(
+        b"".join(
+            app(
+                {
+                    "REQUEST_METHOD": "GET",
+                    "PATH_INFO": "/v1/candidate/runs/private/approval",
+                    "HTTP_AUTHORIZATION": "Bearer invalid",
+                },
+                lambda status, headers: statuses.append(status),
+            )
+        )
+    )
+    assert statuses == ["401 Unauthorized"]
+    assert payload == {"error": "unauthorized"}
 
 
 
