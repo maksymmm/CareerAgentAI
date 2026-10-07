@@ -26,6 +26,9 @@ from career_agent_ai.application.external_actions import (
     ExternalActionOperation,
     ExternalActionStatus,
 )
+from career_agent_ai.application.jobs.company import Company
+from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.jobs.location import Location
 from career_agent_ai.application.observability import (
     JsonLogFormatter,
     OperationalSeverity,
@@ -37,6 +40,7 @@ from career_agent_ai.application.observability import (
 from career_agent_ai.application.runtime import (
     RuntimeConfig,
     RuntimeEnvironment,
+    build_candidate_sandbox_app_from_env,
     build_operational_app_from_env,
     build_external_action_service,
     guard_job_provider,
@@ -78,6 +82,89 @@ def test_runtime_config_defaults_are_safe():
     assert config.log_level == logging.INFO
     assert config.allow_network_providers is False
     assert config.allow_consequential_actions is False
+
+
+def test_candidate_sandbox_requires_explicit_safe_runtime_flags(tmp_path):
+    base = {
+        "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+    }
+    with pytest.raises(PermissionError, match="explicitly enabled"):
+        build_candidate_sandbox_app_from_env(
+            resolve_bearer=lambda token: token, environ={}
+        )
+    for field in (
+        "CAREER_AGENT_ALLOW_NETWORK_PROVIDERS",
+        "CAREER_AGENT_ALLOW_CONSEQUENTIAL_ACTIONS",
+    ):
+        with pytest.raises(ValueError, match="forbids"):
+            build_candidate_sandbox_app_from_env(
+                resolve_bearer=lambda token: token,
+                environ={**base, field: "true"},
+            )
+    with pytest.raises(TypeError, match="resolve_bearer"):
+        build_candidate_sandbox_app_from_env(
+            resolve_bearer=None,  # type: ignore[arg-type]
+            environ=base,
+        )
+
+
+def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
+    app = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "user-1" if token == "sandbox-token" else None,
+        jobs=(
+            Job.create(
+                job_id="job-1",
+                title="Logistics Coordinator",
+                company=Company("company-1", "Acme"),
+                location=Location("Germany", "Karlsruhe"),
+                description="logistics coordination",
+                created_at=NOW,
+            ),
+        ),
+        environ={
+            "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        },
+    )
+    result = app.loop.start(request(), run_id="candidate-run")
+    assert result.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    statuses = []
+    payload = json.loads(
+        b"".join(
+            app(
+                {
+                    "REQUEST_METHOD": "GET",
+                    "PATH_INFO": "/v1/candidate/runs/candidate-run/approval",
+                    "HTTP_AUTHORIZATION": "Bearer sandbox-token",
+                },
+                lambda status, headers: statuses.append(status),
+            )
+        )
+    )
+    assert statuses == ["200 OK"]
+    assert payload["run_id"] == "candidate-run"
+    assert payload["action_kind"] == "approve_application"
+
+    app.close()
+    app.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        app({}, lambda status, headers: None)
+    with pytest.raises(RuntimeError, match="closed"):
+        app.__enter__()
+
+
+def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
+    with pytest.raises(TypeError, match="Job instances"):
+        build_candidate_sandbox_app_from_env(
+            resolve_bearer=lambda token: token,
+            jobs=(object(),),  # type: ignore[arg-type]
+            environ={
+                "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
+                "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            },
+        )
 
 
 
