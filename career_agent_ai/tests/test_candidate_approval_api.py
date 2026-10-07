@@ -138,9 +138,12 @@ def test_post_runs_starts_versioned_request_as_authenticated_owner():
     )
 
     assert status == "201 Created"
-    assert payload == {"phase": "application_approval", "run_id": "run-new"}
+    scoped_run_id = CandidateApprovalWSGIApp._owner_scoped_run_id(
+        "candidate-1", "run-new"
+    )
+    assert payload == {"phase": "application_approval", "run_id": scoped_run_id}
     started, run_id = loop.started
-    assert run_id == "run-new"
+    assert run_id == scoped_run_id
     assert started.user_id == "candidate-1"
     assert started.keyword == "logistics"
     assert started.location == "Karlsruhe"
@@ -197,8 +200,37 @@ def test_post_runs_accepts_maximum_astral_profile_within_schema():
     )
 
     assert status == "201 Created"
-    assert payload == {"phase": "application_approval", "run_id": "run-unicode"}
+    assert payload == {
+        "phase": "application_approval",
+        "run_id": CandidateApprovalWSGIApp._owner_scoped_run_id(
+            "candidate-1", "run-unicode"
+        ),
+    }
     assert loop.started[0].candidate_profile == "😀" * 12_000
+
+
+def test_post_runs_scopes_same_client_run_id_to_authenticated_owner():
+    payload = {
+        "schema_version": 1.0,
+        "run_id": "run-shared",
+        "keyword": "logistics",
+        "candidate_profile": "Warehouse coordinator",
+    }
+
+    first_request, first_id = CandidateApprovalWSGIApp._start_request(
+        payload, user_id="candidate-1"
+    )
+    second_request, second_id = CandidateApprovalWSGIApp._start_request(
+        payload, user_id="candidate-2"
+    )
+
+    assert first_request.user_id == "candidate-1"
+    assert second_request.user_id == "candidate-2"
+    assert first_id != second_id
+    assert len(first_id) == len(second_id) == 64
+    assert first_id == CandidateApprovalWSGIApp._owner_scoped_run_id(
+        "candidate-1", "run-shared"
+    )
 
 
 def test_post_runs_authenticates_before_reading_body_or_storage():

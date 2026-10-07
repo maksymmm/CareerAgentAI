@@ -152,10 +152,10 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         lambda status, headers: start_statuses.append(status),
     )))
     assert start_statuses == ["201 Created"]
-    assert start_payload == {
-        "run_id": "candidate-run",
-        "phase": CareerLoopPhase.APPLICATION_APPROVAL.value,
-    }
+    durable_run_id = start_payload["run_id"]
+    assert durable_run_id != "candidate-run"
+    assert len(durable_run_id) == 64
+    assert start_payload["phase"] == CareerLoopPhase.APPLICATION_APPROVAL.value
 
     statuses = []
     payload = json.loads(
@@ -163,7 +163,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
             app(
                 {
                     "REQUEST_METHOD": "GET",
-                    "PATH_INFO": "/v1/candidate/runs/candidate-run/approval",
+                    "PATH_INFO": f"/v1/candidate/runs/{durable_run_id}/approval",
                     "HTTP_AUTHORIZATION": "Bearer sandbox-token",
                 },
                 lambda status, headers: statuses.append(status),
@@ -171,7 +171,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         )
     )
     assert statuses == ["200 OK"]
-    assert payload["run_id"] == "candidate-run"
+    assert payload["run_id"] == durable_run_id
     assert payload["action_kind"] == "approve_application"
 
     def threaded_get() -> str:
@@ -180,7 +180,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
             app(
                 {
                     "REQUEST_METHOD": "GET",
-                    "PATH_INFO": "/v1/candidate/runs/candidate-run/approval",
+                    "PATH_INFO": f"/v1/candidate/runs/{durable_run_id}/approval",
                     "HTTP_AUTHORIZATION": "Bearer sandbox-token",
                 },
                 lambda status, headers: threaded_statuses.append(status),

@@ -265,7 +265,9 @@ The sandbox composition also exposes `POST /v1/candidate/runs` to start a durabl
 candidate-owned run. Its versioned body accepts only a caller-supplied idempotent
 `run_id`, search keyword, bounded candidate profile, and optional location. The owner
 always comes from the bearer identity; messaging, calendar, provider, credential, and
-consequential-action controls are not accepted from the request.
+consequential-action controls are not accepted from the request. The caller-supplied
+ID is deterministically scoped to that owner and returned as an opaque durable run ID,
+so equal client IDs from different candidates neither conflict nor disclose existence.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

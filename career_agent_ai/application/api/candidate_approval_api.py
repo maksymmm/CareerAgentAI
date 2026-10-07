@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from career_agent_ai.application.career import (
@@ -226,7 +227,8 @@ class CandidateApprovalWSGIApp:
             raise ValueError("start body contains unknown fields.")
         if missing:
             raise ValueError("start body is missing required fields.")
-        if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+        schema_version = payload["schema_version"]
+        if type(schema_version) not in {int, float} or schema_version != 1:
             raise ValueError("schema_version must equal 1.")
         raw_run_id = payload["run_id"]
         run_id = validate_loop_identifier(raw_run_id, "run_id", maximum=120)
@@ -247,7 +249,13 @@ class CandidateApprovalWSGIApp:
             candidate_profile=candidate_profile,
             location=location,
         )
-        return request, run_id
+        return request, CandidateApprovalWSGIApp._owner_scoped_run_id(user_id, run_id)
+
+    @staticmethod
+    def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
+        """Derive an opaque stable storage key without a cross-tenant namespace."""
+        material = f"{len(user_id)}:{user_id}{len(client_run_id)}:{client_run_id}"
+        return sha256(material.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _strict_start_text(

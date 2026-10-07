@@ -381,6 +381,12 @@ sanitized conflict; provider, credential, messaging, calendar, and action-contro
 fields are rejected. End-to-end composition coverage starts a durable run through
 HTTP and reads its approval gate after restart-safe persistence.
 
+Release hardening scopes each caller-supplied idempotency ID to the authenticated
+owner before persistence and returns the resulting opaque durable run ID. Equal
+client IDs from different candidates no longer conflict or reveal foreign state.
+Runtime schema-version parsing also accepts every JSON numeric representation of the
+OpenAPI integer constant `1`, while continuing to reject booleans and other values.
+
 Next priority: define authenticated read-only run-status discovery without exposing
 the stored candidate profile or provider details. Merge into `main` still requires
 explicit user approval.
