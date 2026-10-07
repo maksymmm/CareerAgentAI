@@ -123,15 +123,11 @@ class RuntimeCandidateApp:
         """Serve a candidate approval request while the sandbox is open."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
-        database = SQLiteDatabase(self._database_path)
-        try:
-            app = CandidateApprovalWSGIApp(
-                _build_candidate_loop(database, self._jobs),
-                resolve_bearer=self._resolve_bearer,
-            )
-            return app(environ, start_response)
-        finally:
-            database.close()
+        app = CandidateApprovalWSGIApp(
+            _RequestCandidateLoop(self._database_path, self._jobs),
+            resolve_bearer=self._resolve_bearer,
+        )
+        return app(environ, start_response)
 
     def start(
         self, request: CareerLoopRequest, *, run_id: str | None = None
@@ -160,6 +156,34 @@ class RuntimeCandidateApp:
     def __exit__(self, *_: object) -> None:
         """Close the sandbox on context exit."""
         self.close()
+
+
+class _RequestCandidateLoop:
+    """Open durable storage only after the API authenticates and routes a request."""
+
+    def __init__(self, database_path: str, jobs: tuple[Job, ...]) -> None:
+        self._database_path = database_path
+        self._jobs = jobs
+
+    def get_candidate_approval_prompt(self, run_id: str, *, user_id: str):
+        """Load one owner-scoped prompt using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs
+            ).get_candidate_approval_prompt(run_id, user_id=user_id)
+        finally:
+            database.close()
+
+    def resume_candidate_submission(self, *, user_id: str, submission):
+        """Resume one owner-scoped run using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs
+            ).resume_candidate_submission(user_id=user_id, submission=submission)
+        finally:
+            database.close()
 
 
 def build_candidate_sandbox_app_from_env(
