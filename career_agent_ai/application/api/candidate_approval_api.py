@@ -247,6 +247,22 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         },
         "additionalProperties": False,
     }
+    recovery_conflict_schema = {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["error"],
+                "properties": {"error": {"const": "recovery_unavailable"}},
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "required": ["error"],
+                "properties": {"error": {"const": "approval_conflict"}},
+                "additionalProperties": False,
+            },
+        ]
+    }
 
     def content(schema: Mapping[str, Any]) -> dict[str, Any]:
         return {"application/json": {"schema": schema}}
@@ -353,8 +369,11 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         },
                         **common_responses,
                         "409": {
-                            "description": "Run is waiting for human action",
-                            "content": content(error_schema),
+                            "description": (
+                                "Run is waiting for human action or another worker "
+                                "holds its execution lease"
+                            ),
+                            "content": content(recovery_conflict_schema),
                         },
                     },
                 },

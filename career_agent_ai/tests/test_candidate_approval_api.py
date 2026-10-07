@@ -287,6 +287,14 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
     )
     assert "409" in route["get"]["responses"]
     assert "500" in route["get"]["responses"]
+    recovery = document["paths"]["/v1/candidate/runs/{run_id}/continue"]["post"]
+    conflict_schema = recovery["responses"]["409"]["content"]["application/json"][
+        "schema"
+    ]
+    assert {
+        choice["properties"]["error"]["const"]
+        for choice in conflict_schema["oneOf"]
+    } == {"recovery_unavailable", "approval_conflict"}
 
 
 def test_only_durable_state_conflicts_return_409():
