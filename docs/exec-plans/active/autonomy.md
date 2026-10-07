@@ -360,7 +360,9 @@ Delivered: a candidate-service composition root requires the explicit
 consequential-action runtime flags. It owns durable SQLite loop state, accepts only an
 injected bearer resolver and job seeds, and wires deterministic no-I/O application,
 communication and calendar adapters. Runtime lifecycle and fail-closed configuration
-paths have regression coverage. No production credentials or real providers are used.
+paths have regression coverage. Memory-backed storage is rejected, and each WSGI
+request builds repositories over a connection opened in its own worker thread. No
+production credentials or real providers are used.
 
 Next priority: package a sandbox-only candidate workflow start endpoint while retaining
 strict candidate ownership and bounded input validation. Merge into `main` still
