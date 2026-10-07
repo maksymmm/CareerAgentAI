@@ -424,3 +424,6 @@ The system should only cross consequential external-action boundaries through ex
 # License
 
 Private project.
+
+Candidate approval JSON rejects duplicate member names, including escaped equivalent
+names, before durable resume; malformed submissions receive HTTP 400.
