@@ -28,7 +28,9 @@ class CandidateApprovalLoop(Protocol):
 class CandidateApprovalWSGIApp:
     """Authenticate a candidate before reading or changing durable loop state."""
 
-    MAX_BODY_BYTES = 16_384
+    # Accommodate every schema-valid string even when JSON escaping expands a
+    # Unicode/control character to six ASCII bytes, while retaining a hard cap.
+    MAX_BODY_BYTES = 100_000
 
     def __init__(
         self,
@@ -216,7 +218,10 @@ class CandidateApprovalWSGIApp:
             raise ValueError("start body is missing required fields.")
         if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
             raise ValueError("schema_version must equal 1.")
-        run_id = validate_loop_identifier(payload["run_id"], "run_id", maximum=120)
+        raw_run_id = payload["run_id"]
+        run_id = validate_loop_identifier(raw_run_id, "run_id", maximum=120)
+        if run_id != raw_run_id:
+            raise ValueError("run_id must match the published identifier pattern.")
         if (
             not isinstance(payload["candidate_profile"], str)
             or len(payload["candidate_profile"]) > 12_000

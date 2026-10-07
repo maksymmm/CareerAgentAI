@@ -155,6 +155,7 @@ def test_post_runs_starts_versioned_request_as_authenticated_owner():
         {"provider": "network"},
         {"keyword": ""},
         {"run_id": "bad/run"},
+        {"run_id": " run-new "},
         {"candidate_profile": "x" * 12_001},
     ],
 )
@@ -172,6 +173,24 @@ def test_post_runs_rejects_invalid_or_privileged_fields(change):
 
     assert status == "400 Bad Request"
     assert payload["error"] == "invalid_request"
+
+
+def test_post_runs_accepts_maximum_non_ascii_profile_within_schema():
+    loop = Loop()
+    body = {
+        "schema_version": 1,
+        "run_id": "run-unicode",
+        "keyword": "logistics",
+        "candidate_profile": "é" * 12_000,
+    }
+
+    (status, _), payload = request(
+        app(loop), method="POST", body=body, path="/v1/candidate/runs"
+    )
+
+    assert status == "201 Created"
+    assert payload == {"phase": "application_approval", "run_id": "run-unicode"}
+    assert loop.started[0].candidate_profile == "é" * 12_000
 
 
 def test_post_runs_authenticates_before_reading_body_or_storage():
