@@ -395,7 +395,8 @@ Implemented foundations:
 - Environment-composed operational WSGI runtime with request-local database lifecycle
 - Explicitly enabled candidate sandbox composition with durable loop state, injected
   authentication, request-local SQLite connections and deterministic no-I/O application,
-  messaging and calendar adapters; memory-backed storage is rejected
+  messaging and calendar adapters; authentication and routing occur before storage is
+  opened, and memory-backed storage is rejected
 - Continuous integration workflow
 
 The eight-item autonomous-core execution plan is implemented on the integration branch.
