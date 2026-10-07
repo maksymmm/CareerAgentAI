@@ -133,8 +133,29 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
             "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
         },
     )
-    result = app.start(request(), run_id="candidate-run")
-    assert result.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    start_body = json.dumps({
+        "schema_version": 1,
+        "run_id": "candidate-run",
+        "keyword": "logistics",
+        "candidate_profile": PROFILE,
+    }).encode()
+    start_statuses = []
+    start_payload = json.loads(b"".join(app(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/v1/candidate/runs",
+            "HTTP_AUTHORIZATION": "Bearer sandbox-token",
+            "CONTENT_TYPE": "application/json",
+            "CONTENT_LENGTH": str(len(start_body)),
+            "wsgi.input": io.BytesIO(start_body),
+        },
+        lambda status, headers: start_statuses.append(status),
+    )))
+    assert start_statuses == ["201 Created"]
+    assert start_payload == {
+        "run_id": "candidate-run",
+        "phase": CareerLoopPhase.APPLICATION_APPROVAL.value,
+    }
 
     statuses = []
     payload = json.loads(

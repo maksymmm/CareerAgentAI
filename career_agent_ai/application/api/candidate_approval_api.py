@@ -9,6 +9,7 @@ from career_agent_ai.application.career import (
     CandidateApprovalConflictError,
     CandidateApprovalSubmission,
     CandidateApprovalUnavailableError,
+    CareerLoopRequest,
     CareerLoopConflictError,
     HumanActionRequiredError,
 )
@@ -18,6 +19,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 
 
 class CandidateApprovalLoop(Protocol):
+    def start(self, request: CareerLoopRequest, *, run_id: str | None = None): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
@@ -42,11 +44,13 @@ class CandidateApprovalWSGIApp:
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
         path = str(environ.get("PATH_INFO", ""))
         parts = path.strip("/").split("/")
-        if (
-            len(parts) != 5
-            or parts[:3] != ["v1", "candidate", "runs"]
-            or parts[4] not in {"approval", "continue"}
-        ):
+        is_start = parts == ["v1", "candidate", "runs"]
+        is_existing_run = (
+            len(parts) == 5
+            and parts[:3] == ["v1", "candidate", "runs"]
+            and parts[4] in {"approval", "continue"}
+        )
+        if not is_start and not is_existing_run:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -67,15 +71,53 @@ class CandidateApprovalWSGIApp:
                 {"error": "unauthorized"},
                 [("WWW-Authenticate", "Bearer")],
             )
+        if is_existing_run:
+            try:
+                run_id = validate_loop_identifier(parts[3], "run_id", maximum=120)
+            except (TypeError, ValueError) as exc:
+                return self._respond(
+                    start_response,
+                    "400 Bad Request",
+                    {"error": "invalid_request", "message": str(exc)[:500]},
+                )
         try:
-            run_id = validate_loop_identifier(parts[3], "run_id", maximum=120)
-        except (TypeError, ValueError) as exc:
-            return self._respond(
-                start_response,
-                "400 Bad Request",
-                {"error": "invalid_request", "message": str(exc)[:500]},
-            )
-        try:
+            if is_start:
+                if method != "POST":
+                    return self._respond(
+                        start_response,
+                        "405 Method Not Allowed",
+                        {"error": "method_not_allowed"},
+                        [("Allow", "POST")],
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response,
+                        "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    request, run_id = self._start_request(payload, user_id=user_id)
+                except (TypeError, ValueError) as exc:
+                    return self._respond(
+                        start_response,
+                        "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                try:
+                    result = self._loop.start(request, run_id=run_id)
+                except CareerLoopConflictError:
+                    return self._respond(
+                        start_response,
+                        "409 Conflict",
+                        {"error": "run_conflict"},
+                    )
+                return self._respond(
+                    start_response,
+                    "201 Created",
+                    {"run_id": result.run_id, "phase": result.phase.value},
+                )
             if parts[4] == "continue":
                 if method != "POST":
                     return self._respond(
@@ -158,6 +200,35 @@ class CandidateApprovalWSGIApp:
                 "500 Internal Server Error",
                 {"error": "internal_error"},
             )
+
+    @staticmethod
+    def _start_request(
+        payload: Mapping[str, Any], *, user_id: str
+    ) -> tuple[CareerLoopRequest, str]:
+        """Build a sandbox run request bound to the authenticated candidate."""
+        allowed = {"schema_version", "run_id", "keyword", "candidate_profile", "location"}
+        required = {"schema_version", "run_id", "keyword", "candidate_profile"}
+        unknown = set(payload) - allowed
+        missing = required - set(payload)
+        if unknown:
+            raise ValueError("start body contains unknown fields.")
+        if missing:
+            raise ValueError("start body is missing required fields.")
+        if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+            raise ValueError("schema_version must equal 1.")
+        run_id = validate_loop_identifier(payload["run_id"], "run_id", maximum=120)
+        if (
+            not isinstance(payload["candidate_profile"], str)
+            or len(payload["candidate_profile"]) > 12_000
+        ):
+            raise ValueError("candidate_profile must not exceed 12000 characters.")
+        request = CareerLoopRequest(
+            user_id=user_id,
+            keyword=payload["keyword"],
+            candidate_profile=payload["candidate_profile"],
+            location=payload.get("location", ""),
+        )
+        return request, run_id
 
     def _read_json(self, environ: Mapping[str, Any]) -> Mapping[str, Any]:
         try:
@@ -247,6 +318,27 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         },
         "additionalProperties": False,
     }
+    start_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "run_id", "keyword", "candidate_profile",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+            },
+            "keyword": {"type": "string", "minLength": 1, "maxLength": 500},
+            "candidate_profile": {
+                "type": "string", "minLength": 1, "maxLength": 12_000,
+            },
+            "location": {"type": "string", "maxLength": 500},
+        },
+        "additionalProperties": False,
+    }
     recovery_conflict_schema = {
         "oneOf": [
             {
@@ -286,6 +378,44 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}}
         },
         "paths": {
+            "/v1/candidate/runs": {
+                "post": {
+                    "operationId": "startCandidateRun",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": content(start_schema),
+                    },
+                    "responses": {
+                        "201": {
+                            "description": "Sandbox candidate run started",
+                            "content": content({
+                                "type": "object",
+                                "required": ["run_id", "phase"],
+                                "properties": {
+                                    "run_id": {"type": "string"},
+                                    "phase": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "Run identifier already exists",
+                            "content": content({
+                                "type": "object",
+                                "required": ["error"],
+                                "properties": {"error": {"const": "run_conflict"}},
+                                "additionalProperties": False,
+                            }),
+                        },
+                        "415": {
+                            "description": "Request body is not application/json",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            },
             "/v1/candidate/runs/{run_id}/approval": {
                 "parameters": [{
                     "name": "run_id", "in": "path", "required": True,

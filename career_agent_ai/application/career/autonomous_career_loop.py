@@ -187,7 +187,7 @@ class AutonomousCareerLoop:
         raw_identifier = run_id if run_id is not None else uuid4().hex
         identifier = validate_loop_identifier(raw_identifier, "run_id", maximum=120)
         if self._states.get(identifier) is not None:
-            raise ValueError("run_id already exists.")
+            raise CareerLoopConflictError("run_id already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
         self._persist(state)
         return self._continue(state)
