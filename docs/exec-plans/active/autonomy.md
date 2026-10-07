@@ -360,3 +360,7 @@ real providers or consequential actions. Merge into `main` still requires explic
 user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
+
+Approval API hardening: duplicate JSON members are rejected before submission
+validation or durable resume, including repeated decisions and escaped names.
+The next product priority remains sandbox-gated candidate-service composition.
