@@ -29,6 +29,10 @@ class Loop:
         self.submission = submission
         return SimpleNamespace(run_id="run-1", phase=SimpleNamespace(value="message_approval"))
 
+    def continue_run(self, run_id, *, user_id):
+        assert (run_id, user_id) == ("run-1", "candidate-1")
+        return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
 
 def request(
     app,
@@ -98,6 +102,37 @@ def test_post_parses_bound_submission_and_resumes_as_authenticated_owner():
     assert status == "200 OK"
     assert payload == {"phase": "message_approval", "run_id": "run-1"}
     assert loop.submission.decision is ApprovalDecision.APPROVE
+
+
+def test_post_continue_recovers_authenticated_owner_without_body():
+    (status, _), payload = request(
+        app(Loop()),
+        method="POST",
+        path="/v1/candidate/runs/run-1/continue",
+    )
+    assert status == "200 OK"
+    assert payload == {"phase": "complete", "run_id": "run-1"}
+
+
+def test_continue_rejects_get_and_human_gated_run():
+    (status, headers), payload = request(
+        app(Loop()), path="/v1/candidate/runs/run-1/continue"
+    )
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "POST") in headers
+    assert payload == {"error": "method_not_allowed"}
+
+    class WaitingLoop(Loop):
+        def continue_run(self, run_id, *, user_id):
+            raise RuntimeError("private pending action")
+
+    (status, _), payload = request(
+        app(WaitingLoop()),
+        method="POST",
+        path="/v1/candidate/runs/run-1/continue",
+    )
+    assert status == "409 Conflict"
+    assert payload == {"error": "recovery_unavailable"}
 
 
 def test_post_rejects_non_json_media_type_before_reading_or_resuming():
