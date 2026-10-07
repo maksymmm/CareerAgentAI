@@ -19,6 +19,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 class CandidateApprovalLoop(Protocol):
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
+    def continue_run(self, run_id: str, *, user_id: str): ...
 
 
 class CandidateApprovalWSGIApp:
@@ -40,7 +41,11 @@ class CandidateApprovalWSGIApp:
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
         path = str(environ.get("PATH_INFO", ""))
         parts = path.strip("/").split("/")
-        if len(parts) != 5 or parts[:3] != ["v1", "candidate", "runs"] or parts[4] != "approval":
+        if (
+            len(parts) != 5
+            or parts[:3] != ["v1", "candidate", "runs"]
+            or parts[4] not in {"approval", "continue"}
+        ):
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -70,6 +75,27 @@ class CandidateApprovalWSGIApp:
                 {"error": "invalid_request", "message": str(exc)[:500]},
             )
         try:
+            if parts[4] == "continue":
+                if method != "POST":
+                    return self._respond(
+                        start_response,
+                        "405 Method Not Allowed",
+                        {"error": "method_not_allowed"},
+                        [("Allow", "POST")],
+                    )
+                try:
+                    result = self._loop.continue_run(run_id, user_id=user_id)
+                except RuntimeError:
+                    return self._respond(
+                        start_response,
+                        "409 Conflict",
+                        {"error": "recovery_unavailable"},
+                    )
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"run_id": result.run_id, "phase": result.phase.value},
+                )
             if method == "GET":
                 return self._respond(
                     start_response,
@@ -299,6 +325,38 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         },
                     },
                 },
-            }
+            },
+            "/v1/candidate/runs/{run_id}/continue": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {
+                        "type": "string", "minLength": 1, "maxLength": 120,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
+                }],
+                "post": {
+                    "operationId": "continueCandidateRun",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Persisted non-human phase continued",
+                            "content": content({
+                                "type": "object",
+                                "required": ["run_id", "phase"],
+                                "properties": {
+                                    "run_id": {"type": "string"},
+                                    "phase": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "Run is waiting for human action",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            },
         },
     }
