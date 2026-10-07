@@ -261,6 +261,11 @@ The recovery endpoint maps only an explicit pending-human-action signal to
 unexpected runtime failures remain sanitized internal errors. Its OpenAPI `409`
 contract documents both `recovery_unavailable` and retryable `approval_conflict`
 payloads.
+The sandbox composition also exposes `POST /v1/candidate/runs` to start a durable
+candidate-owned run. Its versioned body accepts only a caller-supplied idempotent
+`run_id`, search keyword, bounded candidate profile, and optional location. The owner
+always comes from the bearer identity; messaging, calendar, provider, credential, and
+consequential-action controls are not accepted from the request.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

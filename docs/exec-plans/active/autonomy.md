@@ -373,9 +373,17 @@ Recovery refusal uses a dedicated human-gate error so a concurrent execution lea
 or unexpected runtime failure cannot be mislabeled as pending human action. The
 OpenAPI contract enumerates both human-gate and execution-conflict `409` payloads.
 
-Next priority: package a sandbox-only candidate workflow start endpoint while retaining
-strict candidate ownership and bounded input validation. Merge into `main` still
-requires explicit user approval.
+Delivered: the sandbox-only `POST /v1/candidate/runs` endpoint authenticates before
+reading its body or opening storage, derives ownership exclusively from the bearer
+identity, and accepts a strict versioned schema containing only a stable run ID,
+keyword, bounded candidate profile, and optional location. Duplicate run IDs return a
+sanitized conflict; provider, credential, messaging, calendar, and action-control
+fields are rejected. End-to-end composition coverage starts a durable run through
+HTTP and reads its approval gate after restart-safe persistence.
+
+Next priority: define authenticated read-only run-status discovery without exposing
+the stored candidate profile or provider details. Merge into `main` still requires
+explicit user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
 

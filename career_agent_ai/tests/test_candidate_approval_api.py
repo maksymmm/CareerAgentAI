@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import re
 
 import pytest
 from types import SimpleNamespace
@@ -23,6 +24,11 @@ class Loop:
             to_dict=lambda: {"run_id": "run-1", "state_version": 3}
         )
         self.submission = None
+        self.started = None
+
+    def start(self, request, *, run_id=None):
+        self.started = (request, run_id)
+        return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="application_approval"))
 
     def get_candidate_approval_prompt(self, run_id, *, user_id):
         assert (run_id, user_id) == ("run-1", "candidate-1")
@@ -116,6 +122,124 @@ def test_post_continue_recovers_authenticated_owner_without_body():
     )
     assert status == "200 OK"
     assert payload == {"phase": "complete", "run_id": "run-1"}
+
+
+def test_post_runs_starts_versioned_request_as_authenticated_owner():
+    loop = Loop()
+    body = {
+        "schema_version": 1,
+        "run_id": "run-new",
+        "keyword": "logistics",
+        "candidate_profile": "Warehouse coordinator",
+        "location": "Karlsruhe",
+    }
+    (status, _), payload = request(
+        app(loop), method="POST", body=body, path="/v1/candidate/runs"
+    )
+
+    assert status == "201 Created"
+    assert payload == {"phase": "application_approval", "run_id": "run-new"}
+    started, run_id = loop.started
+    assert run_id == "run-new"
+    assert started.user_id == "candidate-1"
+    assert started.keyword == "logistics"
+    assert started.location == "Karlsruhe"
+    assert started.sender == ""
+    assert started.schedule_event_id is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema_version": 2},
+        {"user_id": "attacker"},
+        {"provider": "network"},
+        {"keyword": ""},
+        {"keyword": " "},
+        {"keyword": f" {'x' * 500} "},
+        {"keyword": "a\u0000b"},
+        {"keyword": "a\rb"},
+        {"keyword": "\ufefflogistics"},
+        {"run_id": "bad/run"},
+        {"run_id": " run-new "},
+        {"candidate_profile": " "},
+        {"location": " Karlsruhe "},
+        {"candidate_profile": "x" * 12_001},
+    ],
+)
+def test_post_runs_rejects_invalid_or_privileged_fields(change):
+    body = {
+        "schema_version": 1,
+        "run_id": "run-new",
+        "keyword": "logistics",
+        "candidate_profile": "Warehouse coordinator",
+        **change,
+    }
+    (status, _), payload = request(
+        app(Loop()), method="POST", body=body, path="/v1/candidate/runs"
+    )
+
+    assert status == "400 Bad Request"
+    assert payload["error"] == "invalid_request"
+
+
+def test_post_runs_accepts_maximum_astral_profile_within_schema():
+    loop = Loop()
+    body = {
+        "schema_version": 1,
+        "run_id": "run-unicode",
+        "keyword": "logistics",
+        "candidate_profile": "😀" * 12_000,
+    }
+
+    (status, _), payload = request(
+        app(loop), method="POST", body=body, path="/v1/candidate/runs"
+    )
+
+    assert status == "201 Created"
+    assert payload == {"phase": "application_approval", "run_id": "run-unicode"}
+    assert loop.started[0].candidate_profile == "😀" * 12_000
+
+
+def test_post_runs_authenticates_before_reading_body_or_storage():
+    class ForbiddenBody:
+        def read(self, length):
+            raise AssertionError("body must not be read")
+
+    statuses = []
+    response = app(Loop())(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/v1/candidate/runs",
+            "HTTP_AUTHORIZATION": "Bearer invalid",
+            "CONTENT_TYPE": "application/json",
+            "CONTENT_LENGTH": "10",
+            "wsgi.input": ForbiddenBody(),
+        },
+        lambda status, headers: statuses.append(status),
+    )
+
+    assert statuses == ["401 Unauthorized"]
+    assert json.loads(b"".join(response)) == {"error": "unauthorized"}
+
+
+def test_post_runs_returns_sanitized_conflict_for_duplicate_identifier():
+    class ConflictLoop(Loop):
+        def start(self, request, *, run_id=None):
+            raise CareerLoopConflictError("private existing owner")
+
+    body = {
+        "schema_version": 1,
+        "run_id": "run-new",
+        "keyword": "logistics",
+        "candidate_profile": "Warehouse coordinator",
+    }
+    (status, _), payload = request(
+        app(ConflictLoop()), method="POST", body=body, path="/v1/candidate/runs"
+    )
+
+    assert status == "409 Conflict"
+    assert payload == {"error": "run_conflict"}
 
 
 def test_continue_rejects_get_and_human_gated_run():
@@ -287,6 +411,22 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
     )
     assert "409" in route["get"]["responses"]
     assert "500" in route["get"]["responses"]
+    start = document["paths"]["/v1/candidate/runs"]["post"]
+    assert start["security"] == [{"bearerAuth": []}]
+    start_schema = start["requestBody"]["content"]["application/json"]["schema"]
+    assert start_schema["additionalProperties"] is False
+    assert start_schema["required"] == [
+        "schema_version", "run_id", "keyword", "candidate_profile",
+    ]
+    assert "user_id" not in start_schema["properties"]
+    keyword_pattern = re.compile(start_schema["properties"]["keyword"]["pattern"])
+    assert keyword_pattern.fullmatch("logistics\ncoordinator")
+    assert keyword_pattern.fullmatch("a\u0000b") is None
+    assert keyword_pattern.fullmatch("a\rb") is None
+    assert keyword_pattern.fullmatch("\ufefflogistics") is None
+    assert {"201", "400", "401", "404", "409", "415", "500"} <= set(
+        start["responses"]
+    )
     recovery = document["paths"]["/v1/candidate/runs/{run_id}/continue"]["post"]
     conflict_schema = recovery["responses"]["409"]["content"]["application/json"][
         "schema"

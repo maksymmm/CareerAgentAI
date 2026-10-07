@@ -165,6 +165,16 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
 
+    def start(self, request: CareerLoopRequest, *, run_id: str | None = None):
+        """Start one authenticated sandbox run using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).start(
+                request, run_id=run_id
+            )
+        finally:
+            database.close()
+
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str):
         """Load one owner-scoped prompt using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
