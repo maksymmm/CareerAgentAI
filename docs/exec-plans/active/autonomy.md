@@ -365,6 +365,11 @@ request builds repositories over a connection opened in its own worker thread. N
 storage is opened for unauthenticated or unroutable API requests. No production
 credentials or real providers are used.
 
+Crash recovery hardening: authenticated candidates can invoke the owner-scoped
+`POST /v1/candidate/runs/{run_id}/continue` endpoint to resume an already-approved
+non-human phase after process failure. Human-gated runs remain blocked with 409,
+foreign runs remain undisclosed, and the operation opens storage only after auth.
+
 Next priority: package a sandbox-only candidate workflow start endpoint while retaining
 strict candidate ownership and bounded input validation. Merge into `main` still
 requires explicit user approval.
