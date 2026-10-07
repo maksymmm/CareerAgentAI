@@ -226,6 +226,29 @@ def test_candidate_submission_cannot_approve_a_later_gate(tmp_path):
     database.close()
 
 
+def test_identical_start_replay_returns_existing_run_without_new_execution(tmp_path):
+    database, loop, _, _, _, submission, *_ = build_stack(
+        str(tmp_path / "start-replay.sqlite")
+    )
+    original_request = request(with_schedule=False)
+
+    first = loop.start(original_request, run_id="stable-run")
+    replay = loop.start(original_request, run_id="stable-run")
+
+    assert replay == first
+    assert submission.calls == []
+    with pytest.raises(CareerLoopConflictError, match="already exists"):
+        loop.start(
+            CareerLoopRequest(
+                user_id=original_request.user_id,
+                keyword="different",
+                candidate_profile=original_request.candidate_profile,
+            ),
+            run_id="stable-run",
+        )
+    database.close()
+
+
 @pytest.mark.parametrize("gate", ["application", "message", "interview"])
 @pytest.mark.parametrize("approved", [True, False])
 def test_approval_owner_is_required_after_restart(tmp_path, gate, approved):

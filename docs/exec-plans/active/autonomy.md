@@ -386,6 +386,8 @@ owner before persistence and returns the resulting opaque durable run ID. Equal
 client IDs from different candidates no longer conflict or reveal foreign state.
 Runtime schema-version parsing also accepts every JSON numeric representation of the
 OpenAPI integer constant `1`, while continuing to reject booleans and other values.
+Numeric JSON lexemes are parsed exactly, canonical owner identities feed the scope,
+and an identical lost-response retry returns the existing run without new execution.
 
 Next priority: define authenticated read-only run-status discovery without exposing
 the stored candidate profile or provider details. Merge into `main` still requires

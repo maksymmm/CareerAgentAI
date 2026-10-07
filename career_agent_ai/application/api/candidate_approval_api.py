@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from hashlib import sha256
+from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from career_agent_ai.application.career import (
@@ -228,7 +229,7 @@ class CandidateApprovalWSGIApp:
         if missing:
             raise ValueError("start body is missing required fields.")
         schema_version = payload["schema_version"]
-        if type(schema_version) not in {int, float} or schema_version != 1:
+        if type(schema_version) not in {int, float, Decimal} or schema_version != 1:
             raise ValueError("schema_version must equal 1.")
         raw_run_id = payload["run_id"]
         run_id = validate_loop_identifier(raw_run_id, "run_id", maximum=120)
@@ -249,7 +250,9 @@ class CandidateApprovalWSGIApp:
             candidate_profile=candidate_profile,
             location=location,
         )
-        return request, CandidateApprovalWSGIApp._owner_scoped_run_id(user_id, run_id)
+        return request, CandidateApprovalWSGIApp._owner_scoped_run_id(
+            request.user_id, run_id
+        )
 
     @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
@@ -288,7 +291,9 @@ class CandidateApprovalWSGIApp:
             raise ValueError("approval body is incomplete.")
         try:
             payload = json.loads(
-                body.decode("utf-8"), object_pairs_hook=self._unique_json_object
+                body.decode("utf-8"),
+                object_pairs_hook=self._unique_json_object,
+                parse_float=Decimal,
             )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("approval body must be valid UTF-8 JSON.") from exc

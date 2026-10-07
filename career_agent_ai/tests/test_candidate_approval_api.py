@@ -233,6 +233,62 @@ def test_post_runs_scopes_same_client_run_id_to_authenticated_owner():
     )
 
 
+def test_post_runs_hashes_canonical_owner_and_parses_version_exactly():
+    canonical_request, canonical_id = CandidateApprovalWSGIApp._start_request(
+        {
+            "schema_version": 1,
+            "run_id": "run-shared",
+            "keyword": "logistics",
+            "candidate_profile": "Warehouse coordinator",
+        },
+        user_id=" candidate-1 ",
+    )
+    assert canonical_request.user_id == "candidate-1"
+    assert canonical_id == CandidateApprovalWSGIApp._owner_scoped_run_id(
+        "candidate-1", "run-shared"
+    )
+
+    for literal in ("1.0", "1e0"):
+        encoded = (
+            '{"schema_version":' + literal + ',"run_id":"run-exact",'
+            '"keyword":"logistics","candidate_profile":"Warehouse coordinator"}'
+        ).encode()
+        statuses = []
+        response = app(Loop())(
+            {
+                "REQUEST_METHOD": "POST",
+                "PATH_INFO": "/v1/candidate/runs",
+                "HTTP_AUTHORIZATION": "Bearer valid",
+                "CONTENT_TYPE": "application/json",
+                "CONTENT_LENGTH": str(len(encoded)),
+                "wsgi.input": BytesIO(encoded),
+            },
+            lambda status, headers: statuses.append(status),
+        )
+        assert statuses == ["201 Created"]
+        assert json.loads(b"".join(response))["phase"] == "application_approval"
+
+    for literal in ("1.0000000000000001", "0.99999999999999999"):
+        encoded = (
+            '{"schema_version":' + literal + ',"run_id":"run-inexact",'
+            '"keyword":"logistics","candidate_profile":"Warehouse coordinator"}'
+        ).encode()
+        statuses = []
+        response = app(Loop())(
+            {
+                "REQUEST_METHOD": "POST",
+                "PATH_INFO": "/v1/candidate/runs",
+                "HTTP_AUTHORIZATION": "Bearer valid",
+                "CONTENT_TYPE": "application/json",
+                "CONTENT_LENGTH": str(len(encoded)),
+                "wsgi.input": BytesIO(encoded),
+            },
+            lambda status, headers: statuses.append(status),
+        )
+        assert statuses == ["400 Bad Request"]
+        assert json.loads(b"".join(response))["error"] == "invalid_request"
+
+
 def test_post_runs_authenticates_before_reading_body_or_storage():
     class ForbiddenBody:
         def read(self, length):

@@ -186,7 +186,10 @@ class AutonomousCareerLoop:
             raise TypeError("request must be a CareerLoopRequest.")
         raw_identifier = run_id if run_id is not None else uuid4().hex
         identifier = validate_loop_identifier(raw_identifier, "run_id", maximum=120)
-        if self._states.get(identifier) is not None:
+        existing = self._states.get(identifier)
+        if existing is not None:
+            if existing.request == request:
+                return self._result(existing)
             raise CareerLoopConflictError("run_id already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
         self._persist(state)
