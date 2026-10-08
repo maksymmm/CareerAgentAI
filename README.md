@@ -455,3 +455,10 @@ Private project.
 
 Candidate approval JSON rejects duplicate member names, including escaped equivalent
 names, before durable resume; malformed submissions receive HTTP 400.
+
+Authenticated `GET /v1/candidate/runs/{run_id}/status` returns only the durable run
+ID, phase, state version, human-wait flag and terminal flag in a versioned, no-store
+snapshot. It never advances the loop, acquires an execution lease or returns profile,
+provider, error or human-action details. Foreign and missing IDs are indistinguishable.
+Use the opaque durable ID returned by start; approval decisions still require the
+separate prompt-bound approval endpoint. Status is a snapshot, not permission to act.

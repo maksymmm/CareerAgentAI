@@ -221,6 +221,18 @@ class AutonomousCareerLoop:
             )
         return self._apply_human_decision(state, approved=approved)
 
+    def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read an owner-scoped status snapshot without advancing or exposing state."""
+        state = self._owned_state(run_id, user_id)
+        return {
+            "schema_version": 1,
+            "run_id": state.run_id,
+            "state_version": state.version,
+            "phase": state.phase.value,
+            "waiting_for_human": state.pending_human_action is not None,
+            "terminal": state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
+        }
+
     def get_candidate_approval_prompt(
         self, run_id: str, *, user_id: str
     ) -> CandidateApprovalPrompt:

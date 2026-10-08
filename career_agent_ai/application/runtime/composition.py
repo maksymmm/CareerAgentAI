@@ -196,6 +196,16 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read a candidate status snapshot using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).get_candidate_run_status(
+                run_id, user_id=user_id
+            )
+        finally:
+            database.close()
+
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str):
         """Load one owner-scoped prompt using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
