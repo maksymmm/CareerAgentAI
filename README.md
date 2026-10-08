@@ -473,3 +473,5 @@ downstream identifier remains within its 200-character contract and is restart-s
 New run IDs beginning with `run-child:` are rejected at creation. Existing runs
 retain their legacy child and operation IDs, including replay after restart.
 Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
+The ownership check includes retained applications, messages and external-action
+records, so deleting a terminal loop snapshot cannot release its child namespace.

@@ -425,6 +425,8 @@ unchanged and regression coverage exercises the maximum-length restart-safe flow
 The `run-child:` namespace is reserved at new-run creation. Existing reserved-prefix
 runs retain their legacy operation keys and replay durable outcomes after restart.
 Long-run creation rejects an existing legacy namespace alias before persisting intent.
+Retained application, message and external-action rows preserve that reservation even
+after the legacy loop snapshot is deleted.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
 

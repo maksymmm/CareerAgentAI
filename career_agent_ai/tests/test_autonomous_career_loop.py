@@ -1452,10 +1452,23 @@ def test_legacy_reserved_prefix_run_replays_after_restart(tmp_path):
 
 
 def test_long_run_cannot_alias_existing_legacy_reserved_run(tmp_path):
-    database, loop, _, _, _, _, _, _ = build_stack(str(tmp_path / "alias.sqlite"), with_schedule=False)
+    database, loop, applications, _, _, _, _, _ = build_stack(str(tmp_path / "alias.sqlite"), with_schedule=False)
     run_id = "r" * 200
     alias = f"run-child:{sha256(run_id.encode('utf-8')).hexdigest()}"
     loop._states.save(CareerLoopState(run_id=alias, request=request(with_schedule=False)))
+    applications.add(
+        JobApplication(
+            application_id=f"{alias}:application",
+            user_id="legacy-user",
+            job_id="legacy-job",
+            company_id="legacy-company",
+            status=JobApplicationStatus.SAVED,
+            created_at=CREATED,
+            updated_at=CREATED,
+        )
+    )
+    loop._states.delete(alias)
+    assert loop._states.get(alias) is None
     with pytest.raises(CareerLoopConflictError, match="child namespace"):
         loop.start(request(with_schedule=False), run_id=run_id)
     assert loop._states.get(run_id) is None

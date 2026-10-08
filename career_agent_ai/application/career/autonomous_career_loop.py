@@ -218,7 +218,7 @@ class AutonomousCareerLoop:
                 f"{_BOUNDED_RUN_CHILD_PREFIX}"
                 f"{sha256(identifier.encode('utf-8')).hexdigest()}"
             )
-            if self._states.get(legacy_alias) is not None:
+            if self._legacy_child_namespace_exists(legacy_alias):
                 raise CareerLoopConflictError("run_id child namespace already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
         try:
@@ -232,6 +232,25 @@ class AutonomousCareerLoop:
                 return self._result(existing)
             raise
         return self._continue(state)
+
+    def _legacy_child_namespace_exists(self, legacy_alias: str) -> bool:
+        """Return whether durable legacy state owns a bounded child namespace."""
+        application_id = f"{legacy_alias}:application"
+        return any(
+            (
+                self._states.get(legacy_alias) is not None,
+                self._applications.get(application_id) is not None,
+                self._communication.get_persisted(f"{legacy_alias}:message") is not None,
+                self._submission.get_operation(
+                    self._application_submission_operation_id(application_id)
+                )
+                is not None,
+                self._communication.get_operation(f"{legacy_alias}:message-send")
+                is not None,
+                self._scheduling.get_operation(f"{legacy_alias}:interview-accept")
+                is not None,
+            )
+        )
 
     def resume(self, run_id: str, *, user_id: str, approved: bool) -> CareerLoopResult:
         """Resume one human-gated run using an explicit approve/decline decision."""
