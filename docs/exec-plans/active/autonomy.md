@@ -393,6 +393,10 @@ returns the durable winner; a different request still fails closed as a conflict
 Upgrade compatibility probes a caller's legacy unscoped ID through an owner-checked,
 request-matching replay path before creating a scoped run. Unsupported decimal
 exponents are classified as invalid input at both JSON endpoints rather than 500s.
+Because pre-scope workers cannot understand owner-scoped keys, mixed-version serving
+is forbidden. Runtime startup requires an explicit drain-and-replace cutover gate and
+the deployment protocol records the required worker drain, verification, and rollback
+ordering.
 
 Next priority: define authenticated read-only run-status discovery without exposing
 the stored candidate profile or provider details. Merge into `main` still requires

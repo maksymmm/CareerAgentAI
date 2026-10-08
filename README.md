@@ -272,7 +272,10 @@ An identical retry, including one that loses a concurrent create race, returns t
 existing owned run and durable ID; reuse with changed request content remains a
 conflict. Retries of runs created before owner-scoped IDs were introduced safely
 reuse the owned legacy ID after matching the canonical request, avoiding duplicate
-execution during rolling upgrades.
+execution after cutover. Mixed old/new workers are deliberately unsupported: startup
+requires `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-v1`, which operators may
+set only after draining every pre-scope worker as specified in
+`docs/deployment/candidate-id-cutover.md`.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
