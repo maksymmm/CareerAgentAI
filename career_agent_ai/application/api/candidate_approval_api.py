@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from hashlib import sha256
+from hashlib import sha256, sha512
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
@@ -48,16 +48,22 @@ def start_owner_scoped_run(
     client_run_id: str,
 ) -> CareerLoopResult:
     """Start or replay a run through the shared owner-scoped ID transition."""
-    durable_run_id = CandidateApprovalWSGIApp._owner_scoped_run_id(
-        request.user_id, client_run_id
+    legacy_ids = (
+        client_run_id,
+        CandidateApprovalWSGIApp._legacy_owner_scoped_run_id(
+            request.user_id, client_run_id
+        ),
     )
-    if client_run_id != durable_run_id:
+    for legacy_run_id in legacy_ids:
         try:
             return loop.replay_existing_start(
-                request, run_id=client_run_id, user_id=request.user_id
+                request, run_id=legacy_run_id, user_id=request.user_id
             )
         except (KeyError, PermissionError):
             pass
+    durable_run_id = CandidateApprovalWSGIApp._owner_scoped_run_id(
+        request.user_id, client_run_id
+    )
     return loop.start(request, run_id=durable_run_id)
 
 
@@ -111,7 +117,7 @@ class CandidateApprovalWSGIApp:
             )
         if is_existing_run:
             try:
-                run_id = validate_loop_identifier(parts[3], "run_id", maximum=120)
+                run_id = validate_loop_identifier(parts[3], "run_id", maximum=200)
             except (TypeError, ValueError) as exc:
                 return self._respond(
                     start_response,
@@ -282,7 +288,13 @@ class CandidateApprovalWSGIApp:
 
     @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
-        """Derive an opaque stable storage key without a cross-tenant namespace."""
+        """Derive a generation-namespaced key outside the legacy input space."""
+        material = f"{len(user_id)}:{user_id}{len(client_run_id)}:{client_run_id}"
+        return f"scoped-v2:{sha512(material.encode('utf-8')).hexdigest()}"
+
+    @staticmethod
+    def _legacy_owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
+        """Derive the transitional SHA-256 key for compatible replay only."""
         material = f"{len(user_id)}:{user_id}{len(client_run_id)}:{client_run_id}"
         return sha256(material.encode("utf-8")).hexdigest()
 
@@ -506,7 +518,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                     "schema": {
                         "type": "string",
                         "minLength": 1,
-                        "maxLength": 120,
+                        "maxLength": 200,
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
                     },
                 }],
@@ -561,7 +573,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                 "parameters": [{
                     "name": "run_id", "in": "path", "required": True,
                     "schema": {
-                        "type": "string", "minLength": 1, "maxLength": 120,
+                        "type": "string", "minLength": 1, "maxLength": 200,
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
                     },
                 }],

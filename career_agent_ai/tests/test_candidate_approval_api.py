@@ -182,6 +182,40 @@ def test_post_runs_replays_owned_legacy_identifier_without_creating_scoped_dupli
     assert payload == {"phase": "application_approval", "run_id": "run-legacy"}
 
 
+def test_post_runs_replays_transitional_scoped_identifier_before_v2_create():
+    transitional_id = CandidateApprovalWSGIApp._legacy_owner_scoped_run_id(
+        "candidate-1", "run-transition"
+    )
+
+    class TransitionalLoop(Loop):
+        def replay_existing_start(self, request, *, run_id, user_id):
+            if run_id == "run-transition":
+                raise KeyError(run_id)
+            assert run_id == transitional_id
+            assert user_id == request.user_id == "candidate-1"
+            return SimpleNamespace(
+                run_id=run_id, phase=SimpleNamespace(value="application_approval")
+            )
+
+        def start(self, request, *, run_id=None):
+            raise AssertionError("transitional replay must not create a v2 duplicate")
+
+    (status, _), payload = request(
+        app(TransitionalLoop()),
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": "run-transition",
+            "keyword": "logistics",
+            "candidate_profile": "Warehouse coordinator",
+        },
+        path="/v1/candidate/runs",
+    )
+
+    assert status == "201 Created"
+    assert payload == {"phase": "application_approval", "run_id": transitional_id}
+
+
 def test_post_runs_maps_unsupported_decimal_exponent_to_invalid_request():
     encoded = (
         b'{"schema_version":1e999999999999999999999999999999999999999999,'
@@ -307,10 +341,29 @@ def test_post_runs_scopes_same_client_run_id_to_authenticated_owner():
     assert first_request.user_id == "candidate-1"
     assert second_request.user_id == "candidate-2"
     assert first_id != second_id
-    assert len(first_id) == len(second_id) == 64
+    assert len(first_id) == len(second_id) == 138
+    assert first_id.startswith("scoped-v2:")
     assert first_id == CandidateApprovalWSGIApp._owner_scoped_run_id(
         "candidate-1", "run-shared"
     )
+
+
+def test_scoped_v2_identifier_cannot_be_preseeded_through_legacy_start_input():
+    derived_id = CandidateApprovalWSGIApp._owner_scoped_run_id(
+        "candidate-2", "anticipated"
+    )
+
+    assert len(derived_id) > 120
+    with pytest.raises(ValueError, match="120 characters"):
+        CandidateApprovalWSGIApp._start_request(
+            {
+                "schema_version": 1,
+                "run_id": derived_id,
+                "keyword": "logistics",
+                "candidate_profile": "Warehouse coordinator",
+            },
+            user_id="attacker",
+        )
 
 
 def test_post_runs_hashes_canonical_owner_and_parses_version_exactly():
