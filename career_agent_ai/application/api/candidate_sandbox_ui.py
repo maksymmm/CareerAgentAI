@@ -93,6 +93,7 @@ _HTML = """<!doctype html>
     byId('status').addEventListener('click', () => guarded(() => call(runPath('/status'))));
     byId('continue').addEventListener('click', () => guarded(() => call(runPath('/continue'), {method: 'POST'})));
     byId('prompt').addEventListener('click', () => guarded(async () => {
+      if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       approvalPrompt = await call(runPath('/approval'));
       byId('action-title').textContent = approvalPrompt.title;
       byId('action-details').textContent = JSON.stringify(approvalPrompt.details, null, 2);
@@ -105,6 +106,7 @@ _HTML = """<!doctype html>
       decisionInFlight = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
+      byId('prompt').disabled = true;
       const payload = {schema_version: 1, run_id: approvalPrompt.run_id,
         state_version: approvalPrompt.state_version,
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
@@ -114,6 +116,7 @@ _HTML = """<!doctype html>
       } finally {
         decisionInFlight = false;
         approvalPrompt = null;
+        byId('prompt').disabled = false;
       }
     }
     byId('approve').addEventListener('click', () => guarded(() => decide('approve')));
