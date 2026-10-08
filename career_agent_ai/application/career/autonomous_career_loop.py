@@ -185,7 +185,7 @@ class AutonomousCareerLoop:
         if not isinstance(request, CareerLoopRequest):
             raise TypeError("request must be a CareerLoopRequest.")
         raw_identifier = run_id if run_id is not None else uuid4().hex
-        identifier = validate_loop_identifier(raw_identifier, "run_id", maximum=120)
+        identifier = validate_loop_identifier(raw_identifier, "run_id", maximum=200)
         existing = self._states.get(identifier)
         if existing is not None:
             if existing.request == request:
@@ -479,7 +479,7 @@ class AutonomousCareerLoop:
     def _owned_state(self, run_id: str, user_id: str) -> CareerLoopState:
         """Load a run only for its authenticated caller before any gate or side effect."""
         caller = validate_loop_identifier(user_id, "user_id")
-        identifier = validate_loop_identifier(run_id, "run_id", maximum=120)
+        identifier = validate_loop_identifier(run_id, "run_id", maximum=200)
         state = self._states.get(identifier)
         if state is None or state.request.user_id != caller:
             # Do not disclose whether another tenant owns this identifier.

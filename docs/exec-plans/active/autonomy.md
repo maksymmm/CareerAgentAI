@@ -395,6 +395,10 @@ mixed entry points from creating a second run under the raw caller ID.
 Upgrade compatibility probes a caller's legacy unscoped ID through an owner-checked,
 request-matching replay path before creating a scoped run. Unsupported decimal
 exponents are classified as invalid input at both JSON endpoints rather than 500s.
+New durable IDs use a `scoped-v2:` generation namespace longer than the legacy input
+limit, while owner-checked replay preserves transitional SHA-256 scoped runs. This
+prevents a legacy caller from pre-seeding another owner's derived key. Rollback to a
+pre-scope build is forbidden after any scoped start; recovery must roll forward.
 Because pre-scope workers cannot understand owner-scoped keys, mixed-version serving
 is forbidden. Runtime startup requires an explicit drain-and-replace cutover gate and
 the deployment protocol records the required worker drain, verification, and rollback

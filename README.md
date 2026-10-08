@@ -266,7 +266,8 @@ candidate-owned run. Its versioned body accepts only a caller-supplied idempoten
 `run_id`, search keyword, bounded candidate profile, and optional location. The owner
 always comes from the bearer identity; messaging, calendar, provider, credential, and
 consequential-action controls are not accepted from the request. The caller-supplied
-ID is deterministically scoped to that owner and returned as an opaque durable run ID,
+ID is deterministically scoped to that owner, stored in a `scoped-v2:` generation
+namespace outside the legacy caller-ID range, and returned as an opaque durable run ID,
 so equal client IDs from different candidates neither conflict nor disclose existence.
 An identical retry, including one that loses a concurrent create race, returns the
 existing owned run and durable ID; reuse with changed request content remains a
@@ -276,7 +277,8 @@ reuse the owned legacy ID after matching the canonical request, avoiding duplica
 execution after cutover. Mixed old/new workers are deliberately unsupported: startup
 requires `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-v1`, which operators may
 set only after draining every pre-scope worker as specified in
-`docs/deployment/candidate-id-cutover.md`.
+`docs/deployment/candidate-id-cutover.md`. Once scoped traffic has started, rollback to
+a pre-scope build is forbidden; candidate starts stay disabled until a safe roll-forward.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

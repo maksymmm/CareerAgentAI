@@ -203,7 +203,7 @@ def build_candidate_approval_prompt(
         )
     details, fingerprint = _action_snapshot(action)
     return CandidateApprovalPrompt(
-        run_id=validate_loop_identifier(state.run_id, "run_id", maximum=120),
+        run_id=validate_loop_identifier(state.run_id, "run_id", maximum=200),
         state_version=state.version,
         action_kind=action.kind.value,
         title=action.title,

@@ -16,10 +16,15 @@ deployment is prohibited.
 5. Verify the health gate and replay one sandbox request before restoring traffic.
 
 Existing unscoped runs remain readable through the owner-checked legacy replay path.
-New starts use only the owner-scoped durable ID.
+Transitional SHA-256 scoped runs also remain replayable after owner and canonical-request
+verification. New starts use only the `scoped-v2:` generation namespace, whose keys are
+longer than the legacy endpoint's accepted caller-ID range and therefore cannot be
+pre-seeded through that endpoint.
 
 ## Rollback
 
-Drain all new workers before restoring a pre-scope build. Never route candidate start
-traffic to both generations at once. If the worker generation cannot be proven, keep
-candidate start traffic disabled and leave approval/recovery traffic at the human gate.
+After any `scoped-v2:` start has been accepted, rollback to a pre-scope build is
+prohibited: draining workers does not make a later raw-ID retry safe. Keep candidate
+start traffic disabled and roll forward with a corrected scoped build. Approval and
+recovery traffic may remain at the human gate. A pre-scope build may be restored only
+before traffic was enabled and with evidence that no scoped start was persisted.

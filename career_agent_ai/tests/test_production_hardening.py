@@ -167,7 +167,8 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
     assert start_statuses == ["201 Created"]
     durable_run_id = start_payload["run_id"]
     assert durable_run_id != "candidate-run"
-    assert len(durable_run_id) == 64
+    assert durable_run_id.startswith("scoped-v2:")
+    assert len(durable_run_id) == 138
     assert start_payload["phase"] == CareerLoopPhase.APPLICATION_APPROVAL.value
 
     programmatic_replay = app.start(request(), run_id="candidate-run")
