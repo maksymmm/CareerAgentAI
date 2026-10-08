@@ -20,6 +20,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     validate_loop_identifier,
 )
+from .candidate_sandbox_ui import candidate_sandbox_html
 
 
 _STRICT_START_TEXT_PATTERN = (
@@ -89,6 +90,16 @@ class CandidateApprovalWSGIApp:
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
         path = str(environ.get("PATH_INFO", ""))
+        method = str(environ.get("REQUEST_METHOD", "GET")).upper()
+        if path == "/sandbox/candidate":
+            if method != "GET":
+                return self._respond(
+                    start_response,
+                    "405 Method Not Allowed",
+                    {"error": "method_not_allowed"},
+                    [("Allow", "GET")],
+                )
+            return self._respond_html(start_response, candidate_sandbox_html())
         parts = path.strip("/").split("/")
         is_start = parts == ["v1", "candidate", "runs"]
         is_existing_run = (
@@ -101,7 +112,6 @@ class CandidateApprovalWSGIApp:
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
         token = credentials.strip() if separator and scheme.casefold() == "bearer" else ""
-        method = str(environ.get("REQUEST_METHOD", "GET")).upper()
         try:
             user_id = self._resolve_bearer(token) if token else None
         except Exception:
@@ -374,6 +384,24 @@ class CandidateApprovalWSGIApp:
         start_response(status, headers)
         return (body,)
 
+    @staticmethod
+    def _respond_html(start_response, body: bytes):
+        headers = [
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", str(len(body))),
+            ("Cache-Control", "no-store"),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Referrer-Policy", "no-referrer"),
+            (
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; connect-src 'self'; "
+                "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+            ),
+        ]
+        start_response("200 OK", headers)
+        return (body,)
+
 
 def candidate_approval_openapi_document() -> dict[str, Any]:
     """Return the OpenAPI 3.1 contract for the candidate approval boundary."""
@@ -486,6 +514,24 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}}
         },
         "paths": {
+            "/sandbox/candidate": {
+                "get": {
+                    "operationId": "getCandidateSandbox",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "Static candidate sandbox interface",
+                            "content": {
+                                "text/html": {"schema": {"type": "string"}}
+                            },
+                        },
+                        "405": {
+                            "description": "Only GET is allowed",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            },
             "/v1/candidate/runs": {
                 "post": {
                     "operationId": "startCandidateRun",

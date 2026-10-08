@@ -413,9 +413,13 @@ foreign corruption disclosure. Restart/thread, human/reconciliation/terminal,
 authentication, method and sanitized-failure regression tests cover the boundary and
 published OpenAPI schema.
 
-Next priority: build a candidate-facing sandbox approval interface using the existing
-start, status and prompt-bound approval contracts. Merge into `main` still requires
-explicit user approval.
+Delivered: a candidate-facing sandbox interface now uses the existing start, status,
+recovery and prompt-bound approval contracts. It keeps bearer credentials only in
+page memory, renders server data through text-only DOM APIs, and submits the exact
+run ID, state version, and action fingerprint that the candidate inspected. Static
+delivery has no-store, anti-sniffing, no-referrer and restrictive CSP headers; tests
+cover the route, security contract, method boundary, and absence of browser storage.
+Merge into `main` still requires explicit user approval.
 
 Release review hardening: all run-derived application, communication and interview
 identifiers now use a deterministic bounded namespace when a caller supplies a long
@@ -432,4 +436,5 @@ The project is not considered complete merely because modules exist. Completion 
 
 Approval API hardening: duplicate JSON members are rejected before submission
 validation or durable resume, including repeated decisions and escaped names.
-The next product priority remains sandbox-gated candidate-service composition.
+The next product priority is a browser-level end-to-end smoke test of the sandbox
+flow followed by sandbox-gated candidate-service composition.
