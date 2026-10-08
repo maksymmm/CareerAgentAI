@@ -240,9 +240,9 @@ def build_candidate_sandbox_app_from_env(
         "CAREER_AGENT_CANDIDATE_SANDBOX",
     ):
         raise PermissionError("Candidate sandbox must be explicitly enabled.")
-    if source.get("CAREER_AGENT_CANDIDATE_ID_CUTOVER") != "drain-and-replace-v1":
+    if source.get("CAREER_AGENT_CANDIDATE_ID_CUTOVER") != "drain-and-replace-scoped-v2":
         raise PermissionError(
-            "Candidate sandbox requires the drain-and-replace-v1 ID cutover gate."
+            "Candidate sandbox requires the drain-and-replace-scoped-v2 ID cutover gate."
         )
     config = RuntimeConfig.from_env(environ)
     if config.allow_network_providers or config.allow_consequential_actions:

@@ -275,7 +275,7 @@ conflict. HTTP and programmatic starts share this same scoped-ID/replay path, so
 mixing the two entry points cannot create a raw-ID duplicate. Retries of runs created before owner-scoped IDs were introduced safely
 reuse the owned legacy ID after matching the canonical request, avoiding duplicate
 execution after cutover. Mixed old/new workers are deliberately unsupported: startup
-requires `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-v1`, which operators may
+requires `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-scoped-v2`, which operators may
 set only after draining every pre-scope worker as specified in
 `docs/deployment/candidate-id-cutover.md`. Once scoped traffic has started, rollback to
 a pre-scope build is forbidden; candidate starts stay disabled until a safe roll-forward.

@@ -11,7 +11,7 @@ deployment is prohibited.
 2. Drain in-flight requests and confirm that no pre-scope worker remains able to serve
    `POST /v1/candidate/runs`.
 3. Deploy only the new build to the entire candidate API pool.
-4. Set `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-v1` only after steps 1–3
+4. Set `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-scoped-v2` only after steps 1–3
    are satisfied, then start the new workers.
 5. Verify the health gate and replay one sandbox request before restoring traffic.
 

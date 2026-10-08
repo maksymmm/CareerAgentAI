@@ -89,11 +89,16 @@ def test_candidate_sandbox_requires_explicit_safe_runtime_flags(tmp_path):
     base = {
         "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
         "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
-        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
     }
     with pytest.raises(PermissionError, match="explicitly enabled"):
         build_candidate_sandbox_app_from_env(
             resolve_bearer=lambda token: token, environ={}
+        )
+    with pytest.raises(PermissionError, match="cutover gate"):
+        build_candidate_sandbox_app_from_env(
+            resolve_bearer=lambda token: token,
+            environ={**base, "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1"},
         )
     with pytest.raises(PermissionError, match="cutover gate"):
         build_candidate_sandbox_app_from_env(
@@ -122,7 +127,7 @@ def test_candidate_sandbox_requires_explicit_safe_runtime_flags(tmp_path):
             resolve_bearer=lambda token: token,
             environ={
                 "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
-                "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
+                "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
             },
         )
 
@@ -143,7 +148,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         environ={
             "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
             "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
-            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
         },
     )
     start_body = json.dumps({
@@ -227,7 +232,7 @@ def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
             environ={
                 "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
                 "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
-                "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
+                "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
             },
         )
 
@@ -238,7 +243,7 @@ def test_candidate_sandbox_authenticates_before_opening_storage(tmp_path, monkey
         environ={
             "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
             "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
-            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
         },
     )
 
