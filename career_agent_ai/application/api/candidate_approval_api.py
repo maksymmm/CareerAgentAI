@@ -514,6 +514,24 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}}
         },
         "paths": {
+            "/sandbox/candidate": {
+                "get": {
+                    "operationId": "getCandidateSandbox",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "Static candidate sandbox interface",
+                            "content": {
+                                "text/html": {"schema": {"type": "string"}}
+                            },
+                        },
+                        "405": {
+                            "description": "Only GET is allowed",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            },
             "/v1/candidate/runs": {
                 "post": {
                     "operationId": "startCandidateRun",

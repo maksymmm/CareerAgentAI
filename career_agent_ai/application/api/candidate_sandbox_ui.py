@@ -62,6 +62,7 @@ _HTML = """<!doctype html>
   <script>
     'use strict';
     let approvalPrompt = null;
+    let decisionInFlight = false;
     const byId = (id) => document.getElementById(id);
     const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
@@ -100,14 +101,20 @@ _HTML = """<!doctype html>
     }));
     async function decide(decision) {
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
+      if (decisionInFlight) throw new Error('A decision is already being submitted.');
+      decisionInFlight = true;
+      byId('approve').disabled = true;
+      byId('decline').disabled = true;
       const payload = {schema_version: 1, run_id: approvalPrompt.run_id,
         state_version: approvalPrompt.state_version,
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
-      await call(runPath('/approval'), {method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)});
-      approvalPrompt = null;
-      byId('approve').disabled = true;
-      byId('decline').disabled = true;
+      try {
+        await call(runPath('/approval'), {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)});
+      } finally {
+        decisionInFlight = false;
+        approvalPrompt = null;
+      }
     }
     byId('approve').addEventListener('click', () => guarded(() => decide('approve')));
     byId('decline').addEventListener('click', () => guarded(() => decide('decline')));

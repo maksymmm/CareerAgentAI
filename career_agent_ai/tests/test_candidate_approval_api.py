@@ -104,6 +104,13 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "/v1/candidate/runs" in html
     assert "action_fingerprint: approvalPrompt.action_fingerprint" in html
     assert "state_version: approvalPrompt.state_version" in html
+    assert "if (decisionInFlight)" in html
+    decision_start = html.index("async function decide")
+    decision_post = html.index("await call(runPath('/approval')", decision_start)
+    assert html.index("decisionInFlight = true", decision_start) < decision_post
+    assert html.index(
+        "byId('approve').disabled = true", decision_start
+    ) < decision_post
     assert "localStorage" not in html
     assert "sessionStorage" not in html
     assert ".innerHTML" not in html
@@ -115,6 +122,16 @@ def test_candidate_sandbox_ui_rejects_non_get_methods_without_authentication():
     assert status == "405 Method Not Allowed"
     assert ("Allow", "GET") in headers
     assert json.loads(body) == {"error": "method_not_allowed"}
+
+
+def test_openapi_publishes_public_candidate_sandbox_route():
+    operation = candidate_approval_openapi_document()["paths"]["/sandbox/candidate"]["get"]
+
+    assert operation["security"] == []
+    assert operation["responses"]["200"]["content"] == {
+        "text/html": {"schema": {"type": "string"}}
+    }
+    assert "405" in operation["responses"]
 
 
 def test_authentication_happens_before_durable_prompt_access():
