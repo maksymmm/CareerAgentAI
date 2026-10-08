@@ -50,6 +50,7 @@ from career_agent_ai.application.search.job_provider import JobProvider
 from career_agent_ai.application.search.search_service import SearchService
 from career_agent_ai.application.scheduling import FakeCalendarAdapter, SchedulingService
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+    SQLiteCandidateRunStatusProjection,
     SQLiteCareerLoopRepository,
 )
 from career_agent_ai.application.storage.sqlite_communication_repository import (
@@ -197,12 +198,10 @@ class _RequestCandidateLoop:
             database.close()
 
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]:
-        """Read a candidate status snapshot using request-thread storage."""
-        database = SQLiteDatabase(self._database_path)
+        """Read status without permitting database creation, migration, or writes."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
         try:
-            return _build_candidate_loop(database, self._jobs).get_candidate_run_status(
-                run_id, user_id=user_id
-            )
+            return SQLiteCandidateRunStatusProjection(database).get(run_id, user_id=user_id)
         finally:
             database.close()
 

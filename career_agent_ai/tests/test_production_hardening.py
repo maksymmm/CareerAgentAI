@@ -1381,3 +1381,59 @@ def test_candidate_status_is_restart_safe_private_and_read_only(tmp_path, monkey
         assert SQLiteCareerLoopRepository(reopened).get(state.run_id) == before
     finally:
         reopened.close()
+
+
+def test_candidate_status_does_not_recreate_missing_database(tmp_path):
+    database_path = tmp_path / "missing-after-start.sqlite"
+    runtime = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "user-1" if token == "owner" else None,
+        environ={
+            "CAREER_AGENT_DB_PATH": str(database_path),
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        },
+    )
+    database_path.unlink()
+    try:
+        meta, payload = _wsgi_call(
+            runtime, "/v1/candidate/runs/missing/status", token="owner"
+        )
+        assert meta["status"] == "500 Internal Server Error"
+        assert payload == {"error": "internal_error"}
+        assert not database_path.exists()
+    finally:
+        runtime.close()
+
+
+def test_candidate_status_checks_owner_before_decoding_malformed_payload(tmp_path):
+    database_path = str(tmp_path / "malformed-foreign.sqlite")
+    database = SQLiteDatabase(database_path)
+    repository = SQLiteCareerLoopRepository(database)
+    foreign = CareerLoopState(run_id="foreign-run", request=CareerLoopRequest(
+        user_id="user-2", keyword="logistics", candidate_profile=PROFILE,
+    ))
+    repository.save(foreign)
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET payload_json = ? WHERE run_id = ?",
+        ("{malformed private state", foreign.run_id),
+    )
+    database.connection.commit()
+    database.close()
+
+    with build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: {"owner": "user-1", "foreign": "user-2"}.get(token),
+        environ={
+            "CAREER_AGENT_DB_PATH": database_path,
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        },
+    ) as runtime:
+        hidden = _wsgi_call(runtime, "/v1/candidate/runs/foreign-run/status", token="owner")
+        missing = _wsgi_call(runtime, "/v1/candidate/runs/missing/status", token="owner")
+        assert hidden == missing
+        assert hidden[0]["status"] == "404 Not Found"
+        owned_meta, owned_payload = _wsgi_call(
+            runtime, "/v1/candidate/runs/foreign-run/status", token="foreign"
+        )
+        assert owned_meta["status"] == "500 Internal Server Error"
+        assert owned_payload == {"error": "internal_error"}

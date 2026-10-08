@@ -407,8 +407,11 @@ ordering.
 Delivered: authenticated read-only run-status discovery exposes only a strict
 versioned status projection. Ownership is checked before projection; foreign and
 missing IDs return identical responses. Reads do not advance or save state or claim
-execution. Restart/thread, human/reconciliation/terminal, authentication, method and
-sanitized-failure regression tests cover the boundary and published OpenAPI schema.
+execution. The request opens existing SQLite state read-only and checks durable owner
+metadata before private-payload decoding, preventing missing-store recreation and
+foreign corruption disclosure. Restart/thread, human/reconciliation/terminal,
+authentication, method and sanitized-failure regression tests cover the boundary and
+published OpenAPI schema.
 
 Next priority: build a candidate-facing sandbox approval interface using the existing
 start, status and prompt-bound approval contracts. Merge into `main` still requires
