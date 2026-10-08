@@ -1406,6 +1406,16 @@ def test_maximum_length_run_id_uses_bounded_stable_child_identifiers(tmp_path):
     assert autonomous_loop_module._bounded_run_child_id("short", ":message") == (
         "short:message"
     )
+    reserved_run_id = f"run-child:{sha256(run_id.encode('utf-8')).hexdigest()}"
+    assert all(
+        autonomous_loop_module._bounded_run_child_id(reserved_run_id, suffix)
+        != value
+        for suffix, value in zip(suffixes, derived, strict=True)
+    )
+    assert all(
+        len(autonomous_loop_module._bounded_run_child_id(reserved_run_id, suffix)) <= 200
+        for suffix in suffixes
+    )
 
     path = str(tmp_path / "maximum-run-id.sqlite")
     database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)

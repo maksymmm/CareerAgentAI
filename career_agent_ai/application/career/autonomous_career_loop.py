@@ -55,14 +55,21 @@ from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingSer
 
 
 _MAX_DERIVED_IDENTIFIER_LENGTH = 200
+_BOUNDED_RUN_CHILD_PREFIX = "run-child:"
 
 
 def _bounded_run_child_id(run_id: str, suffix: str) -> str:
     """Derive a stable child ID without exceeding downstream identifier budgets."""
     candidate = f"{run_id}{suffix}"
-    if len(candidate) <= _MAX_DERIVED_IDENTIFIER_LENGTH:
+    if (
+        len(candidate) <= _MAX_DERIVED_IDENTIFIER_LENGTH
+        and not run_id.startswith(_BOUNDED_RUN_CHILD_PREFIX)
+    ):
         return candidate
-    bounded = f"run-child:{sha256(run_id.encode('utf-8')).hexdigest()}{suffix}"
+    bounded = (
+        f"{_BOUNDED_RUN_CHILD_PREFIX}"
+        f"{sha256(run_id.encode('utf-8')).hexdigest()}{suffix}"
+    )
     if len(bounded) > _MAX_DERIVED_IDENTIFIER_LENGTH:
         raise ValueError("Derived run child identifier exceeds its storage budget.")
     return bounded
