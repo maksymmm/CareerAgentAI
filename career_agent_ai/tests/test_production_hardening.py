@@ -170,6 +170,10 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
     assert len(durable_run_id) == 64
     assert start_payload["phase"] == CareerLoopPhase.APPLICATION_APPROVAL.value
 
+    programmatic_replay = app.start(request(), run_id="candidate-run")
+    assert programmatic_replay.run_id == durable_run_id
+    assert programmatic_replay.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
     statuses = []
     payload = json.loads(
         b"".join(

@@ -270,7 +270,8 @@ ID is deterministically scoped to that owner and returned as an opaque durable r
 so equal client IDs from different candidates neither conflict nor disclose existence.
 An identical retry, including one that loses a concurrent create race, returns the
 existing owned run and durable ID; reuse with changed request content remains a
-conflict. Retries of runs created before owner-scoped IDs were introduced safely
+conflict. HTTP and programmatic starts share this same scoped-ID/replay path, so
+mixing the two entry points cannot create a raw-ID duplicate. Retries of runs created before owner-scoped IDs were introduced safely
 reuse the owned legacy ID after matching the canonical request, avoiding duplicate
 execution after cutover. Mixed old/new workers are deliberately unsupported: startup
 requires `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-v1`, which operators may
