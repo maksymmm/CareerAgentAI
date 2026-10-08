@@ -17,6 +17,7 @@ from career_agent_ai.application.career import (
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopResult,
+    CareerLoopPhase,
     validate_loop_identifier,
 )
 
@@ -37,6 +38,7 @@ class CandidateApprovalLoop(Protocol):
         self, request: CareerLoopRequest, *, run_id: str, user_id: str
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
+    def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -92,7 +94,7 @@ class CandidateApprovalWSGIApp:
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
-            and parts[4] in {"approval", "continue"}
+            and parts[4] in {"approval", "continue", "status"}
         )
         if not is_start and not is_existing_run:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
@@ -163,6 +165,16 @@ class CandidateApprovalWSGIApp:
                     start_response,
                     "201 Created",
                     {"run_id": result.run_id, "phase": result.phase.value},
+                )
+            if parts[4] == "status":
+                if method != "GET":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "GET")],
+                    )
+                return self._respond(
+                    start_response, "200 OK",
+                    self._loop.get_candidate_run_status(run_id, user_id=user_id),
                 )
             if parts[4] == "continue":
                 if method != "POST":
@@ -507,6 +519,43 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         },
                         "415": {
                             "description": "Request body is not application/json",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            },
+            "/v1/candidate/runs/{run_id}/status": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {
+                        "type": "string", "minLength": 1, "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
+                }],
+                "get": {
+                    "operationId": "getCandidateRunStatus",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Read-only owner-scoped durable status snapshot",
+                            "content": content({
+                                "type": "object",
+                                "required": ["schema_version", "run_id", "state_version",
+                                             "phase", "waiting_for_human", "terminal"],
+                                "properties": {
+                                    "schema_version": {"type": "integer", "const": 1},
+                                    "run_id": {"type": "string", "minLength": 1},
+                                    "state_version": {"type": "integer", "minimum": 0},
+                                    "phase": {"type": "string", "enum": [p.value for p in CareerLoopPhase]},
+                                    "waiting_for_human": {"type": "boolean"},
+                                    "terminal": {"type": "boolean"},
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "405": {
+                            "description": "Only GET is allowed",
                             "content": content(error_schema),
                         },
                     },

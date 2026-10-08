@@ -50,11 +50,12 @@ class SQLiteCareerLoopRepository:
                 connection.execute(
                     """
                     INSERT INTO autonomous_career_loops (
-                        run_id, payload_json, updated_at, version
-                    ) VALUES (?, ?, ?, ?)
+                        run_id, owner_user_id, payload_json, updated_at, version
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         state.run_id,
+                        state.request.user_id,
                         serialized,
                         state.updated_at.isoformat(),
                         next_version,
@@ -66,7 +67,7 @@ class SQLiteCareerLoopRepository:
                         """
                         UPDATE autonomous_career_loops
                         SET payload_json = ?, updated_at = ?, version = ?
-                        WHERE run_id = ? AND version = ?
+                        WHERE run_id = ? AND owner_user_id = ? AND version = ?
                           AND execution_claim_owner IS NULL
                         """,
                         (
@@ -74,6 +75,7 @@ class SQLiteCareerLoopRepository:
                             state.updated_at.isoformat(),
                             next_version,
                             state.run_id,
+                            state.request.user_id,
                             current_version,
                         ),
                     )
@@ -82,7 +84,7 @@ class SQLiteCareerLoopRepository:
                         """
                         UPDATE autonomous_career_loops
                         SET payload_json = ?, updated_at = ?, version = ?
-                        WHERE run_id = ? AND version = ?
+                        WHERE run_id = ? AND owner_user_id = ? AND version = ?
                           AND execution_claim_owner = ?
                         """,
                         (
@@ -90,6 +92,7 @@ class SQLiteCareerLoopRepository:
                             state.updated_at.isoformat(),
                             next_version,
                             state.run_id,
+                            state.request.user_id,
                             current_version,
                             expected_owner_id,
                         ),
@@ -288,6 +291,7 @@ class SQLiteCareerLoopRepository:
             """
             CREATE TABLE IF NOT EXISTS autonomous_career_loops (
                 run_id TEXT PRIMARY KEY,
+                owner_user_id TEXT,
                 payload_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
@@ -307,6 +311,18 @@ class SQLiteCareerLoopRepository:
                 "ALTER TABLE autonomous_career_loops "
                 "ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
             )
+        if "owner_user_id" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE autonomous_career_loops ADD COLUMN owner_user_id TEXT"
+            )
+            self._database.connection.execute(
+                """
+                UPDATE autonomous_career_loops
+                SET owner_user_id = json_extract(payload_json, '$.request.user_id')
+                WHERE json_valid(payload_json)
+                  AND json_type(payload_json, '$.request.user_id') = 'text'
+                """
+            )
         if "execution_claim_owner" not in columns:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops "
@@ -323,8 +339,13 @@ class SQLiteCareerLoopRepository:
             ON autonomous_career_loops(updated_at, run_id)
             """
         )
+        self._database.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_autonomous_loop_owner
+            ON autonomous_career_loops(owner_user_id, run_id)
+            """
+        )
         self._database.connection.commit()
-
     @classmethod
     def _serialize(
         cls, state: CareerLoopState, *, version: int | None = None
@@ -472,3 +493,49 @@ class SQLiteCareerLoopRepository:
         if not isinstance(value, str):
             raise ValueError("Persisted optional text must be text or null.")
         return value
+
+
+class SQLiteCandidateRunStatusProjection:
+    """Read a minimal owner-scoped run status from an existing SQLite database."""
+
+    def __init__(self, database: SQLiteDatabase) -> None:
+        if database.is_memory:
+            raise ValueError("Candidate status projection requires durable storage.")
+        self._database = database
+
+    def get(self, run_id: str, *, user_id: str) -> dict[str, Any]:
+        """Return status after checking trusted ownership metadata before JSON parsing."""
+        identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
+        owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
+        row = self._database.connection.execute(
+            """
+            SELECT owner_user_id, payload_json, version
+            FROM autonomous_career_loops
+            WHERE run_id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None or row[0] != owner:
+            raise KeyError("Unknown autonomous career loop for this user.")
+        try:
+            payload = json.loads(row[1])
+            if not isinstance(payload, dict):
+                raise ValueError("status payload must be an object")
+            phase = CareerLoopPhase(payload["phase"])
+            payload_version = payload["version"]
+            if (
+                not isinstance(payload_version, int)
+                or isinstance(payload_version, bool)
+                or payload_version != row[2]
+            ):
+                raise ValueError("status version is malformed")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("Persisted autonomous-loop status is malformed.") from exc
+        return {
+            "schema_version": 1,
+            "run_id": identifier,
+            "state_version": payload_version,
+            "phase": phase.value,
+            "waiting_for_human": payload.get("pending_human_action") is not None,
+            "terminal": phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
+        }

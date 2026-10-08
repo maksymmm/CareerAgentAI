@@ -404,8 +404,17 @@ is forbidden. Runtime startup requires an explicit drain-and-replace cutover gat
 the deployment protocol records the required worker drain, verification, and rollback
 ordering.
 
-Next priority: define authenticated read-only run-status discovery without exposing
-the stored candidate profile or provider details. Merge into `main` still requires
+Delivered: authenticated read-only run-status discovery exposes only a strict
+versioned status projection. Ownership is checked before projection; foreign and
+missing IDs return identical responses. Reads do not advance or save state or claim
+execution. The request opens existing SQLite state read-only and checks durable owner
+metadata before private-payload decoding, preventing missing-store recreation and
+foreign corruption disclosure. Restart/thread, human/reconciliation/terminal,
+authentication, method and sanitized-failure regression tests cover the boundary and
+published OpenAPI schema.
+
+Next priority: build a candidate-facing sandbox approval interface using the existing
+start, status and prompt-bound approval contracts. Merge into `main` still requires
 explicit user approval.
 
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.

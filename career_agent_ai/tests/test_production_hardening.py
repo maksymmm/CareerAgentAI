@@ -1316,3 +1316,124 @@ def test_operational_wsgi_rejects_unsafe_auth_tokens(token):
     service = OperationalApiService(SQLiteOperationalProbe(SQLiteDatabase()))
     with pytest.raises((TypeError, ValueError)):
         OperationalWSGIApp(service, bearer_token=token)
+
+
+@pytest.mark.parametrize('phase,kind', [
+    (CareerLoopPhase.SEARCH, None),
+    (CareerLoopPhase.APPLICATION_APPROVAL, HumanActionKind.APPROVE_APPLICATION),
+    (CareerLoopPhase.APPLICATION_RECONCILIATION, HumanActionKind.RECONCILE_APPLICATION_SUBMISSION),
+    (CareerLoopPhase.COMPLETE, None),
+    (CareerLoopPhase.FAILED, None),
+])
+def test_candidate_status_is_restart_safe_private_and_read_only(tmp_path, monkeypatch, phase, kind):
+    from career_agent_ai.application.api import candidate_approval_openapi_document
+    from career_agent_ai.application.career.autonomous_career_loop import AutonomousCareerLoop
+
+    database_path = str(tmp_path / 'status.sqlite')
+    database = SQLiteDatabase(database_path)
+    repository = SQLiteCareerLoopRepository(database)
+    state = CareerLoopState(
+        run_id='scoped-v2:' + 'a' * 128, request=request(), phase=phase,
+        last_error='secret provider credentials',
+        pending_human_action=None if kind is None else HumanActionEvent(
+            kind=kind, title='private title', details={'secret': 'private content'},
+        ),
+    )
+    repository.save(state)
+    before = repository.get(state.run_id)
+    database.close()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('GET status must never execute or persist a run')
+
+    monkeypatch.setattr(AutonomousCareerLoop, '_continue', forbidden)
+    monkeypatch.setattr(SQLiteCareerLoopRepository, 'save', forbidden)
+    monkeypatch.setattr(SQLiteCareerLoopRepository, 'claim_execution', forbidden)
+    with build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: {'owner': 'user-1', 'foreign': 'user-2'}.get(token),
+        environ={
+            'CAREER_AGENT_DB_PATH': database_path,
+            'CAREER_AGENT_CANDIDATE_SANDBOX': 'true',
+            'CAREER_AGENT_CANDIDATE_ID_CUTOVER': 'drain-and-replace-scoped-v2',
+        },
+    ) as runtime:
+        path = f'/v1/candidate/runs/{state.run_id}/status'
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            meta, payload = executor.submit(_wsgi_call, runtime, path, token='owner').result()
+        assert meta['status'] == '200 OK'
+        assert payload == {
+            'schema_version': 1, 'run_id': state.run_id, 'state_version': before.version,
+            'phase': phase.value, 'waiting_for_human': kind is not None,
+            'terminal': phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
+        }
+        assert meta['headers']['Cache-Control'] == 'no-store'
+        foreign = _wsgi_call(runtime, path, token='foreign')
+        missing = _wsgi_call(runtime, '/v1/candidate/runs/missing/status', token='owner')
+        assert foreign == missing
+        assert foreign[0]['status'] == '404 Not Found'
+        schema = candidate_approval_openapi_document()['paths']['/v1/candidate/runs/{run_id}/status']['get']
+        assert schema['security'] == [{'bearerAuth': []}]
+        properties = schema['responses']['200']['content']['application/json']['schema']
+        assert set(properties['required']) == set(payload)
+        assert properties['additionalProperties'] is False
+    reopened = SQLiteDatabase(database_path)
+    try:
+        assert SQLiteCareerLoopRepository(reopened).get(state.run_id) == before
+    finally:
+        reopened.close()
+
+
+def test_candidate_status_does_not_recreate_missing_database(tmp_path):
+    database_path = tmp_path / "missing-after-start.sqlite"
+    runtime = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "user-1" if token == "owner" else None,
+        environ={
+            "CAREER_AGENT_DB_PATH": str(database_path),
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        },
+    )
+    database_path.unlink()
+    try:
+        meta, payload = _wsgi_call(
+            runtime, "/v1/candidate/runs/missing/status", token="owner"
+        )
+        assert meta["status"] == "500 Internal Server Error"
+        assert payload == {"error": "internal_error"}
+        assert not database_path.exists()
+    finally:
+        runtime.close()
+
+
+def test_candidate_status_checks_owner_before_decoding_malformed_payload(tmp_path):
+    database_path = str(tmp_path / "malformed-foreign.sqlite")
+    database = SQLiteDatabase(database_path)
+    repository = SQLiteCareerLoopRepository(database)
+    foreign = CareerLoopState(run_id="foreign-run", request=CareerLoopRequest(
+        user_id="user-2", keyword="logistics", candidate_profile=PROFILE,
+    ))
+    repository.save(foreign)
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET payload_json = ? WHERE run_id = ?",
+        ("{malformed private state", foreign.run_id),
+    )
+    database.connection.commit()
+    database.close()
+
+    with build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: {"owner": "user-1", "foreign": "user-2"}.get(token),
+        environ={
+            "CAREER_AGENT_DB_PATH": database_path,
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        },
+    ) as runtime:
+        hidden = _wsgi_call(runtime, "/v1/candidate/runs/foreign-run/status", token="owner")
+        missing = _wsgi_call(runtime, "/v1/candidate/runs/missing/status", token="owner")
+        assert hidden == missing
+        assert hidden[0]["status"] == "404 Not Found"
+        owned_meta, owned_payload = _wsgi_call(
+            runtime, "/v1/candidate/runs/foreign-run/status", token="foreign"
+        )
+        assert owned_meta["status"] == "500 Internal Server Error"
+        assert owned_payload == {"error": "internal_error"}

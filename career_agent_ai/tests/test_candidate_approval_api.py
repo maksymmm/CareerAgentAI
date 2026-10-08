@@ -795,3 +795,34 @@ def test_post_rejects_duplicate_json_members_before_resuming(duplicate):
         "approval body contains duplicate JSON members."
     )
     assert loop.submission is None
+
+
+@pytest.mark.parametrize('method,token,expected', [
+    ('GET', '', '401 Unauthorized'),
+    ('GET', 'invalid', '401 Unauthorized'),
+    ('POST', 'valid', '405 Method Not Allowed'),
+    ('DELETE', 'valid', '405 Method Not Allowed'),
+])
+def test_status_auth_and_method_reject_before_storage(method, token, expected):
+    class ForbiddenLoop:
+        def get_candidate_run_status(self, *args, **kwargs):
+            pytest.fail('rejected request must not access storage')
+
+    (status, headers), _ = request(
+        app(ForbiddenLoop()), path='/v1/candidate/runs/run-1/status',
+        method=method, token=token,
+    )
+    assert status == expected
+    assert ('Cache-Control', 'no-store') in headers
+    if expected.startswith('405'):
+        assert ('Allow', 'GET') in headers
+
+
+def test_status_storage_failure_is_sanitized():
+    class BrokenLoop:
+        def get_candidate_run_status(self, *args, **kwargs):
+            raise RuntimeError('private provider and profile details')
+
+    (status, _), payload = request(app(BrokenLoop()), path='/v1/candidate/runs/run-1/status')
+    assert status == '500 Internal Server Error'
+    assert payload == {'error': 'internal_error'}
