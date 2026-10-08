@@ -89,10 +89,19 @@ def test_candidate_sandbox_requires_explicit_safe_runtime_flags(tmp_path):
     base = {
         "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
         "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
     }
     with pytest.raises(PermissionError, match="explicitly enabled"):
         build_candidate_sandbox_app_from_env(
             resolve_bearer=lambda token: token, environ={}
+        )
+    with pytest.raises(PermissionError, match="cutover gate"):
+        build_candidate_sandbox_app_from_env(
+            resolve_bearer=lambda token: token,
+            environ={
+                "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
+                "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            },
         )
     for field in (
         "CAREER_AGENT_ALLOW_NETWORK_PROVIDERS",
@@ -111,7 +120,10 @@ def test_candidate_sandbox_requires_explicit_safe_runtime_flags(tmp_path):
     with pytest.raises(ValueError, match="durable SQLite"):
         build_candidate_sandbox_app_from_env(
             resolve_bearer=lambda token: token,
-            environ={"CAREER_AGENT_CANDIDATE_SANDBOX": "true"},
+            environ={
+                "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+                "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
+            },
         )
 
 
@@ -131,6 +143,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         environ={
             "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
             "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
         },
     )
     start_body = json.dumps({
@@ -152,10 +165,14 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         lambda status, headers: start_statuses.append(status),
     )))
     assert start_statuses == ["201 Created"]
-    assert start_payload == {
-        "run_id": "candidate-run",
-        "phase": CareerLoopPhase.APPLICATION_APPROVAL.value,
-    }
+    durable_run_id = start_payload["run_id"]
+    assert durable_run_id != "candidate-run"
+    assert len(durable_run_id) == 64
+    assert start_payload["phase"] == CareerLoopPhase.APPLICATION_APPROVAL.value
+
+    programmatic_replay = app.start(request(), run_id="candidate-run")
+    assert programmatic_replay.run_id == durable_run_id
+    assert programmatic_replay.phase == CareerLoopPhase.APPLICATION_APPROVAL
 
     statuses = []
     payload = json.loads(
@@ -163,7 +180,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
             app(
                 {
                     "REQUEST_METHOD": "GET",
-                    "PATH_INFO": "/v1/candidate/runs/candidate-run/approval",
+                    "PATH_INFO": f"/v1/candidate/runs/{durable_run_id}/approval",
                     "HTTP_AUTHORIZATION": "Bearer sandbox-token",
                 },
                 lambda status, headers: statuses.append(status),
@@ -171,7 +188,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         )
     )
     assert statuses == ["200 OK"]
-    assert payload["run_id"] == "candidate-run"
+    assert payload["run_id"] == durable_run_id
     assert payload["action_kind"] == "approve_application"
 
     def threaded_get() -> str:
@@ -180,7 +197,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
             app(
                 {
                     "REQUEST_METHOD": "GET",
-                    "PATH_INFO": "/v1/candidate/runs/candidate-run/approval",
+                    "PATH_INFO": f"/v1/candidate/runs/{durable_run_id}/approval",
                     "HTTP_AUTHORIZATION": "Bearer sandbox-token",
                 },
                 lambda status, headers: threaded_statuses.append(status),
@@ -209,6 +226,7 @@ def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
             environ={
                 "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
                 "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+                "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
             },
         )
 
@@ -219,6 +237,7 @@ def test_candidate_sandbox_authenticates_before_opening_storage(tmp_path, monkey
         environ={
             "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate.sqlite"),
             "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-v1",
         },
     )
 

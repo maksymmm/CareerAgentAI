@@ -11,6 +11,7 @@ from career_agent_ai.application.api import (
     CandidateApprovalWSGIApp,
     OperationalApiService,
     OperationalWSGIApp,
+    start_owner_scoped_run,
 )
 from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.agents.agent_registry import AgentRegistry
@@ -24,6 +25,7 @@ from career_agent_ai.application.career import (
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopRequest,
     CareerLoopResult,
+    validate_loop_identifier,
 )
 from career_agent_ai.application.communication import (
     CommunicationService,
@@ -132,14 +134,21 @@ class RuntimeCandidateApp:
     def start(
         self, request: CareerLoopRequest, *, run_id: str | None = None
     ) -> CareerLoopResult:
-        """Start a sandbox run using a short-lived connection."""
+        """Start a sandbox run through the owner-scoped transition."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
+        if run_id is not None:
+            validated_run_id = validate_loop_identifier(
+                run_id, "run_id", maximum=120
+            )
+            if validated_run_id != run_id:
+                raise ValueError("run_id must match the published identifier pattern.")
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(database, self._jobs).start(
-                request, run_id=run_id
-            )
+            loop = _build_candidate_loop(database, self._jobs)
+            if run_id is None:
+                return loop.start(request)
+            return start_owner_scoped_run(loop, request, client_run_id=run_id)
         finally:
             database.close()
 
@@ -171,6 +180,18 @@ class _RequestCandidateLoop:
         try:
             return _build_candidate_loop(database, self._jobs).start(
                 request, run_id=run_id
+            )
+        finally:
+            database.close()
+
+    def replay_existing_start(
+        self, request: CareerLoopRequest, *, run_id: str, user_id: str
+    ):
+        """Replay an owned legacy start using request-thread storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).replay_existing_start(
+                request, run_id=run_id, user_id=user_id
             )
         finally:
             database.close()
@@ -219,6 +240,10 @@ def build_candidate_sandbox_app_from_env(
         "CAREER_AGENT_CANDIDATE_SANDBOX",
     ):
         raise PermissionError("Candidate sandbox must be explicitly enabled.")
+    if source.get("CAREER_AGENT_CANDIDATE_ID_CUTOVER") != "drain-and-replace-v1":
+        raise PermissionError(
+            "Candidate sandbox requires the drain-and-replace-v1 ID cutover gate."
+        )
     config = RuntimeConfig.from_env(environ)
     if config.allow_network_providers or config.allow_consequential_actions:
         raise ValueError(

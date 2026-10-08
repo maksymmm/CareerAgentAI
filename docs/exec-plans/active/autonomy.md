@@ -381,6 +381,25 @@ sanitized conflict; provider, credential, messaging, calendar, and action-contro
 fields are rejected. End-to-end composition coverage starts a durable run through
 HTTP and reads its approval gate after restart-safe persistence.
 
+Release hardening scopes each caller-supplied idempotency ID to the authenticated
+owner before persistence and returns the resulting opaque durable run ID. Equal
+client IDs from different candidates no longer conflict or reveal foreign state.
+Runtime schema-version parsing also accepts every JSON numeric representation of the
+OpenAPI integer constant `1`, while continuing to reject booleans and other values.
+Numeric JSON lexemes are parsed exactly, canonical owner identities feed the scope,
+and an identical lost-response retry returns the existing run without new execution.
+If two identical starts race between lookup and insert, the losing request reloads and
+returns the durable winner; a different request still fails closed as a conflict.
+HTTP and programmatic runtime starts use the same owner-scoped transition, preventing
+mixed entry points from creating a second run under the raw caller ID.
+Upgrade compatibility probes a caller's legacy unscoped ID through an owner-checked,
+request-matching replay path before creating a scoped run. Unsupported decimal
+exponents are classified as invalid input at both JSON endpoints rather than 500s.
+Because pre-scope workers cannot understand owner-scoped keys, mixed-version serving
+is forbidden. Runtime startup requires an explicit drain-and-replace cutover gate and
+the deployment protocol records the required worker drain, verification, and rollback
+ordering.
+
 Next priority: define authenticated read-only run-status discovery without exposing
 the stored candidate profile or provider details. Merge into `main` still requires
 explicit user approval.

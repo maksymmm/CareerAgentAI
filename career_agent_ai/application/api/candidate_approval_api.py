@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from career_agent_ai.application.career import (
@@ -14,6 +16,7 @@ from career_agent_ai.application.career import (
     HumanActionRequiredError,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
+    CareerLoopResult,
     validate_loop_identifier,
 )
 
@@ -30,9 +33,32 @@ _STRICT_START_TEXT_PATTERN = (
 
 class CandidateApprovalLoop(Protocol):
     def start(self, request: CareerLoopRequest, *, run_id: str | None = None): ...
+    def replay_existing_start(
+        self, request: CareerLoopRequest, *, run_id: str, user_id: str
+    ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
+
+
+def start_owner_scoped_run(
+    loop: CandidateApprovalLoop,
+    request: CareerLoopRequest,
+    *,
+    client_run_id: str,
+) -> CareerLoopResult:
+    """Start or replay a run through the shared owner-scoped ID transition."""
+    durable_run_id = CandidateApprovalWSGIApp._owner_scoped_run_id(
+        request.user_id, client_run_id
+    )
+    if client_run_id != durable_run_id:
+        try:
+            return loop.replay_existing_start(
+                request, run_id=client_run_id, user_id=request.user_id
+            )
+        except (KeyError, PermissionError):
+            pass
+    return loop.start(request, run_id=durable_run_id)
 
 
 class CandidateApprovalWSGIApp:
@@ -110,15 +136,17 @@ class CandidateApprovalWSGIApp:
                     )
                 try:
                     payload = self._read_json(environ)
-                    request, run_id = self._start_request(payload, user_id=user_id)
-                except (TypeError, ValueError) as exc:
+                    request, _ = self._start_request(payload, user_id=user_id)
+                except (TypeError, ValueError, InvalidOperation) as exc:
                     return self._respond(
                         start_response,
                         "400 Bad Request",
                         {"error": "invalid_request", "message": str(exc)[:500]},
                     )
                 try:
-                    result = self._loop.start(request, run_id=run_id)
+                    result = start_owner_scoped_run(
+                        self._loop, request, client_run_id=payload["run_id"]
+                    )
                 except CareerLoopConflictError:
                     return self._respond(
                         start_response,
@@ -172,7 +200,7 @@ class CandidateApprovalWSGIApp:
                         raise ValueError(
                             "approval payload run_id does not match the URL."
                         )
-                except (TypeError, ValueError) as exc:
+                except (TypeError, ValueError, InvalidOperation) as exc:
                     return self._respond(
                         start_response,
                         "400 Bad Request",
@@ -226,7 +254,8 @@ class CandidateApprovalWSGIApp:
             raise ValueError("start body contains unknown fields.")
         if missing:
             raise ValueError("start body is missing required fields.")
-        if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+        schema_version = payload["schema_version"]
+        if type(schema_version) not in {int, float, Decimal} or schema_version != 1:
             raise ValueError("schema_version must equal 1.")
         raw_run_id = payload["run_id"]
         run_id = validate_loop_identifier(raw_run_id, "run_id", maximum=120)
@@ -247,7 +276,15 @@ class CandidateApprovalWSGIApp:
             candidate_profile=candidate_profile,
             location=location,
         )
-        return request, run_id
+        return request, CandidateApprovalWSGIApp._owner_scoped_run_id(
+            request.user_id, run_id
+        )
+
+    @staticmethod
+    def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
+        """Derive an opaque stable storage key without a cross-tenant namespace."""
+        material = f"{len(user_id)}:{user_id}{len(client_run_id)}:{client_run_id}"
+        return sha256(material.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _strict_start_text(
@@ -280,7 +317,9 @@ class CandidateApprovalWSGIApp:
             raise ValueError("approval body is incomplete.")
         try:
             payload = json.loads(
-                body.decode("utf-8"), object_pairs_hook=self._unique_json_object
+                body.decode("utf-8"),
+                object_pairs_hook=self._unique_json_object,
+                parse_float=Decimal,
             )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("approval body must be valid UTF-8 JSON.") from exc

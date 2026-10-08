@@ -186,10 +186,22 @@ class AutonomousCareerLoop:
             raise TypeError("request must be a CareerLoopRequest.")
         raw_identifier = run_id if run_id is not None else uuid4().hex
         identifier = validate_loop_identifier(raw_identifier, "run_id", maximum=120)
-        if self._states.get(identifier) is not None:
+        existing = self._states.get(identifier)
+        if existing is not None:
+            if existing.request == request:
+                return self._result(existing)
             raise CareerLoopConflictError("run_id already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
-        self._persist(state)
+        try:
+            self._persist(state)
+        except CareerLoopConflictError:
+            # Another identical start may have won the create race after our
+            # initial read. Treat that durable winner like any other replay,
+            # while preserving conflicts for a reused ID with different input.
+            existing = self._states.get(identifier)
+            if existing is not None and existing.request == request:
+                return self._result(existing)
+            raise
         return self._continue(state)
 
     def resume(self, run_id: str, *, user_id: str, approved: bool) -> CareerLoopResult:
@@ -436,6 +448,17 @@ class AutonomousCareerLoop:
     def get(self, run_id: str, *, user_id: str) -> CareerLoopResult:
         """Return a durable loop snapshot without executing work."""
         state = self._owned_state(run_id, user_id)
+        return self._result(state)
+
+    def replay_existing_start(
+        self, request: CareerLoopRequest, *, run_id: str, user_id: str
+    ) -> CareerLoopResult:
+        """Return an owned pre-existing run only when its start request is identical."""
+        if not isinstance(request, CareerLoopRequest):
+            raise TypeError("request must be a CareerLoopRequest.")
+        state = self._owned_state(run_id, user_id)
+        if state.request != request:
+            raise CareerLoopConflictError("run_id already exists.")
         return self._result(state)
 
     def continue_run(self, run_id: str, *, user_id: str) -> CareerLoopResult:

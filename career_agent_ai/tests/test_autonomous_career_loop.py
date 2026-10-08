@@ -226,6 +226,89 @@ def test_candidate_submission_cannot_approve_a_later_gate(tmp_path):
     database.close()
 
 
+def test_identical_start_replay_returns_existing_run_without_new_execution(tmp_path):
+    database, loop, _, _, _, submission, *_ = build_stack(
+        str(tmp_path / "start-replay.sqlite")
+    )
+    original_request = request(with_schedule=False)
+
+    first = loop.start(original_request, run_id="stable-run")
+    replay = loop.start(original_request, run_id="stable-run")
+
+    assert replay == first
+    assert submission.calls == []
+    with pytest.raises(CareerLoopConflictError, match="already exists"):
+        loop.start(
+            CareerLoopRequest(
+                user_id=original_request.user_id,
+                keyword="different",
+                candidate_profile=original_request.candidate_profile,
+            ),
+            run_id="stable-run",
+        )
+    database.close()
+
+
+def test_concurrent_identical_start_returns_durable_winner(tmp_path):
+    database, loop, _, _, _, submission, *_ = build_stack(
+        str(tmp_path / "concurrent-start-replay.sqlite")
+    )
+    repository = loop._states
+    original_request = request(with_schedule=False)
+
+    class LosingCreateRepository:
+        def get(self, run_id):
+            return repository.get(run_id)
+
+        def save(self, state, *, expected_owner_id=None):
+            if state.version == 0:
+                repository.save(
+                    CareerLoopState(run_id=state.run_id, request=state.request)
+                )
+                raise CareerLoopConflictError("Concurrent insert lost.")
+            repository.save(state, expected_owner_id=expected_owner_id)
+
+        def __getattr__(self, name):
+            return getattr(repository, name)
+
+    loop._states = LosingCreateRepository()
+
+    result = loop.start(original_request, run_id="concurrent-stable-run")
+
+    assert result.run_id == "concurrent-stable-run"
+    assert result.phase == CareerLoopPhase.SEARCH
+    assert submission.calls == []
+    assert repository.get("concurrent-stable-run").request == original_request
+    database.close()
+
+
+def test_legacy_start_replay_requires_same_owner_and_canonical_request(tmp_path):
+    database, loop, *_ = build_stack(str(tmp_path / "legacy-start-replay.sqlite"))
+    original_request = request(with_schedule=False)
+    first = loop.start(original_request, run_id="legacy-client-id")
+
+    replay = loop.replay_existing_start(
+        original_request, run_id="legacy-client-id", user_id="user-1"
+    )
+
+    assert replay == first
+    with pytest.raises(KeyError):
+        loop.replay_existing_start(
+            original_request, run_id="legacy-client-id", user_id="other-user"
+        )
+    with pytest.raises(CareerLoopConflictError, match="already exists"):
+        loop.replay_existing_start(
+            CareerLoopRequest(
+                user_id="user-1",
+                keyword="different",
+                candidate_profile=original_request.candidate_profile,
+            ),
+            run_id="legacy-client-id",
+            user_id="user-1",
+        )
+    database.close()
+
+
 @pytest.mark.parametrize("gate", ["application", "message", "interview"])
 @pytest.mark.parametrize("approved", [True, False])
 def test_approval_owner_is_required_after_restart(tmp_path, gate, approved):
