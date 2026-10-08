@@ -54,6 +54,20 @@ from career_agent_ai.application.observability.structured_logging import redact_
 from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
 
 
+_MAX_DERIVED_IDENTIFIER_LENGTH = 200
+
+
+def _bounded_run_child_id(run_id: str, suffix: str) -> str:
+    """Derive a stable child ID without exceeding downstream identifier budgets."""
+    candidate = f"{run_id}{suffix}"
+    if len(candidate) <= _MAX_DERIVED_IDENTIFIER_LENGTH:
+        return candidate
+    bounded = f"run-child:{sha256(run_id.encode('utf-8')).hexdigest()}{suffix}"
+    if len(bounded) > _MAX_DERIVED_IDENTIFIER_LENGTH:
+        raise ValueError("Derived run child identifier exceeds its storage budget.")
+    return bounded
+
+
 class _RecoverableCareerLoopError(RuntimeError):
     """Signal a durable partial outcome that should be retried after restart."""
 
@@ -716,7 +730,9 @@ class AutonomousCareerLoop:
             tracked = matches[0]
             application_id = tracked.application_id
         else:
-            application_id = state.application_id or f"{state.run_id}:application"
+            application_id = state.application_id or _bounded_run_child_id(
+                state.run_id, ":application"
+            )
             collision = self._applications.get(application_id)
             if collision is not None:
                 raise RuntimeError(
@@ -936,10 +952,10 @@ class AutonomousCareerLoop:
             state.approved_human_action = None
             state.phase = CareerLoopPhase.TRACK
             return
-        message_id = state.message_id or f"{state.run_id}:message"
+        message_id = state.message_id or _bounded_run_child_id(state.run_id, ":message")
         message = CommunicationMessage(
             message_id=message_id,
-            thread_id=f"{state.run_id}:thread",
+            thread_id=_bounded_run_child_id(state.run_id, ":thread"),
             sender=state.request.sender,
             recipient=state.request.recipient,
             subject=state.request.message_subject,
@@ -996,7 +1012,7 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved message intent is stale; refusing external send."
             )
-        operation_id = f"{state.run_id}:message-send"
+        operation_id = _bounded_run_child_id(state.run_id, ":message-send")
         durable_before_send = self._communication.get_operation(operation_id)
         if (
             durable_before_send is not None
@@ -1164,7 +1180,7 @@ class AutonomousCareerLoop:
             state.approved_human_action = None
             state.phase = CareerLoopPhase.COMPLETE
             return
-        operation_id = f"{state.run_id}:interview-accept"
+        operation_id = _bounded_run_child_id(state.run_id, ":interview-accept")
         accepted = self._scheduling.accept(
             operation_id,
             event_id,

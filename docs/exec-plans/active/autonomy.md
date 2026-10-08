@@ -417,6 +417,12 @@ Next priority: build a candidate-facing sandbox approval interface using the exi
 start, status and prompt-bound approval contracts. Merge into `main` still requires
 explicit user approval.
 
+Release review hardening: all run-derived application, communication and interview
+identifiers now use a deterministic bounded namespace when a caller supplies a long
+programmatic run ID. The full 200-character run contract remains accepted without
+allowing later phases to fail on suffixed child identifiers; short-ID compatibility is
+unchanged and regression coverage exercises the maximum-length restart-safe flow.
+
 The project is not considered complete merely because modules exist. Completion requires a verified end-to-end flow that safely survives restarts, prevents duplicate consequential actions, and stops at explicit human gates for real-world decisions.
 
 Approval API hardening: duplicate JSON members are rejected before submission

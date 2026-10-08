@@ -1382,6 +1382,47 @@ def test_start_rejects_run_ids_that_cannot_derive_safe_operation_ids(tmp_path, b
     database.close()
 
 
+def test_maximum_length_run_id_uses_bounded_stable_child_identifiers(tmp_path):
+    run_id = "r" * 200
+    suffixes = (
+        ":application",
+        ":message",
+        ":thread",
+        ":message-send",
+        ":interview-accept",
+    )
+    derived = [
+        autonomous_loop_module._bounded_run_child_id(run_id, suffix)
+        for suffix in suffixes
+    ]
+
+    assert len(set(derived)) == len(suffixes)
+    assert all(value.startswith("run-child:") for value in derived)
+    assert all(len(value) <= 200 for value in derived)
+    assert derived == [
+        autonomous_loop_module._bounded_run_child_id(run_id, suffix)
+        for suffix in suffixes
+    ]
+    assert autonomous_loop_module._bounded_run_child_id("short", ":message") == (
+        "short:message"
+    )
+
+    path = str(tmp_path / "maximum-run-id.sqlite")
+    database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.application_id == derived[0]
+    assert loop.resume(run_id, approved=True, user_id="user-1").completed is True
+    database.close()
+
+
 
 def test_derived_application_id_collision_cannot_cross_user_ownership(tmp_path):
     path = str(tmp_path / "application-ownership.sqlite")
