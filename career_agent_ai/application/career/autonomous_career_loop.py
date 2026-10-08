@@ -61,10 +61,7 @@ _BOUNDED_RUN_CHILD_PREFIX = "run-child:"
 def _bounded_run_child_id(run_id: str, suffix: str) -> str:
     """Derive a stable child ID without exceeding downstream identifier budgets."""
     candidate = f"{run_id}{suffix}"
-    if (
-        len(candidate) <= _MAX_DERIVED_IDENTIFIER_LENGTH
-        and not run_id.startswith(_BOUNDED_RUN_CHILD_PREFIX)
-    ):
+    if len(candidate) <= _MAX_DERIVED_IDENTIFIER_LENGTH:
         return candidate
     bounded = (
         f"{_BOUNDED_RUN_CHILD_PREFIX}"
@@ -212,6 +209,17 @@ class AutonomousCareerLoop:
             if existing.request == request:
                 return self._result(existing)
             raise CareerLoopConflictError("run_id already exists.")
+        # Existing runs retain their original operation keys. Reserve the bounded
+        # namespace only at creation, after the owner/request replay above.
+        if identifier.startswith(_BOUNDED_RUN_CHILD_PREFIX):
+            raise ValueError("run_id uses a reserved child-identifier namespace.")
+        if len(identifier) + len(":interview-accept") > 200:
+            legacy_alias = (
+                f"{_BOUNDED_RUN_CHILD_PREFIX}"
+                f"{sha256(identifier.encode('utf-8')).hexdigest()}"
+            )
+            if self._states.get(legacy_alias) is not None:
+                raise CareerLoopConflictError("run_id child namespace already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
         try:
             self._persist(state)

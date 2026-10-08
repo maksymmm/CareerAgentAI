@@ -470,5 +470,6 @@ Programmatic loop IDs may use the full 200-character durable identifier budget.
 Application, message, thread, send and interview child IDs retain the readable legacy
 form when it fits; otherwise they use a deterministic SHA-256 run namespace so every
 downstream identifier remains within its 200-character contract and is restart-stable.
-Run IDs beginning with the reserved `run-child:` prefix also use the hashed path,
-preventing a caller-selected short run from reproducing another run's bounded child IDs.
+New run IDs beginning with `run-child:` are rejected at creation. Existing runs
+retain their legacy child and operation IDs, including replay after restart.
+Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
