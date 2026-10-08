@@ -4,8 +4,8 @@ from career_agent_ai.application.jobs.in_memory_job_application_repository impor
 from career_agent_ai.application.jobs.in_memory_job_bookmark_repository import InMemoryJobBookmarkRepository
 from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.jobs.job import Job
-from career_agent_ai.application.jobs.job_application import JobApplication
-from career_agent_ai.application.jobs.job_application_repository import JobApplicationRepository
+from career_agent_ai.application.jobs.job_application import ApplicationTimelineEvent, JobApplication
+from career_agent_ai.application.jobs.job_application_repository import ApplicationConflictError, ApplicationQuery, JobApplicationRepository
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.jobs.job_bookmark import JobBookmark
 from career_agent_ai.application.jobs.job_bookmark_repository import JobBookmarkRepository
@@ -33,6 +33,9 @@ __all__ = [
     "InMemoryJobRepository",
     "Job",
     "JobApplication",
+    "ApplicationTimelineEvent",
+    "ApplicationConflictError",
+    "ApplicationQuery",
     "JobApplicationRepository",
     "JobApplicationStatus",
     "JobBookmark",

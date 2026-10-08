@@ -1,0 +1,93 @@
+# CareerAgentAI Deployment
+
+## Runtime contract
+
+Production deployments must compose CareerAgentAI from environment-provided configuration. Use
+`RuntimeConfig.from_env()` and reject startup when validation fails.
+
+Required production baseline:
+
+- `CAREER_AGENT_ENV=production`
+- `CAREER_AGENT_DB_PATH` points to a durable SQLite file on persistent storage.
+- `CAREER_AGENT_LOG_LEVEL` is a recognized Python logging level.
+- `CAREER_AGENT_ALLOW_NETWORK_PROVIDERS` defaults to `false`; enable only when an explicitly configured provider is intended.
+- `CAREER_AGENT_ALLOW_CONSEQUENTIAL_ACTIONS` defaults to `false`; enabling it does not bypass any domain human-approval gate.
+
+Production composition must route consequential provider calls through `build_external_action_service(config, ...)`, network-backed opportunity collection through `guard_signal_provider(config, ...)`, and live job discovery through `guard_job_provider(config, ...)`. `AgentFactory.create("job_search", runtime_config=...)` applies the job-provider guard automatically and defaults to a validated, network-disabled configuration when one is not supplied. These wrappers consume the validated runtime flags at the execution boundary, so the default `false` values are effective kill switches rather than documentation-only settings. Direct construction of unguarded real-provider execution paths is not a supported production composition.
+
+Secrets and provider credentials must come from the deployment secret store or process environment. Do not put credentials in repository files, images, logs, migration SQL, or test fixtures.
+
+## Database
+
+Back up the SQLite database before every release that introduces schema changes. Versioned migrations are applied through `SQLiteMigrationRunner`. Applied migrations are stored in `schema_migrations` with a SHA-256 checksum.
+
+Never edit an already-applied migration. A checksum mismatch is a deployment failure and must be investigated rather than bypassed. Migrations marked `destructive=True` require explicit `allow_destructive=True`; treat that flag as a human change-control gate and take a verified backup first.
+
+Use one durable database path per environment. Do not use `:memory:` in production.
+
+SQLite connections explicitly enable URI filenames. The worker and renewal
+connections use the same URI semantics. URI paths and query keys/values are
+case-sensitive: `mode=memory` selects memory, while `MODE=MEMORY` is ignored by
+SQLite and leaves a file-backed database eligible for heartbeat renewal. URI
+percent-encoding is decoded and repeated query keys use the last value.
+Deployments that previously relied on a literal filename beginning with `file:`
+must move that database to an ordinary filesystem path before adopting this release;
+URI-looking paths now have explicit URI meaning.
+
+Production configuration classifies URI databases from SQLite's case-sensitive,
+percent-decoded path and last-value-wins `mode` and `vfs` semantics, rejecting encoded
+or fragment-bearing memory URIs and the ephemeral `vfs=memdb` backend. URI text is
+preserved unchanged for worker connections.
+Configuration validation never opens or creates the URI target. Unsupported `mode`
+values fail validation, while empty and `:memory:` URI paths remain classified as
+ephemeral regardless of an explicit non-memory mode. Actual accessibility is checked
+when a component opens its required connection.
+Raw and percent-encoded NUL bytes are rejected before SQLite opens the URI, so
+configuration text cannot be silently truncated to a different database filename.
+
+## Caller ownership
+
+Existing autonomous-loop entry points require the authenticated caller's `user_id`,
+including approvals, recovery, readback and all three reconciliation resolvers.
+Pass it from trusted authentication/session context; do not copy it from a client
+payload or from the run being loaded. Cross-user and missing run identifiers have
+the same error response. This is a deliberate API tightening: callers must supply
+the identity explicitly; there is no legacy identity-free fallback.
+
+## Observability
+
+Configure JSON logs with `configure_structured_logging()`. Wrap request/run entry points in `correlation_scope()` and pass stable correlation identifiers when available. Put structured data in `log_event(..., **fields)`; credential-like field names are redacted.
+
+`SQLiteOperationalProbe` detects failed or reconciliation-required external actions, stale prepared/in-progress operations, failed autonomous loops, and non-human-gated loops that have stopped progressing.
+
+The read-only operational WSGI API provides:
+
+- `GET /healthz` — liveness only.
+- `GET /v1/operational/issues?stale_after_seconds=...` — authenticated operational issues.
+
+The issues endpoint requires a bearer token supplied at composition time. Serve the WSGI app behind TLS and do not expose the token in command-line arguments or logs. The OpenAPI 3.1 document is generated by `openapi_document()`.
+
+Use `build_operational_app_from_env()` as the operational API composition root and set
+`CAREER_AGENT_OPERATIONAL_BEARER_TOKEN` through the deployment secret store. The token
+must contain 32 to 4096 ASCII characters. Database-backed requests open and close an
+isolated read-only SQLite connection within their execution context; a missing database
+is never recreated by the inspection endpoint. Liveness remains available
+when SQLite cannot be opened, while inspection returns a sanitized JSON error. Register
+the application's idempotent `close()` with the process shutdown hook to reject later requests.
+Invalid token input fails before runtime validation can probe or create a SQLite URI.
+
+## Release procedure
+
+1. Run the complete repository test command with coverage >=90%.
+2. Review the release diff for credentials, provider endpoints, migrations, and permission changes.
+3. Back up the production database.
+4. Validate production environment configuration before starting workers.
+5. Apply pending non-destructive migrations.
+6. Start one instance and verify `/healthz`, structured logs, and the operational issue endpoint.
+7. Enable additional workers only after the initial instance is healthy.
+8. Keep consequential actions disabled until the configured real providers and human-approval workflow have been verified.
+9. If a migration or startup check fails, stop deployment. Restore from backup when necessary rather than editing migration history.
+
+## Rollback
+
+Code may be rolled back only when its database expectations remain compatible with the migrated schema. Schema rollback is not automatic. Prefer forward fixes; for destructive recovery, use a verified backup and explicit human change control.
