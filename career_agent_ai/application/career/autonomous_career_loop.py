@@ -54,6 +54,24 @@ from career_agent_ai.application.observability.structured_logging import redact_
 from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
 
 
+_MAX_DERIVED_IDENTIFIER_LENGTH = 200
+_BOUNDED_RUN_CHILD_PREFIX = "run-child:"
+
+
+def _bounded_run_child_id(run_id: str, suffix: str) -> str:
+    """Derive a stable child ID without exceeding downstream identifier budgets."""
+    candidate = f"{run_id}{suffix}"
+    if len(candidate) <= _MAX_DERIVED_IDENTIFIER_LENGTH:
+        return candidate
+    bounded = (
+        f"{_BOUNDED_RUN_CHILD_PREFIX}"
+        f"{sha256(run_id.encode('utf-8')).hexdigest()}{suffix}"
+    )
+    if len(bounded) > _MAX_DERIVED_IDENTIFIER_LENGTH:
+        raise ValueError("Derived run child identifier exceeds its storage budget.")
+    return bounded
+
+
 class _RecoverableCareerLoopError(RuntimeError):
     """Signal a durable partial outcome that should be retried after restart."""
 
@@ -191,6 +209,17 @@ class AutonomousCareerLoop:
             if existing.request == request:
                 return self._result(existing)
             raise CareerLoopConflictError("run_id already exists.")
+        # Existing runs retain their original operation keys. Reserve the bounded
+        # namespace only at creation, after the owner/request replay above.
+        if identifier.startswith(_BOUNDED_RUN_CHILD_PREFIX):
+            raise ValueError("run_id uses a reserved child-identifier namespace.")
+        if len(identifier) + len(":interview-accept") > 200:
+            legacy_alias = (
+                f"{_BOUNDED_RUN_CHILD_PREFIX}"
+                f"{sha256(identifier.encode('utf-8')).hexdigest()}"
+            )
+            if self._legacy_child_namespace_exists(legacy_alias):
+                raise CareerLoopConflictError("run_id child namespace already exists.")
         state = CareerLoopState(run_id=identifier, request=request)
         try:
             self._persist(state)
@@ -203,6 +232,25 @@ class AutonomousCareerLoop:
                 return self._result(existing)
             raise
         return self._continue(state)
+
+    def _legacy_child_namespace_exists(self, legacy_alias: str) -> bool:
+        """Return whether durable legacy state owns a bounded child namespace."""
+        application_id = f"{legacy_alias}:application"
+        return any(
+            (
+                self._states.get(legacy_alias) is not None,
+                self._applications.get(application_id) is not None,
+                self._communication.get_persisted(f"{legacy_alias}:message") is not None,
+                self._submission.get_operation(
+                    self._application_submission_operation_id(application_id)
+                )
+                is not None,
+                self._communication.get_operation(f"{legacy_alias}:message-send")
+                is not None,
+                self._scheduling.get_operation(f"{legacy_alias}:interview-accept")
+                is not None,
+            )
+        )
 
     def resume(self, run_id: str, *, user_id: str, approved: bool) -> CareerLoopResult:
         """Resume one human-gated run using an explicit approve/decline decision."""
@@ -716,7 +764,9 @@ class AutonomousCareerLoop:
             tracked = matches[0]
             application_id = tracked.application_id
         else:
-            application_id = state.application_id or f"{state.run_id}:application"
+            application_id = state.application_id or _bounded_run_child_id(
+                state.run_id, ":application"
+            )
             collision = self._applications.get(application_id)
             if collision is not None:
                 raise RuntimeError(
@@ -936,10 +986,10 @@ class AutonomousCareerLoop:
             state.approved_human_action = None
             state.phase = CareerLoopPhase.TRACK
             return
-        message_id = state.message_id or f"{state.run_id}:message"
+        message_id = state.message_id or _bounded_run_child_id(state.run_id, ":message")
         message = CommunicationMessage(
             message_id=message_id,
-            thread_id=f"{state.run_id}:thread",
+            thread_id=_bounded_run_child_id(state.run_id, ":thread"),
             sender=state.request.sender,
             recipient=state.request.recipient,
             subject=state.request.message_subject,
@@ -996,7 +1046,7 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Approved message intent is stale; refusing external send."
             )
-        operation_id = f"{state.run_id}:message-send"
+        operation_id = _bounded_run_child_id(state.run_id, ":message-send")
         durable_before_send = self._communication.get_operation(operation_id)
         if (
             durable_before_send is not None
@@ -1164,7 +1214,7 @@ class AutonomousCareerLoop:
             state.approved_human_action = None
             state.phase = CareerLoopPhase.COMPLETE
             return
-        operation_id = f"{state.run_id}:interview-accept"
+        operation_id = _bounded_run_child_id(state.run_id, ":interview-accept")
         accepted = self._scheduling.accept(
             operation_id,
             event_id,

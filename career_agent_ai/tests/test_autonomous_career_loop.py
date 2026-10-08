@@ -1382,6 +1382,98 @@ def test_start_rejects_run_ids_that_cannot_derive_safe_operation_ids(tmp_path, b
     database.close()
 
 
+def test_maximum_length_run_id_uses_bounded_stable_child_identifiers(tmp_path):
+    run_id = "r" * 200
+    suffixes = (
+        ":application",
+        ":message",
+        ":thread",
+        ":message-send",
+        ":interview-accept",
+    )
+    derived = [
+        autonomous_loop_module._bounded_run_child_id(run_id, suffix)
+        for suffix in suffixes
+    ]
+
+    assert len(set(derived)) == len(suffixes)
+    assert all(value.startswith("run-child:") for value in derived)
+    assert all(len(value) <= 200 for value in derived)
+    assert derived == [
+        autonomous_loop_module._bounded_run_child_id(run_id, suffix)
+        for suffix in suffixes
+    ]
+    assert autonomous_loop_module._bounded_run_child_id("short", ":message") == (
+        "short:message"
+    )
+    reserved_run_id = f"run-child:{sha256(run_id.encode('utf-8')).hexdigest()}"
+
+    path = str(tmp_path / "maximum-run-id.sqlite")
+    database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+    with pytest.raises(ValueError, match="reserved"):
+        loop.start(request(with_schedule=False), run_id=reserved_run_id)
+    assert loop._states.get(reserved_run_id) is None
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.application_id == derived[0]
+    assert loop.resume(run_id, approved=True, user_id="user-1").completed is True
+    database.close()
+
+
+
+def test_legacy_reserved_prefix_run_replays_after_restart(tmp_path):
+    path = str(tmp_path / "legacy-reserved.sqlite")
+    run_id = "run-child:foo"
+    database, loop, _, _, _, _, _, _ = build_stack(path, with_schedule=False)
+    original_request = request(with_schedule=False)
+    loop._states.save(CareerLoopState(run_id=run_id, request=original_request))
+    assert loop.start(original_request, run_id=run_id).phase == CareerLoopPhase.SEARCH
+    assert loop.continue_run(run_id, user_id="user-1").application_id == f"{run_id}:application"
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    message_approval = loop._states.get(run_id).pending_human_action
+    assert loop.resume(run_id, approved=True, user_id="user-1").completed
+    state = loop._states.get(run_id)
+    state.phase = CareerLoopPhase.MESSAGE_SEND
+    state.approved_human_action = message_approval
+    loop._states.save(state)
+    database.close()
+    database, loop, _, messages, _, _, provider, _ = build_stack(path, with_schedule=False)
+    assert loop.continue_run(run_id, user_id="user-1").completed
+    assert provider.calls == []
+    assert messages.get(f"{run_id}:message").direction.value == "outbound"
+    database.close()
+
+
+def test_long_run_cannot_alias_existing_legacy_reserved_run(tmp_path):
+    database, loop, applications, _, _, _, _, _ = build_stack(str(tmp_path / "alias.sqlite"), with_schedule=False)
+    run_id = "r" * 200
+    alias = f"run-child:{sha256(run_id.encode('utf-8')).hexdigest()}"
+    loop._states.save(CareerLoopState(run_id=alias, request=request(with_schedule=False)))
+    applications.add(
+        JobApplication(
+            application_id=f"{alias}:application",
+            user_id="legacy-user",
+            job_id="legacy-job",
+            company_id="legacy-company",
+            status=JobApplicationStatus.SAVED,
+            created_at=CREATED,
+            updated_at=CREATED,
+        )
+    )
+    loop._states.delete(alias)
+    assert loop._states.get(alias) is None
+    with pytest.raises(CareerLoopConflictError, match="child namespace"):
+        loop.start(request(with_schedule=False), run_id=run_id)
+    assert loop._states.get(run_id) is None
+    database.close()
+
 
 def test_derived_application_id_collision_cannot_cross_user_ownership(tmp_path):
     path = str(tmp_path / "application-ownership.sqlite")

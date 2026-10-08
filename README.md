@@ -465,3 +465,13 @@ owner metadata before decoding the private durable payload, so a missing databas
 not recreated and malformed foreign state remains indistinguishable from absence.
 Use the opaque durable ID returned by start; approval decisions still require the
 separate prompt-bound approval endpoint. Status is a snapshot, not permission to act.
+
+Programmatic loop IDs may use the full 200-character durable identifier budget.
+Application, message, thread, send and interview child IDs retain the readable legacy
+form when it fits; otherwise they use a deterministic SHA-256 run namespace so every
+downstream identifier remains within its 200-character contract and is restart-stable.
+New run IDs beginning with `run-child:` are rejected at creation. Existing runs
+retain their legacy child and operation IDs, including replay after restart.
+Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
+The ownership check includes retained applications, messages and external-action
+records, so deleting a terminal loop snapshot cannot release its child namespace.
