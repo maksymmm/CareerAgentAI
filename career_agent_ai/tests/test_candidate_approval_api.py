@@ -78,6 +78,109 @@ def app(loop):
     )
 
 
+def raw_request(app, *, method="GET", path="/sandbox/candidate"):
+    statuses = []
+    environ = {
+        "REQUEST_METHOD": method,
+        "PATH_INFO": path,
+        "CONTENT_LENGTH": "0",
+        "wsgi.input": BytesIO(),
+    }
+    response = b"".join(
+        app(environ, lambda status, headers: statuses.append((status, headers)))
+    )
+    return statuses[0], response
+
+
+def test_candidate_sandbox_ui_is_public_static_and_hardened():
+    (status, headers), body = raw_request(app(Loop()))
+    html = body.decode("utf-8")
+
+    assert status == "200 OK"
+    assert ("Content-Type", "text/html; charset=utf-8") in headers
+    assert ("Cache-Control", "no-store") in headers
+    assert ("Referrer-Policy", "no-referrer") in headers
+    assert any(name == "Content-Security-Policy" for name, _ in headers)
+    assert "/v1/candidate/runs" in html
+    assert "const resultRequest = ++latestResultRequest" in html
+    assert "resultRequest === latestResultRequest" in html
+    assert "error.resultRequest = resultRequest" in html
+    assert "error.resultRequest === undefined || error.resultRequest === latestResultRequest" in html
+    assert "action_fingerprint: approvalPrompt.action_fingerprint" in html
+    assert "state_version: approvalPrompt.state_version" in html
+    assert "if (decisionInFlight)" in html
+    prompt_handler = html.index("byId('prompt').addEventListener")
+    prompt_get = html.index("const loadedPrompt = await call", prompt_handler)
+    assert html.index("if (decisionInFlight)", prompt_handler) < prompt_get
+    assert html.index("invalidateApprovalPrompt('Loading approval prompt…')", prompt_handler) < prompt_get
+    invalidation_helper = html.index("function invalidateApprovalPrompt")
+    assert html.index(
+        "byId('action-details').textContent = ''", invalidation_helper
+    ) < html.index("function selectRun", invalidation_helper)
+    assert "Approval prompt unavailable. Load it again." in html
+    start_handler = html.index("byId('start').addEventListener")
+    start_post = html.index("await call('/v1/candidate/runs'", start_handler)
+    start_assignment = html.index("selectRun(payload.run_id)", start_post)
+    assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
+    assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]
+    assert "byId('run-id').addEventListener('input'" in html
+    assert "approvalPromptGeneration += 1" in html
+    assert "invalidateApprovalPrompt();" in html[start_assignment:prompt_handler]
+    assert "const promptGeneration = approvalPromptGeneration" in html[prompt_handler:prompt_get]
+    assert "const promptRunId = byId('run-id').value" in html[prompt_handler:prompt_get]
+    assert "promptGeneration !== approvalPromptGeneration" in html[prompt_get:]
+    assert "promptRunId !== byId('run-id').value" in html[prompt_get:]
+    assert "activePromptLoadGeneration = null" in html[invalidation_helper:prompt_handler]
+    assert "activePromptLoadGeneration = promptGeneration" in html[prompt_handler:prompt_get]
+    assert "activePromptLoadGeneration === promptGeneration" in html[prompt_get:]
+    recovery_handler = html.index("byId('continue').addEventListener")
+    recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
+    assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
+    assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
+    assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
+    assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
+    assert "error.code = payload.error" in html
+    assert "error.code === 'recovery_unavailable'" in html[recovery_post:prompt_handler]
+    assert "byId('approve').disabled = !approvalPrompt" in html[recovery_post:prompt_handler]
+    assert "Recovery result is uncertain. Load the current approval prompt." in html[recovery_post:prompt_handler]
+    assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
+    assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
+    decision_start = html.index("async function decide")
+    decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
+    assert html.index("if (activePromptLoadGeneration !== null)", decision_start) < decision_post
+    assert html.index("if (recoveryInFlight)", decision_start) < decision_post
+    assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
+    assert "runPath(" not in html[decision_start:]
+    assert html.index("decisionInFlight = true", decision_start) < decision_post
+    assert html.index(
+        "byId('approve').disabled = true", decision_start
+    ) < decision_post
+    assert html.index("byId('prompt').disabled = true", decision_start) < decision_post
+    assert html.index("byId('continue').disabled = true", decision_start) < decision_post
+    assert html.index("byId('prompt').disabled = false", decision_post) > decision_post
+    assert "localStorage" not in html
+    assert "sessionStorage" not in html
+    assert ".innerHTML" not in html
+
+
+def test_candidate_sandbox_ui_rejects_non_get_methods_without_authentication():
+    (status, headers), body = raw_request(app(Loop()), method="POST")
+
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "GET") in headers
+    assert json.loads(body) == {"error": "method_not_allowed"}
+
+
+def test_openapi_publishes_public_candidate_sandbox_route():
+    operation = candidate_approval_openapi_document()["paths"]["/sandbox/candidate"]["get"]
+
+    assert operation["security"] == []
+    assert operation["responses"]["200"]["content"] == {
+        "text/html": {"schema": {"type": "string"}}
+    }
+    assert "405" in operation["responses"]
+
+
 def test_authentication_happens_before_durable_prompt_access():
     class ForbiddenLoop:
         def get_candidate_approval_prompt(self, *args, **kwargs):
