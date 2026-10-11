@@ -6,7 +6,8 @@ import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from threading import Barrier
+from threading import Barrier, Thread
+from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
 import career_agent_ai.application.runtime.composition as runtime_composition
@@ -222,6 +223,112 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         app.__enter__()
     with pytest.raises(RuntimeError, match="closed"):
         app.start(request())
+
+
+def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    database_path = str(tmp_path / "browser-candidate.sqlite")
+    environ = {
+        "CAREER_AGENT_DB_PATH": database_path,
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+    }
+    jobs = (
+        Job.create(
+            job_id="browser-job",
+            title="Logistics Coordinator",
+            company=Company("browser-company", "Sandbox Logistics"),
+            location=Location("Germany", "Karlsruhe"),
+            description="logistics coordination",
+            created_at=NOW,
+        ),
+    )
+    app = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "browser-user" if token == "sandbox-token" else None,
+        jobs=jobs,
+        environ=environ,
+    )
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    durable_run_id = ""
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("sandbox-token")
+            page.locator("#start-run-id").fill("browser-composed-run")
+            page.locator("#keyword").fill("logistics")
+            page.locator("#location").fill("Karlsruhe")
+            page.locator("#profile").fill(PROFILE)
+            page.locator("#start").click()
+            page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
+            durable_run_id = page.locator("#run-id").input_value()
+            assert durable_run_id.startswith("scoped-v2:")
+
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve job application").wait_for()
+            page.locator("#approve").click()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        app.close()
+
+    operations_database = SQLiteDatabase(database_path)
+    try:
+        persisted_operations = operations_database.connection.execute(
+            """
+            SELECT action_type, status, result_json
+            FROM external_action_operations
+            ORDER BY operation_id
+            """
+        ).fetchall()
+    finally:
+        operations_database.close()
+
+    assert len(persisted_operations) == 1
+    action_type, status, result_json = persisted_operations[0]
+    assert action_type == "application.submit"
+    assert status == ExternalActionStatus.SUCCEEDED.value
+    assert json.loads(result_json)["provider_submission_id"].startswith("fake:")
+
+    restarted = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "browser-user" if token == "sandbox-token" else None,
+        jobs=jobs,
+        environ=environ,
+    )
+    restarted_server = make_server(
+        "127.0.0.1", 0, restarted, handler_class=QuietHandler
+    )
+    restarted_thread = Thread(target=restarted_server.serve_forever, daemon=True)
+    restarted_thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(
+                f"http://127.0.0.1:{restarted_server.server_port}/sandbox/candidate"
+            )
+            page.locator("#token").fill("sandbox-token")
+            page.locator("#run-id").fill(durable_run_id)
+            page.locator("#status").click()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
+            assert page.locator("#run-id").input_value() == durable_run_id
+            browser.close()
+    finally:
+        restarted_server.shutdown()
+        restarted_thread.join(timeout=5)
+        restarted_server.server_close()
+        restarted.close()
 
 
 def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
