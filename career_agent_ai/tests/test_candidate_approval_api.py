@@ -108,7 +108,6 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     prompt_handler = html.index("byId('prompt').addEventListener")
     prompt_get = html.index("const loadedPrompt = await call", prompt_handler)
     assert html.index("if (decisionInFlight)", prompt_handler) < prompt_get
-    assert html.index("promptLoadInFlight = true", prompt_handler) < prompt_get
     assert html.index("invalidateApprovalPrompt('Loading approval prompt…')", prompt_handler) < prompt_get
     invalidation_helper = html.index("function invalidateApprovalPrompt")
     assert html.index(
@@ -127,16 +126,22 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "const promptRunId = byId('run-id').value" in html[prompt_handler:prompt_get]
     assert "promptGeneration !== approvalPromptGeneration" in html[prompt_get:]
     assert "promptRunId !== byId('run-id').value" in html[prompt_get:]
+    assert "activePromptLoadGeneration = null" in html[invalidation_helper:prompt_handler]
+    assert "activePromptLoadGeneration = promptGeneration" in html[prompt_handler:prompt_get]
+    assert "activePromptLoadGeneration === promptGeneration" in html[prompt_get:]
     recovery_handler = html.index("byId('continue').addEventListener")
     recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
     assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
     assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
+    assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
+    assert "byId('approve').disabled = !approvalPrompt" in html[recovery_post:prompt_handler]
+    assert "Recovery result is uncertain. Load the current approval prompt." in html[recovery_post:prompt_handler]
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     decision_start = html.index("async function decide")
     decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
-    assert html.index("if (promptLoadInFlight)", decision_start) < decision_post
+    assert html.index("if (activePromptLoadGeneration !== null)", decision_start) < decision_post
     assert html.index("if (recoveryInFlight)", decision_start) < decision_post
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]

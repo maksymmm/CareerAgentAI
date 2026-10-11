@@ -63,7 +63,7 @@ _HTML = """<!doctype html>
     'use strict';
     let approvalPrompt = null;
     let decisionInFlight = false;
-    let promptLoadInFlight = false;
+    let activePromptLoadGeneration = null;
     let recoveryInFlight = false;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
@@ -77,6 +77,8 @@ _HTML = """<!doctype html>
       byId('action-details').textContent = '';
       byId('approve').disabled = true;
       byId('decline').disabled = true;
+      activePromptLoadGeneration = null;
+      byId('prompt').disabled = decisionInFlight || recoveryInFlight;
     }
     function selectRun(runId) {
       byId('run-id').value = runId;
@@ -91,7 +93,11 @@ _HTML = """<!doctype html>
       });
       const payload = await response.json();
       show({status: response.status, payload});
-      if (!response.ok) throw new Error(payload.message || payload.error || 'Request failed.');
+      if (!response.ok) {
+        const error = new Error(payload.message || payload.error || 'Request failed.');
+        error.status = response.status;
+        throw error;
+      }
       return payload;
     }
     async function guarded(operation) {
@@ -114,7 +120,7 @@ _HTML = """<!doctype html>
     byId('status').addEventListener('click', () => guarded(() => call(runPath('/status'))));
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
-      if (promptLoadInFlight) throw new Error('Wait for the approval prompt to finish loading.');
+      if (activePromptLoadGeneration !== null) throw new Error('Wait for the approval prompt to finish loading.');
       if (recoveryInFlight) throw new Error('Recovery is already running.');
       recoveryInFlight = true;
       byId('continue').disabled = true;
@@ -123,6 +129,15 @@ _HTML = """<!doctype html>
       byId('decline').disabled = true;
       try {
         await call(runPath('/continue'), {method: 'POST'});
+        invalidateApprovalPrompt('Recovery finished. Load the current approval prompt.');
+      } catch (error) {
+        if (error.status) {
+          byId('approve').disabled = !approvalPrompt;
+          byId('decline').disabled = !approvalPrompt;
+        } else {
+          invalidateApprovalPrompt('Recovery result is uncertain. Load the current approval prompt.');
+        }
+        throw error;
       } finally {
         recoveryInFlight = false;
         byId('continue').disabled = false;
@@ -131,11 +146,11 @@ _HTML = """<!doctype html>
     }));
     byId('prompt').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
-      if (promptLoadInFlight) throw new Error('An approval prompt is already loading.');
-      promptLoadInFlight = true;
+      if (activePromptLoadGeneration !== null) throw new Error('An approval prompt is already loading.');
       invalidateApprovalPrompt('Loading approval prompt…');
       const promptGeneration = approvalPromptGeneration;
       const promptRunId = byId('run-id').value;
+      activePromptLoadGeneration = promptGeneration;
       byId('prompt').disabled = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
@@ -153,13 +168,15 @@ _HTML = """<!doctype html>
         }
         throw error;
       } finally {
-        promptLoadInFlight = false;
-        byId('prompt').disabled = false;
+        if (activePromptLoadGeneration === promptGeneration) {
+          activePromptLoadGeneration = null;
+          byId('prompt').disabled = false;
+        }
       }
     }));
     async function decide(decision) {
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
-      if (promptLoadInFlight) throw new Error('Wait for the approval prompt to finish loading.');
+      if (activePromptLoadGeneration !== null) throw new Error('Wait for the approval prompt to finish loading.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
       decisionInFlight = true;
