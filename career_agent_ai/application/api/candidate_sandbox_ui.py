@@ -66,9 +66,22 @@ _HTML = """<!doctype html>
     let promptLoadInFlight = false;
     let recoveryInFlight = false;
     let latestStartRequest = 0;
+    let approvalPromptGeneration = 0;
     const byId = (id) => document.getElementById(id);
     const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
+    function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
+      approvalPromptGeneration += 1;
+      approvalPrompt = null;
+      byId('action-title').textContent = message;
+      byId('action-details').textContent = '';
+      byId('approve').disabled = true;
+      byId('decline').disabled = true;
+    }
+    function selectRun(runId) {
+      byId('run-id').value = runId;
+      invalidateApprovalPrompt();
+    }
     async function call(path, options = {}) {
       const token = byId('token').value;
       if (!token) throw new Error('Bearer token is required.');
@@ -92,9 +105,12 @@ _HTML = """<!doctype html>
           keyword: byId('keyword').value, candidate_profile: byId('profile').value,
           location: byId('location').value}),
       });
-      if (requestNumber === latestStartRequest) byId('run-id').value = payload.run_id;
+      if (requestNumber === latestStartRequest) selectRun(payload.run_id);
     }));
-    byId('run-id').addEventListener('input', () => { latestStartRequest += 1; });
+    byId('run-id').addEventListener('input', () => {
+      latestStartRequest += 1;
+      invalidateApprovalPrompt();
+    });
     byId('status').addEventListener('click', () => guarded(() => call(runPath('/status'))));
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
@@ -117,20 +133,24 @@ _HTML = """<!doctype html>
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       if (promptLoadInFlight) throw new Error('An approval prompt is already loading.');
       promptLoadInFlight = true;
-      approvalPrompt = null;
-      byId('action-title').textContent = 'Loading approval prompt…';
-      byId('action-details').textContent = '';
+      invalidateApprovalPrompt('Loading approval prompt…');
+      const promptGeneration = approvalPromptGeneration;
+      const promptRunId = byId('run-id').value;
       byId('prompt').disabled = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       try {
-        approvalPrompt = await call(runPath('/approval'));
-        byId('action-title').textContent = approvalPrompt.title;
-        byId('action-details').textContent = JSON.stringify(approvalPrompt.details, null, 2);
+        const loadedPrompt = await call('/v1/candidate/runs/' + encodeURIComponent(promptRunId) + '/approval');
+        if (promptGeneration !== approvalPromptGeneration || promptRunId !== byId('run-id').value) return;
+        approvalPrompt = loadedPrompt;
+        byId('action-title').textContent = loadedPrompt.title;
+        byId('action-details').textContent = JSON.stringify(loadedPrompt.details, null, 2);
         byId('approve').disabled = false;
         byId('decline').disabled = false;
       } catch (error) {
-        byId('action-title').textContent = 'Approval prompt unavailable. Load it again.';
+        if (promptGeneration === approvalPromptGeneration) {
+          byId('action-title').textContent = 'Approval prompt unavailable. Load it again.';
+        }
         throw error;
       } finally {
         promptLoadInFlight = false;

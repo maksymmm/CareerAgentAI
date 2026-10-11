@@ -106,18 +106,27 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "state_version: approvalPrompt.state_version" in html
     assert "if (decisionInFlight)" in html
     prompt_handler = html.index("byId('prompt').addEventListener")
-    prompt_get = html.index("approvalPrompt = await call", prompt_handler)
+    prompt_get = html.index("const loadedPrompt = await call", prompt_handler)
     assert html.index("if (decisionInFlight)", prompt_handler) < prompt_get
     assert html.index("promptLoadInFlight = true", prompt_handler) < prompt_get
-    assert html.index("approvalPrompt = null", prompt_handler) < prompt_get
-    assert html.index("byId('action-details').textContent = ''", prompt_handler) < prompt_get
+    assert html.index("invalidateApprovalPrompt('Loading approval prompt…')", prompt_handler) < prompt_get
+    invalidation_helper = html.index("function invalidateApprovalPrompt")
+    assert html.index(
+        "byId('action-details').textContent = ''", invalidation_helper
+    ) < html.index("function selectRun", invalidation_helper)
     assert "Approval prompt unavailable. Load it again." in html
     start_handler = html.index("byId('start').addEventListener")
     start_post = html.index("await call('/v1/candidate/runs'", start_handler)
-    start_assignment = html.index("byId('run-id').value = payload.run_id", start_post)
+    start_assignment = html.index("selectRun(payload.run_id)", start_post)
     assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
     assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]
     assert "byId('run-id').addEventListener('input'" in html
+    assert "approvalPromptGeneration += 1" in html
+    assert "invalidateApprovalPrompt();" in html[start_assignment:prompt_handler]
+    assert "const promptGeneration = approvalPromptGeneration" in html[prompt_handler:prompt_get]
+    assert "const promptRunId = byId('run-id').value" in html[prompt_handler:prompt_get]
+    assert "promptGeneration !== approvalPromptGeneration" in html[prompt_get:]
+    assert "promptRunId !== byId('run-id').value" in html[prompt_get:]
     recovery_handler = html.index("byId('continue').addEventListener")
     recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
     assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
