@@ -67,6 +67,7 @@ _HTML = """<!doctype html>
     let recoveryInFlight = false;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
+    let latestResultRequest = 0;
     const byId = (id) => document.getElementById(id);
     const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
@@ -85,24 +86,34 @@ _HTML = """<!doctype html>
       invalidateApprovalPrompt();
     }
     async function call(path, options = {}) {
+      const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
       if (!token) throw new Error('Bearer token is required.');
-      const response = await fetch(path, {
-        ...options,
-        headers: {Authorization: 'Bearer ' + token, ...(options.headers || {})},
-      });
-      const payload = await response.json();
-      show({status: response.status, payload});
-      if (!response.ok) {
-        const error = new Error(payload.message || payload.error || 'Request failed.');
-        error.status = response.status;
-        error.code = payload.error;
+      try {
+        const response = await fetch(path, {
+          ...options,
+          headers: {Authorization: 'Bearer ' + token, ...(options.headers || {})},
+        });
+        const payload = await response.json();
+        if (resultRequest === latestResultRequest) show({status: response.status, payload});
+        if (!response.ok) {
+          const error = new Error(payload.message || payload.error || 'Request failed.');
+          error.status = response.status;
+          error.code = payload.error;
+          throw error;
+        }
+        return payload;
+      } catch (error) {
+        error.resultRequest = resultRequest;
         throw error;
       }
-      return payload;
     }
     async function guarded(operation) {
-      try { await operation(); } catch (error) { show({error: String(error.message || error)}); }
+      try { await operation(); } catch (error) {
+        if (error.resultRequest === undefined || error.resultRequest === latestResultRequest) {
+          show({error: String(error.message || error)});
+        }
+      }
     }
     byId('start').addEventListener('click', () => guarded(async () => {
       const requestNumber = ++latestStartRequest;

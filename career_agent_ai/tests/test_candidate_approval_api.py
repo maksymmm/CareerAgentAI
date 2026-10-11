@@ -102,6 +102,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert ("Referrer-Policy", "no-referrer") in headers
     assert any(name == "Content-Security-Policy" for name, _ in headers)
     assert "/v1/candidate/runs" in html
+    assert "const resultRequest = ++latestResultRequest" in html
+    assert "resultRequest === latestResultRequest" in html
+    assert "error.resultRequest = resultRequest" in html
+    assert "error.resultRequest === undefined || error.resultRequest === latestResultRequest" in html
     assert "action_fingerprint: approvalPrompt.action_fingerprint" in html
     assert "state_version: approvalPrompt.state_version" in html
     assert "if (decisionInFlight)" in html
