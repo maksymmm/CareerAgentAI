@@ -108,8 +108,13 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     prompt_handler = html.index("byId('prompt').addEventListener")
     prompt_get = html.index("approvalPrompt = await call", prompt_handler)
     assert html.index("if (decisionInFlight)", prompt_handler) < prompt_get
+    assert html.index("promptLoadInFlight = true", prompt_handler) < prompt_get
+    assert html.index("approvalPrompt = null", prompt_handler) < prompt_get
+    assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
+    assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     decision_start = html.index("async function decide")
     decision_post = html.index("await call(runPath('/approval')", decision_start)
+    assert html.index("if (promptLoadInFlight)", decision_start) < decision_post
     assert html.index("decisionInFlight = true", decision_start) < decision_post
     assert html.index(
         "byId('approve').disabled = true", decision_start

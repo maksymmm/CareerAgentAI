@@ -63,6 +63,7 @@ _HTML = """<!doctype html>
     'use strict';
     let approvalPrompt = null;
     let decisionInFlight = false;
+    let promptLoadInFlight = false;
     const byId = (id) => document.getElementById(id);
     const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
@@ -94,13 +95,25 @@ _HTML = """<!doctype html>
     byId('continue').addEventListener('click', () => guarded(() => call(runPath('/continue'), {method: 'POST'})));
     byId('prompt').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
-      approvalPrompt = await call(runPath('/approval'));
-      byId('action-title').textContent = approvalPrompt.title;
-      byId('action-details').textContent = JSON.stringify(approvalPrompt.details, null, 2);
-      byId('approve').disabled = false;
-      byId('decline').disabled = false;
+      if (promptLoadInFlight) throw new Error('An approval prompt is already loading.');
+      promptLoadInFlight = true;
+      approvalPrompt = null;
+      byId('prompt').disabled = true;
+      byId('approve').disabled = true;
+      byId('decline').disabled = true;
+      try {
+        approvalPrompt = await call(runPath('/approval'));
+        byId('action-title').textContent = approvalPrompt.title;
+        byId('action-details').textContent = JSON.stringify(approvalPrompt.details, null, 2);
+        byId('approve').disabled = false;
+        byId('decline').disabled = false;
+      } finally {
+        promptLoadInFlight = false;
+        byId('prompt').disabled = false;
+      }
     }));
     async function decide(decision) {
+      if (promptLoadInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
       decisionInFlight = true;
