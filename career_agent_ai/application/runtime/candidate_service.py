@@ -25,6 +25,11 @@ class _IPv6WSGIServer(WSGIServer):
 
     address_family = socket.AF_INET6
 
+    def server_bind(self) -> None:
+        """Make IPv6-only exposure deterministic before binding the socket."""
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+
 
 @dataclass(frozen=True)
 class CandidateServiceConfig:
@@ -58,6 +63,10 @@ class CandidateServiceConfig:
 
         bearer_token = source.get("CAREER_AGENT_CANDIDATE_BEARER_TOKEN", "")
         OperationalWSGIApp.validate_bearer_token(bearer_token)
+        if bearer_token != bearer_token.strip():
+            raise ValueError(
+                "CAREER_AGENT_CANDIDATE_BEARER_TOKEN must not start or end with whitespace."
+            )
         user_id = validate_loop_identifier(
             source.get("CAREER_AGENT_CANDIDATE_USER_ID", ""),
             "CAREER_AGENT_CANDIDATE_USER_ID",
@@ -140,7 +149,7 @@ def build_candidate_service_from_env(
             app,
             server_class=server_class,
         )
-    except Exception:
+    except BaseException:
         app.close()
         raise
     return CandidateServiceRuntime(app, server)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import socket
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,7 @@ from threading import Barrier, Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
+import career_agent_ai.application.runtime.candidate_service as candidate_service
 import career_agent_ai.application.runtime.composition as runtime_composition
 
 from career_agent_ai.application.api import (
@@ -371,6 +373,39 @@ def test_candidate_service_rejects_invalid_listener_and_identity(field, value, m
         CandidateServiceConfig.from_env(environ)
 
 
+@pytest.mark.parametrize("token", (" " + "s" * 32, "s" * 32 + " "))
+def test_candidate_service_rejects_bearer_whitespace_changed_by_header_parser(token):
+    with pytest.raises(ValueError, match="start or end with whitespace"):
+        CandidateServiceConfig.from_env(
+            {
+                "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": token,
+                "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+            }
+        )
+
+
+def test_candidate_service_ipv6_listener_is_explicitly_ipv6_only(monkeypatch):
+    socket_calls = []
+    parent_bind_calls = []
+
+    class FakeSocket:
+        def setsockopt(self, level, option, value):
+            socket_calls.append((level, option, value))
+
+    fake_server = object.__new__(candidate_service._IPv6WSGIServer)
+    fake_server.socket = FakeSocket()
+    monkeypatch.setattr(
+        candidate_service.WSGIServer,
+        "server_bind",
+        lambda self: parent_bind_calls.append(self),
+    )
+
+    candidate_service._IPv6WSGIServer.server_bind(fake_server)
+
+    assert socket_calls == [(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)]
+    assert parent_bind_calls == [fake_server]
+
+
 def test_candidate_service_binds_authenticates_and_closes(tmp_path):
     token = "s" * 32
     environ = {
@@ -426,6 +461,37 @@ def test_candidate_service_interrupt_closes_listener_and_app():
 
     assert app.close_calls == 1
     assert server.close_calls == 1
+
+
+def test_candidate_service_bind_interrupt_closes_composed_app(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    app = FakeApp()
+    monkeypatch.setattr(
+        candidate_service,
+        "build_candidate_sandbox_app_from_env",
+        lambda **kwargs: app,
+    )
+    monkeypatch.setattr(
+        candidate_service,
+        "make_server",
+        lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        build_candidate_service_from_env(
+            environ={
+                "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "s" * 32,
+                "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+            }
+        )
+
+    assert app.close_calls == 1
 
 
 def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
