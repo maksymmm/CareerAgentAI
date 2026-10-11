@@ -135,6 +135,9 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
+            integrity = database.connection.execute("PRAGMA quick_check(1)").fetchone()
+            if integrity != ("ok",):
+                raise RuntimeError("candidate storage integrity check failed")
             schema = database.connection.execute(
                 """SELECT 1 FROM sqlite_master
                    WHERE type = 'table' AND name = 'autonomous_career_loops'"""

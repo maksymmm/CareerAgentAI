@@ -514,6 +514,40 @@ def test_candidate_service_readiness_rejects_corrupt_database(tmp_path):
     assert body == {"status": "unavailable"}
 
 
+def test_candidate_service_readiness_rejects_corrupt_data_page(tmp_path):
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    database_path = tmp_path / "corrupt-page.sqlite"
+    database = SQLiteDatabase(str(database_path))
+    database.connection.execute(
+        "CREATE TABLE autonomous_career_loops (payload BLOB NOT NULL)"
+    )
+    for _ in range(8):
+        database.connection.execute(
+            "INSERT INTO autonomous_career_loops VALUES (zeroblob(3000))"
+        )
+    database.connection.commit()
+    page_size = database.connection.execute("PRAGMA page_size").fetchone()[0]
+    database.close()
+    contents = bytearray(database_path.read_bytes())
+    last_page_offset = len(contents) - page_size
+    contents[last_page_offset] = 0xFF
+    database_path.write_bytes(contents)
+    app = CandidateServiceWSGIApp(
+        DelegatedApp(), database_path=str(database_path)  # type: ignore[arg-type]
+    )
+
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
+
+
 @pytest.mark.parametrize("path", ("/healthz", "/readyz"))
 def test_candidate_service_probe_routes_reject_non_get_methods(path, tmp_path):
     class DelegatedApp:
