@@ -495,6 +495,20 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
     def content(schema: Mapping[str, Any]) -> dict[str, Any]:
         return {"application/json": {"schema": schema}}
 
+    health_schema = {
+        "type": "object",
+        "required": ["status"],
+        "properties": {"status": {"const": "ok"}},
+        "additionalProperties": False,
+    }
+    unavailable_schema = {
+        "type": "object",
+        "required": ["status"],
+        "properties": {"status": {"const": "unavailable"}},
+        "additionalProperties": False,
+    }
+    probe_method_response = {"description": "Only GET is allowed"}
+
     common_responses = {
         "400": {"description": "Malformed approval request", "content": content(error_schema)},
         "401": {"description": "Missing or invalid bearer token", "content": content(error_schema)},
@@ -514,6 +528,36 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer"}}
         },
         "paths": {
+            "/healthz": {
+                "get": {
+                    "operationId": "getCandidateServiceHealth",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "Candidate service is alive",
+                            "content": content(health_schema),
+                        },
+                        "405": probe_method_response,
+                    },
+                },
+            },
+            "/readyz": {
+                "get": {
+                    "operationId": "getCandidateServiceReadiness",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "Candidate service storage is ready",
+                            "content": content(health_schema),
+                        },
+                        "503": {
+                            "description": "Candidate service storage is unavailable",
+                            "content": content(unavailable_schema),
+                        },
+                        "405": probe_method_response,
+                    },
+                },
+            },
             "/sandbox/candidate": {
                 "get": {
                     "operationId": "getCandidateSandbox",

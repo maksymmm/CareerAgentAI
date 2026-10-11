@@ -448,7 +448,9 @@ def test_candidate_service_probe_routes_are_public_safe_and_read_only(tmp_path):
             self.close_calls += 1
 
     database_path = tmp_path / "candidate.sqlite"
-    SQLiteDatabase(str(database_path)).close()
+    database = SQLiteDatabase(str(database_path))
+    SQLiteCareerLoopRepository(database)
+    database.close()
     delegated = DelegatedApp()
     app = CandidateServiceWSGIApp(
         delegated, database_path=str(database_path)  # type: ignore[arg-type]
@@ -490,6 +492,26 @@ def test_candidate_service_readiness_does_not_create_or_disclose_missing_databas
     assert body == {"status": "unavailable"}
     assert str(database_path) not in json.dumps(body)
     assert not database_path.exists()
+
+
+def test_candidate_service_readiness_rejects_corrupt_database(tmp_path):
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    database_path = tmp_path / "corrupt.sqlite"
+    database_path.write_bytes(b"not a sqlite database")
+    app = CandidateServiceWSGIApp(
+        DelegatedApp(), database_path=str(database_path)  # type: ignore[arg-type]
+    )
+
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
 
 
 @pytest.mark.parametrize("path", ("/healthz", "/readyz"))

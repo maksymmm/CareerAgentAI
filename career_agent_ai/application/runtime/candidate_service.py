@@ -135,7 +135,12 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
-            database.connection.execute("SELECT 1").fetchone()
+            schema = database.connection.execute(
+                """SELECT 1 FROM sqlite_master
+                   WHERE type = 'table' AND name = 'autonomous_career_loops'"""
+            ).fetchone()
+            if schema is None:
+                raise RuntimeError("candidate schema is unavailable")
         except Exception:
             return self._respond(
                 start_response, "503 Service Unavailable", self._UNAVAILABLE_BODY
