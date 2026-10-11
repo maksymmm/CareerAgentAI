@@ -58,7 +58,6 @@ jobs:
             careeragentai:candidate
           test "$(docker exec careeragent-candidate-ci id -u)" = "10001"
           test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent)" = "700"
-          test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent/candidate.sqlite)" = "600"
           python - <<'PY'
           import json
           import time
@@ -79,3 +78,4 @@ jobs:
                           raise
                       time.sleep(1)
           PY
+          test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent/candidate.sqlite)" = "600"
