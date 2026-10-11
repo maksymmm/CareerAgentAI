@@ -8,7 +8,7 @@ import os
 import signal
 import socket
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from wsgiref.simple_server import WSGIServer, make_server
 
 from career_agent_ai.application.api import OperationalWSGIApp
@@ -16,8 +16,10 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     validate_loop_identifier,
 )
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 from .composition import RuntimeCandidateApp, build_candidate_sandbox_app_from_env
+from .config import RuntimeConfig
 
 
 class _IPv6WSGIServer(WSGIServer):
@@ -85,10 +87,98 @@ class CandidateServiceConfig:
         return self.user_id if hmac.compare_digest(presented_bytes, expected) else None
 
 
+class CandidateServiceWSGIApp:
+    """Expose unauthenticated probe routes around the authenticated candidate API."""
+
+    _HEALTH_BODY = b'{"status":"ok"}'
+    _UNAVAILABLE_BODY = b'{"status":"unavailable"}'
+
+    def __init__(self, app: RuntimeCandidateApp, *, database_path: str) -> None:
+        self._app = app
+        self._database_path = database_path
+
+    @staticmethod
+    def _respond(
+        start_response: Callable[..., Any], status: str, body: bytes
+    ) -> list[bytes]:
+        start_response(
+            status,
+            [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Content-Length", str(len(body))),
+                ("Cache-Control", "no-store"),
+                ("X-Content-Type-Options", "nosniff"),
+            ],
+        )
+        return [body]
+
+    def __call__(
+        self, environ: Mapping[str, Any], start_response: Callable[..., Any]
+    ) -> Iterable[bytes]:
+        path = environ.get("PATH_INFO", "")
+        if path not in {"/healthz", "/readyz"}:
+            return self._app(environ, start_response)
+        if environ.get("REQUEST_METHOD", "GET") != "GET":
+            start_response(
+                "405 Method Not Allowed",
+                [
+                    ("Allow", "GET"),
+                    ("Content-Length", "0"),
+                    ("Cache-Control", "no-store"),
+                    ("X-Content-Type-Options", "nosniff"),
+                ],
+            )
+            return [b""]
+        if path == "/healthz":
+            return self._respond(start_response, "200 OK", self._HEALTH_BODY)
+
+        database = None
+        try:
+            database = SQLiteDatabase.open_read_only(self._database_path)
+            schema = database.connection.execute(
+                """SELECT 1 FROM sqlite_master
+                   WHERE type = 'table' AND name = 'autonomous_career_loops'"""
+            ).fetchone()
+            if schema is None:
+                raise RuntimeError("candidate schema is unavailable")
+        except Exception:
+            return self._respond(
+                start_response, "503 Service Unavailable", self._UNAVAILABLE_BODY
+            )
+        finally:
+            if database is not None:
+                database.close()
+        return self._respond(start_response, "200 OK", self._HEALTH_BODY)
+
+    def close(self) -> None:
+        """Close the delegated candidate runtime."""
+        self._app.close()
+
+
+def _validate_candidate_storage(database_path: str) -> None:
+    """Validate all SQLite pages once during startup, before accepting traffic."""
+    database = None
+    try:
+        database = SQLiteDatabase.open_read_only(database_path)
+        if database.connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise RuntimeError("candidate storage integrity check failed")
+        schema = database.connection.execute(
+            """SELECT 1 FROM sqlite_master
+               WHERE type = 'table' AND name = 'autonomous_career_loops'"""
+        ).fetchone()
+        if schema is None:
+            raise RuntimeError("candidate schema is unavailable")
+    except Exception as exc:
+        raise RuntimeError("Candidate storage failed startup validation.") from exc
+    finally:
+        if database is not None:
+            database.close()
+
+
 class CandidateServiceRuntime:
     """Own the HTTP listener and close it together with the candidate runtime."""
 
-    def __init__(self, app: RuntimeCandidateApp, server: WSGIServer) -> None:
+    def __init__(self, app: Any, server: WSGIServer) -> None:
         self._app = app
         self._server = server
         self._closed = False
@@ -132,12 +222,17 @@ def build_candidate_service_from_env(
 ) -> CandidateServiceRuntime:
     """Validate auth first, compose the safe app, and bind its HTTP listener."""
     config = CandidateServiceConfig.from_env(environ)
-    app = build_candidate_sandbox_app_from_env(
+    runtime_config = RuntimeConfig.from_env(environ)
+    candidate_app = build_candidate_sandbox_app_from_env(
         resolve_bearer=config.resolve_bearer,
         jobs=jobs,
         environ=environ,
     )
+    app = CandidateServiceWSGIApp(
+        candidate_app, database_path=runtime_config.database_path
+    )
     try:
+        _validate_candidate_storage(runtime_config.database_path)
         server_class = (
             _IPv6WSGIServer
             if ipaddress.ip_address(config.host).version == 6

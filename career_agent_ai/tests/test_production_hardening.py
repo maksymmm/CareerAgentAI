@@ -44,6 +44,7 @@ from career_agent_ai.application.observability import (
 from career_agent_ai.application.runtime import (
     CandidateServiceConfig,
     CandidateServiceRuntime,
+    CandidateServiceWSGIApp,
     RuntimeConfig,
     RuntimeEnvironment,
     build_candidate_sandbox_app_from_env,
@@ -432,6 +433,135 @@ def test_candidate_service_binds_authenticates_and_closes(tmp_path):
         runtime.__enter__()
 
 
+def test_candidate_service_probe_routes_are_public_safe_and_read_only(tmp_path):
+    class DelegatedApp:
+        def __init__(self):
+            self.calls = []
+            self.close_calls = 0
+
+        def __call__(self, environ, start_response):
+            self.calls.append(environ["PATH_INFO"])
+            start_response("418 I'm a teapot", [("Content-Length", "2")])
+            return [b"{}"]
+
+        def close(self):
+            self.close_calls += 1
+
+    database_path = tmp_path / "candidate.sqlite"
+    database = SQLiteDatabase(str(database_path))
+    SQLiteCareerLoopRepository(database)
+    database.close()
+    delegated = DelegatedApp()
+    app = CandidateServiceWSGIApp(
+        delegated, database_path=str(database_path)  # type: ignore[arg-type]
+    )
+
+    health_meta, health = _wsgi_call(app, "/healthz")
+    ready_meta, ready = _wsgi_call(app, "/readyz")
+    delegated_meta, _ = _wsgi_call(app, "/delegated")
+
+    assert health_meta["status"] == "200 OK"
+    assert health == {"status": "ok"}
+    assert ready_meta["status"] == "200 OK"
+    assert ready == {"status": "ok"}
+    assert ready_meta["headers"]["Cache-Control"] == "no-store"
+    assert delegated_meta["status"] == "418 I'm a teapot"
+    assert delegated.calls == ["/delegated"]
+    app.close()
+    assert delegated.close_calls == 1
+
+
+def test_candidate_service_readiness_does_not_create_or_disclose_missing_database(
+    tmp_path,
+):
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    database_path = tmp_path / "missing.sqlite"
+    app = CandidateServiceWSGIApp(
+        DelegatedApp(), database_path=str(database_path)  # type: ignore[arg-type]
+    )
+
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
+    assert str(database_path) not in json.dumps(body)
+    assert not database_path.exists()
+
+
+def test_candidate_service_readiness_rejects_corrupt_database(tmp_path):
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    database_path = tmp_path / "corrupt.sqlite"
+    database_path.write_bytes(b"not a sqlite database")
+    app = CandidateServiceWSGIApp(
+        DelegatedApp(), database_path=str(database_path)  # type: ignore[arg-type]
+    )
+
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
+
+
+def test_candidate_service_startup_rejects_corrupt_data_page(tmp_path):
+
+    database_path = tmp_path / "corrupt-page.sqlite"
+    database = SQLiteDatabase(str(database_path))
+    database.connection.execute(
+        "CREATE TABLE autonomous_career_loops (payload BLOB NOT NULL)"
+    )
+    for _ in range(8):
+        database.connection.execute(
+            "INSERT INTO autonomous_career_loops VALUES (zeroblob(3000))"
+        )
+    database.connection.commit()
+    page_size = database.connection.execute("PRAGMA page_size").fetchone()[0]
+    database.close()
+    contents = bytearray(database_path.read_bytes())
+    last_page_offset = len(contents) - page_size
+    contents[last_page_offset] = 0xFF
+    database_path.write_bytes(contents)
+    with pytest.raises(RuntimeError, match="failed startup validation"):
+        candidate_service._validate_candidate_storage(str(database_path))
+
+
+@pytest.mark.parametrize("path", ("/healthz", "/readyz"))
+def test_candidate_service_probe_routes_reject_non_get_methods(path, tmp_path):
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    app = CandidateServiceWSGIApp(
+        DelegatedApp(),  # type: ignore[arg-type]
+        database_path=str(tmp_path / "missing.sqlite"),
+    )
+    captured = {}
+
+    chunks = app(
+        {"REQUEST_METHOD": "POST", "PATH_INFO": path},
+        lambda status, headers: captured.update(status=status, headers=dict(headers)),
+    )
+
+    assert captured["status"] == "405 Method Not Allowed"
+    assert captured["headers"]["Allow"] == "GET"
+    assert b"".join(chunks) == b""
+    assert not (tmp_path / "missing.sqlite").exists()
+
+
 def test_candidate_service_interrupt_closes_listener_and_app():
     class FakeApp:
         def __init__(self):
@@ -482,10 +612,43 @@ def test_candidate_service_bind_interrupt_closes_composed_app(monkeypatch):
         "make_server",
         lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
+    monkeypatch.setattr(candidate_service, "_validate_candidate_storage", lambda path: None)
 
     with pytest.raises(KeyboardInterrupt):
         build_candidate_service_from_env(
             environ={
+                "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "s" * 32,
+                "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+            }
+        )
+
+    assert app.close_calls == 1
+
+
+def test_candidate_service_storage_validation_failure_closes_composed_app(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    app = FakeApp()
+    monkeypatch.setattr(
+        candidate_service,
+        "build_candidate_sandbox_app_from_env",
+        lambda **kwargs: app,
+    )
+    monkeypatch.setattr(
+        candidate_service,
+        "_validate_candidate_storage",
+        lambda path: (_ for _ in ()).throw(RuntimeError("invalid storage")),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid storage"):
+        build_candidate_service_from_env(
+            environ={
+                "CAREER_AGENT_DB_PATH": "/tmp/candidate-invalid.sqlite",
                 "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "s" * 32,
                 "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
             }

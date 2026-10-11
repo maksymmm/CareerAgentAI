@@ -799,6 +799,15 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
         "type": "http",
         "scheme": "bearer",
     }
+    health = document["paths"]["/healthz"]["get"]
+    readiness = document["paths"]["/readyz"]["get"]
+    assert health["security"] == []
+    assert set(health["responses"]) == {"200", "405"}
+    assert readiness["security"] == []
+    assert set(readiness["responses"]) == {"200", "405", "503"}
+    assert readiness["responses"]["503"]["content"]["application/json"][
+        "schema"
+    ]["properties"]["status"]["const"] == "unavailable"
     assert route["get"]["security"] == [{"bearerAuth": []}]
     assert route["post"]["security"] == [{"bearerAuth": []}]
     request_schema = route["post"]["requestBody"]["content"]["application/json"]["schema"]
