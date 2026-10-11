@@ -283,27 +283,52 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
         server.server_close()
         app.close()
 
+    operations_database = SQLiteDatabase(database_path)
+    try:
+        persisted_operations = operations_database.connection.execute(
+            """
+            SELECT action_type, status, result_json
+            FROM external_action_operations
+            ORDER BY operation_id
+            """
+        ).fetchall()
+    finally:
+        operations_database.close()
+
+    assert len(persisted_operations) == 1
+    action_type, status, result_json = persisted_operations[0]
+    assert action_type == "application.submit"
+    assert status == ExternalActionStatus.SUCCEEDED.value
+    assert json.loads(result_json)["provider_submission_id"].startswith("fake:")
+
     restarted = build_candidate_sandbox_app_from_env(
         resolve_bearer=lambda token: "browser-user" if token == "sandbox-token" else None,
         jobs=jobs,
         environ=environ,
     )
+    restarted_server = make_server(
+        "127.0.0.1", 0, restarted, handler_class=QuietHandler
+    )
+    restarted_thread = Thread(target=restarted_server.serve_forever, daemon=True)
+    restarted_thread.start()
     try:
-        statuses = []
-        payload = json.loads(b"".join(restarted(
-            {
-                "REQUEST_METHOD": "GET",
-                "PATH_INFO": f"/v1/candidate/runs/{durable_run_id}/status",
-                "HTTP_AUTHORIZATION": "Bearer sandbox-token",
-            },
-            lambda status, headers: statuses.append(status),
-        )))
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(
+                f"http://127.0.0.1:{restarted_server.server_port}/sandbox/candidate"
+            )
+            page.locator("#token").fill("sandbox-token")
+            page.locator("#run-id").fill(durable_run_id)
+            page.locator("#status").click()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
+            assert page.locator("#run-id").input_value() == durable_run_id
+            browser.close()
     finally:
+        restarted_server.shutdown()
+        restarted_thread.join(timeout=5)
+        restarted_server.server_close()
         restarted.close()
-
-    assert statuses == ["200 OK"]
-    assert payload["run_id"] == durable_run_id
-    assert payload["phase"] == CareerLoopPhase.COMPLETE.value
 
 
 def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):

@@ -437,9 +437,10 @@ The project is not considered complete merely because modules exist. Completion 
 Approval API hardening: duplicate JSON members are rejected before submission
 validation or durable resume, including repeated decisions and escaped names.
 Delivered: CI executes the sandbox start, prompt inspection, prompt-bound approval,
-process restart, and durable status recovery flow in headless Chromium against the
-sandbox-gated SQLite composition. The test uses deterministic no-I/O adapters and
-cannot send applications, messages, or calendar changes.
+runtime/server restart, and durable status recovery flow in a fresh headless Chromium
+session against the sandbox-gated SQLite composition. The test verifies exactly one
+successful `application.submit` row with a `fake:` provider ID; no messaging or calendar
+action is exercised, so it cannot send applications, messages, or calendar changes.
 
 The next product priority is a deployable candidate-service startup boundary with
 validated authentication configuration and graceful runtime shutdown.
