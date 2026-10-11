@@ -436,5 +436,10 @@ The project is not considered complete merely because modules exist. Completion 
 
 Approval API hardening: duplicate JSON members are rejected before submission
 validation or durable resume, including repeated decisions and escaped names.
-The next product priority is a browser-level end-to-end smoke test of the sandbox
-flow followed by sandbox-gated candidate-service composition.
+Delivered: CI executes the sandbox start, prompt inspection, prompt-bound approval,
+process restart, and durable status recovery flow in headless Chromium against the
+sandbox-gated SQLite composition. The test uses deterministic no-I/O adapters and
+cannot send applications, messages, or calendar changes.
+
+The next product priority is a deployable candidate-service startup boundary with
+validated authentication configuration and graceful runtime shutdown.

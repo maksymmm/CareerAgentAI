@@ -287,6 +287,10 @@ candidate enters a bearer token that stays only in the tab's memory. Decisions c
 the prompt's run ID, state version, and action fingerprint back to the strict API, so
 the interface cannot silently approve a changed or stale action. The page is served
 with `no-store`, anti-sniffing, no-referrer, and restrictive content-security headers.
+CI runs the complete start, prompt inspection, prompt-bound approval, process restart,
+and durable status recovery path in headless Chromium against the sandbox-gated SQLite
+composition. The browser test retains deterministic fake application, messaging, and
+calendar adapters and cannot perform external actions.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
