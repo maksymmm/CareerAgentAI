@@ -98,6 +98,8 @@ _HTML = """<!doctype html>
       if (promptLoadInFlight) throw new Error('An approval prompt is already loading.');
       promptLoadInFlight = true;
       approvalPrompt = null;
+      byId('action-title').textContent = 'Loading approval prompt…';
+      byId('action-details').textContent = '';
       byId('prompt').disabled = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
@@ -107,6 +109,9 @@ _HTML = """<!doctype html>
         byId('action-details').textContent = JSON.stringify(approvalPrompt.details, null, 2);
         byId('approve').disabled = false;
         byId('decline').disabled = false;
+      } catch (error) {
+        byId('action-title').textContent = 'Approval prompt unavailable. Load it again.';
+        throw error;
       } finally {
         promptLoadInFlight = false;
         byId('prompt').disabled = false;
@@ -129,6 +134,8 @@ _HTML = """<!doctype html>
       } finally {
         decisionInFlight = false;
         approvalPrompt = null;
+        byId('action-title').textContent = 'Decision finished. Load the current prompt.';
+        byId('action-details').textContent = '';
         byId('prompt').disabled = false;
       }
     }

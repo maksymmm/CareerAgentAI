@@ -110,6 +110,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("if (decisionInFlight)", prompt_handler) < prompt_get
     assert html.index("promptLoadInFlight = true", prompt_handler) < prompt_get
     assert html.index("approvalPrompt = null", prompt_handler) < prompt_get
+    assert html.index("byId('action-details').textContent = ''", prompt_handler) < prompt_get
+    assert "Approval prompt unavailable. Load it again." in html
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     decision_start = html.index("async function decide")
