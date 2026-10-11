@@ -301,6 +301,14 @@ token comparison. SIGTERM and keyboard interruption close both the listener and 
 listener-bind failure also closes the already-composed application. The entrypoint keeps
 all network providers and consequential actions disabled and uses only deterministic fake
 adapters.
+
+The repository also ships a minimal candidate-service `Dockerfile`. The image runs as
+the dedicated numeric identity `10001:10001`, keeps Python bytecode and external-action
+permissions disabled, and stores mutable SQLite state only under
+`/var/lib/careeragent`. Supply the bearer token and candidate identity at runtime; they
+are never baked into the image. CI builds the image and proves it can serve liveness and
+readiness with a read-only root filesystem, a constrained `/tmp`, and an explicit
+persistent data volume.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

@@ -452,5 +452,12 @@ routes. Readiness opens the configured durable SQLite database read-only and fai
 a sanitized `503` without creating missing storage; candidate workflow routes remain
 behind bearer authentication.
 
-The next product priority is a packaged process/container boundary with a non-root,
-read-only runtime contract and a CI deployment smoke test, without enabling real I/O.
+Delivered: the candidate service now has a minimal container boundary that runs as
+numeric UID/GID `10001:10001`, keeps network/consequential-action switches disabled,
+and writes only to an explicit durable data mount. CI builds and starts the image with a
+read-only root filesystem and constrained temporary filesystem, then verifies the
+non-root identity plus live health/readiness probes without real I/O.
+
+The next product priority is release artifact hardening: pin and attest the container
+base/build inputs, add vulnerability/SBOM gates, and document promotion/rollback without
+enabling production credentials or real external actions.

@@ -33,3 +33,47 @@ jobs:
       - name: Run test suite
         run: |
           python -m pytest             --cov=career_agent_ai             --cov-report=term-missing             --cov-fail-under=90
+
+      - name: Build candidate service container
+        run: docker build --tag careeragentai:candidate .
+
+      - name: Smoke candidate service container
+        shell: bash
+        run: |
+          set -euo pipefail
+          volume=careeragent-candidate-ci-data
+          docker volume create "$volume"
+          cleanup() {
+            docker rm --force careeragent-candidate-ci >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name careeragent-candidate-ci \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --mount type=volume,src="$volume",dst=/var/lib/careeragent \
+            --publish 127.0.0.1:18080:8080 \
+            --env CAREER_AGENT_CANDIDATE_BEARER_TOKEN="$(printf 's%.0s' {1..32})" \
+            --env CAREER_AGENT_CANDIDATE_USER_ID=candidate-ci \
+            careeragentai:candidate
+          test "$(docker exec careeragent-candidate-ci id -u)" = "10001"
+          python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          for path in ("/healthz", "/readyz"):
+              for attempt in range(30):
+                  try:
+                      with urllib.request.urlopen(
+                          f"http://127.0.0.1:18080{path}", timeout=2
+                      ) as response:
+                          assert response.status == 200
+                          assert json.load(response) == {"status": "ok"}
+                          break
+                  except (OSError, urllib.error.URLError):
+                      if attempt == 29:
+                          raise
+                      time.sleep(1)
+          PY
