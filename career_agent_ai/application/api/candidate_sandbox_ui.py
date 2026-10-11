@@ -96,6 +96,7 @@ _HTML = """<!doctype html>
       if (!response.ok) {
         const error = new Error(payload.message || payload.error || 'Request failed.');
         error.status = response.status;
+        error.code = payload.error;
         throw error;
       }
       return payload;
@@ -131,7 +132,7 @@ _HTML = """<!doctype html>
         await call(runPath('/continue'), {method: 'POST'});
         invalidateApprovalPrompt('Recovery finished. Load the current approval prompt.');
       } catch (error) {
-        if (error.status) {
+        if (error.code === 'recovery_unavailable') {
           byId('approve').disabled = !approvalPrompt;
           byId('decline').disabled = !approvalPrompt;
         } else {

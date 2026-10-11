@@ -135,6 +135,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
     assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
+    assert "error.code = payload.error" in html
+    assert "error.code === 'recovery_unavailable'" in html[recovery_post:prompt_handler]
     assert "byId('approve').disabled = !approvalPrompt" in html[recovery_post:prompt_handler]
     assert "Recovery result is uncertain. Load the current approval prompt." in html[recovery_post:prompt_handler]
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
