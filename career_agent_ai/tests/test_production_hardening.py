@@ -40,9 +40,12 @@ from career_agent_ai.application.observability import (
     redact_mapping,
 )
 from career_agent_ai.application.runtime import (
+    CandidateServiceConfig,
+    CandidateServiceRuntime,
     RuntimeConfig,
     RuntimeEnvironment,
     build_candidate_sandbox_app_from_env,
+    build_candidate_service_from_env,
     build_operational_app_from_env,
     build_external_action_service,
     guard_job_provider,
@@ -329,6 +332,100 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
         restarted_thread.join(timeout=5)
         restarted_server.server_close()
         restarted.close()
+
+
+def test_candidate_service_validates_auth_before_opening_storage(tmp_path):
+    database_path = tmp_path / "must-not-exist.sqlite"
+    environ = {
+        "CAREER_AGENT_ENV": "production",
+        "CAREER_AGENT_DB_PATH": str(database_path),
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "short",
+        "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+    }
+
+    with pytest.raises(ValueError, match="32 to 4096"):
+        build_candidate_service_from_env(environ=environ)
+
+    assert not database_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("CAREER_AGENT_CANDIDATE_HOST", "localhost", "IPv4 or IPv6"),
+        ("CAREER_AGENT_CANDIDATE_PORT", "8O80", "must be an integer"),
+        ("CAREER_AGENT_CANDIDATE_PORT", "65536", "between 0 and 65535"),
+        ("CAREER_AGENT_CANDIDATE_USER_ID", "bad user", "malformed"),
+    ],
+)
+def test_candidate_service_rejects_invalid_listener_and_identity(field, value, message):
+    environ = {
+        "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "s" * 32,
+        "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        CandidateServiceConfig.from_env(environ)
+
+
+def test_candidate_service_binds_authenticates_and_closes(tmp_path):
+    token = "s" * 32
+    environ = {
+        "CAREER_AGENT_ENV": "production",
+        "CAREER_AGENT_DB_PATH": str(tmp_path / "candidate-service.sqlite"),
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        "CAREER_AGENT_CANDIDATE_HOST": "127.0.0.1",
+        "CAREER_AGENT_CANDIDATE_PORT": "0",
+        "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": token,
+        "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+    }
+    config = CandidateServiceConfig.from_env(environ)
+
+    assert config.resolve_bearer(token) == "candidate-1"
+    assert config.resolve_bearer(token + "x") is None
+    assert config.resolve_bearer("é" * 32) is None
+
+    runtime = build_candidate_service_from_env(environ=environ)
+    assert runtime.server_port > 0
+    runtime.close()
+    runtime.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        runtime.__enter__()
+
+
+def test_candidate_service_interrupt_closes_listener_and_app():
+    class FakeApp:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    class InterruptedServer:
+        server_port = 8080
+
+        def __init__(self):
+            self.close_calls = 0
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            self.close_calls += 1
+
+    app = FakeApp()
+    server = InterruptedServer()
+    runtime = CandidateServiceRuntime(app, server)  # type: ignore[arg-type]
+
+    runtime.serve_forever()
+    runtime.close()
+
+    assert app.close_calls == 1
+    assert server.close_calls == 1
 
 
 def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):

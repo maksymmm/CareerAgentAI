@@ -442,5 +442,10 @@ session against the sandbox-gated SQLite composition. The test verifies exactly 
 successful `application.submit` row with a `fake:` provider ID; no messaging or calendar
 action is exercised, so it cannot send applications, messages, or calendar changes.
 
-The next product priority is a deployable candidate-service startup boundary with
-validated authentication configuration and graceful runtime shutdown.
+Delivered: a deployable candidate-service startup validates the IP listener, port,
+secret bearer token and owner identity before binding; it retains the sandbox/cutover
+and no-I/O gates, uses constant-time authentication, and closes the listener/runtime on
+SIGTERM, interruption, or bind failure.
+
+The next product priority is deployment-level health/readiness integration for the
+candidate service and a packaged process/container boundary without enabling real I/O.
