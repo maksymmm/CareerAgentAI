@@ -100,6 +100,13 @@ reverse proxy/authentication layer before exposing it beyond a single candidate.
 performs graceful listener/runtime cleanup; failed validation or listener binding aborts
 startup.
 
+Configure the orchestrator to use `GET /healthz` for liveness and `GET /readyz` for
+readiness. Both probe routes are intentionally unauthenticated and return minimal,
+non-cached JSON. Readiness verifies that the already-created durable SQLite database can
+be opened read-only; a missing or unavailable database returns `503` without creating a
+new file or exposing its path. Do not route candidate workflow traffic to an instance
+until readiness returns `200`.
+
 ## Release procedure
 
 1. Run the complete repository test command with coverage >=90%.
@@ -107,7 +114,7 @@ startup.
 3. Back up the production database.
 4. Validate production environment configuration before starting workers.
 5. Apply pending non-destructive migrations.
-6. Start one instance and verify `/healthz`, structured logs, and the operational issue endpoint.
+6. Start one instance and verify `/healthz`, candidate `/readyz`, structured logs, and the operational issue endpoint.
 7. Enable additional workers only after the initial instance is healthy.
 8. Keep consequential actions disabled until the configured real providers and human-approval workflow have been verified.
 9. If a migration or startup check fails, stop deployment. Restore from backup when necessary rather than editing migration history.

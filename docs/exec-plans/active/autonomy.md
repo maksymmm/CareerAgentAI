@@ -447,5 +447,10 @@ secret bearer token and owner identity before binding; it retains the sandbox/cu
 and no-I/O gates, uses constant-time authentication, and closes the listener/runtime on
 SIGTERM, interruption, or bind failure.
 
-The next product priority is deployment-level health/readiness integration for the
-candidate service and a packaged process/container boundary without enabling real I/O.
+Delivered: the candidate service now exposes public, non-cached liveness and readiness
+routes. Readiness opens the configured durable SQLite database read-only and fails with
+a sanitized `503` without creating missing storage; candidate workflow routes remain
+behind bearer authentication.
+
+The next product priority is a packaged process/container boundary with a non-root,
+read-only runtime contract and a CI deployment smoke test, without enabling real I/O.

@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from .candidate_service import (
         CandidateServiceConfig,
         CandidateServiceRuntime,
+        CandidateServiceWSGIApp,
         build_candidate_service_from_env,
     )
     from .composition import (
@@ -37,6 +38,7 @@ _COMPOSITION_EXPORTS = {
 _SERVICE_EXPORTS = {
     "CandidateServiceConfig",
     "CandidateServiceRuntime",
+    "CandidateServiceWSGIApp",
     "build_candidate_service_from_env",
 }
 
@@ -67,6 +69,7 @@ __all__ = [
     "RuntimeEnvironment",
     "CandidateServiceConfig",
     "CandidateServiceRuntime",
+    "CandidateServiceWSGIApp",
     "RuntimeGuardedJobProvider",
     "RuntimeGuardedSignalProvider",
     "RuntimeCandidateApp",
