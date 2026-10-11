@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 import json
 import re
+from threading import Thread
+from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
 from types import SimpleNamespace
@@ -90,6 +92,84 @@ def raw_request(app, *, method="GET", path="/sandbox/candidate"):
         app(environ, lambda status, headers: statuses.append((status, headers)))
     )
     return statuses[0], response
+
+
+def test_candidate_sandbox_browser_completes_prompt_bound_approval():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class BrowserLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.run_id = None
+
+        def start(self, request, *, run_id=None):
+            self.started = (request, run_id)
+            self.run_id = run_id
+            return SimpleNamespace(
+                run_id=run_id,
+                phase=SimpleNamespace(value="application_approval"),
+            )
+
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == (self.run_id, "candidate-1")
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "run_id": run_id,
+                    "state_version": 3,
+                    "action_fingerprint": "0" * 64,
+                    "title": "Approve application",
+                    "details": {"company": "Sandbox GmbH"},
+                }
+            )
+
+        def resume_candidate_submission(self, *, user_id, submission):
+            assert user_id == "candidate-1"
+            self.submission = submission
+            return SimpleNamespace(
+                run_id=self.run_id,
+                phase=SimpleNamespace(value="message_approval"),
+            )
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = BrowserLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#start-run-id").fill("browser-smoke")
+            page.locator("#keyword").fill("platform engineer")
+            page.locator("#location").fill("Berlin")
+            page.locator("#profile").fill("Senior Python engineer")
+            page.locator("#start").click()
+            page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
+
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            assert page.locator("#action-details").text_content() == (
+                '{\n  "company": "Sandbox GmbH"\n}'
+            )
+
+            page.locator("#approve").click()
+            page.locator("#result").get_by_text('"phase": "message_approval"').wait_for()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert loop.submission is not None
+    assert loop.submission.run_id == loop.run_id
+    assert loop.submission.state_version == 3
+    assert loop.submission.action_fingerprint == "0" * 64
+    assert loop.submission.decision is ApprovalDecision.APPROVE
 
 
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
