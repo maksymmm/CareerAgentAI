@@ -128,7 +128,10 @@ The image runs as numeric UID/GID `10001:10001`. Keep the published listener beh
 trusted TLS/authentication proxy, make `/var/lib/careeragent` a backed-up persistent
 volume, and do not mount source code or the container root writable. Network-provider
 and consequential-action kill switches are fixed to safe defaults in the image and must
-remain false for the sandbox release.
+remain false for the sandbox release. The base image is pinned by immutable digest;
+update that digest only through a reviewed dependency change. The entrypoint applies
+`umask 077`, so the data directory remains owner-only and newly created SQLite files are
+not readable by other container identities.
 
 ## Release procedure
 

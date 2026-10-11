@@ -1,4 +1,4 @@
-FROM python:3.12.15-slim-bookworm
+FROM python:3.12.15-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,16 +13,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --gid 10001 careeragent \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin careeragent \
-    && mkdir -p /app /var/lib/careeragent \
+    && mkdir -p /app \
+    && install -d -m 0700 -o 10001 -g 10001 /var/lib/careeragent \
     && chown -R 10001:10001 /app /var/lib/careeragent
 
 WORKDIR /app
 COPY --chown=10001:10001 career_agent_ai/ /app/career_agent_ai/
+COPY --chmod=0555 --chown=10001:10001 container-entrypoint.sh /usr/local/bin/careeragent-entrypoint
 
 USER 10001:10001
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+    CMD ["python", "-c", "import os, urllib.request; port=os.environ.get('CAREER_AGENT_CANDIDATE_PORT', '8080'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=2).read()"]
 
-ENTRYPOINT ["python", "-m", "career_agent_ai.application.runtime.candidate_service"]
+ENTRYPOINT ["/usr/local/bin/careeragent-entrypoint"]

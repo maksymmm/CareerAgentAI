@@ -57,6 +57,8 @@ jobs:
             --env CAREER_AGENT_CANDIDATE_USER_ID=candidate-ci \
             careeragentai:candidate
           test "$(docker exec careeragent-candidate-ci id -u)" = "10001"
+          test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent)" = "700"
+          test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent/candidate.sqlite)" = "600"
           python - <<'PY'
           import json
           import time
