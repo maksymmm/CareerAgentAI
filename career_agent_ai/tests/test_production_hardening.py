@@ -275,7 +275,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve job application").wait_for()
             page.locator("#approve").click()
-            page.locator("#result").get_by_text('"phase": "message_approval"').wait_for()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             browser.close()
     finally:
         server.shutdown()
@@ -303,7 +303,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
 
     assert statuses == ["200 OK"]
     assert payload["run_id"] == durable_run_id
-    assert payload["phase"] == CareerLoopPhase.MESSAGE_APPROVAL.value
+    assert payload["phase"] == CareerLoopPhase.COMPLETE.value
 
 
 def test_candidate_sandbox_rejects_non_job_seed_and_closes_database(tmp_path):
