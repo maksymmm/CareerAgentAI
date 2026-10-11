@@ -27,7 +27,8 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-cov
+          python -m pip install pytest pytest-cov playwright
+          python -m playwright install --with-deps chromium
 
       - name: Run test suite
         run: |
