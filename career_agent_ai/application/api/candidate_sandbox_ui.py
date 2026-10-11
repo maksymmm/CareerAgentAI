@@ -129,7 +129,7 @@ _HTML = """<!doctype html>
         state_version: approvalPrompt.state_version,
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
       try {
-        await call(runPath('/approval'), {method: 'POST', headers: {'Content-Type': 'application/json'},
+        await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)});
       } finally {
         decisionInFlight = false;

@@ -115,8 +115,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     decision_start = html.index("async function decide")
-    decision_post = html.index("await call(runPath('/approval')", decision_start)
+    decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
     assert html.index("if (promptLoadInFlight)", decision_start) < decision_post
+    assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
+    assert "runPath(" not in html[decision_start:]
     assert html.index("decisionInFlight = true", decision_start) < decision_post
     assert html.index(
         "byId('approve').disabled = true", decision_start
