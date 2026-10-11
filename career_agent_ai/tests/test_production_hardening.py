@@ -514,13 +514,7 @@ def test_candidate_service_readiness_rejects_corrupt_database(tmp_path):
     assert body == {"status": "unavailable"}
 
 
-def test_candidate_service_readiness_rejects_corrupt_data_page(tmp_path):
-    class DelegatedApp:
-        def __call__(self, environ, start_response):
-            raise AssertionError("probe must not reach the authenticated app")
-
-        def close(self):
-            pass
+def test_candidate_service_startup_rejects_corrupt_data_page(tmp_path):
 
     database_path = tmp_path / "corrupt-page.sqlite"
     database = SQLiteDatabase(str(database_path))
@@ -538,14 +532,8 @@ def test_candidate_service_readiness_rejects_corrupt_data_page(tmp_path):
     last_page_offset = len(contents) - page_size
     contents[last_page_offset] = 0xFF
     database_path.write_bytes(contents)
-    app = CandidateServiceWSGIApp(
-        DelegatedApp(), database_path=str(database_path)  # type: ignore[arg-type]
-    )
-
-    meta, body = _wsgi_call(app, "/readyz")
-
-    assert meta["status"] == "503 Service Unavailable"
-    assert body == {"status": "unavailable"}
+    with pytest.raises(RuntimeError, match="failed startup validation"):
+        candidate_service._validate_candidate_storage(str(database_path))
 
 
 @pytest.mark.parametrize("path", ("/healthz", "/readyz"))
@@ -624,10 +612,43 @@ def test_candidate_service_bind_interrupt_closes_composed_app(monkeypatch):
         "make_server",
         lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
+    monkeypatch.setattr(candidate_service, "_validate_candidate_storage", lambda path: None)
 
     with pytest.raises(KeyboardInterrupt):
         build_candidate_service_from_env(
             environ={
+                "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "s" * 32,
+                "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+            }
+        )
+
+    assert app.close_calls == 1
+
+
+def test_candidate_service_storage_validation_failure_closes_composed_app(monkeypatch):
+    class FakeApp:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    app = FakeApp()
+    monkeypatch.setattr(
+        candidate_service,
+        "build_candidate_sandbox_app_from_env",
+        lambda **kwargs: app,
+    )
+    monkeypatch.setattr(
+        candidate_service,
+        "_validate_candidate_storage",
+        lambda path: (_ for _ in ()).throw(RuntimeError("invalid storage")),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid storage"):
+        build_candidate_service_from_env(
+            environ={
+                "CAREER_AGENT_DB_PATH": "/tmp/candidate-invalid.sqlite",
                 "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "s" * 32,
                 "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
             }

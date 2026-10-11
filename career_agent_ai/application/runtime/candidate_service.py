@@ -135,9 +135,6 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
-            integrity = database.connection.execute("PRAGMA quick_check(1)").fetchone()
-            if integrity != ("ok",):
-                raise RuntimeError("candidate storage integrity check failed")
             schema = database.connection.execute(
                 """SELECT 1 FROM sqlite_master
                    WHERE type = 'table' AND name = 'autonomous_career_loops'"""
@@ -156,6 +153,26 @@ class CandidateServiceWSGIApp:
     def close(self) -> None:
         """Close the delegated candidate runtime."""
         self._app.close()
+
+
+def _validate_candidate_storage(database_path: str) -> None:
+    """Validate all SQLite pages once during startup, before accepting traffic."""
+    database = None
+    try:
+        database = SQLiteDatabase.open_read_only(database_path)
+        if database.connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise RuntimeError("candidate storage integrity check failed")
+        schema = database.connection.execute(
+            """SELECT 1 FROM sqlite_master
+               WHERE type = 'table' AND name = 'autonomous_career_loops'"""
+        ).fetchone()
+        if schema is None:
+            raise RuntimeError("candidate schema is unavailable")
+    except Exception as exc:
+        raise RuntimeError("Candidate storage failed startup validation.") from exc
+    finally:
+        if database is not None:
+            database.close()
 
 
 class CandidateServiceRuntime:
@@ -215,6 +232,7 @@ def build_candidate_service_from_env(
         candidate_app, database_path=runtime_config.database_path
     )
     try:
+        _validate_candidate_storage(runtime_config.database_path)
         server_class = (
             _IPv6WSGIServer
             if ipaddress.ip_address(config.host).version == 6
