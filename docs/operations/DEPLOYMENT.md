@@ -76,6 +76,30 @@ when SQLite cannot be opened, while inspection returns a sanitized JSON error. R
 the application's idempotent `close()` with the process shutdown hook to reject later requests.
 Invalid token input fails before runtime validation can probe or create a SQLite URI.
 
+## Candidate sandbox service
+
+The deployable candidate approval sandbox starts with:
+
+```bash
+python -m career_agent_ai.application.runtime.candidate_service
+```
+
+In addition to the safe runtime baseline, configure:
+
+- `CAREER_AGENT_CANDIDATE_SANDBOX=true`
+- `CAREER_AGENT_CANDIDATE_ID_CUTOVER=drain-and-replace-scoped-v2`
+- `CAREER_AGENT_CANDIDATE_HOST` as an explicit IPv4/IPv6 address (default `127.0.0.1`)
+- `CAREER_AGENT_CANDIDATE_PORT` (default `8080`)
+- `CAREER_AGENT_CANDIDATE_BEARER_TOKEN` from the secret store, 32–4096 ASCII characters
+- `CAREER_AGENT_CANDIDATE_USER_ID` as the authenticated owner identity
+
+Keep `CAREER_AGENT_ALLOW_NETWORK_PROVIDERS=false` and
+`CAREER_AGENT_ALLOW_CONSEQUENTIAL_ACTIONS=false`. This entrypoint deliberately composes
+only fake no-I/O providers. Put TLS and multi-user identity resolution in a trusted
+reverse proxy/authentication layer before exposing it beyond a single candidate. SIGTERM
+performs graceful listener/runtime cleanup; failed validation or listener binding aborts
+startup.
+
 ## Release procedure
 
 1. Run the complete repository test command with coverage >=90%.

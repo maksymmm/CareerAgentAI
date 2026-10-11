@@ -292,6 +292,15 @@ restart, and durable status recovery path in a fresh headless Chromium session a
 the sandbox-gated SQLite composition. The browser test verifies that the only persisted
 external action is one successful application submission with a `fake:` provider ID;
 messaging and calendar actions are not exercised, so it cannot perform external actions.
+
+The sandbox now has a deployable standard-library HTTP entrypoint:
+`python -m career_agent_ai.application.runtime.candidate_service`. Startup validates an
+IP listener, port, 32+ character bearer token, candidate identity, durable SQLite path,
+sandbox flag, and scoped-ID cutover before binding. Authentication uses constant-time
+token comparison. SIGTERM and keyboard interruption close both the listener and runtime;
+listener-bind failure also closes the already-composed application. The entrypoint keeps
+all network providers and consequential actions disabled and uses only deterministic fake
+adapters.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
