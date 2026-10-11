@@ -64,6 +64,8 @@ _HTML = """<!doctype html>
     let approvalPrompt = null;
     let decisionInFlight = false;
     let promptLoadInFlight = false;
+    let recoveryInFlight = false;
+    let latestStartRequest = 0;
     const byId = (id) => document.getElementById(id);
     const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
@@ -83,16 +85,34 @@ _HTML = """<!doctype html>
       try { await operation(); } catch (error) { show({error: String(error.message || error)}); }
     }
     byId('start').addEventListener('click', () => guarded(async () => {
+      const requestNumber = ++latestStartRequest;
       const payload = await call('/v1/candidate/runs', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({schema_version: 1, run_id: byId('start-run-id').value,
           keyword: byId('keyword').value, candidate_profile: byId('profile').value,
           location: byId('location').value}),
       });
-      byId('run-id').value = payload.run_id;
+      if (requestNumber === latestStartRequest) byId('run-id').value = payload.run_id;
     }));
+    byId('run-id').addEventListener('input', () => { latestStartRequest += 1; });
     byId('status').addEventListener('click', () => guarded(() => call(runPath('/status'))));
-    byId('continue').addEventListener('click', () => guarded(() => call(runPath('/continue'), {method: 'POST'})));
+    byId('continue').addEventListener('click', () => guarded(async () => {
+      if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
+      if (promptLoadInFlight) throw new Error('Wait for the approval prompt to finish loading.');
+      if (recoveryInFlight) throw new Error('Recovery is already running.');
+      recoveryInFlight = true;
+      byId('continue').disabled = true;
+      byId('prompt').disabled = true;
+      byId('approve').disabled = true;
+      byId('decline').disabled = true;
+      try {
+        await call(runPath('/continue'), {method: 'POST'});
+      } finally {
+        recoveryInFlight = false;
+        byId('continue').disabled = false;
+        byId('prompt').disabled = false;
+      }
+    }));
     byId('prompt').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       if (promptLoadInFlight) throw new Error('An approval prompt is already loading.');
@@ -118,6 +138,7 @@ _HTML = """<!doctype html>
       }
     }));
     async function decide(decision) {
+      if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
       if (promptLoadInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
@@ -125,6 +146,7 @@ _HTML = """<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       byId('prompt').disabled = true;
+      byId('continue').disabled = true;
       const payload = {schema_version: 1, run_id: approvalPrompt.run_id,
         state_version: approvalPrompt.state_version,
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
@@ -137,6 +159,7 @@ _HTML = """<!doctype html>
         byId('action-title').textContent = 'Decision finished. Load the current prompt.';
         byId('action-details').textContent = '';
         byId('prompt').disabled = false;
+        byId('continue').disabled = false;
       }
     }
     byId('approve').addEventListener('click', () => guarded(() => decide('approve')));

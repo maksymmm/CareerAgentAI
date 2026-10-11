@@ -112,11 +112,23 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("approvalPrompt = null", prompt_handler) < prompt_get
     assert html.index("byId('action-details').textContent = ''", prompt_handler) < prompt_get
     assert "Approval prompt unavailable. Load it again." in html
+    start_handler = html.index("byId('start').addEventListener")
+    start_post = html.index("await call('/v1/candidate/runs'", start_handler)
+    start_assignment = html.index("byId('run-id').value = payload.run_id", start_post)
+    assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
+    assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]
+    assert "byId('run-id').addEventListener('input'" in html
+    recovery_handler = html.index("byId('continue').addEventListener")
+    recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
+    assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
+    assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
+    assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     decision_start = html.index("async function decide")
     decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
     assert html.index("if (promptLoadInFlight)", decision_start) < decision_post
+    assert html.index("if (recoveryInFlight)", decision_start) < decision_post
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]
     assert html.index("decisionInFlight = true", decision_start) < decision_post
@@ -124,6 +136,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         "byId('approve').disabled = true", decision_start
     ) < decision_post
     assert html.index("byId('prompt').disabled = true", decision_start) < decision_post
+    assert html.index("byId('continue').disabled = true", decision_start) < decision_post
     assert html.index("byId('prompt').disabled = false", decision_post) > decision_post
     assert "localStorage" not in html
     assert "sessionStorage" not in html
