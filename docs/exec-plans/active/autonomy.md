@@ -465,8 +465,10 @@ evidence bundle. A pinned scanner fails the build for fixed critical vulnerabili
 evidence is uploaded under the exact source commit only after the runtime smoke passes.
 Checkout and evidence use the same exact SHA, repository-local scanner configuration is
 disabled through runner-owned explicit configs, and the SBOM is validated against the
-vendored official SPDX 2.3 JSON schema. The gate does not publish an image, use
-production credentials, or enable real actions.
+vendored official SPDX 2.3 JSON schema after verifying its upstream SHA-256. The evidence
+pipeline runs in a clean job that never executes PR-controlled pytest code, preventing
+cross-step environment poisoning. The gate does not publish an image, use production
+credentials, or enable real actions.
 
 The next product priority is promotion and rollback integrity: publish immutable
 candidate artifacts to a non-production registry, attach provenance/attestation, and
