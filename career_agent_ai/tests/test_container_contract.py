@@ -93,7 +93,8 @@ def test_container_rejects_non_regular_database_without_mutation(tmp_path, targe
         destination.write_bytes(b"")
         database.symlink_to(destination)
 
-    with pytest.raises(ValueError, match="regular file"):
+    expected = "regular file" if target_kind == "directory" else "ancestors"
+    with pytest.raises(ValueError, match=expected):
         secure_storage(str(database))
 
     assert stat.S_IMODE(data.stat().st_mode) == 0o755
