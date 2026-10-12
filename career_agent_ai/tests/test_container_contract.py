@@ -32,6 +32,7 @@ def test_candidate_container_runs_non_root_with_safe_defaults():
     assert "CAREER_AGENT_CANDIDATE_PORT" in dockerfile
     assert ".get('CAREER_AGENT_CANDIDATE_HOST', '0.0.0.0').strip()" in dockerfile
     assert ".get('CAREER_AGENT_CANDIDATE_PORT', '8080').strip()" in dockerfile
+    assert "build_opener(urllib.request.ProxyHandler({})).open" in dockerfile
     assert "probe='127.0.0.1' if bind == '0.0.0.0'" in dockerfile
     assert "else '::1' if bind == '::' else bind" in dockerfile
     assert "http://{host}:{port}/healthz" in dockerfile
@@ -111,6 +112,34 @@ def test_container_preserves_non_utf8_uri_path_bytes(tmp_path):
 
     assert stat.S_IMODE(os.stat(data).st_mode) == 0o700
     assert stat.S_IMODE(os.stat(database).st_mode) == 0o600
+
+
+def test_container_rejects_remote_sqlite_uri_authority():
+    with pytest.raises(ValueError, match="authority"):
+        database_filesystem_path("file://remote/var/lib/candidate.sqlite?mode=rwc")
+
+
+def test_container_preserves_literal_uri_control_bytes(tmp_path):
+    database = os.fsencode(tmp_path) + b"/candidate\ndata.sqlite"
+    uri = "file:" + os.fsdecode(database) + "?mode=rwc"
+
+    assert database_filesystem_path(uri) == database
+
+
+def test_container_rejects_symlink_in_database_ancestor(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    nested = outside / "nested"
+    nested.mkdir(mode=0o755)
+    mount = tmp_path / "mount"
+    mount.mkdir(mode=0o755)
+    (mount / "link").symlink_to(outside, target_is_directory=True)
+    database = mount / "link" / "nested" / "candidate.sqlite"
+
+    with pytest.raises(ValueError, match="ancestors"):
+        secure_storage(str(database))
+
+    assert stat.S_IMODE(nested.stat().st_mode) == 0o755
 
 
 def test_ci_smokes_read_only_candidate_container():
