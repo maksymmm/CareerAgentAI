@@ -309,6 +309,10 @@ permissions disabled, and stores mutable SQLite state only under
 are never baked into the image. CI builds the image and proves it can serve liveness and
 readiness with a read-only root filesystem, a constrained `/tmp`, and an explicit
 persistent data volume.
+CI also records the built image's content-addressed ID, generates a validated SPDX 2.3
+SBOM, verifies checksums for the release evidence bundle, and runs a pinned vulnerability
+scanner that blocks fixed critical findings. Evidence is uploaded under the exact source
+commit; this does not publish or deploy the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

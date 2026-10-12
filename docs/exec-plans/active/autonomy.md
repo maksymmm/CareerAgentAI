@@ -458,6 +458,12 @@ and writes only to an explicit durable data mount. CI builds and starts the imag
 read-only root filesystem and constrained temporary filesystem, then verifies the
 non-root identity plus live health/readiness probes without real I/O.
 
-The next product priority is release artifact hardening: pin and attest the container
-base/build inputs, add vulnerability/SBOM gates, and document promotion/rollback without
-enabling production credentials or real external actions.
+Delivered: release CI pins every third-party action by immutable commit, records the
+built container's content-addressed image ID, generates and validates an SPDX 2.3 SBOM,
+checksums the evidence bundle, and uploads it under the exact source commit. A pinned
+scanner fails the build for fixed critical vulnerabilities. The gate does not publish
+an image, use production credentials, or enable real external actions.
+
+The next product priority is promotion and rollback integrity: publish immutable
+candidate artifacts to a non-production registry, attach provenance/attestation, and
+verify digest-only deployment without enabling real providers or consequential actions.

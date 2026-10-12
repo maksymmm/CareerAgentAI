@@ -196,3 +196,19 @@ def test_ci_smokes_read_only_candidate_container():
     assert "stat -c %a /var/lib/careeragent/candidate.sqlite" in workflow
     assert '"/healthz"' in workflow
     assert '"/readyz"' in workflow
+
+
+def test_ci_generates_and_verifies_pinned_release_evidence():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
+    assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
+    assert "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" in workflow
+    assert "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2" in workflow
+    assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
+    assert "candidate-image-digest.txt" in workflow
+    assert "candidate-sbom.spdx.json" in workflow
+    assert "release-artifacts.sha256" in workflow
+    assert "sha256sum --check release-artifacts.sha256" in workflow
+    assert "severity-cutoff: critical" in workflow
+    assert "only-fixed: true" in workflow
