@@ -1,4 +1,14 @@
+import os
+import stat
 from pathlib import Path
+
+import pytest
+
+from career_agent_ai.application.runtime.container_entrypoint import (
+    database_filesystem_path,
+    secure_storage,
+    validate_environment,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,26 +30,87 @@ def test_candidate_container_runs_non_root_with_safe_defaults():
     assert "CAREER_AGENT_CANDIDATE_BEARER_TOKEN" not in dockerfile
     assert "CAREER_AGENT_CANDIDATE_USER_ID" not in dockerfile
     assert "CAREER_AGENT_CANDIDATE_PORT" in dockerfile
+    assert ".get('CAREER_AGENT_CANDIDATE_HOST', '0.0.0.0').strip()" in dockerfile
+    assert ".get('CAREER_AGENT_CANDIDATE_PORT', '8080').strip()" in dockerfile
     assert "probe='127.0.0.1' if bind == '0.0.0.0'" in dockerfile
     assert "else '::1' if bind == '::' else bind" in dockerfile
     assert "http://{host}:{port}/healthz" in dockerfile
     entrypoint = (ROOT / "container-entrypoint.sh").read_text(encoding="utf-8")
     assert "umask 077" in entrypoint
-    assert "print(sys.argv[1].strip())" in entrypoint
-    assert 'export CAREER_AGENT_DB_PATH="$normalized_db"' in entrypoint
-    assert 'unquote(urlsplit(value).path) if value.startswith("file:") else value' in entrypoint
-    assert 'if "\\x00" in path:' in entrypoint
-    assert "CAREER_AGENT_DB_PATH must not contain NUL bytes" in entrypoint
-    assert "print(path)" in entrypoint
-    assert "CAREER_AGENT_DB_PATH must resolve to an absolute filesystem path" in entrypoint
-    assert "if not raw.isascii() or not raw.isdecimal():" in entrypoint
-    assert "if not 1 <= port <= 65535:" in entrypoint
-    assert 'export CAREER_AGENT_CANDIDATE_PORT="$candidate_port"' in entrypoint
-    assert "CAREER_AGENT_DB_PATH must use a writable mounted parent directory" in entrypoint
-    assert 'export CAREER_AGENT_CANDIDATE_HOST="$normalized_host"' in entrypoint
-    assert 'chmod 0700 "$data_dir"' in entrypoint
-    assert 'chmod 0600 "$db_path"' in entrypoint
-    assert "exec python -m career_agent_ai.application.runtime.candidate_service" in entrypoint
+    assert "exec python -m career_agent_ai.application.runtime.container_entrypoint" in entrypoint
+
+
+def _valid_environment(database_path: Path) -> dict[str, str]:
+    return {
+        "CAREER_AGENT_ENV": "production",
+        "CAREER_AGENT_DB_PATH": str(database_path),
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        "CAREER_AGENT_ALLOW_NETWORK_PROVIDERS": "false",
+        "CAREER_AGENT_ALLOW_CONSEQUENTIAL_ACTIONS": "false",
+        "CAREER_AGENT_CANDIDATE_HOST": "127.0.0.1",
+        "CAREER_AGENT_CANDIDATE_PORT": "8080",
+        "CAREER_AGENT_CANDIDATE_BEARER_TOKEN": "a" * 32,
+        "CAREER_AGENT_CANDIDATE_USER_ID": "candidate-1",
+    }
+
+
+@pytest.mark.parametrize("key", ["CAREER_AGENT_CANDIDATE_HOST", "CAREER_AGENT_CANDIDATE_PORT"])
+def test_container_rejects_explicit_empty_listener_setting_before_chmod(tmp_path, key):
+    database = tmp_path / "data" / "candidate.sqlite"
+    database.parent.mkdir(mode=0o755)
+    environ = _valid_environment(database)
+    environ[key] = ""
+
+    with pytest.raises(ValueError):
+        validate_environment(environ)
+
+    assert stat.S_IMODE(database.parent.stat().st_mode) == 0o755
+
+
+def test_container_validates_all_policy_before_chmod(tmp_path):
+    database = tmp_path / "data" / "candidate.sqlite"
+    database.parent.mkdir(mode=0o755)
+    environ = _valid_environment(database)
+    environ["CAREER_AGENT_ALLOW_NETWORK_PROVIDERS"] = "invalid"
+
+    with pytest.raises(ValueError):
+        validate_environment(environ)
+
+    assert stat.S_IMODE(database.parent.stat().st_mode) == 0o755
+
+
+@pytest.mark.parametrize("target_kind", ["directory", "symlink"])
+def test_container_rejects_non_regular_database_without_mutation(tmp_path, target_kind):
+    data = tmp_path / "data"
+    data.mkdir(mode=0o755)
+    database = data / "candidate.sqlite"
+    if target_kind == "directory":
+        database.mkdir(mode=0o755)
+    else:
+        destination = tmp_path / "real.sqlite"
+        destination.write_bytes(b"")
+        database.symlink_to(destination)
+
+    with pytest.raises(ValueError, match="regular file"):
+        secure_storage(str(database))
+
+    assert stat.S_IMODE(data.stat().st_mode) == 0o755
+
+
+def test_container_preserves_non_utf8_uri_path_bytes(tmp_path):
+    data = os.fsencode(tmp_path) + b"/data"
+    os.mkdir(data, 0o755)
+    database = data + b"/candidate-\xff.sqlite"
+    with open(database, "wb"):
+        pass
+    uri = "file:" + os.fsdecode(data) + "/candidate-%FF.sqlite"
+
+    assert database_filesystem_path(uri) == database
+    secure_storage(uri)
+
+    assert stat.S_IMODE(os.stat(data).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(database).st_mode) == 0o600
 
 
 def test_ci_smokes_read_only_candidate_container():
