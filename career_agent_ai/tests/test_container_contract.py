@@ -187,7 +187,7 @@ def test_container_secures_storage_through_open_descriptors(tmp_path, monkeypatc
 def test_ci_smokes_read_only_candidate_container():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
-    assert "docker build --tag careeragentai:candidate ." in workflow
+    assert "docker build --tag careeragentai:candidate source" in workflow
     assert "--read-only" in workflow
     assert "--tmpfs /tmp:rw,noexec,nosuid,size=16m" in workflow
     assert "type=volume" in workflow
@@ -227,6 +227,12 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert workflow.index("Run test suite") < workflow.index("release-evidence:")
     release_job = workflow[workflow.index("release-evidence:") :]
     assert "python -m pytest" not in release_job
+    assert "path: source" in release_job
+    assert "working-directory: ${{ runner.temp }}" in release_job
+    assert "python -I -m pip install jsonschema==4.25.1" in release_job
+    assert "python -I - <<'PY'" in release_job
+    assert "SOURCE_ROOT: ${{ github.workspace }}/source" in release_job
+    assert "${{ runner.temp }}/candidate-sbom.spdx.json" in release_job
     assert workflow.index("Smoke candidate service container") < workflow.index(
         "Upload immutable release evidence"
     )

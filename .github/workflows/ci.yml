@@ -46,6 +46,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: source
 
       - name: Set up evidence validator
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -53,10 +54,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned evidence validator
-        run: python -m pip install jsonschema==4.25.1
+        working-directory: ${{ runner.temp }}
+        run: python -I -m pip install jsonschema==4.25.1
 
       - name: Build candidate service container
-        run: docker build --tag careeragentai:candidate .
+        run: docker build --tag careeragentai:candidate source
 
       - name: Record immutable candidate image identity
         shell: bash
@@ -66,8 +68,8 @@ jobs:
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
           image_id="$(docker image inspect --format '{{.Id}}' careeragentai:candidate)"
           [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf '%s\n' "$source_sha" > source-commit.txt
-          printf '%s\n' "$image_id" > candidate-image-digest.txt
+          printf '%s\n' "$source_sha" > "$RUNNER_TEMP/source-commit.txt"
+          printf '%s\n' "$image_id" > "$RUNNER_TEMP/candidate-image-digest.txt"
           printf '{}\n' > "$RUNNER_TEMP/syft.yaml"
           printf '{}\n' > "$RUNNER_TEMP/grype.yaml"
 
@@ -76,7 +78,7 @@ jobs:
         with:
           image: careeragentai:candidate
           format: spdx-json
-          output-file: candidate-sbom.spdx.json
+          output-file: ${{ runner.temp }}/candidate-sbom.spdx.json
           upload-artifact: false
           config: ${{ runner.temp }}/syft.yaml
 
@@ -88,26 +90,32 @@ jobs:
           severity-cutoff: critical
           only-fixed: true
           output-format: json
-          output-file: candidate-vulnerabilities.json
+          output-file: ${{ runner.temp }}/candidate-vulnerabilities.json
           config: ${{ runner.temp }}/grype.yaml
 
       - name: Validate and checksum release evidence
         shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          SOURCE_ROOT: ${{ github.workspace }}/source
         run: |
           set -euo pipefail
+          schema="$SOURCE_ROOT/.github/schemas/spdx-2.3.schema.json"
           printf '%s  %s\n' \
             '4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212' \
-            '.github/schemas/spdx-2.3.schema.json' \
+            "$schema" \
             | sha256sum --check --strict
-          python - <<'PY'
+          python -I - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           from jsonschema import Draft201909Validator
 
           sbom = json.loads(Path("candidate-sbom.spdx.json").read_text(encoding="utf-8"))
           schema = json.loads(
-              Path(".github/schemas/spdx-2.3.schema.json").read_text(encoding="utf-8")
+              (Path(os.environ["SOURCE_ROOT"]) / ".github/schemas/spdx-2.3.schema.json")
+              .read_text(encoding="utf-8")
           )
           Draft201909Validator.check_schema(schema)
           Draft201909Validator(schema).validate(sbom)
@@ -132,6 +140,7 @@ jobs:
 
       - name: Smoke candidate service container
         shell: bash
+        working-directory: ${{ runner.temp }}
         run: |
           set -euo pipefail
           volume=careeragent-candidate-ci-data
@@ -151,7 +160,7 @@ jobs:
             careeragentai:candidate
           test "$(docker exec careeragent-candidate-ci id -u)" = "10001"
           test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent)" = "700"
-          python - <<'PY'
+          python -I - <<'PY'
           import json
           import time
           import urllib.error
@@ -178,10 +187,10 @@ jobs:
         with:
           name: candidate-release-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
-            source-commit.txt
-            candidate-image-digest.txt
-            candidate-sbom.spdx.json
-            candidate-vulnerabilities.json
-            release-artifacts.sha256
+            ${{ runner.temp }}/source-commit.txt
+            ${{ runner.temp }}/candidate-image-digest.txt
+            ${{ runner.temp }}/candidate-sbom.spdx.json
+            ${{ runner.temp }}/candidate-vulnerabilities.json
+            ${{ runner.temp }}/release-artifacts.sha256
           if-no-files-found: error
           retention-days: 30
