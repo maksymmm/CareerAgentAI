@@ -3,16 +3,27 @@ set -eu
 
 umask 077
 
-data_dir=${CAREER_AGENT_DB_PATH%/*}
-if [ "$data_dir" = "$CAREER_AGENT_DB_PATH" ]; then
-    data_dir=.
-fi
+db_path=$(python - "$CAREER_AGENT_DB_PATH" <<'PY'
+import sys
+from urllib.parse import unquote, urlsplit
+
+value = sys.argv[1]
+path = urlsplit(value).path if value.startswith("file:") else value
+print(unquote(path))
+PY
+)
+
+case "$db_path" in
+    /*) ;;
+    *) echo "CAREER_AGENT_DB_PATH must resolve to an absolute filesystem path" >&2; exit 64 ;;
+esac
+data_dir=${db_path%/*}
 
 # A mounted volume hides the permissions baked into the image. Repair metadata
 # on every start and fail closed when the runtime identity cannot secure it.
 chmod 0700 "$data_dir"
-if [ -e "$CAREER_AGENT_DB_PATH" ]; then
-    chmod 0600 "$CAREER_AGENT_DB_PATH"
+if [ -e "$db_path" ]; then
+    chmod 0600 "$db_path"
 fi
 
 exec python -m career_agent_ai.application.runtime.candidate_service
