@@ -224,6 +224,8 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert ".github/schemas/spdx-2.3.schema.json" in workflow
     assert "4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212" in workflow
     assert "release-evidence:" in workflow
+    assert "github.event_name == 'push'" in workflow
+    assert "github.ref == 'refs/heads/feat/decision-engine-implementation'" in workflow
     assert workflow.index("Run test suite") < workflow.index("release-evidence:")
     release_job = workflow[workflow.index("release-evidence:") :]
     assert "python -m pytest" not in release_job

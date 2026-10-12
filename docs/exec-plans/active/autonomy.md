@@ -469,6 +469,9 @@ vendored official SPDX 2.3 JSON schema after verifying its upstream SHA-256. The
 pipeline runs in a clean job that never executes PR-controlled pytest code, preventing
 cross-step environment poisoning. Python validation also runs isolated from runner-owned
 temporary storage outside the untrusted checkout, preventing repository module shadowing.
+Release evidence runs only after reviewed code reaches the integration branch; pull
+requests cannot use a modified workflow definition to fabricate trusted evidence, while
+their complete test and coverage gate remains required before merge.
 The gate does not publish an image, use production
 credentials, or enable real actions.
 

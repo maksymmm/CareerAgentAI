@@ -318,7 +318,10 @@ and validates the SBOM against the vendored official SPDX 2.3 JSON schema after 
 its trusted upstream SHA-256. Evidence runs in a clean job that never executes the PR's
 pytest code. Its validator uses isolated Python from runner-owned temporary storage,
 outside the untrusted checkout, preventing module shadowing and workflow-environment
-poisoning. This does not publish or deploy
+poisoning. The release-evidence job runs only for reviewed pushes to the integration
+branch, so a pull request cannot replace the workflow instructions that create its own
+evidence. Pull requests still run the complete test and coverage gate. This does not
+publish or deploy
 the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application

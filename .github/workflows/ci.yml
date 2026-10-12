@@ -37,6 +37,9 @@ jobs:
           python -m pytest             --cov=career_agent_ai             --cov-report=term-missing             --cov-fail-under=90
 
   release-evidence:
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/feat/decision-engine-implementation'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
