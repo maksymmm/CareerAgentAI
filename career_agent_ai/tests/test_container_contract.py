@@ -28,12 +28,15 @@ def test_candidate_container_runs_non_root_with_safe_defaults():
     assert "print(sys.argv[1].strip())" in entrypoint
     assert 'export CAREER_AGENT_DB_PATH="$normalized_db"' in entrypoint
     assert 'unquote(urlsplit(value).path) if value.startswith("file:") else value' in entrypoint
+    assert 'if "\\x00" in path:' in entrypoint
+    assert "CAREER_AGENT_DB_PATH must not contain NUL bytes" in entrypoint
     assert "print(path)" in entrypoint
     assert "CAREER_AGENT_DB_PATH must resolve to an absolute filesystem path" in entrypoint
+    assert "if not raw.isascii() or not raw.isdecimal():" in entrypoint
     assert "if not 1 <= port <= 65535:" in entrypoint
     assert 'export CAREER_AGENT_CANDIDATE_PORT="$candidate_port"' in entrypoint
-    assert '[ -n "$data_dir" ] || data_dir=/' in entrypoint
-    assert 'if [ "$data_dir" != / ]; then' in entrypoint
+    assert "CAREER_AGENT_DB_PATH must use a writable mounted parent directory" in entrypoint
+    assert 'export CAREER_AGENT_CANDIDATE_HOST="$normalized_host"' in entrypoint
     assert 'chmod 0700 "$data_dir"' in entrypoint
     assert 'chmod 0600 "$db_path"' in entrypoint
     assert "exec python -m career_agent_ai.application.runtime.candidate_service" in entrypoint
