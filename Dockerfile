@@ -25,6 +25,6 @@ USER 10001:10001
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["python", "-c", "import os, urllib.request; port=os.environ.get('CAREER_AGENT_CANDIDATE_PORT', '8080'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=2).read()"]
+    CMD ["python", "-c", "import os, urllib.request; bind=os.environ.get('CAREER_AGENT_CANDIDATE_HOST', '0.0.0.0'); host='[::1]' if ':' in bind else '127.0.0.1'; port=os.environ.get('CAREER_AGENT_CANDIDATE_PORT', '8080'); urllib.request.urlopen(f'http://{host}:{port}/healthz', timeout=2).read()"]
 
 ENTRYPOINT ["/usr/local/bin/careeragent-entrypoint"]

@@ -20,9 +20,12 @@ def test_candidate_container_runs_non_root_with_safe_defaults():
     assert "CAREER_AGENT_CANDIDATE_BEARER_TOKEN" not in dockerfile
     assert "CAREER_AGENT_CANDIDATE_USER_ID" not in dockerfile
     assert "CAREER_AGENT_CANDIDATE_PORT" in dockerfile
-    assert "http://127.0.0.1:{port}/healthz" in dockerfile
+    assert "host='[::1]' if ':' in bind else '127.0.0.1'" in dockerfile
+    assert "http://{host}:{port}/healthz" in dockerfile
     entrypoint = (ROOT / "container-entrypoint.sh").read_text(encoding="utf-8")
     assert "umask 077" in entrypoint
+    assert 'chmod 0700 "$data_dir"' in entrypoint
+    assert 'chmod 0600 "$CAREER_AGENT_DB_PATH"' in entrypoint
     assert "exec python -m career_agent_ai.application.runtime.candidate_service" in entrypoint
 
 
