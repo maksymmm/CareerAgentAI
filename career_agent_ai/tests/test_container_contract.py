@@ -142,6 +142,24 @@ def test_container_rejects_symlink_in_database_ancestor(tmp_path):
     assert stat.S_IMODE(nested.stat().st_mode) == 0o755
 
 
+def test_container_secures_storage_through_open_descriptors(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir(mode=0o755)
+    database = data / "candidate.sqlite"
+    database.write_bytes(b"")
+    calls = []
+    real_open = os.open
+
+    def recording_open(path, flags, *args, **kwargs):
+        calls.append((path, flags, kwargs.get("dir_fd")))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    secure_storage(str(database))
+
+    assert any(flags & os.O_NOFOLLOW and dir_fd is not None for _, flags, dir_fd in calls)
+
+
 def test_ci_smokes_read_only_candidate_container():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 

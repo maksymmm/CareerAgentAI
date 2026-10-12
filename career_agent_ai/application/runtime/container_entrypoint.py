@@ -43,7 +43,7 @@ def database_filesystem_path(database_path: str) -> bytes:
 
 
 def secure_storage(database_path: str) -> None:
-    """Repair only a regular database file in a real mounted parent directory."""
+    """Repair storage through retained no-follow directory handles."""
     path = database_filesystem_path(database_path)
     parent = os.path.dirname(path)
     if parent in {b"", os.fsencode(os.path.sep)}:
@@ -51,26 +51,37 @@ def secure_storage(database_path: str) -> None:
     components = parent.split(b"/")[1:]
     if any(component in {b".", b".."} for component in components):
         raise ValueError("CAREER_AGENT_DB_PATH must not contain relative components.")
-    current = b"/"
-    for component in components:
-        if not component:
-            continue
-        current = os.path.join(current, component)
-        component_stat = os.lstat(current)
-        if stat.S_ISLNK(component_stat.st_mode) or not stat.S_ISDIR(component_stat.st_mode):
-            raise ValueError("CAREER_AGENT_DB_PATH ancestors must be non-symlink directories.")
-    parent_stat = os.lstat(parent)
-    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
-        raise ValueError("CAREER_AGENT_DB_PATH parent must be a non-symlink directory.")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_fd = os.open(b"/", directory_flags)
     try:
-        target_stat = os.lstat(path)
-    except FileNotFoundError:
-        target_stat = None
-    if target_stat is not None and not stat.S_ISREG(target_stat.st_mode):
-        raise ValueError("CAREER_AGENT_DB_PATH must be a regular file.")
-    os.chmod(parent, 0o700, follow_symlinks=False)
-    if target_stat is not None:
-        os.chmod(path, 0o600, follow_symlinks=False)
+        for component in components:
+            if not component:
+                continue
+            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+            raise ValueError("CAREER_AGENT_DB_PATH parent must be a directory.")
+        target_fd = None
+        try:
+            target_fd = os.open(
+                os.path.basename(path), os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+        except FileNotFoundError:
+            pass
+        if target_fd is not None and not stat.S_ISREG(os.fstat(target_fd).st_mode):
+            raise ValueError("CAREER_AGENT_DB_PATH must be a regular file.")
+        os.fchmod(directory_fd, 0o700)
+        if target_fd is not None:
+            os.fchmod(target_fd, 0o600)
+    except OSError as exc:
+        raise ValueError(
+            "CAREER_AGENT_DB_PATH ancestors must be non-symlink directories."
+        ) from exc
+    finally:
+        if "target_fd" in locals() and target_fd is not None:
+            os.close(target_fd)
+        os.close(directory_fd)
 
 
 def main() -> None:
