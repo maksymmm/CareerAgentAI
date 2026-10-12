@@ -161,6 +161,7 @@ def test_container_secures_storage_through_open_descriptors(tmp_path, monkeypatc
     secure_storage(str(database))
 
     assert any(flags & os.O_NOFOLLOW and dir_fd is not None for _, flags, dir_fd in calls)
+    assert any(flags & os.O_PATH and dir_fd is not None for _, flags, dir_fd in calls)
 
 
 def test_ci_smokes_read_only_candidate_container():

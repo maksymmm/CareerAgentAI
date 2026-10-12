@@ -62,17 +62,29 @@ def secure_storage(database_path: str) -> None:
             directory_fd = next_fd
         if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
             raise ValueError("CAREER_AGENT_DB_PATH parent must be a directory.")
+        target_metadata_fd = None
         target_fd = None
         try:
-            target_fd = os.open(
+            target_metadata_fd = os.open(
                 os.path.basename(path),
-                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                os.O_PATH | os.O_NOFOLLOW,
                 dir_fd=directory_fd,
             )
         except FileNotFoundError:
             pass
-        if target_fd is not None and not stat.S_ISREG(os.fstat(target_fd).st_mode):
-            raise ValueError("CAREER_AGENT_DB_PATH must be a regular file.")
+        if target_metadata_fd is not None:
+            metadata_stat = os.fstat(target_metadata_fd)
+            if not stat.S_ISREG(metadata_stat.st_mode):
+                raise ValueError("CAREER_AGENT_DB_PATH must be a regular file.")
+            target_fd = os.open(
+                os.path.basename(path), os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            target_stat = os.fstat(target_fd)
+            if (target_stat.st_dev, target_stat.st_ino) != (
+                metadata_stat.st_dev,
+                metadata_stat.st_ino,
+            ):
+                raise ValueError("CAREER_AGENT_DB_PATH changed during validation.")
         os.fchmod(directory_fd, 0o700)
         if target_fd is not None:
             os.fchmod(target_fd, 0o600)
@@ -81,6 +93,8 @@ def secure_storage(database_path: str) -> None:
             "CAREER_AGENT_DB_PATH ancestors must be non-symlink directories."
         ) from exc
     finally:
+        if "target_metadata_fd" in locals() and target_metadata_fd is not None:
+            os.close(target_metadata_fd)
         if "target_fd" in locals() and target_fd is not None:
             os.close(target_fd)
         os.close(directory_fd)
