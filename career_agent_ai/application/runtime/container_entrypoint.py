@@ -65,7 +65,9 @@ def secure_storage(database_path: str) -> None:
         target_fd = None
         try:
             target_fd = os.open(
-                os.path.basename(path), os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+                os.path.basename(path),
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
             )
         except FileNotFoundError:
             pass

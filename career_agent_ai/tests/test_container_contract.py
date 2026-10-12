@@ -81,19 +81,21 @@ def test_container_validates_all_policy_before_chmod(tmp_path):
     assert stat.S_IMODE(database.parent.stat().st_mode) == 0o755
 
 
-@pytest.mark.parametrize("target_kind", ["directory", "symlink"])
+@pytest.mark.parametrize("target_kind", ["directory", "symlink", "fifo"])
 def test_container_rejects_non_regular_database_without_mutation(tmp_path, target_kind):
     data = tmp_path / "data"
     data.mkdir(mode=0o755)
     database = data / "candidate.sqlite"
     if target_kind == "directory":
         database.mkdir(mode=0o755)
-    else:
+    elif target_kind == "symlink":
         destination = tmp_path / "real.sqlite"
         destination.write_bytes(b"")
         database.symlink_to(destination)
+    else:
+        os.mkfifo(database)
 
-    expected = "regular file" if target_kind == "directory" else "ancestors"
+    expected = "ancestors" if target_kind == "symlink" else "regular file"
     with pytest.raises(ValueError, match=expected):
         secure_storage(str(database))
 
