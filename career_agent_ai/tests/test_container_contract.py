@@ -25,9 +25,10 @@ def test_candidate_container_runs_non_root_with_safe_defaults():
     assert "http://{host}:{port}/healthz" in dockerfile
     entrypoint = (ROOT / "container-entrypoint.sh").read_text(encoding="utf-8")
     assert "umask 077" in entrypoint
-    assert 'urlsplit(value).path if value.startswith("file:") else value' in entrypoint
-    assert "print(unquote(path))" in entrypoint
+    assert 'unquote(urlsplit(value).path) if value.startswith("file:") else value' in entrypoint
+    assert "print(path)" in entrypoint
     assert "CAREER_AGENT_DB_PATH must resolve to an absolute filesystem path" in entrypoint
+    assert "CAREER_AGENT_CANDIDATE_PORT=0 is not supported in the container" in entrypoint
     assert 'chmod 0700 "$data_dir"' in entrypoint
     assert 'chmod 0600 "$db_path"' in entrypoint
     assert "exec python -m career_agent_ai.application.runtime.candidate_service" in entrypoint
