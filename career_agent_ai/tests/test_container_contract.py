@@ -102,6 +102,22 @@ def test_container_rejects_non_regular_database_without_mutation(tmp_path, targe
     assert stat.S_IMODE(data.stat().st_mode) == 0o755
 
 
+def test_container_rejects_hard_linked_database_without_mutation(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir(mode=0o755)
+    outside = tmp_path / "outside.sqlite"
+    outside.write_bytes(b"")
+    outside.chmod(0o644)
+    database = data / "candidate.sqlite"
+    database.hardlink_to(outside)
+
+    with pytest.raises(ValueError, match="hard-linked"):
+        secure_storage(str(database))
+
+    assert stat.S_IMODE(data.stat().st_mode) == 0o755
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o644
+
+
 def test_container_preserves_non_utf8_uri_path_bytes(tmp_path):
     data = os.fsencode(tmp_path) + b"/data"
     os.mkdir(data, 0o755)
@@ -162,6 +178,10 @@ def test_container_secures_storage_through_open_descriptors(tmp_path, monkeypatc
 
     assert any(flags & os.O_NOFOLLOW and dir_fd is not None for _, flags, dir_fd in calls)
     assert any(flags & os.O_PATH and dir_fd is not None for _, flags, dir_fd in calls)
+    assert any(
+        flags & os.O_NONBLOCK and not flags & os.O_PATH and dir_fd is not None
+        for _, flags, dir_fd in calls
+    )
 
 
 def test_ci_smokes_read_only_candidate_container():
