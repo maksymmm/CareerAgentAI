@@ -243,21 +243,7 @@ def build_candidate_sandbox_app_from_env(
     environ: Mapping[str, str] | None = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
-    source = environ if environ is not None else os.environ
-    if not RuntimeConfig._parse_bool(
-        source.get("CAREER_AGENT_CANDIDATE_SANDBOX", "false"),
-        "CAREER_AGENT_CANDIDATE_SANDBOX",
-    ):
-        raise PermissionError("Candidate sandbox must be explicitly enabled.")
-    if source.get("CAREER_AGENT_CANDIDATE_ID_CUTOVER") != "drain-and-replace-scoped-v2":
-        raise PermissionError(
-            "Candidate sandbox requires the drain-and-replace-scoped-v2 ID cutover gate."
-        )
-    config = RuntimeConfig.from_env(environ)
-    if config.allow_network_providers or config.allow_consequential_actions:
-        raise ValueError(
-            "Candidate sandbox forbids network providers and consequential actions."
-        )
+    config = validate_candidate_sandbox_environment(environ)
     if not callable(resolve_bearer):
         raise TypeError("resolve_bearer must be callable.")
 
@@ -277,6 +263,28 @@ def build_candidate_sandbox_app_from_env(
         jobs=configured_jobs,
         resolve_bearer=resolve_bearer,
     )
+
+
+def validate_candidate_sandbox_environment(
+    environ: Mapping[str, str] | None = None,
+) -> RuntimeConfig:
+    """Validate candidate policy without opening or mutating durable storage."""
+    source = environ if environ is not None else os.environ
+    if not RuntimeConfig._parse_bool(
+        source.get("CAREER_AGENT_CANDIDATE_SANDBOX", "false"),
+        "CAREER_AGENT_CANDIDATE_SANDBOX",
+    ):
+        raise PermissionError("Candidate sandbox must be explicitly enabled.")
+    if source.get("CAREER_AGENT_CANDIDATE_ID_CUTOVER") != "drain-and-replace-scoped-v2":
+        raise PermissionError(
+            "Candidate sandbox requires the drain-and-replace-scoped-v2 ID cutover gate."
+        )
+    config = RuntimeConfig.from_env(environ)
+    if config.allow_network_providers or config.allow_consequential_actions:
+        raise ValueError(
+            "Candidate sandbox forbids network providers and consequential actions."
+        )
+    return config
 
 
 def _build_candidate_loop(

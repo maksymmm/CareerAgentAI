@@ -107,6 +107,32 @@ be opened read-only; a missing or unavailable database returns `503` without cre
 new file or exposing its path. Do not route candidate workflow traffic to an instance
 until readiness returns `200`.
 
+### Container runtime
+
+Build the candidate image from the repository root and run it with an immutable root
+filesystem. Mount only the SQLite data directory writable and inject candidate identity
+and bearer credentials through the deployment secret/configuration mechanism:
+
+```bash
+docker build --tag careeragentai:candidate .
+docker run --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --mount type=volume,src=careeragent-data,dst=/var/lib/careeragent \
+  --publish 127.0.0.1:8080:8080 \
+  --env CAREER_AGENT_CANDIDATE_BEARER_TOKEN \
+  --env CAREER_AGENT_CANDIDATE_USER_ID \
+  careeragentai:candidate
+```
+
+The image runs as numeric UID/GID `10001:10001`. Keep the published listener behind the
+trusted TLS/authentication proxy, make `/var/lib/careeragent` a backed-up persistent
+volume, and do not mount source code or the container root writable. Network-provider
+and consequential-action kill switches are fixed to safe defaults in the image and must
+remain false for the sandbox release. The base image is pinned by immutable digest;
+update that digest only through a reviewed dependency change. The entrypoint applies
+`umask 077`, so the data directory remains owner-only and newly created SQLite files are
+not readable by other container identities.
+
 ## Release procedure
 
 1. Run the complete repository test command with coverage >=90%.
