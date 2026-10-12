@@ -202,6 +202,7 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in workflow
     assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
     assert "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610" in workflow
     assert "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2" in workflow
@@ -215,6 +216,12 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "severity-cutoff: critical" in workflow
     assert "only-fixed: true" in workflow
     assert "github.event.pull_request.head.sha || github.sha" in workflow
+    assert 'printf \'{}\\n\' > "$RUNNER_TEMP/syft.yaml"' in workflow
+    assert 'printf \'{}\\n\' > "$RUNNER_TEMP/grype.yaml"' in workflow
+    assert "config: ${{ runner.temp }}/syft.yaml" in workflow
+    assert "config: ${{ runner.temp }}/grype.yaml" in workflow
+    assert "Draft201909Validator(schema).validate(sbom)" in workflow
+    assert ".github/schemas/spdx-2.3.schema.json" in workflow
     assert workflow.index("Smoke candidate service container") < workflow.index(
         "Upload immutable release evidence"
     )

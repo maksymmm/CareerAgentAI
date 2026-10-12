@@ -313,7 +313,9 @@ CI also records the exact source commit and built image's content-addressed ID, 
 a validated SPDX 2.3 SBOM, retains the vulnerability report, and verifies checksums for
 the complete release evidence bundle. A pinned scanner blocks fixed critical findings.
 Evidence is uploaded only after the runtime smoke test passes and is named for the exact
-source commit; this does not publish or deploy the image.
+source commit. CI explicitly disables repository-local Syft/Grype configuration discovery
+and validates the SBOM against the vendored official SPDX 2.3 JSON schema. This does not
+publish or deploy the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
