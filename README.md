@@ -320,8 +320,9 @@ pytest code. Its validator uses isolated Python from runner-owned temporary stor
 outside the untrusted checkout, preventing module shadowing and workflow-environment
 poisoning. The release-evidence job runs only for reviewed pushes to the integration
 branch, so a pull request cannot replace the workflow instructions that create its own
-evidence. Pull requests still run the complete test and coverage gate. This does not
-publish or deploy
+evidence. Pull requests still run the complete test and coverage gate against GitHub's
+synthetic merge result, and trusted evidence depends explicitly on that job succeeding.
+This does not publish or deploy
 the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application

@@ -471,7 +471,8 @@ cross-step environment poisoning. Python validation also runs isolated from runn
 temporary storage outside the untrusted checkout, preventing repository module shadowing.
 Release evidence runs only after reviewed code reaches the integration branch; pull
 requests cannot use a modified workflow definition to fabricate trusted evidence, while
-their complete test and coverage gate remains required before merge.
+their complete test and coverage gate checks the merge result before merge. Integration
+release evidence explicitly depends on that test job succeeding.
 The gate does not publish an image, use production
 credentials, or enable real actions.
 
