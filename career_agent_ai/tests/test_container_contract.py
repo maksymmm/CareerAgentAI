@@ -208,7 +208,13 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
     assert "candidate-image-digest.txt" in workflow
     assert "candidate-sbom.spdx.json" in workflow
+    assert "candidate-vulnerabilities.json" in workflow
+    assert "source-commit.txt" in workflow
     assert "release-artifacts.sha256" in workflow
     assert "sha256sum --check release-artifacts.sha256" in workflow
     assert "severity-cutoff: critical" in workflow
     assert "only-fixed: true" in workflow
+    assert "github.event.pull_request.head.sha || github.sha" in workflow
+    assert workflow.index("Smoke candidate service container") < workflow.index(
+        "Upload immutable release evidence"
+    )

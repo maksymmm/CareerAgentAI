@@ -41,8 +41,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
           image_id="$(docker image inspect --format '{{.Id}}' careeragentai:candidate)"
           [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$source_sha" > source-commit.txt
           printf '%s\n' "$image_id" > candidate-image-digest.txt
 
       - name: Generate SPDX SBOM
@@ -52,6 +55,16 @@ jobs:
           format: spdx-json
           output-file: candidate-sbom.spdx.json
           upload-artifact: false
+
+      - name: Scan candidate image for fixed critical vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: careeragentai:candidate
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          output-format: json
+          output-file: candidate-vulnerabilities.json
 
       - name: Validate and checksum release evidence
         shell: bash
@@ -64,30 +77,22 @@ jobs:
           sbom = json.loads(Path("candidate-sbom.spdx.json").read_text(encoding="utf-8"))
           assert sbom["spdxVersion"] == "SPDX-2.3"
           assert sbom["packages"], "SBOM must contain at least one package"
+          report = json.loads(
+              Path("candidate-vulnerabilities.json").read_text(encoding="utf-8")
+          )
+          assert isinstance(report["matches"], list)
+          source = Path("source-commit.txt").read_text(encoding="ascii").strip()
+          assert len(source) == 40 and all(char in "0123456789abcdef" for char in source)
           digest = Path("candidate-image-digest.txt").read_text(encoding="ascii").strip()
           assert digest.startswith("sha256:") and len(digest) == 71
           PY
-          sha256sum candidate-image-digest.txt candidate-sbom.spdx.json > release-artifacts.sha256
+          sha256sum \
+            source-commit.txt \
+            candidate-image-digest.txt \
+            candidate-sbom.spdx.json \
+            candidate-vulnerabilities.json \
+            > release-artifacts.sha256
           sha256sum --check release-artifacts.sha256
-
-      - name: Scan candidate image for fixed critical vulnerabilities
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
-        with:
-          image: careeragentai:candidate
-          fail-build: true
-          severity-cutoff: critical
-          only-fixed: true
-
-      - name: Upload immutable release evidence
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: candidate-release-evidence-${{ github.sha }}
-          path: |
-            candidate-image-digest.txt
-            candidate-sbom.spdx.json
-            release-artifacts.sha256
-          if-no-files-found: error
-          retention-days: 30
 
       - name: Smoke candidate service container
         shell: bash
@@ -131,3 +136,16 @@ jobs:
                       time.sleep(1)
           PY
           test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent/candidate.sqlite)" = "600"
+
+      - name: Upload immutable release evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-release-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            source-commit.txt
+            candidate-image-digest.txt
+            candidate-sbom.spdx.json
+            candidate-vulnerabilities.json
+            release-artifacts.sha256
+          if-no-files-found: error
+          retention-days: 30

@@ -459,10 +459,11 @@ read-only root filesystem and constrained temporary filesystem, then verifies th
 non-root identity plus live health/readiness probes without real I/O.
 
 Delivered: release CI pins every third-party action by immutable commit, records the
-built container's content-addressed image ID, generates and validates an SPDX 2.3 SBOM,
-checksums the evidence bundle, and uploads it under the exact source commit. A pinned
-scanner fails the build for fixed critical vulnerabilities. The gate does not publish
-an image, use production credentials, or enable real external actions.
+exact source commit and built container's content-addressed image ID, generates and
+validates an SPDX 2.3 SBOM, retains the vulnerability report, and checksums the complete
+evidence bundle. A pinned scanner fails the build for fixed critical vulnerabilities;
+evidence is uploaded under the exact source commit only after the runtime smoke passes.
+The gate does not publish an image, use production credentials, or enable real actions.
 
 The next product priority is promotion and rollback integrity: publish immutable
 candidate artifacts to a non-production registry, attach provenance/attestation, and
