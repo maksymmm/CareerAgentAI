@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -127,3 +128,19 @@ def test_manifest_parser_rejects_noncanonical_or_untrusted_json(tmp_path, mutato
 
     with pytest.raises(PromotionManifestError):
         PromotionManifest.from_json(mutator(value))
+
+
+def test_release_evidence_targets_the_integration_ref_name():
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "github.event_name == 'push'" in workflow
+    assert (
+        "github.ref_name == 'feat/decision-engine-implementation'"
+        in workflow
+    )
+    assert (
+        "github.ref == 'refs/heads/feat/decision-engine-implementation'"
+        not in workflow
+    )
