@@ -210,6 +210,7 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "candidate-image-digest.txt" in workflow
     assert "candidate-sbom.spdx.json" in workflow
     assert "candidate-vulnerabilities.json" in workflow
+    assert "candidate-release-manifest.json" in workflow
     assert "source-commit.txt" in workflow
     assert "release-artifacts.sha256" in workflow
     assert "sha256sum --check release-artifacts.sha256" in workflow
@@ -238,6 +239,10 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "python -I -m pip install jsonschema==4.25.1" in release_job
     assert "python -I - <<'PY'" in release_job
     assert "SOURCE_ROOT: ${{ github.workspace }}/source" in release_job
+    assert '"candidate_local_image_id": digest' in release_job
+    assert '"publication_status": "unpublished"' in release_job
+    assert 'sys.path.insert(0, os.environ["SOURCE_ROOT"])' not in release_job
+    assert "career_agent_ai.application.release" not in release_job
     assert "${{ runner.temp }}/candidate-sbom.spdx.json" in release_job
     assert workflow.index("Smoke candidate service container") < workflow.index(
         "Upload immutable release evidence"

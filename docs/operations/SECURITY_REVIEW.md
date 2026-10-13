@@ -32,6 +32,16 @@ Persisted JSON is decoded with standard JSON only; unsafe object deserialization
 
 Production SQLite must live on durable storage with backups. File permissions should restrict database access to the service account.
 
+## Release promotion
+
+Release evidence includes a strict canonical pre-promotion manifest that binds the
+reviewed source commit and local Docker image/config ID to the complete evidence set.
+Duplicate or unknown JSON fields, incomplete evidence, mutable/non-SHA-256 identifiers,
+and any claim of publication are rejected. The trusted workflow constructs this document
+without importing or executing checkout Python. This closes the evidence-format boundary
+but does not provide a registry manifest digest, publication, rollback or cryptographic
+attestation; those remain required before an image can be promoted.
+
 ## Remaining environment responsibilities
 
 Before enabling real external providers, operators must separately review provider OAuth/API scopes, credential rotation, webhook authenticity where applicable, TLS termination, host/firewall policy, backup encryption, access control for the operational API, retention requirements, and incident-response procedures.

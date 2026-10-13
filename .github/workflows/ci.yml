@@ -131,12 +131,37 @@ jobs:
           assert len(source) == 40 and all(char in "0123456789abcdef" for char in source)
           digest = Path("candidate-image-digest.txt").read_text(encoding="ascii").strip()
           assert digest.startswith("sha256:") and len(digest) == 71
+
+          import hashlib
+
+          evidence_names = (
+              "candidate-image-digest.txt",
+              "candidate-sbom.spdx.json",
+              "candidate-vulnerabilities.json",
+              "source-commit.txt",
+          )
+          checksums = {
+              name: "sha256:" + hashlib.sha256(Path(name).read_bytes()).hexdigest()
+              for name in evidence_names
+          }
+          manifest = {
+              "candidate_local_image_id": digest,
+              "evidence_sha256": checksums,
+              "publication_status": "unpublished",
+              "schema_version": 1,
+              "source_commit": source,
+          }
+          Path("candidate-release-manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="ascii",
+          )
           PY
           sha256sum \
             source-commit.txt \
             candidate-image-digest.txt \
             candidate-sbom.spdx.json \
             candidate-vulnerabilities.json \
+            candidate-release-manifest.json \
             > release-artifacts.sha256
           sha256sum --check release-artifacts.sha256
 
@@ -193,6 +218,7 @@ jobs:
             ${{ runner.temp }}/candidate-image-digest.txt
             ${{ runner.temp }}/candidate-sbom.spdx.json
             ${{ runner.temp }}/candidate-vulnerabilities.json
+            ${{ runner.temp }}/candidate-release-manifest.json
             ${{ runner.temp }}/release-artifacts.sha256
           if-no-files-found: error
           retention-days: 30

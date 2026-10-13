@@ -322,8 +322,12 @@ poisoning. The release-evidence job runs only for reviewed pushes to the integra
 branch, so a pull request cannot replace the workflow instructions that create its own
 evidence. Pull requests still run the complete test and coverage gate against GitHub's
 synthetic merge result, and trusted evidence depends explicitly on that job succeeding.
-This does not publish or deploy
-the image.
+The bundle also contains a strict canonical pre-promotion manifest binding the reviewed
+source and candidate local image/config ID to SHA-256 digests of every evidence input. Its
+parser rejects duplicate or unknown fields, incomplete evidence, non-digest image
+identities, and any claim that the local image has been published. A local Docker image
+ID is not an OCI registry manifest digest and cannot be used as a deployment reference.
+This groundwork does not yet publish, attest, promote, roll back, or deploy the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

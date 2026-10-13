@@ -479,3 +479,11 @@ credentials, or enable real actions.
 The next product priority is promotion and rollback integrity: publish immutable
 candidate artifacts to a non-production registry, attach provenance/attestation, and
 verify digest-only deployment without enabling real providers or consequential actions.
+
+Promotion-contract groundwork: release CI now emits a canonical versioned
+`candidate-release-manifest.json` binding the reviewed source commit and local Docker
+image/config ID to SHA-256 digests of the exact identity, SBOM and vulnerability evidence.
+The parser rejects duplicate/unknown fields, incomplete evidence, mutable identifiers
+and any false publication status. Registry publication, registry manifest identity and signed
+provenance remain the next isolated unit; the current artifact must not be represented
+as a published deployable image.
