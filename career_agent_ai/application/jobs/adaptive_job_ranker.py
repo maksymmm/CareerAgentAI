@@ -57,7 +57,7 @@ class AdaptiveJobRanker:
         by_company: dict[str, list[float]] = {}
         for application in history:
             signal = self._outcome_signal(application)
-            if application.company_id and signal is not None:
+            if self._is_identifying_company_id(application.company_id) and signal is not None:
                 by_company.setdefault(application.company_id, []).append(signal)
 
         results: list[AdaptiveJobScore] = []
@@ -87,12 +87,12 @@ class AdaptiveJobRanker:
             return 0.0
         mean = sum(evidence) / len(evidence)
         confidence = len(evidence) / (len(evidence) + cls.PRIOR_STRENGTH)
-        raw_adjustment = cls.MAX_ADJUSTMENT * mean * confidence
         # The wrapped ranker has two public scales: legacy results are commonly
         # 0-2 while filter relevance can exceed 50. Cap against the active score
-        # so history refines either scale instead of overwhelming it.
+        # so history refines either scale instead of overwhelming it. Applying
+        # confidence to that cap preserves the sparse-to-dense evidence gradient.
         active_cap = min(cls.MAX_ADJUSTMENT, max(abs(relevance_score) * 0.1, 0.01))
-        return round(max(-active_cap, min(active_cap, raw_adjustment)), 6)
+        return round(active_cap * mean * confidence, 6)
 
     @staticmethod
     def _outcome_signal(application: JobApplication) -> float | None:
@@ -111,7 +111,15 @@ class AdaptiveJobRanker:
     @staticmethod
     def _company_id(job: Job) -> str:
         value = getattr(getattr(job, "company", None), "company_id", "")
-        return value.strip() if isinstance(value, str) else ""
+        normalized = value.strip() if isinstance(value, str) else ""
+        return normalized if AdaptiveJobRanker._is_identifying_company_id(normalized) else ""
+
+    @staticmethod
+    def _is_identifying_company_id(value: str) -> bool:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        label = " ".join(value.rsplit(":", 1)[-1].lower().split())
+        return label not in {"unknown", "unknown company", "n/a", "not disclosed"}
 
     @staticmethod
     def _reason(evidence: list[float], adjustment: float) -> str:
