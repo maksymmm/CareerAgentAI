@@ -249,6 +249,45 @@ def test_identical_start_replay_returns_existing_run_without_new_execution(tmp_p
     database.close()
 
 
+def test_search_persists_explainable_candidate_outcome_score_across_restart(tmp_path):
+    path = str(tmp_path / "adaptive-search.sqlite")
+    database, loop, applications, *_ = build_stack(path, max_iterations=1)
+    historical = JobApplication(
+        application_id="historical-application",
+        user_id="user-1",
+        job_id="historical-job",
+        company_id="company-1",
+        status=JobApplicationStatus.SAVED,
+        created_at=CREATED,
+        updated_at=CREATED,
+    )
+    historical = historical.transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=CREATED + timedelta(minutes=1),
+    ).transition(
+        JobApplicationStatus.INTERVIEW,
+        occurred_at=CREATED + timedelta(minutes=2),
+    )
+    applications.add(historical)
+
+    loop.start(request(with_schedule=False), run_id="adaptive-search")
+    state = loop._states.get("adaptive-search")
+
+    assert state.selected_job_id == "job-1"
+    assert state.selected_job_relevance_score is not None
+    assert state.selected_job_outcome_adjustment > 0
+    assert state.selected_job_score > state.selected_job_relevance_score
+    assert state.selected_job_evidence_count == 1
+    assert "1 prior application outcome" in state.selected_job_decision_reason
+    database.close()
+
+    database, restarted, *_ = build_stack(path, max_iterations=1)
+    durable = restarted._states.get("adaptive-search")
+    assert durable.selected_job_score == state.selected_job_score
+    assert durable.selected_job_decision_reason == state.selected_job_decision_reason
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")

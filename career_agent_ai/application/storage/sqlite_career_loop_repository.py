@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from math import isfinite
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -372,6 +373,11 @@ class SQLiteCareerLoopRepository:
             "selected_job_title": state.selected_job_title,
             "selected_company": state.selected_company,
             "selected_company_id": state.selected_company_id,
+            "selected_job_relevance_score": state.selected_job_relevance_score,
+            "selected_job_outcome_adjustment": state.selected_job_outcome_adjustment,
+            "selected_job_score": state.selected_job_score,
+            "selected_job_evidence_count": state.selected_job_evidence_count,
+            "selected_job_decision_reason": state.selected_job_decision_reason,
             "application_id": state.application_id,
             "application_artifact_content": state.application_artifact_content,
             "application_artifact_sha256": state.application_artifact_sha256,
@@ -433,6 +439,20 @@ class SQLiteCareerLoopRepository:
                 selected_job_title=cls._optional_text(value.get("selected_job_title")),
                 selected_company=cls._optional_text(value.get("selected_company")),
                 selected_company_id=cls._optional_text(value.get("selected_company_id")),
+                selected_job_relevance_score=cls._optional_number(
+                    value.get("selected_job_relevance_score")
+                ),
+                selected_job_outcome_adjustment=cls._optional_number(
+                    value.get("selected_job_outcome_adjustment")
+                ),
+                selected_job_score=cls._optional_number(value.get("selected_job_score")),
+                selected_job_evidence_count=cls._non_negative_integer(
+                    value.get("selected_job_evidence_count", 0),
+                    "selected_job_evidence_count",
+                ),
+                selected_job_decision_reason=cls._optional_text(
+                    value.get("selected_job_decision_reason")
+                ),
                 application_id=cls._optional_text(value.get("application_id")),
                 application_artifact_content=cls._optional_text(
                     value.get("application_artifact_content")
@@ -492,6 +512,23 @@ class SQLiteCareerLoopRepository:
             return None
         if not isinstance(value, str):
             raise ValueError("Persisted optional text must be text or null.")
+        return value
+
+    @staticmethod
+    def _optional_number(value: Any) -> float | None:
+        if value is None:
+            return None
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError("Persisted optional score must be numeric or null.")
+        normalized = float(value)
+        if not isfinite(normalized):
+            raise ValueError("Persisted optional score must be finite.")
+        return normalized
+
+    @staticmethod
+    def _non_negative_integer(value: Any, field: str) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"Persisted {field} must be a non-negative integer.")
         return value
 
 

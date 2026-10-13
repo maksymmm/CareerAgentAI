@@ -49,6 +49,8 @@ from career_agent_ai.application.jobs.job_application_repository import (
     JobApplicationRepository,
 )
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRanker
+from career_agent_ai.application.jobs.job_filter import JobFilter
 from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
 from career_agent_ai.application.observability.structured_logging import redact_text
 from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
@@ -195,6 +197,7 @@ class AutonomousCareerLoop:
         self._states = state_repository
         self._max_iterations = max_iterations
         self._decision_engine = CareerDecisionEngine()
+        self._adaptive_job_ranker = AdaptiveJobRanker(application_repository)
 
     def start(
         self, request: CareerLoopRequest, *, run_id: str | None = None
@@ -700,7 +703,15 @@ class AutonomousCareerLoop:
         jobs = result.metadata.get("jobs", ())
         if not isinstance(jobs, (tuple, list)) or not jobs:
             raise RuntimeError("Job discovery returned no opportunities.")
-        selected = jobs[0]
+        ranked = self._adaptive_job_ranker.rank(
+            state.request.user_id,
+            tuple(jobs),
+            JobFilter(keyword=state.request.keyword, city=state.request.location),
+        )
+        if not ranked:
+            raise RuntimeError("Job discovery returned no rankable opportunities.")
+        selection = ranked[0]
+        selected = selection.job
         job_id = getattr(selected, "job_id", None)
         title = getattr(selected, "title", None)
         company = getattr(selected, "company", None)
@@ -717,6 +728,11 @@ class AutonomousCareerLoop:
             if isinstance(company_id, str) and company_id.strip()
             else None
         )
+        state.selected_job_relevance_score = selection.relevance_score
+        state.selected_job_outcome_adjustment = selection.outcome_adjustment
+        state.selected_job_score = selection.score
+        state.selected_job_evidence_count = selection.evidence_count
+        state.selected_job_decision_reason = selection.reason
         state.phase = CareerLoopPhase.DECISION
 
     def _decide(self, state: CareerLoopState) -> None:
