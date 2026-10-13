@@ -127,3 +127,4 @@ def test_manifest_parser_rejects_noncanonical_or_untrusted_json(tmp_path, mutato
 
     with pytest.raises(PromotionManifestError):
         PromotionManifest.from_json(mutator(value))
+

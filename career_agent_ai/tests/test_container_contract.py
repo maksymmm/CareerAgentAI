@@ -227,7 +227,8 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "release-evidence:" in workflow
     assert "needs: test" in workflow
     assert "github.event_name == 'push'" in workflow
-    assert "github.ref == 'refs/heads/feat/decision-engine-implementation'" in workflow
+    assert "github.ref_name == 'feat/decision-engine-implementation'" in workflow
+    assert "github.ref == 'refs/heads/feat/decision-engine-implementation'" not in workflow
     assert workflow.index("Run test suite") < workflow.index("release-evidence:")
     release_job = workflow[workflow.index("release-evidence:") :]
     assert "python -m pytest" not in release_job
