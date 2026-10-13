@@ -487,3 +487,27 @@ The parser rejects duplicate/unknown fields, incomplete evidence, mutable identi
 and any false publication status. Registry publication, registry manifest identity and signed
 provenance remain the next isolated unit; the current artifact must not be represented
 as a published deployable image.
+
+## 11. Candidate-outcome adaptive ranking
+
+Status: **IN PROGRESS**
+
+Goal: move job selection beyond static relevance by learning safely from the
+candidate's observed application funnel while keeping decisions explainable.
+
+Acceptance criteria:
+- [x] Derive employer outcome evidence from durable candidate-owned applications.
+- [x] Treat interviews and offers as stronger evidence than direct rejection.
+- [x] Shrink sparse evidence toward neutral and strictly bound its ranking impact.
+- [x] Preserve tenant isolation and expose an explanation for every adjustment.
+- [x] Cover positive, negative, sparse, historical-funnel, and isolation behavior.
+- [ ] Feed the adaptive scorer into the durable autonomous-loop discovery phase.
+- [ ] Extend learning from employer outcomes to role/skill attributes with bias and
+  exploration guardrails.
+
+Delivered in the first unit: `AdaptiveJobRanker` composes the existing relevance
+ranker with candidate-specific application outcomes. It recognizes an interview even
+when the application later ends in rejection, ignores non-outcome states, applies
+confidence shrinkage, and caps the adjustment so current relevance remains
+authoritative. The next unit is restart-safe loop integration with a durable decision
+explanation snapshot.

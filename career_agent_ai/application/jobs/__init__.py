@@ -1,4 +1,8 @@
 from career_agent_ai.application.jobs.company import Company
+from career_agent_ai.application.jobs.adaptive_job_ranker import (
+    AdaptiveJobRanker,
+    AdaptiveJobScore,
+)
 from career_agent_ai.application.jobs.employment_type import EmploymentType
 from career_agent_ai.application.jobs.in_memory_job_application_repository import InMemoryJobApplicationRepository
 from career_agent_ai.application.jobs.in_memory_job_bookmark_repository import InMemoryJobBookmarkRepository
@@ -26,6 +30,8 @@ from career_agent_ai.application.jobs.location import Location
 from career_agent_ai.application.jobs.salary import Salary
 
 __all__ = [
+    "AdaptiveJobRanker",
+    "AdaptiveJobScore",
     "Company",
     "EmploymentType",
     "InMemoryJobApplicationRepository",

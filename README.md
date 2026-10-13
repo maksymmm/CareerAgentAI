@@ -102,6 +102,14 @@ The job-search layer provides:
 - relevance scoring
 - explicit sorting
 
+An optional `AdaptiveJobRanker` can refine that relevance ordering from the
+authenticated candidate's own durable application outcomes. Employer-level interview
+and offer evidence raises a score, while direct rejection evidence lowers it. The
+adjustment is confidence-shrunk for sparse history and strictly bounded so historical
+feedback cannot overwhelm current job relevance. Every result exposes the baseline,
+adjustment, evidence count, and plain-language reason; another candidate's history is
+never consulted. Saved, merely applied, and withdrawn records remain neutral.
+
 ---
 
 ## Pre-Vacancy Opportunity Pipeline
