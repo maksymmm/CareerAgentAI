@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Event
 from time import sleep
 from hashlib import sha256
+from types import SimpleNamespace
 
 import pytest
 
@@ -298,6 +299,11 @@ def test_search_persists_explainable_candidate_outcome_score_across_restart(tmp_
             selected_job_outcome_adjustment=1.0,
             selected_job_score=payload["selected_job_relevance_score"] + 1.0,
         ),
+        lambda payload: payload.update(
+            selected_job_evidence_count=1,
+            selected_job_outcome_adjustment=100.0,
+            selected_job_score=payload["selected_job_relevance_score"] + 100.0,
+        ),
     ],
 )
 def test_restart_rejects_incomplete_or_inconsistent_adaptive_snapshot(
@@ -314,6 +320,69 @@ def test_restart_rejects_incomplete_or_inconsistent_adaptive_snapshot(
 
     with pytest.raises(ValueError, match="state is malformed"):
         SQLiteCareerLoopRepository._deserialize(payload)
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.pop("selected_job_score"),
+        lambda payload: payload.update(selected_job_evidence_count=False),
+    ],
+)
+def test_restart_rejects_partial_or_malformed_neutral_adaptive_snapshot(mutation):
+    payload = SQLiteCareerLoopRepository._serialize(
+        CareerLoopState(run_id="neutral-adaptive", request=request(with_schedule=False))
+    )
+    mutation(payload)
+
+    with pytest.raises(ValueError, match="state is malformed"):
+        SQLiteCareerLoopRepository._deserialize(payload)
+
+
+def test_search_skips_progressed_job_before_adaptive_selection(tmp_path):
+    database, loop, applications, *_ = build_stack(
+        str(tmp_path / "skip-progressed.sqlite"), max_iterations=1
+    )
+    progressed = JobApplication(
+        application_id="progressed",
+        user_id="user-1",
+        job_id="job-1",
+        company_id="company-1",
+        status=JobApplicationStatus.SAVED,
+        created_at=CREATED,
+        updated_at=CREATED,
+    ).transition(
+        JobApplicationStatus.APPLIED,
+        occurred_at=CREATED + timedelta(minutes=1),
+    )
+    applications.add(progressed)
+    fresh = Job.create(
+        job_id="job-2",
+        title="Logistics Specialist",
+        company=Company("company-2", "Fresh Logistics"),
+        location=Location("Germany", "Karlsruhe"),
+        description="Logistics coordination",
+        created_at=START,
+    )
+    old = Job.create(
+        job_id="job-1",
+        title="Logistics Coordinator",
+        company=Company("company-1", "Acme Logistics"),
+        location=Location("Germany", "Karlsruhe"),
+        description="Warehouse logistics coordination",
+        created_at=START,
+    )
+    result = SimpleNamespace(success=True, metadata={"jobs": (old, fresh)})
+    loop._agents = SimpleNamespace(
+        resolve=lambda _: SimpleNamespace(execute=lambda __: result)
+    )
+    state = CareerLoopState(run_id="skip-progressed", request=request(with_schedule=False))
+
+    loop._search(state)
+
+    assert state.selected_job_id == "job-2"
+    assert state.selected_job_evidence_count == 0
     database.close()
 
 

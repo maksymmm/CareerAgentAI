@@ -16,6 +16,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     HumanActionKind,
 )
 from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopConflictError
+from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRanker
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -540,12 +541,20 @@ class SQLiteCareerLoopRepository:
             "selected_job_evidence_count",
             "selected_job_decision_reason",
         )
+        present = tuple(field in value for field in fields)
+        if not any(present):
+            return None, None, None, 0, None
+        if not all(present):
+            raise ValueError("Persisted adaptive score snapshot is incomplete.")
         raw = tuple(value.get(field) for field in fields)
         # Legacy and pre-search states have no decision snapshot. New pre-search
         # payloads include the keys with the same neutral values.
-        if raw[:3] == (None, None, None) and raw[4] is None and raw[3] in (None, 0):
+        if raw[:3] == (None, None, None) and raw[4] is None:
+            cls._non_negative_integer(raw[3], fields[3])
+            if raw[3] != 0:
+                raise ValueError("Neutral adaptive snapshot cannot contain evidence.")
             return None, None, None, 0, None
-        if any(field not in value for field in fields) or any(item is None for item in raw):
+        if any(item is None for item in raw):
             raise ValueError("Persisted adaptive score snapshot is incomplete.")
         relevance = cls._optional_number(raw[0])
         adjustment = cls._optional_number(raw[1])
@@ -558,6 +567,13 @@ class SQLiteCareerLoopRepository:
             raise ValueError("Persisted adaptive score snapshot is inconsistent.")
         if evidence == 0 and adjustment != 0:
             raise ValueError("Adaptive adjustment requires outcome evidence.")
+        confidence = evidence / (evidence + AdaptiveJobRanker.PRIOR_STRENGTH)
+        active_cap = min(
+            AdaptiveJobRanker.MAX_ADJUSTMENT,
+            max(abs(relevance) * 0.1, 0.01),
+        )
+        if abs(adjustment) > active_cap * confidence + 1e-6:
+            raise ValueError("Adaptive adjustment exceeds its evidence bound.")
         return relevance, adjustment, score, evidence, reason
 
 

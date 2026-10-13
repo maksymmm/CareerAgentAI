@@ -703,9 +703,24 @@ class AutonomousCareerLoop:
         jobs = result.metadata.get("jobs", ())
         if not isinstance(jobs, (tuple, list)) or not jobs:
             raise RuntimeError("Job discovery returned no opportunities.")
+        progressed_job_ids = {
+            application.job_id
+            for application in self._applications.list(state.request.user_id)
+            if application.status is not JobApplicationStatus.SAVED
+        }
+        eligible_jobs = tuple(
+            job
+            for job in jobs
+            if getattr(job, "job_id", None) not in progressed_job_ids
+        )
+        if not eligible_jobs:
+            raise RuntimeError(
+                "Job discovery returned no unprogressed opportunities; "
+                "refusing duplicate submission."
+            )
         ranked = self._adaptive_job_ranker.rank(
             state.request.user_id,
-            tuple(jobs),
+            eligible_jobs,
             JobFilter(keyword=state.request.keyword, city=state.request.location),
         )
         if not ranked:
