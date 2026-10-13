@@ -135,6 +135,18 @@ not readable by other container identities.
 
 ## Release procedure
 
+The trusted integration workflow emits `candidate-release-manifest.json`. Treat it as
+the promotion input, not as informational metadata: it binds the reviewed source commit,
+candidate image content ID, and SHA-256 of the exact SBOM, vulnerability report and
+identity evidence. Consumers must parse the canonical versioned document strictly,
+recompute every evidence checksum, and select an image by digest only. Mutable tags are
+not valid deployment identity. When a rollback digest is recorded, it must differ from
+the candidate digest and must itself be an immutable digest that was previously verified.
+
+The current workflow does not publish the image to a registry. Registry publication,
+signed provenance and environment promotion remain a separate release step; never
+substitute a mutable tag merely because the evidence manifest passed validation.
+
 1. Run the complete repository test command with coverage >=90%.
 2. Review the release diff for credentials, provider endpoints, migrations, and permission changes.
 3. Back up the production database.

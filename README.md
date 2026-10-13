@@ -322,8 +322,11 @@ poisoning. The release-evidence job runs only for reviewed pushes to the integra
 branch, so a pull request cannot replace the workflow instructions that create its own
 evidence. Pull requests still run the complete test and coverage gate against GitHub's
 synthetic merge result, and trusted evidence depends explicitly on that job succeeding.
-This does not publish or deploy
-the image.
+The bundle also contains a strict canonical promotion manifest binding the reviewed
+source and candidate image content ID to SHA-256 digests of every evidence input. Its
+parser rejects duplicate or unknown fields, incomplete evidence, non-digest image
+identities, and invalid rollback targets. This establishes the digest-only promotion
+contract but does not yet publish, attest, or deploy the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
