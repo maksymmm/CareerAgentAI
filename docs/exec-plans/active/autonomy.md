@@ -481,9 +481,9 @@ candidate artifacts to a non-production registry, attach provenance/attestation,
 verify digest-only deployment without enabling real providers or consequential actions.
 
 Promotion-contract groundwork: release CI now emits a canonical versioned
-`candidate-release-manifest.json` binding the reviewed source commit and candidate image
-content ID to SHA-256 digests of the exact identity, SBOM and vulnerability evidence.
+`candidate-release-manifest.json` binding the reviewed source commit and local Docker
+image/config ID to SHA-256 digests of the exact identity, SBOM and vulnerability evidence.
 The parser rejects duplicate/unknown fields, incomplete evidence, mutable identifiers
-and a rollback target equal to the candidate. Registry publication and signed
+and any false publication status. Registry publication, registry manifest identity and signed
 provenance remain the next isolated unit; the current artifact must not be represented
 as a published deployable image.

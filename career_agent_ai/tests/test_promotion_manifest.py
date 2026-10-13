@@ -12,7 +12,6 @@ from career_agent_ai.application.release import (
 
 SOURCE = "a" * 40
 IMAGE = "sha256:" + "b" * 64
-ROLLBACK = "sha256:" + "c" * 64
 
 
 def _write_evidence(tmp_path) -> None:
@@ -26,16 +25,14 @@ def _write_evidence(tmp_path) -> None:
     )
 
 
-def test_create_manifest_binds_complete_evidence_and_rollback(tmp_path):
+def test_create_manifest_binds_complete_unpublished_evidence(tmp_path):
     _write_evidence(tmp_path)
 
-    manifest = create_promotion_manifest(
-        tmp_path, rollback_image_digest=ROLLBACK
-    )
+    manifest = create_promotion_manifest(tmp_path)
 
     assert manifest.source_commit == SOURCE
-    assert manifest.image_digest == IMAGE
-    assert manifest.rollback_image_digest == ROLLBACK
+    assert manifest.local_image_id == IMAGE
+    assert manifest.publication_status == "unpublished"
     assert set(manifest.evidence_sha256) == {
         "source-commit.txt",
         "candidate-image-digest.txt",
@@ -87,11 +84,30 @@ def test_create_manifest_rejects_missing_or_empty_evidence(tmp_path):
         create_promotion_manifest(tmp_path)
 
 
-def test_manifest_rejects_same_candidate_and_rollback_digest(tmp_path):
+def test_manifest_rejects_boolean_schema_version(tmp_path):
     _write_evidence(tmp_path)
+    valid = create_promotion_manifest(tmp_path)
 
-    with pytest.raises(PromotionManifestError, match="must differ"):
-        create_promotion_manifest(tmp_path, rollback_image_digest=IMAGE)
+    with pytest.raises(PromotionManifestError, match="version"):
+        PromotionManifest(
+            source_commit=valid.source_commit,
+            local_image_id=valid.local_image_id,
+            evidence_sha256=valid.evidence_sha256,
+            schema_version=True,
+        )
+
+
+def test_manifest_rejects_published_status_without_registry_identity(tmp_path):
+    _write_evidence(tmp_path)
+    valid = create_promotion_manifest(tmp_path)
+
+    with pytest.raises(PromotionManifestError, match="unpublished"):
+        PromotionManifest(
+            source_commit=valid.source_commit,
+            local_image_id=valid.local_image_id,
+            evidence_sha256=valid.evidence_sha256,
+            publication_status="published",
+        )
 
 
 @pytest.mark.parametrize(

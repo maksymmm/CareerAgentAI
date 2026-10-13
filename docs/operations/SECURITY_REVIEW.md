@@ -34,12 +34,13 @@ Production SQLite must live on durable storage with backups. File permissions sh
 
 ## Release promotion
 
-Release evidence includes a strict canonical promotion manifest that binds the reviewed
-source commit and candidate image content ID to the complete evidence set. Duplicate or
-unknown JSON fields, incomplete evidence, mutable/non-SHA-256 image identifiers, and a
-rollback target equal to the candidate are rejected. This closes the format and
-integrity boundary but does not yet provide registry publication or cryptographic
-attestation; those remain required before a production image can be promoted.
+Release evidence includes a strict canonical pre-promotion manifest that binds the
+reviewed source commit and local Docker image/config ID to the complete evidence set.
+Duplicate or unknown JSON fields, incomplete evidence, mutable/non-SHA-256 identifiers,
+and any claim of publication are rejected. The trusted workflow constructs this document
+without importing or executing checkout Python. This closes the evidence-format boundary
+but does not provide a registry manifest digest, publication, rollback or cryptographic
+attestation; those remain required before an image can be promoted.
 
 ## Remaining environment responsibilities
 

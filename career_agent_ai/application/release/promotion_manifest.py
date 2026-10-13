@@ -26,24 +26,22 @@ class PromotionManifestError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PromotionManifest:
-    """Immutable descriptor binding promotion and rollback to reviewed evidence."""
+    """Immutable pre-promotion descriptor binding reviewed release evidence."""
 
     source_commit: str
-    image_digest: str
+    local_image_id: str
     evidence_sha256: Mapping[str, str]
-    rollback_image_digest: str | None = None
     schema_version: int = 1
+    publication_status: str = "unpublished"
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version != 1:
             raise PromotionManifestError("unsupported promotion manifest version")
+        if self.publication_status != "unpublished":
+            raise PromotionManifestError("pre-promotion manifest must remain unpublished")
         if not _COMMIT.fullmatch(self.source_commit):
             raise PromotionManifestError("source commit must be a lowercase 40-byte SHA")
-        _validate_digest(self.image_digest, "image digest")
-        if self.rollback_image_digest is not None:
-            _validate_digest(self.rollback_image_digest, "rollback image digest")
-            if self.rollback_image_digest == self.image_digest:
-                raise PromotionManifestError("rollback digest must differ from candidate digest")
+        _validate_digest(self.local_image_id, "local image ID")
         expected = set(_ARTIFACT_NAMES)
         actual = set(self.evidence_sha256)
         if actual != expected:
@@ -60,11 +58,10 @@ class PromotionManifest:
         payload: dict[str, object] = {
             "schema_version": self.schema_version,
             "source_commit": self.source_commit,
-            "candidate_image_digest": self.image_digest,
+            "candidate_local_image_id": self.local_image_id,
+            "publication_status": self.publication_status,
             "evidence_sha256": dict(sorted(self.evidence_sha256.items())),
         }
-        if self.rollback_image_digest is not None:
-            payload["rollback_image_digest"] = self.rollback_image_digest
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
 
     @classmethod
@@ -80,14 +77,13 @@ class PromotionManifest:
         allowed = {
             "schema_version",
             "source_commit",
-            "candidate_image_digest",
-            "rollback_image_digest",
+            "candidate_local_image_id",
+            "publication_status",
             "evidence_sha256",
         }
         if set(payload) - allowed:
             raise PromotionManifestError("promotion manifest contains unknown fields")
-        required = allowed - {"rollback_image_digest"}
-        if not required.issubset(payload):
+        if not allowed.issubset(payload):
             raise PromotionManifestError("promotion manifest is missing required fields")
         checksums = payload["evidence_sha256"]
         if not isinstance(checksums, dict) or not all(
@@ -98,17 +94,15 @@ class PromotionManifest:
         if type(payload["schema_version"]) is not int:
             raise PromotionManifestError("schema version must be an integer")
         source = payload["source_commit"]
-        image = payload["candidate_image_digest"]
-        rollback = payload.get("rollback_image_digest")
-        if not isinstance(source, str) or not isinstance(image, str):
-            raise PromotionManifestError("source and image digests must be strings")
-        if rollback is not None and not isinstance(rollback, str):
-            raise PromotionManifestError("rollback image digest must be a string")
+        image = payload["candidate_local_image_id"]
+        publication_status = payload["publication_status"]
+        if not all(isinstance(item, str) for item in (source, image, publication_status)):
+            raise PromotionManifestError("source, image ID and publication status must be strings")
         manifest = cls(
             schema_version=payload["schema_version"],
             source_commit=source,
-            image_digest=image,
-            rollback_image_digest=rollback,
+            local_image_id=image,
+            publication_status=publication_status,
             evidence_sha256=checksums,
         )
         if manifest.to_json() != value:
@@ -118,8 +112,6 @@ class PromotionManifest:
 
 def create_promotion_manifest(
     evidence_directory: Path,
-    *,
-    rollback_image_digest: str | None = None,
 ) -> PromotionManifest:
     """Build a strict manifest from the complete validated release evidence set."""
 
@@ -139,8 +131,7 @@ def create_promotion_manifest(
     )
     return PromotionManifest(
         source_commit=source,
-        image_digest=image,
-        rollback_image_digest=rollback_image_digest,
+        local_image_id=image,
         evidence_sha256=checksums,
     )
 
