@@ -431,6 +431,13 @@ class SQLiteCareerLoopRepository:
             iterations = value["iterations"]
             if not isinstance(iterations, int) or isinstance(iterations, bool) or iterations < 0:
                 raise ValueError("Persisted iterations must be a non-negative integer.")
+            (
+                relevance_score,
+                outcome_adjustment,
+                adaptive_score,
+                evidence_count,
+                decision_reason,
+            ) = cls._adaptive_snapshot(value)
             return CareerLoopState(
                 run_id=cls._identifier(value["run_id"], "run_id"),
                 request=request,
@@ -439,20 +446,11 @@ class SQLiteCareerLoopRepository:
                 selected_job_title=cls._optional_text(value.get("selected_job_title")),
                 selected_company=cls._optional_text(value.get("selected_company")),
                 selected_company_id=cls._optional_text(value.get("selected_company_id")),
-                selected_job_relevance_score=cls._optional_number(
-                    value.get("selected_job_relevance_score")
-                ),
-                selected_job_outcome_adjustment=cls._optional_number(
-                    value.get("selected_job_outcome_adjustment")
-                ),
-                selected_job_score=cls._optional_number(value.get("selected_job_score")),
-                selected_job_evidence_count=cls._non_negative_integer(
-                    value.get("selected_job_evidence_count", 0),
-                    "selected_job_evidence_count",
-                ),
-                selected_job_decision_reason=cls._optional_text(
-                    value.get("selected_job_decision_reason")
-                ),
+                selected_job_relevance_score=relevance_score,
+                selected_job_outcome_adjustment=outcome_adjustment,
+                selected_job_score=adaptive_score,
+                selected_job_evidence_count=evidence_count,
+                selected_job_decision_reason=decision_reason,
                 application_id=cls._optional_text(value.get("application_id")),
                 application_artifact_content=cls._optional_text(
                     value.get("application_artifact_content")
@@ -530,6 +528,37 @@ class SQLiteCareerLoopRepository:
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"Persisted {field} must be a non-negative integer.")
         return value
+
+    @classmethod
+    def _adaptive_snapshot(
+        cls, value: dict[str, Any]
+    ) -> tuple[float | None, float | None, float | None, int, str | None]:
+        fields = (
+            "selected_job_relevance_score",
+            "selected_job_outcome_adjustment",
+            "selected_job_score",
+            "selected_job_evidence_count",
+            "selected_job_decision_reason",
+        )
+        raw = tuple(value.get(field) for field in fields)
+        # Legacy and pre-search states have no decision snapshot. New pre-search
+        # payloads include the keys with the same neutral values.
+        if raw[:3] == (None, None, None) and raw[4] is None and raw[3] in (None, 0):
+            return None, None, None, 0, None
+        if any(field not in value for field in fields) or any(item is None for item in raw):
+            raise ValueError("Persisted adaptive score snapshot is incomplete.")
+        relevance = cls._optional_number(raw[0])
+        adjustment = cls._optional_number(raw[1])
+        score = cls._optional_number(raw[2])
+        evidence = cls._non_negative_integer(raw[3], fields[3])
+        reason = cls._optional_text(raw[4])
+        if relevance is None or adjustment is None or score is None or not reason:
+            raise ValueError("Persisted adaptive score snapshot is incomplete.")
+        if not abs(score - (relevance + adjustment)) <= 1e-6:
+            raise ValueError("Persisted adaptive score snapshot is inconsistent.")
+        if evidence == 0 and adjustment != 0:
+            raise ValueError("Adaptive adjustment requires outcome evidence.")
+        return relevance, adjustment, score, evidence, reason
 
 
 class SQLiteCandidateRunStatusProjection:

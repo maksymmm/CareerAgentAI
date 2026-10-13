@@ -288,6 +288,35 @@ def test_search_persists_explainable_candidate_outcome_score_across_restart(tmp_
     database.close()
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.pop("selected_job_outcome_adjustment"),
+        lambda payload: payload.update(selected_job_score=999.0),
+        lambda payload: payload.update(
+            selected_job_evidence_count=0,
+            selected_job_outcome_adjustment=1.0,
+            selected_job_score=payload["selected_job_relevance_score"] + 1.0,
+        ),
+    ],
+)
+def test_restart_rejects_incomplete_or_inconsistent_adaptive_snapshot(
+    tmp_path, mutation
+):
+    database, loop, *_ = build_stack(
+        str(tmp_path / "corrupt-adaptive-score.sqlite"), max_iterations=1
+    )
+    loop.start(request(with_schedule=False), run_id="corrupt-adaptive-score")
+    payload = SQLiteCareerLoopRepository._serialize(
+        loop._states.get("corrupt-adaptive-score")
+    )
+    mutation(payload)
+
+    with pytest.raises(ValueError, match="state is malformed"):
+        SQLiteCareerLoopRepository._deserialize(payload)
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")
