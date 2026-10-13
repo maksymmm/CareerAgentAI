@@ -64,7 +64,7 @@ class AdaptiveJobRanker:
         for baseline in self._ranker.rank(jobs, filters):
             company_id = self._company_id(baseline.job)
             evidence = by_company.get(company_id, [])
-            adjustment = self._adjustment(evidence)
+            adjustment = self._adjustment(evidence, baseline.score)
             results.append(
                 AdaptiveJobScore(
                     job=baseline.job,
@@ -76,22 +76,28 @@ class AdaptiveJobRanker:
                 )
             )
 
-        results.sort(
-            key=lambda item: (item.score, item.relevance_score, item.job.job_id),
-            reverse=True,
-        )
+        # Python's sort is stable, so an adaptive tie preserves every secondary
+        # ordering decision already made by the wrapped ranker (including salary).
+        results.sort(key=lambda item: item.score, reverse=True)
         return tuple(results)
 
     @classmethod
-    def _adjustment(cls, evidence: list[float]) -> float:
+    def _adjustment(cls, evidence: list[float], relevance_score: float) -> float:
         if not evidence:
             return 0.0
         mean = sum(evidence) / len(evidence)
         confidence = len(evidence) / (len(evidence) + cls.PRIOR_STRENGTH)
-        return round(cls.MAX_ADJUSTMENT * mean * confidence, 6)
+        raw_adjustment = cls.MAX_ADJUSTMENT * mean * confidence
+        # The wrapped ranker has two public scales: legacy results are commonly
+        # 0-2 while filter relevance can exceed 50. Cap against the active score
+        # so history refines either scale instead of overwhelming it.
+        active_cap = min(cls.MAX_ADJUSTMENT, max(abs(relevance_score) * 0.1, 0.01))
+        return round(max(-active_cap, min(active_cap, raw_adjustment)), 6)
 
     @staticmethod
     def _outcome_signal(application: JobApplication) -> float | None:
+        if application.status is JobApplicationStatus.WITHDRAWN:
+            return None
         statuses = {event.to_status for event in application.timeline}
         statuses.add(application.status)
         if JobApplicationStatus.OFFER in statuses:
