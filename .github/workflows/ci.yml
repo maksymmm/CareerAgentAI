@@ -36,9 +36,11 @@ jobs:
 
   release-evidence:
     needs: test
+    # Use ref_name rather than the fully qualified ref so the trusted
+    # integration push is not silently skipped by event/ref normalization.
     if: >-
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/feat/decision-engine-implementation'
+      github.ref_name == 'feat/decision-engine-implementation'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
