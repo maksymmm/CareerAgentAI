@@ -309,6 +309,21 @@ permissions disabled, and stores mutable SQLite state only under
 are never baked into the image. CI builds the image and proves it can serve liveness and
 readiness with a read-only root filesystem, a constrained `/tmp`, and an explicit
 persistent data volume.
+CI also records the exact source commit and built image's content-addressed ID, generates
+a validated SPDX 2.3 SBOM, retains the vulnerability report, and verifies checksums for
+the complete release evidence bundle. A pinned scanner blocks fixed critical findings.
+Evidence is uploaded only after the runtime smoke test passes and is named for the exact
+source commit. CI explicitly disables repository-local Syft/Grype configuration discovery
+and validates the SBOM against the vendored official SPDX 2.3 JSON schema after checking
+its trusted upstream SHA-256. Evidence runs in a clean job that never executes the PR's
+pytest code. Its validator uses isolated Python from runner-owned temporary storage,
+outside the untrusted checkout, preventing module shadowing and workflow-environment
+poisoning. The release-evidence job runs only for reviewed pushes to the integration
+branch, so a pull request cannot replace the workflow instructions that create its own
+evidence. Pull requests still run the complete test and coverage gate against GitHub's
+synthetic merge result, and trusted evidence depends explicitly on that job succeeding.
+This does not publish or deploy
+the image.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

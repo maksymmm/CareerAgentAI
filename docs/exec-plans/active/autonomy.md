@@ -458,6 +458,24 @@ and writes only to an explicit durable data mount. CI builds and starts the imag
 read-only root filesystem and constrained temporary filesystem, then verifies the
 non-root identity plus live health/readiness probes without real I/O.
 
-The next product priority is release artifact hardening: pin and attest the container
-base/build inputs, add vulnerability/SBOM gates, and document promotion/rollback without
-enabling production credentials or real external actions.
+Delivered: release CI pins every third-party action by immutable commit, records the
+exact source commit and built container's content-addressed image ID, generates and
+validates an SPDX 2.3 SBOM, retains the vulnerability report, and checksums the complete
+evidence bundle. A pinned scanner fails the build for fixed critical vulnerabilities;
+evidence is uploaded under the exact source commit only after the runtime smoke passes.
+Checkout and evidence use the same exact SHA, repository-local scanner configuration is
+disabled through runner-owned explicit configs, and the SBOM is validated against the
+vendored official SPDX 2.3 JSON schema after verifying its upstream SHA-256. The evidence
+pipeline runs in a clean job that never executes PR-controlled pytest code, preventing
+cross-step environment poisoning. Python validation also runs isolated from runner-owned
+temporary storage outside the untrusted checkout, preventing repository module shadowing.
+Release evidence runs only after reviewed code reaches the integration branch; pull
+requests cannot use a modified workflow definition to fabricate trusted evidence, while
+their complete test and coverage gate checks the merge result before merge. Integration
+release evidence explicitly depends on that test job succeeding.
+The gate does not publish an image, use production
+credentials, or enable real actions.
+
+The next product priority is promotion and rollback integrity: publish immutable
+candidate artifacts to a non-production registry, attach provenance/attestation, and
+verify digest-only deployment without enabling real providers or consequential actions.
