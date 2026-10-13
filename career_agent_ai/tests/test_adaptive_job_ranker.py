@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from career_agent_ai.application.jobs import Company, Job, Location
+from career_agent_ai.application.jobs import Company, Job, Location, Salary
 from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRanker
 from career_agent_ai.application.jobs.in_memory_job_application_repository import (
     InMemoryJobApplicationRepository,
@@ -12,13 +12,14 @@ from career_agent_ai.application.jobs.job_application_status import JobApplicati
 from career_agent_ai.application.jobs.job_filter import JobFilter
 
 
-def _job(job_id: str, company_id: str) -> Job:
+def _job(job_id: str, company_id: str, salary: int | None = None) -> Job:
     return Job.create(
         job_id=job_id,
         title="Python Engineer",
         company=Company(company_id=company_id, name=company_id),
         location=Location(country="Germany", city="Berlin"),
         description="Python backend services",
+        salary=Salary(minimum=salary, maximum=salary) if salary is not None else None,
     )
 
 
@@ -68,7 +69,7 @@ def test_rejection_adjustment_is_bounded_and_sparse_evidence_is_shrunk():
     result = AdaptiveJobRanker(repository).rank("candidate", (_job("job", "company"),))[0]
 
     assert -AdaptiveJobRanker.MAX_ADJUSTMENT <= result.outcome_adjustment < 0
-    assert result.outcome_adjustment == pytest.approx(-1.73913)
+    assert result.outcome_adjustment == -0.01
 
 
 def test_interview_then_rejection_retains_positive_funnel_signal():
@@ -77,7 +78,64 @@ def test_interview_then_rejection_retains_positive_funnel_signal():
 
     result = AdaptiveJobRanker(repository).rank("candidate", (_job("job", "company"),))[0]
 
-    assert result.outcome_adjustment == 1.0
+    assert result.outcome_adjustment == 0.01
+
+
+def test_interview_then_withdrawal_is_neutral():
+    repository = InMemoryJobApplicationRepository()
+    repository.add(
+        _application(
+            "a1",
+            "candidate",
+            "company",
+            (
+                JobApplicationStatus.APPLIED,
+                JobApplicationStatus.INTERVIEW,
+                JobApplicationStatus.WITHDRAWN,
+            ),
+        )
+    )
+
+    result = AdaptiveJobRanker(repository).rank("candidate", (_job("job", "company"),))[0]
+
+    assert result.evidence_count == 0
+    assert result.outcome_adjustment == 0.0
+
+
+def test_legacy_scale_history_cannot_overwhelm_large_relevance_gap():
+    repository = InMemoryJobApplicationRepository()
+    for index in range(20):
+        repository.add(
+            _application(
+                f"offer-{index}",
+                "candidate",
+                "low-salary",
+                (
+                    JobApplicationStatus.APPLIED,
+                    JobApplicationStatus.INTERVIEW,
+                    JobApplicationStatus.OFFER,
+                ),
+            )
+        )
+
+    ranked = AdaptiveJobRanker(repository).rank(
+        "candidate",
+        (_job("high", "new-company", 200_000), _job("low", "low-salary", 30_000)),
+    )
+
+    assert [item.job.job_id for item in ranked] == ["high", "low"]
+    assert ranked[1].outcome_adjustment <= ranked[1].relevance_score * 0.1
+
+
+def test_adaptive_tie_preserves_baseline_salary_order():
+    repository = InMemoryJobApplicationRepository()
+    ranked = AdaptiveJobRanker(repository).rank(
+        "candidate",
+        (_job("z-low", "one", 40_000), _job("a-high", "two", 90_000)),
+        JobFilter(keyword="Python"),
+    )
+
+    assert [item.job.job_id for item in ranked] == ["a-high", "z-low"]
 
 
 def test_history_is_tenant_isolated_and_non_outcomes_remain_neutral():
