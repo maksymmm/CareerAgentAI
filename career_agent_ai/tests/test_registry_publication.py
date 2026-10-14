@@ -143,6 +143,30 @@ def test_receipt_accepts_uppercase_registry_host_but_keeps_path_lowercase():
     assert receipt.registry_reference == reference
 
 
+@pytest.mark.parametrize("repository", [
+    "localhost/team/image",
+    "registry:5000/team/image",
+    "Registry/team/image",
+])
+def test_receipt_accepts_unambiguous_single_label_registry_hosts(repository):
+    reference = repository + "@" + DIGEST
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+    receipt = create_registry_publication_receipt(
+        _manifest(), registry_reference=reference,
+        expected_repository=repository, provenance_json=provenance.to_json(),
+    )
+
+    assert receipt.registry_reference == reference
+
+
+def test_receipt_rejects_ambiguous_lowercase_single_label_registry_host():
+    reference = "registry/team/image@" + DIGEST
+
+    with pytest.raises(PromotionManifestError, match="ambiguous registry host"):
+        ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+
 def test_receipt_applies_length_limit_to_path_not_registry_host():
     host = ".".join(("a" * 63, "b" * 63, "c" * 63, "d" * 61))
     repository = f"{host}/abc"
