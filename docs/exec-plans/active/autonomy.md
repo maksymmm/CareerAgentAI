@@ -521,7 +521,9 @@ moves the transition to reconciliation rather than retrying. Independent reconci
 can confirm the exact durable outcome or safely return a verified no-effect operation to
 prepared state. A success requires independently observed target and rollback references
 that exactly match the durable plan. The only adapter is deterministic, in-memory and
-no-I/O. The next
+no-I/O. Unclassified provider exceptions are treated as ambiguous unless explicitly
+identified as pre-execution failures, and identical reconciliation decisions are
+restart-safe to replay. The next
 isolated priority is an authenticated candidate/operator approval projection for this
 release action; no real orchestrator adapter or deployment credential may be added yet.
 
