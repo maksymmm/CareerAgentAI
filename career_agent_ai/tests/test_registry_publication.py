@@ -117,6 +117,26 @@ def test_receipt_accepts_valid_repeated_repository_separators(component):
     assert receipt.registry_reference == reference
 
 
+def test_receipt_accepts_bracketed_ipv6_registry_host():
+    repository = "[2001:db8::1]:5000/team/image"
+    reference = repository + "@" + DIGEST
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+    receipt = create_registry_publication_receipt(
+        _manifest(), registry_reference=reference,
+        expected_repository=repository, provenance_json=provenance.to_json(),
+    )
+
+    assert receipt.registry_reference == reference
+
+
+def test_receipt_rejects_repository_longer_than_distribution_limit():
+    repository = "ghcr.io/team/" + "a" * 244
+    reference = repository + "@" + DIGEST
+    with pytest.raises(PromotionManifestError, match="255"):
+        ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+
 @pytest.mark.parametrize("source,subject", [
     ("d" * 40, REFERENCE),
     (SOURCE, "ghcr.io/maksymmm/careeragentai-candidate@sha256:" + "d" * 64),

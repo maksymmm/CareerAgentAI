@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import hashlib
+import ipaddress
 from dataclasses import dataclass
 
 from career_agent_ai.application.release.promotion_manifest import (
@@ -15,9 +16,10 @@ from career_agent_ai.application.release.promotion_manifest import (
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+_HOST = rf"(?P<host>(?:{_HOST_LABEL})(?:\.(?:{_HOST_LABEL}))*|\[[0-9A-Fa-f:.]+\])"
 _PATH_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
 _REGISTRY_REFERENCE = re.compile(
-    rf"(?P<repository>(?:{_HOST_LABEL})(?:\.(?:{_HOST_LABEL}))*(?::[0-9]+)?"
+    rf"(?P<repository>{_HOST}(?::[0-9]+)?"
     rf"/(?:{_PATH_COMPONENT})(?:/(?:{_PATH_COMPONENT}))*)@"
     r"(?P<digest>sha256:[0-9a-f]{64})\Z"
 )
@@ -36,8 +38,7 @@ class ProvenanceStatement:
             raise PromotionManifestError("unsupported provenance statement version")
         if not _COMMIT.fullmatch(self.source_commit):
             raise PromotionManifestError("provenance source must be a lowercase commit SHA")
-        if not _REGISTRY_REFERENCE.fullmatch(self.subject_reference):
-            raise PromotionManifestError("provenance subject must be an immutable registry reference")
+        _parse_registry_reference(self.subject_reference, "provenance subject")
 
     def to_json(self) -> str:
         return json.dumps(
@@ -88,8 +89,7 @@ class RegistryPublicationReceipt:
             raise PromotionManifestError("registry receipt must remain non-production")
         if not _COMMIT.fullmatch(self.source_commit):
             raise PromotionManifestError("source commit must be a lowercase 40-byte SHA")
-        if not _REGISTRY_REFERENCE.fullmatch(self.registry_reference):
-            raise PromotionManifestError("registry reference must use an immutable SHA-256 digest")
+        _parse_registry_reference(self.registry_reference, "registry reference")
         for value in (self.promotion_manifest_sha256, self.provenance_sha256):
             if not _SHA256.fullmatch(value):
                 raise PromotionManifestError("receipt evidence must use lowercase SHA-256 digests")
@@ -98,8 +98,7 @@ class RegistryPublicationReceipt:
     def image_digest(self) -> str:
         """Return the immutable registry manifest digest."""
 
-        match = _REGISTRY_REFERENCE.fullmatch(self.registry_reference)
-        assert match is not None
+        match = _parse_registry_reference(self.registry_reference, "registry reference")
         return match.group("digest")
 
     def verify_deployment_reference(self, reference: str) -> None:
@@ -173,9 +172,7 @@ def create_registry_publication_receipt(
 
     if manifest.publication_status != "unpublished":
         raise PromotionManifestError("publication must start from unpublished evidence")
-    match = _REGISTRY_REFERENCE.fullmatch(registry_reference)
-    if match is None:
-        raise PromotionManifestError("registry reference must use an immutable SHA-256 digest")
+    match = _parse_registry_reference(registry_reference, "registry reference")
     if match.group("repository") != expected_repository:
         raise PromotionManifestError("registry reference does not match the trusted repository")
     provenance = ProvenanceStatement.from_json(provenance_json)
@@ -200,3 +197,18 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
             raise PromotionManifestError("registry receipt contains duplicate fields")
         result[key] = value
     return result
+
+
+def _parse_registry_reference(value: str, label: str) -> re.Match[str]:
+    match = _REGISTRY_REFERENCE.fullmatch(value)
+    if match is None:
+        raise PromotionManifestError(f"{label} must be an immutable SHA-256 registry reference")
+    if len(match.group("repository")) > 255:
+        raise PromotionManifestError(f"{label} repository exceeds 255 characters")
+    host = match.group("host")
+    if host.startswith("["):
+        try:
+            ipaddress.IPv6Address(host[1:-1])
+        except ipaddress.AddressValueError as exc:
+            raise PromotionManifestError(f"{label} contains an invalid IPv6 host") from exc
+    return match
