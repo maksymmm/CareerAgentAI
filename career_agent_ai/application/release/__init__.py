@@ -14,6 +14,13 @@ from career_agent_ai.application.release.promotion_plan import (
     DryRunPromotionPlan,
     create_dry_run_promotion_plan,
 )
+from career_agent_ai.application.release.promotion_execution import (
+    DryRunPromotionAdapter,
+    PromotionExecutionAdapter,
+    PromotionPreExecutionError,
+    PromotionExecutionResult,
+    PromotionExecutionService,
+)
 
 __all__ = [
     "PromotionManifest",
@@ -24,4 +31,9 @@ __all__ = [
     "create_registry_publication_receipt",
     "DryRunPromotionPlan",
     "create_dry_run_promotion_plan",
+    "DryRunPromotionAdapter",
+    "PromotionExecutionAdapter",
+    "PromotionPreExecutionError",
+    "PromotionExecutionResult",
+    "PromotionExecutionService",
 ]
