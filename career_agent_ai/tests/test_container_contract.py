@@ -251,6 +251,9 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "candidate-registry-reference.txt" in release_job
     assert "candidate-provenance.json" in release_job
     assert "candidate-publication-receipt.json" in release_job
+    assert 're.compile(r"sha256:[0-9a-f]{64}\\Z")' in release_job
+    assert 're.compile(r"[0-9a-f]{40}\\Z")' in release_job
+    assert 're.compile(r"sha256:[0-9a-f]{64}\\\\Z")' not in release_job
     assert release_job.index("docker push") < release_job.index("candidate-publication-receipt.json")
     assert 'sys.path.insert(0, os.environ["SOURCE_ROOT"])' not in release_job
     assert "career_agent_ai.application.release" not in release_job
