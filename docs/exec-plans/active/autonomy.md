@@ -488,6 +488,13 @@ and any false publication status. Registry publication, registry manifest identi
 provenance remain the next isolated unit; the current artifact must not be represented
 as a published deployable image.
 
+Delivered in the registry-contract unit: a canonical non-production publication receipt
+binds the reviewed source commit, promotion-manifest checksum, immutable registry
+manifest reference, and provenance checksum. Digest-only deployment validation rejects
+tags, alternate repositories, and digest substitution. Real registry publication and
+provenance generation remain intentionally outside this credential-free unit; CI wiring
+to a sandbox registry is the next promotion priority.
+
 ## 11. Candidate-outcome adaptive ranking
 
 Status: **IN PROGRESS**

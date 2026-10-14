@@ -345,6 +345,12 @@ parser rejects duplicate or unknown fields, incomplete evidence, non-digest imag
 identities, and any claim that the local image has been published. A local Docker image
 ID is not an OCI registry manifest digest and cannot be used as a deployment reference.
 This groundwork does not yet publish, attest, promote, roll back, or deploy the image.
+The release boundary now also defines a canonical non-production publication receipt
+that binds the reviewed source, promotion-manifest checksum, immutable registry manifest
+reference, and provenance checksum. Deployment validation accepts only that exact
+`repository@sha256:...` reference; mutable tags, substituted repositories or digests,
+and production-labelled receipts are rejected. The contract performs no registry login,
+push, or deployment by itself.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
