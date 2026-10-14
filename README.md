@@ -367,6 +367,9 @@ external-action lifecycle. It persists intent before execution, requires literal
 approval, uses a stable operation ID for idempotency, and moves restarted or mismatched
 outcomes to reconciliation instead of retrying. The only included adapter is a
 deterministic in-memory dry run with no registry, orchestrator, credential or network I/O.
+Confirming an ambiguous success requires independently observed target and rollback
+references that exactly match the durable plan; planned values are never substituted
+for provider observations.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
