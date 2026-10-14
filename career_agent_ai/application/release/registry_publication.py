@@ -14,8 +14,9 @@ from career_agent_ai.application.release.promotion_manifest import (
 
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+_HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 _REGISTRY_REFERENCE = re.compile(
-    r"(?P<repository>(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::[0-9]+)?"
+    rf"(?P<repository>(?:{_HOST_LABEL})(?:\.(?:{_HOST_LABEL}))*(?::[0-9]+)?"
     r"/(?:[a-z0-9]+(?:[._-][a-z0-9]+)*)(?:/(?:[a-z0-9]+(?:[._-][a-z0-9]+)*))*)@"
     r"(?P<digest>sha256:[0-9a-f]{64})\Z"
 )

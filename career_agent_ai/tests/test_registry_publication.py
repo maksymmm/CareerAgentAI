@@ -70,6 +70,9 @@ def test_receipt_rejects_mutable_or_noncanonical_registry_identity(reference):
     "ghcr.io//maksymmm/image@" + DIGEST,
     "ghcr.io/maksymmm/../image@" + DIGEST,
     "ghcr.io.:443/maksymmm/image@" + DIGEST,
+    "ghcr..io/maksymmm/image@" + DIGEST,
+    "a.-b/maksymmm/image@" + DIGEST,
+    "a-.b/maksymmm/image@" + DIGEST,
 ])
 def test_receipt_rejects_ambiguous_registry_names(reference):
     with pytest.raises(PromotionManifestError, match="immutable"):
