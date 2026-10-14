@@ -362,6 +362,11 @@ receipt. It revalidates the manifest, provenance, receipt and trusted repository
 binding the new digest to a distinct immutable current digest for rollback. Exact-match
 guards reject target or rollback substitution. The plan is deliberately non-production
 and non-executable: it has no registry, orchestrator or deployment adapter.
+A provider-neutral execution port now binds that exact plan to the existing durable
+external-action lifecycle. It persists intent before execution, requires literal human
+approval, uses a stable operation ID for idempotency, and moves restarted or mismatched
+outcomes to reconciliation instead of retrying. The only included adapter is a
+deterministic in-memory dry run with no registry, orchestrator, credential or network I/O.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
