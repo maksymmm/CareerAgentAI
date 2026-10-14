@@ -16,11 +16,11 @@ from career_agent_ai.application.release.promotion_manifest import (
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
-_HOST = rf"(?P<host>(?:{_HOST_LABEL})(?:\.(?:{_HOST_LABEL}))*|\[[0-9A-Fa-f:.]+\])"
+_HOST = rf"(?P<host>(?:{_HOST_LABEL})(?:\.(?:{_HOST_LABEL}))*|\[[0-9A-Fa-f:]+\])"
 _PATH_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
 _REGISTRY_REFERENCE = re.compile(
     rf"(?P<repository>{_HOST}(?::[0-9]+)?"
-    rf"/(?:{_PATH_COMPONENT})(?:/(?:{_PATH_COMPONENT}))*)@"
+    rf"/(?P<repository_path>(?:{_PATH_COMPONENT})(?:/(?:{_PATH_COMPONENT}))*))@"
     r"(?P<digest>sha256:[0-9a-f]{64})\Z"
 )
 
@@ -203,7 +203,7 @@ def _parse_registry_reference(value: str, label: str) -> re.Match[str]:
     match = _REGISTRY_REFERENCE.fullmatch(value)
     if match is None:
         raise PromotionManifestError(f"{label} must be an immutable SHA-256 registry reference")
-    if len(match.group("repository")) > 255:
+    if len(match.group("repository_path")) > 255:
         raise PromotionManifestError(f"{label} repository exceeds 255 characters")
     host = match.group("host")
     if host.startswith("["):
