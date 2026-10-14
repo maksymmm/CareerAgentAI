@@ -242,6 +242,19 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert "SOURCE_ROOT: ${{ github.workspace }}/source" in release_job
     assert '"candidate_local_image_id": digest' in release_job
     assert '"publication_status": "unpublished"' in release_job
+    assert "Publish and verify sandbox registry identity" in release_job
+    assert "registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373" in release_job
+    assert "localhost:5000/careeragentai/candidate" in release_job
+    assert 'docker push "$tag"' in release_job
+    assert 'docker pull "$registry_reference"' in release_job
+    assert '"environment": "non-production"' in release_job
+    assert "candidate-registry-reference.txt" in release_job
+    assert "candidate-provenance.json" in release_job
+    assert "candidate-publication-receipt.json" in release_job
+    assert 're.compile(r"sha256:[0-9a-f]{64}\\Z")' in release_job
+    assert 're.compile(r"[0-9a-f]{40}\\Z")' in release_job
+    assert 're.compile(r"sha256:[0-9a-f]{64}\\\\Z")' not in release_job
+    assert release_job.index("docker push") < release_job.index("candidate-publication-receipt.json")
     assert 'sys.path.insert(0, os.environ["SOURCE_ROOT"])' not in release_job
     assert "career_agent_ai.application.release" not in release_job
     assert "${{ runner.temp }}/candidate-sbom.spdx.json" in release_job

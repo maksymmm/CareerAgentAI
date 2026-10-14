@@ -495,6 +495,16 @@ tags, alternate repositories, and digest substitution. Real registry publication
 provenance generation remain intentionally outside this credential-free unit; CI wiring
 to a sandbox registry is the next promotion priority.
 
+Delivered in the sandbox-publication unit: trusted integration CI starts a pinned,
+ephemeral localhost registry, pushes the candidate under an exact-source tag, derives
+the registry manifest digest from the completed push, removes the tag locally and pulls
+the candidate back by digest. The release bundle records the digest-only reference,
+canonical provenance and non-production publication receipt and checksum-verifies all
+three. The registry is destroyed after the job and no external registry, credential or
+deployment is used. The next isolated promotion priority is a dry-run promotion/rollback
+plan that accepts only this revalidated receipt and preserves the prior digest as the
+rollback target.
+
 ## 11. Candidate-outcome adaptive ranking
 
 Status: **IN PROGRESS**

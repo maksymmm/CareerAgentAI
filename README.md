@@ -351,6 +351,12 @@ reference, and provenance checksum. Deployment validation accepts only that exac
 `repository@sha256:...` reference; mutable tags, substituted repositories or digests,
 and production-labelled receipts are rejected. The contract performs no registry login,
 push, or deployment by itself.
+After reviewed code reaches the integration branch, release CI now starts an ephemeral
+localhost registry pinned by image digest, publishes the candidate only to that sandbox,
+and pulls the resulting manifest back by its registry digest. The evidence bundle includes
+the exact registry reference, canonical provenance and publication receipt and verifies
+their checksums. The registry is destroyed at the end of the job; no external registry,
+credential, production environment or deployment is contacted.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
