@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass
 
 from career_agent_ai.application.release.promotion_manifest import (
@@ -14,9 +15,57 @@ from career_agent_ai.application.release.promotion_manifest import (
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _REGISTRY_REFERENCE = re.compile(
-    r"(?P<repository>[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+)@"
+    r"(?P<repository>(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::[0-9]+)?"
+    r"/(?:[a-z0-9]+(?:[._-][a-z0-9]+)*)(?:/(?:[a-z0-9]+(?:[._-][a-z0-9]+)*))*)@"
     r"(?P<digest>sha256:[0-9a-f]{64})\Z"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ProvenanceStatement:
+    """Minimal canonical provenance subject verified before receipt issuance."""
+
+    source_commit: str
+    subject_reference: str
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version != 1:
+            raise PromotionManifestError("unsupported provenance statement version")
+        if not _COMMIT.fullmatch(self.source_commit):
+            raise PromotionManifestError("provenance source must be a lowercase commit SHA")
+        if not _REGISTRY_REFERENCE.fullmatch(self.subject_reference):
+            raise PromotionManifestError("provenance subject must be an immutable registry reference")
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "schema_version": self.schema_version,
+                "source_commit": self.source_commit,
+                "subject_reference": self.subject_reference,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ) + "\n"
+
+    @classmethod
+    def from_json(cls, value: str) -> "ProvenanceStatement":
+        try:
+            payload = json.loads(value, object_pairs_hook=_reject_duplicate_keys)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise PromotionManifestError("invalid provenance statement JSON") from exc
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema_version", "source_commit", "subject_reference"
+        }:
+            raise PromotionManifestError("provenance statement fields do not match the schema")
+        if type(payload["schema_version"]) is not int or not all(
+            isinstance(payload[key], str) for key in ("source_commit", "subject_reference")
+        ):
+            raise PromotionManifestError("provenance statement contains invalid field types")
+        statement = cls(**payload)
+        if statement.to_json() != value:
+            raise PromotionManifestError("provenance statement JSON is not canonical")
+        return statement
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,18 +149,30 @@ def create_registry_publication_receipt(
     manifest: PromotionManifest,
     *,
     registry_reference: str,
-    promotion_manifest_sha256: str,
-    provenance_sha256: str,
+    expected_repository: str,
+    provenance_json: str,
 ) -> RegistryPublicationReceipt:
     """Bind a validated pre-promotion manifest to registry and provenance identities."""
 
     if manifest.publication_status != "unpublished":
         raise PromotionManifestError("publication must start from unpublished evidence")
+    match = _REGISTRY_REFERENCE.fullmatch(registry_reference)
+    if match is None:
+        raise PromotionManifestError("registry reference must use an immutable SHA-256 digest")
+    if match.group("repository") != expected_repository:
+        raise PromotionManifestError("registry reference does not match the trusted repository")
+    provenance = ProvenanceStatement.from_json(provenance_json)
+    if provenance.source_commit != manifest.source_commit:
+        raise PromotionManifestError("provenance source does not match the promotion manifest")
+    if provenance.subject_reference != registry_reference:
+        raise PromotionManifestError("provenance subject does not match the registry reference")
+    manifest_digest = hashlib.sha256(manifest.to_json().encode("ascii")).hexdigest()
+    provenance_digest = hashlib.sha256(provenance_json.encode("ascii")).hexdigest()
     return RegistryPublicationReceipt(
         source_commit=manifest.source_commit,
         registry_reference=registry_reference,
-        promotion_manifest_sha256=promotion_manifest_sha256,
-        provenance_sha256=provenance_sha256,
+        promotion_manifest_sha256=f"sha256:{manifest_digest}",
+        provenance_sha256=f"sha256:{provenance_digest}",
     )
 
 

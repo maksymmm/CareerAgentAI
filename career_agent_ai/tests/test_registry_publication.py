@@ -7,6 +7,7 @@ import pytest
 from career_agent_ai.application.release import (
     PromotionManifest,
     PromotionManifestError,
+    ProvenanceStatement,
     RegistryPublicationReceipt,
     create_registry_publication_receipt,
 )
@@ -26,12 +27,12 @@ def _manifest() -> PromotionManifest:
 
 def _receipt() -> RegistryPublicationReceipt:
     manifest = _manifest()
-    manifest_digest = "sha256:" + hashlib.sha256(manifest.to_json().encode()).hexdigest()
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=REFERENCE)
     return create_registry_publication_receipt(
         manifest,
         registry_reference=REFERENCE,
-        promotion_manifest_sha256=manifest_digest,
-        provenance_sha256="sha256:" + "c" * 64,
+        expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+        provenance_json=provenance.to_json(),
     )
 
 
@@ -41,6 +42,9 @@ def test_receipt_binds_source_registry_manifest_and_provenance():
     assert receipt.source_commit == SOURCE
     assert receipt.image_digest == DIGEST
     assert receipt.environment == "non-production"
+    assert receipt.promotion_manifest_sha256 == "sha256:" + hashlib.sha256(
+        _manifest().to_json().encode("ascii")
+    ).hexdigest()
     assert RegistryPublicationReceipt.from_json(receipt.to_json()) == receipt
     receipt.verify_deployment_reference(REFERENCE)
 
@@ -55,7 +59,53 @@ def test_receipt_rejects_mutable_or_noncanonical_registry_identity(reference):
     with pytest.raises(PromotionManifestError, match="immutable"):
         create_registry_publication_receipt(
             _manifest(), registry_reference=reference,
-            promotion_manifest_sha256=DIGEST, provenance_sha256=DIGEST,
+            expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+            provenance_json=ProvenanceStatement(
+                source_commit=SOURCE, subject_reference=REFERENCE
+            ).to_json(),
+        )
+
+
+@pytest.mark.parametrize("reference", [
+    "ghcr.io//maksymmm/image@" + DIGEST,
+    "ghcr.io/maksymmm/../image@" + DIGEST,
+    "ghcr.io.:443/maksymmm/image@" + DIGEST,
+])
+def test_receipt_rejects_ambiguous_registry_names(reference):
+    with pytest.raises(PromotionManifestError, match="immutable"):
+        create_registry_publication_receipt(
+            _manifest(), registry_reference=reference,
+            expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+            provenance_json=ProvenanceStatement(
+                source_commit=SOURCE, subject_reference=REFERENCE
+            ).to_json(),
+        )
+
+
+def test_receipt_rejects_untrusted_repository_even_with_matching_provenance():
+    hostile = "attacker.example/image@" + DIGEST
+    with pytest.raises(PromotionManifestError, match="trusted repository"):
+        create_registry_publication_receipt(
+            _manifest(), registry_reference=hostile,
+            expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+            provenance_json=ProvenanceStatement(
+                source_commit=SOURCE, subject_reference=hostile
+            ).to_json(),
+        )
+
+
+@pytest.mark.parametrize("source,subject", [
+    ("d" * 40, REFERENCE),
+    (SOURCE, "ghcr.io/maksymmm/careeragentai-candidate@sha256:" + "d" * 64),
+])
+def test_receipt_rejects_provenance_for_another_source_or_subject(source, subject):
+    with pytest.raises(PromotionManifestError, match="provenance"):
+        create_registry_publication_receipt(
+            _manifest(), registry_reference=REFERENCE,
+            expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+            provenance_json=ProvenanceStatement(
+                source_commit=source, subject_reference=subject
+            ).to_json(),
         )
 
 

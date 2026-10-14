@@ -6,6 +6,7 @@ from career_agent_ai.application.release.promotion_manifest import (
     create_promotion_manifest,
 )
 from career_agent_ai.application.release.registry_publication import (
+    ProvenanceStatement,
     RegistryPublicationReceipt,
     create_registry_publication_receipt,
 )
@@ -15,5 +16,6 @@ __all__ = [
     "PromotionManifestError",
     "create_promotion_manifest",
     "RegistryPublicationReceipt",
+    "ProvenanceStatement",
     "create_registry_publication_receipt",
 ]
