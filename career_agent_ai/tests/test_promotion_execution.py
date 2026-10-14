@@ -177,6 +177,8 @@ def test_reconciliation_can_confirm_exact_success():
         "promote:reconcile",
         promoted=True,
         execution_id="provider:verified-1",
+        observed_target_reference=TARGET,
+        observed_rollback_reference=ROLLBACK,
     )
 
     assert resolved.status == ExternalActionStatus.SUCCEEDED
@@ -216,7 +218,11 @@ def test_reconciliation_rejects_tampered_durable_plan_checksum():
 
     with pytest.raises(ValueError, match="checksum"):
         service.resolve_reconciliation(
-            "promote:tampered", promoted=True, execution_id="provider:verified"
+            "promote:tampered",
+            promoted=True,
+            execution_id="provider:verified",
+            observed_target_reference=TARGET,
+            observed_rollback_reference=ROLLBACK,
         )
 
     assert (
@@ -244,20 +250,37 @@ def test_promotion_rejects_invalid_operation_id(operation_id):
 
 
 @pytest.mark.parametrize(
-    "promoted,execution_id,error",
+    "promoted,execution_id,target,rollback,error",
     [
-        (True, None, "requires execution_id"),
-        (False, "provider:unexpected", "must be omitted"),
-        ("true", None, "boolean"),
+        (True, None, TARGET, ROLLBACK, "requires execution_id"),
+        (True, "provider:1", None, ROLLBACK, "observed transition"),
+        (True, "provider:1", TARGET, None, "observed transition"),
+        (
+            True,
+            "provider:1",
+            REPOSITORY + "@sha256:" + "e" * 64,
+            ROLLBACK,
+            "exactly match",
+        ),
+        (True, "provider:1", TARGET, TARGET, "exactly match"),
+        (False, "provider:unexpected", None, None, "must be omitted"),
+        (False, None, TARGET, None, "must be omitted"),
+        ("true", None, None, None, "boolean"),
     ],
 )
-def test_reconciliation_rejects_ambiguous_claims(promoted, execution_id, error):
+def test_reconciliation_rejects_ambiguous_claims(
+    promoted, execution_id, target, rollback, error
+):
     service, _ = _service(SQLiteDatabase(), MismatchedAdapter())
     service.execute("promote:claims", plan=_plan(), human_approved=True)
 
     with pytest.raises((TypeError, ValueError), match=error):
         service.resolve_reconciliation(
-            "promote:claims", promoted=promoted, execution_id=execution_id
+            "promote:claims",
+            promoted=promoted,
+            execution_id=execution_id,
+            observed_target_reference=target,
+            observed_rollback_reference=rollback,
         )
 
 
