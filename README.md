@@ -369,7 +369,9 @@ outcomes to reconciliation instead of retrying. The only included adapter is a
 deterministic in-memory dry run with no registry, orchestrator, credential or network I/O.
 Confirming an ambiguous success requires independently observed target and rollback
 references that exactly match the durable plan; planned values are never substituted
-for provider observations.
+for provider observations. Provider exceptions are conservatively ambiguous unless the
+adapter explicitly proves they occurred before any external effect, and matching
+reconciliation decisions are safe to replay after a lost response.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
