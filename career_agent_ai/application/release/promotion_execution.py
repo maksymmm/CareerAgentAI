@@ -179,6 +179,8 @@ class PromotionExecutionService:
         *,
         promoted: bool,
         execution_id: str | None = None,
+        observed_target_reference: str | None = None,
+        observed_rollback_reference: str | None = None,
     ) -> ExternalActionOperation:
         """Resolve an ambiguous transition after independent provider verification."""
 
@@ -197,18 +199,31 @@ class PromotionExecutionService:
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Promotion is not awaiting reconciliation")
         if not promoted:
-            if execution_id is not None:
-                raise ValueError("execution_id must be omitted when no promotion occurred")
+            if any(
+                value is not None
+                for value in (
+                    execution_id,
+                    observed_target_reference,
+                    observed_rollback_reference,
+                )
+            ):
+                raise ValueError(
+                    "execution evidence must be omitted when no promotion occurred"
+                )
             return self._external_actions.resolve_reconciliation(
                 operation_id, confirmed_succeeded=False
             )
         if execution_id is None:
             raise ValueError("confirmed promotion requires execution_id")
         plan = _plan_from_payload(operation.payload)
+        if observed_target_reference is None or observed_rollback_reference is None:
+            raise ValueError("confirmed promotion requires observed transition references")
+        plan.verify_target_reference(observed_target_reference)
+        plan.verify_rollback_reference(observed_rollback_reference)
         result = PromotionExecutionResult(
             execution_id=execution_id,
-            target_reference=plan.target_reference,
-            rollback_reference=plan.rollback_reference,
+            target_reference=observed_target_reference,
+            rollback_reference=observed_rollback_reference,
         )
         return self._external_actions.resolve_reconciliation(
             operation_id,
