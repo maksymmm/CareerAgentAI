@@ -20,6 +20,10 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
 _ACTION_TYPE = "release.promote.dry-run"
 
 
+class PromotionPreExecutionError(RuntimeError):
+    """Signal a provider failure known to have happened before any external effect."""
+
+
 @dataclass(frozen=True, slots=True)
 class PromotionExecutionResult:
     """Validated outcome returned by a promotion execution adapter."""
@@ -110,11 +114,18 @@ class _PromotionActionAdapter:
         if action_type != _ACTION_TYPE:
             raise ValueError("unsupported promotion action type")
         plan = _plan_from_payload(payload)
-        result = self._adapter.promote(
-            operation_id,
-            target_reference=plan.target_reference,
-            rollback_reference=plan.rollback_reference,
-        )
+        try:
+            result = self._adapter.promote(
+                operation_id,
+                target_reference=plan.target_reference,
+                rollback_reference=plan.rollback_reference,
+            )
+        except (PromotionPreExecutionError, AmbiguousExternalActionError):
+            raise
+        except Exception as exc:
+            raise AmbiguousExternalActionError(
+                "Promotion provider raised after execution may have started."
+            ) from exc
         if not isinstance(result, PromotionExecutionResult):
             raise AmbiguousExternalActionError(
                 "Promotion provider returned a malformed result."
@@ -196,8 +207,6 @@ class PromotionExecutionService:
             operation = self._external_actions.execute(
                 operation_id, human_approved=True
             )
-        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
-            raise ValueError("Promotion is not awaiting reconciliation")
         if not promoted:
             if any(
                 value is not None
@@ -210,6 +219,10 @@ class PromotionExecutionService:
                 raise ValueError(
                     "execution evidence must be omitted when no promotion occurred"
                 )
+            if operation.status == ExternalActionStatus.PREPARED:
+                return operation
+            if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+                raise ValueError("Promotion is not awaiting reconciliation")
             return self._external_actions.resolve_reconciliation(
                 operation_id, confirmed_succeeded=False
             )
@@ -225,6 +238,14 @@ class PromotionExecutionService:
             target_reference=observed_target_reference,
             rollback_reference=observed_rollback_reference,
         )
+        if operation.status == ExternalActionStatus.SUCCEEDED:
+            if operation.result is None or dict(operation.result) != result.as_dict():
+                raise ValueError(
+                    "Persisted promotion result does not match reconciliation evidence"
+                )
+            return operation
+        if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            raise ValueError("Promotion is not awaiting reconciliation")
         return self._external_actions.resolve_reconciliation(
             operation_id,
             confirmed_succeeded=True,
