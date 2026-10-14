@@ -357,6 +357,11 @@ and pulls the resulting manifest back by its registry digest. The evidence bundl
 the exact registry reference, canonical provenance and publication receipt and verifies
 their checksums. The registry is destroyed at the end of the job; no external registry,
 credential, production environment or deployment is contacted.
+The release API can additionally produce a canonical dry-run promotion plan from that
+receipt. It revalidates the manifest, provenance, receipt and trusted repository before
+binding the new digest to a distinct immutable current digest for rollback. Exact-match
+guards reject target or rollback substitution. The plan is deliberately non-production
+and non-executable: it has no registry, orchestrator or deployment adapter.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the

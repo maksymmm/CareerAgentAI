@@ -10,6 +10,10 @@ from career_agent_ai.application.release.registry_publication import (
     RegistryPublicationReceipt,
     create_registry_publication_receipt,
 )
+from career_agent_ai.application.release.promotion_plan import (
+    DryRunPromotionPlan,
+    create_dry_run_promotion_plan,
+)
 
 __all__ = [
     "PromotionManifest",
@@ -18,4 +22,6 @@ __all__ = [
     "RegistryPublicationReceipt",
     "ProvenanceStatement",
     "create_registry_publication_receipt",
+    "DryRunPromotionPlan",
+    "create_dry_run_promotion_plan",
 ]

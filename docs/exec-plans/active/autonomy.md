@@ -505,6 +505,15 @@ deployment is used. The next isolated promotion priority is a dry-run promotion/
 plan that accepts only this revalidated receipt and preserves the prior digest as the
 rollback target.
 
+Delivered in the dry-run promotion-plan unit: a canonical non-production,
+non-executable plan revalidates the manifest, provenance and publication receipt before
+binding its exact digest-only promotion target to a distinct immutable rollback target
+in the same trusted repository. Exact-match guards reject either target being
+substituted. No registry, orchestrator, credentials or deployment adapter is present.
+The next isolated promotion priority is a provider-neutral execution port with explicit
+human approval, idempotency and uncertain-outcome reconciliation, initially backed only
+by an in-memory fake.
+
 ## 11. Candidate-outcome adaptive ranking
 
 Status: **IN PROGRESS**
