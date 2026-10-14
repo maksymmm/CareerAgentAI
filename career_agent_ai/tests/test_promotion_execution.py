@@ -13,6 +13,7 @@ from career_agent_ai.application.release import (
     DryRunPromotionPlan,
     PromotionExecutionResult,
     PromotionExecutionService,
+    PromotionPreExecutionError,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_external_action_repository import (
@@ -118,6 +119,21 @@ class MalformedAdapter:
         return {"execution_id": "not-a-typed-result"}
 
 
+class RaisingAdapter:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def promote(
+        self,
+        operation_id: str,
+        *,
+        target_reference: str,
+        rollback_reference: str,
+    ) -> PromotionExecutionResult:
+        del operation_id, target_reference, rollback_reference
+        raise self.error
+
+
 def test_mismatched_provider_result_requires_reconciliation_and_is_not_retried():
     service, repository = _service(SQLiteDatabase(), MismatchedAdapter())
 
@@ -139,6 +155,35 @@ def test_malformed_provider_result_requires_reconciliation():
     operation = repository.get("promote:malformed")
     assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert "malformed result" in operation.error
+
+
+def test_uncertain_provider_exception_requires_reconciliation():
+    service, repository = _service(
+        SQLiteDatabase(), RaisingAdapter(TimeoutError("response lost"))
+    )
+
+    assert service.execute(
+        "promote:timeout", plan=_plan(), human_approved=True
+    ) is None
+
+    operation = repository.get("promote:timeout")
+    assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert "may have started" in operation.error
+
+
+def test_explicit_pre_execution_failure_is_definite():
+    service, repository = _service(
+        SQLiteDatabase(),
+        RaisingAdapter(PromotionPreExecutionError("provider unavailable")),
+    )
+
+    assert service.execute(
+        "promote:pre-failure", plan=_plan(), human_approved=True
+    ) is None
+
+    operation = repository.get("promote:pre-failure")
+    assert operation.status == ExternalActionStatus.FAILED
+    assert operation.error == "provider unavailable"
 
 
 def test_restart_converts_in_progress_transition_to_reconciliation(tmp_path):
@@ -190,6 +235,24 @@ def test_reconciliation_can_confirm_exact_success():
     }
     assert repository.get("promote:reconcile") == resolved
 
+    replay = service.resolve_reconciliation(
+        "promote:reconcile",
+        promoted=True,
+        execution_id="provider:verified-1",
+        observed_target_reference=TARGET,
+        observed_rollback_reference=ROLLBACK,
+    )
+    assert replay == resolved
+
+    with pytest.raises(ValueError, match="does not match"):
+        service.resolve_reconciliation(
+            "promote:reconcile",
+            promoted=True,
+            execution_id="provider:different",
+            observed_target_reference=TARGET,
+            observed_rollback_reference=ROLLBACK,
+        )
+
 
 def test_reconciliation_no_effect_returns_to_prepared_without_execution_id():
     service, _ = _service(SQLiteDatabase(), MismatchedAdapter())
@@ -200,6 +263,9 @@ def test_reconciliation_no_effect_returns_to_prepared_without_execution_id():
     )
 
     assert reopened.status == ExternalActionStatus.PREPARED
+    assert service.resolve_reconciliation(
+        "promote:no-effect", promoted=False
+    ) == reopened
 
 
 def test_reconciliation_rejects_tampered_durable_plan_checksum():
