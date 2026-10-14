@@ -519,7 +519,9 @@ an external-action intent before execution, literal human approval is required, 
 operation ID suppresses duplicate execution, and restart or provider-result mismatch
 moves the transition to reconciliation rather than retrying. Independent reconciliation
 can confirm the exact durable outcome or safely return a verified no-effect operation to
-prepared state. The only adapter is deterministic, in-memory and no-I/O. The next
+prepared state. A success requires independently observed target and rollback references
+that exactly match the durable plan. The only adapter is deterministic, in-memory and
+no-I/O. The next
 isolated priority is an authenticated candidate/operator approval projection for this
 release action; no real orchestrator adapter or deployment credential may be added yet.
 
