@@ -28,6 +28,9 @@ def _application(
     user_id: str,
     company_id: str,
     outcomes: tuple[JobApplicationStatus, ...],
+    *,
+    job_title: str = "",
+    job_skills: tuple[str, ...] = (),
 ) -> JobApplication:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     result = JobApplication(
@@ -35,6 +38,8 @@ def _application(
         user_id=user_id,
         job_id=f"historic-{application_id}",
         company_id=company_id,
+        job_title=job_title,
+        job_skills=job_skills,
         status=JobApplicationStatus.SAVED,
         created_at=now,
         updated_at=now,
@@ -210,6 +215,114 @@ def test_history_is_tenant_isolated_and_non_outcomes_remain_neutral():
 
     assert result.evidence_count == 0
     assert result.outcome_adjustment == 0.0
+
+
+def test_repeated_role_and_skill_outcomes_transfer_across_employers():
+    repository = InMemoryJobApplicationRepository()
+    for index in range(2):
+        repository.add(
+            _application(
+                f"python-{index}",
+                "candidate",
+                f"historic-{index}",
+                (JobApplicationStatus.APPLIED, JobApplicationStatus.INTERVIEW),
+                job_title="Backend Engineer",
+                job_skills=("python",),
+            )
+        )
+
+    result = AdaptiveJobRanker(repository).rank(
+        "candidate",
+        (_job("new", "new-company"),),
+        JobFilter(keyword="Python backend"),
+    )[0]
+
+    assert result.evidence_count == 2
+    assert result.outcome_adjustment > 0
+    assert "role, or skill" in result.reason
+
+
+def test_single_attribute_outcome_is_ignored_to_limit_feedback_bias():
+    repository = InMemoryJobApplicationRepository()
+    repository.add(
+        _application(
+            "single",
+            "candidate",
+            "historic",
+            (
+                JobApplicationStatus.APPLIED,
+                JobApplicationStatus.INTERVIEW,
+                JobApplicationStatus.OFFER,
+            ),
+            job_title="Python Engineer",
+            job_skills=("python",),
+        )
+    )
+
+    result = AdaptiveJobRanker(repository).rank(
+        "candidate", (_job("new", "new-company"),), JobFilter(keyword="Python")
+    )[0]
+
+    assert result.evidence_count == 0
+    assert result.outcome_adjustment > 0
+    assert "exploration" in result.reason
+
+
+def test_unseen_attributes_receive_only_small_bounded_exploration():
+    repository = InMemoryJobApplicationRepository()
+    for index in range(2):
+        repository.add(
+            _application(
+                f"java-{index}", "candidate", f"historic-{index}",
+                (JobApplicationStatus.APPLIED, JobApplicationStatus.REJECTED),
+                job_title="Java Engineer", job_skills=("java",),
+            )
+        )
+
+    result = AdaptiveJobRanker(repository).rank(
+        "candidate", (_job("python", "new-company"),), JobFilter(keyword="Python")
+    )[0]
+
+    cap = max(abs(result.relevance_score) * 0.1, 0.01)
+    assert result.outcome_adjustment == pytest.approx(cap * 0.1)
+    assert result.evidence_count == 0
+    assert "exploration" in result.reason
+
+
+def test_attribute_evidence_deduplicates_one_application_matching_multiple_terms():
+    repository = InMemoryJobApplicationRepository()
+    for index in range(2):
+        repository.add(
+            _application(
+                f"multi-{index}", "candidate", f"historic-{index}",
+                (JobApplicationStatus.APPLIED, JobApplicationStatus.INTERVIEW),
+                job_title="Python Backend", job_skills=("python", "backend"),
+            )
+        )
+
+    result = AdaptiveJobRanker(repository).rank(
+        "candidate", (_job("new", "new-company"),), JobFilter(keyword="Python backend")
+    )[0]
+
+    assert result.evidence_count == 2
+
+
+def test_same_application_is_not_counted_twice_for_employer_and_attributes():
+    repository = InMemoryJobApplicationRepository()
+    for index in range(2):
+        repository.add(
+            _application(
+                f"same-{index}", "candidate", "same-company",
+                (JobApplicationStatus.APPLIED, JobApplicationStatus.INTERVIEW),
+                job_title="Python Backend", job_skills=("python",),
+            )
+        )
+
+    result = AdaptiveJobRanker(repository).rank(
+        "candidate", (_job("new", "same-company"),), JobFilter(keyword="Python")
+    )[0]
+
+    assert result.evidence_count == 2
 
 
 @pytest.mark.parametrize("user_id", ["", "   ", None, 7])

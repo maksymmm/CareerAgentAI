@@ -841,6 +841,8 @@ class AutonomousCareerLoop:
                 user_id=state.request.user_id,
                 job_id=state.selected_job_id,
                 company_id=state.selected_company_id or "",
+                job_title=state.selected_job_title or "",
+                job_skills=AdaptiveJobRanker.attribute_terms(state.request.keyword),
                 status=JobApplicationStatus.SAVED,
                 created_at=state.created_at.astimezone(timezone.utc),
                 updated_at=state.created_at.astimezone(timezone.utc),

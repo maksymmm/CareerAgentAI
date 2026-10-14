@@ -51,7 +51,12 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
             or application.version != expected_version + 1
         ):
             raise ApplicationConflictError("Application is missing or has changed.")
-        if application.user_id != current.user_id or application.job_id != current.job_id:
+        if (
+            application.user_id != current.user_id
+            or application.job_id != current.job_id
+            or application.job_title != current.job_title
+            or application.job_skills != current.job_skills
+        ):
             raise ApplicationConflictError("Application identity cannot be changed.")
         if application.created_at != current.created_at:
             raise ApplicationConflictError("Application created_at cannot be changed.")
@@ -158,6 +163,8 @@ class InMemoryJobApplicationRepository(JobApplicationRepository):
         if (
             application.user_id != current.user_id
             or application.job_id != current.job_id
+            or application.job_title != current.job_title
+            or application.job_skills != current.job_skills
             or application.created_at != current.created_at
         ):
             raise ApplicationConflictError("Application identity cannot be changed.")

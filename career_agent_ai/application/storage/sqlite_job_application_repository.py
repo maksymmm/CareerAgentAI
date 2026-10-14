@@ -36,8 +36,9 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             connection.execute(
                 """INSERT INTO job_applications (
                        application_id, user_id, job_id, company_id, status,
-                       created_at, updated_at, version, serialization_version
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       created_at, updated_at, version, serialization_version,
+                       job_title, job_skills_json
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 self._application_values(application),
             )
             self._insert_children(application)
@@ -56,7 +57,8 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         normalized = self._required_filter(application_id, "application_id")
         row = self._database.connection.execute(
             """SELECT application_id, user_id, job_id, company_id, status,
-                      created_at, updated_at, version, serialization_version
+                      created_at, updated_at, version, serialization_version,
+                      job_title, job_skills_json
                FROM job_applications WHERE application_id = ?""",
             (normalized,),
         ).fetchone()
@@ -75,7 +77,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             connection.execute("BEGIN")
             current = connection.execute(
                 """SELECT user_id, job_id, created_at, version,
-                          submission_claim_operation_id
+                          submission_claim_operation_id, job_title, job_skills_json
                    FROM job_applications WHERE application_id = ?""",
                 (application.application_id,),
             ).fetchone()
@@ -85,7 +87,12 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 raise ApplicationConflictError(
                     "Application is reserved for an in-flight submission."
                 )
-            if application.user_id != current[0] or application.job_id != current[1]:
+            if (
+                application.user_id != current[0]
+                or application.job_id != current[1]
+                or application.job_title != current[5]
+                or application.job_skills != self._load_skills(current[6])
+            ):
                 raise ApplicationConflictError("Application identity cannot be changed.")
             try:
                 persisted_created_at = datetime.fromisoformat(current[2])
@@ -147,7 +154,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         rows = self._database.connection.execute(
             """SELECT a.application_id, a.user_id, a.job_id, a.company_id,
                       a.status, a.created_at, a.updated_at, a.version,
-                      a.serialization_version
+                      a.serialization_version, a.job_title, a.job_skills_json
                FROM job_applications a""" + join + where,
             tuple(parameters),
         ).fetchall()
@@ -291,7 +298,8 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
                 """SELECT user_id, job_id, created_at, status, version,
-                          submission_claim_operation_id, submission_claim_owner_id
+                          submission_claim_operation_id, submission_claim_owner_id,
+                          job_title, job_skills_json
                    FROM job_applications WHERE application_id = ?""",
                 (application.application_id,),
             ).fetchone()
@@ -305,7 +313,12 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 raise ApplicationConflictError(
                     "Application changed or lost its submission claim."
                 )
-            if application.user_id != current[0] or application.job_id != current[1]:
+            if (
+                application.user_id != current[0]
+                or application.job_id != current[1]
+                or application.job_title != current[7]
+                or application.job_skills != self._load_skills(current[8])
+            ):
                 raise ApplicationConflictError("Application identity cannot be changed.")
             try:
                 persisted_created_at = datetime.fromisoformat(current[2])
@@ -406,6 +419,7 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 application_id=row[0], user_id=row[1], job_id=row[2], company_id=row[3],
                 status=JobApplicationStatus(row[4]), created_at=datetime.fromisoformat(row[5]),
                 updated_at=datetime.fromisoformat(row[6]), version=row[7],
+                job_title=row[9], job_skills=self._load_skills(row[10]),
                 external_action_operation_ids=tuple(item[0] for item in operation_rows),
                 timeline=events,
             )
@@ -440,6 +454,8 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 serialization_version INTEGER NOT NULL,
                 submission_claim_operation_id TEXT,
                 submission_claim_owner_id TEXT,
+                job_title TEXT NOT NULL DEFAULT '',
+                job_skills_json TEXT NOT NULL DEFAULT '[]',
                 UNIQUE(user_id, job_id)
             );
             CREATE INDEX IF NOT EXISTS idx_applications_user_status
@@ -481,6 +497,15 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 """UPDATE job_applications
                    SET submission_claim_owner_id = submission_claim_operation_id
                    WHERE submission_claim_operation_id IS NOT NULL"""
+            )
+        if "job_title" not in application_columns:
+            connection.execute(
+                "ALTER TABLE job_applications ADD COLUMN job_title TEXT NOT NULL DEFAULT ''"
+            )
+        if "job_skills_json" not in application_columns:
+            connection.execute(
+                "ALTER TABLE job_applications "
+                "ADD COLUMN job_skills_json TEXT NOT NULL DEFAULT '[]'"
             )
         connection.execute(
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_application_submission_claim
@@ -531,7 +556,16 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
             application.application_id, application.user_id, application.job_id,
             application.company_id, application.status.value, cls._timestamp(application.created_at),
             cls._timestamp(application.updated_at), application.version, cls.SERIALIZATION_VERSION,
+            application.job_title,
+            json.dumps(application.job_skills, ensure_ascii=False, separators=(",", ":")),
         )
+
+    @classmethod
+    def _load_skills(cls, value: Any) -> tuple[str, ...]:
+        skills = json.loads(value, parse_constant=cls._reject_constant)
+        if not isinstance(skills, list):
+            raise ValueError("Persisted job skills must contain a JSON array.")
+        return tuple(skills)
 
     @staticmethod
     def _timestamp(value: datetime) -> str:
