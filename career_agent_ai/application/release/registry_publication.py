@@ -206,6 +206,11 @@ def _parse_registry_reference(value: str, label: str) -> re.Match[str]:
     if len(match.group("repository_path")) > 255:
         raise PromotionManifestError(f"{label} repository exceeds 255 characters")
     host = match.group("host")
+    repository_path = match.group("repository_path")
+    if host.lower() == "index.docker.io":
+        raise PromotionManifestError(f"{label} uses a noncanonical Docker Hub host")
+    if host.lower() == "docker.io" and "/" not in repository_path:
+        raise PromotionManifestError(f"{label} must include the Docker Hub library namespace")
     if host.startswith("["):
         try:
             ipaddress.IPv6Address(host[1:-1])
