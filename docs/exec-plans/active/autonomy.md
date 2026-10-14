@@ -514,6 +514,15 @@ The next isolated promotion priority is a provider-neutral execution port with e
 human approval, idempotency and uncertain-outcome reconciliation, initially backed only
 by an in-memory fake.
 
+Delivered in the promotion execution-port unit: the exact dry-run plan is persisted as
+an external-action intent before execution, literal human approval is required, a stable
+operation ID suppresses duplicate execution, and restart or provider-result mismatch
+moves the transition to reconciliation rather than retrying. Independent reconciliation
+can confirm the exact durable outcome or safely return a verified no-effect operation to
+prepared state. The only adapter is deterministic, in-memory and no-I/O. The next
+isolated priority is an authenticated candidate/operator approval projection for this
+release action; no real orchestrator adapter or deployment credential may be added yet.
+
 ## 11. Candidate-outcome adaptive ranking
 
 Status: **IN PROGRESS**
