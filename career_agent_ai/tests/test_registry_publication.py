@@ -130,8 +130,29 @@ def test_receipt_accepts_bracketed_ipv6_registry_host():
     assert receipt.registry_reference == reference
 
 
+def test_receipt_applies_length_limit_to_path_not_registry_host():
+    host = ".".join(("a" * 63, "b" * 63, "c" * 63, "d" * 61))
+    repository = f"{host}/abc"
+    reference = repository + "@" + DIGEST
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+    receipt = create_registry_publication_receipt(
+        _manifest(), registry_reference=reference,
+        expected_repository=repository, provenance_json=provenance.to_json(),
+    )
+
+    assert receipt.registry_reference == reference
+
+
+def test_receipt_rejects_ipv4_embedded_ipv6_registry_host():
+    reference = "[::ffff:192.0.2.1]/team/image@" + DIGEST
+
+    with pytest.raises(PromotionManifestError, match="immutable SHA-256"):
+        ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+
 def test_receipt_rejects_repository_longer_than_distribution_limit():
-    repository = "ghcr.io/team/" + "a" * 244
+    repository = "ghcr.io/team/" + "a" * 251
     reference = repository + "@" + DIGEST
     with pytest.raises(PromotionManifestError, match="255"):
         ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
