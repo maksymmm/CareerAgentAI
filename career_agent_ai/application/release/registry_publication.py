@@ -41,6 +41,8 @@ class ProvenanceStatement:
         _parse_registry_reference(self.subject_reference, "provenance subject")
 
     def to_json(self) -> str:
+        """Serialize the provenance statement as canonical newline-terminated JSON."""
+
         return json.dumps(
             {
                 "schema_version": self.schema_version,
@@ -53,6 +55,8 @@ class ProvenanceStatement:
 
     @classmethod
     def from_json(cls, value: str) -> "ProvenanceStatement":
+        """Parse and validate an exact canonical provenance JSON document."""
+
         try:
             payload = json.loads(value, object_pairs_hook=_reject_duplicate_keys)
         except (json.JSONDecodeError, TypeError) as exc:
@@ -110,6 +114,8 @@ class RegistryPublicationReceipt:
             )
 
     def to_json(self) -> str:
+        """Serialize the publication receipt as canonical newline-terminated JSON."""
+
         payload = {
             "environment": self.environment,
             "promotion_manifest_sha256": self.promotion_manifest_sha256,
@@ -129,6 +135,8 @@ class RegistryPublicationReceipt:
         expected_repository: str,
         provenance_json: str,
     ) -> "RegistryPublicationReceipt":
+        """Parse a canonical receipt and revalidate it against trusted evidence."""
+
         try:
             payload = json.loads(value, object_pairs_hook=_reject_duplicate_keys)
         except (json.JSONDecodeError, TypeError) as exc:
