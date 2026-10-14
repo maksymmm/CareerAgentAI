@@ -211,4 +211,13 @@ def _parse_registry_reference(value: str, label: str) -> re.Match[str]:
             ipaddress.IPv6Address(host[1:-1])
         except ipaddress.AddressValueError as exc:
             raise PromotionManifestError(f"{label} contains an invalid IPv6 host") from exc
+    else:
+        repository_suffix = match.group("repository")[len(host):]
+        if (
+            "." not in host
+            and host != "localhost"
+            and host == host.lower()
+            and not repository_suffix.startswith(":")
+        ):
+            raise PromotionManifestError(f"{label} contains an ambiguous registry host")
     return match
