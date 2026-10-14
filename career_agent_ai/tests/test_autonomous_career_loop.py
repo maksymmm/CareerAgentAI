@@ -373,6 +373,7 @@ def test_search_skips_progressed_job_before_adaptive_selection(tmp_path):
         description="Warehouse logistics coordination",
         created_at=START,
     )
+    object.__setattr__(old, "job_id", "job-1 ")
     result = SimpleNamespace(success=True, metadata={"jobs": (old, fresh)})
     loop._agents = SimpleNamespace(
         resolve=lambda _: SimpleNamespace(execute=lambda __: result)
@@ -383,6 +384,69 @@ def test_search_skips_progressed_job_before_adaptive_selection(tmp_path):
 
     assert state.selected_job_id == "job-2"
     assert state.selected_job_evidence_count == 0
+    database.close()
+
+
+def test_search_continues_to_next_page_when_first_page_is_progressed(tmp_path):
+    database, loop, applications, *_ = build_stack(
+        str(tmp_path / "next-discovery-page.sqlite"), max_iterations=1
+    )
+    applications.add(
+        JobApplication(
+            application_id="progressed-page-one",
+            user_id="user-1",
+            job_id="job-1",
+            company_id="company-1",
+            status=JobApplicationStatus.SAVED,
+            created_at=CREATED,
+            updated_at=CREATED,
+        ).transition(
+            JobApplicationStatus.APPLIED,
+            occurred_at=CREATED + timedelta(minutes=1),
+        )
+    )
+    old = Job.create(
+        job_id="job-1",
+        title="Logistics Coordinator",
+        company=Company("company-1", "Acme Logistics"),
+        location=Location("Germany", "Karlsruhe"),
+        description="Warehouse logistics coordination",
+        created_at=START,
+    )
+    fresh = Job.create(
+        job_id="job-2",
+        title="Logistics Specialist",
+        company=Company("company-2", "Fresh Logistics"),
+        location=Location("Germany", "Karlsruhe"),
+        description="Logistics coordination",
+        created_at=START,
+    )
+    pages: list[int] = []
+
+    def execute(context):
+        page = context.payload["page"]
+        pages.append(page)
+        return SimpleNamespace(
+            success=True,
+            metadata={
+                "jobs": (old,) if page == 1 else (fresh,),
+                "page": page,
+                "page_size": 1,
+                "total": 2,
+            },
+        )
+
+    loop._agents = SimpleNamespace(
+        resolve=lambda _: SimpleNamespace(execute=execute)
+    )
+    state = CareerLoopState(
+        run_id="next-discovery-page", request=request(with_schedule=False)
+    )
+
+    loop._search(state)
+
+    assert pages == [1, 2]
+    assert state.selected_job_id == "job-2"
     database.close()
 
 

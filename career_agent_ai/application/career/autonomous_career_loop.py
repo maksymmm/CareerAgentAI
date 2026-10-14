@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from datetime import timezone
 from hashlib import sha256
 from threading import Event, Thread
@@ -168,6 +169,7 @@ class AutonomousCareerLoop:
     """Connect career discovery through interview coordination with durable gates."""
 
     DEFAULT_MAX_ITERATIONS = 16
+    MAX_DISCOVERY_PAGES = 10
     EXECUTION_LEASE_SECONDS = 900
     EXECUTION_HEARTBEAT_SECONDS = 60
     POST_EFFECT_RECOVERY_PHASES = frozenset({
@@ -689,30 +691,47 @@ class AutonomousCareerLoop:
             raise RuntimeError(f"Unsupported autonomous-loop phase: {state.phase.value}")
 
     def _search(self, state: CareerLoopState) -> None:
-        context = self._context(
-            state,
-            {
-                "keyword": state.request.keyword,
-                "location": state.request.location,
-                "page_size": 20,
-            },
-        )
-        result = self._agents.resolve("job_search").execute(context)
-        if not result.success:
-            raise RuntimeError("Job discovery failed.")
-        jobs = result.metadata.get("jobs", ())
-        if not isinstance(jobs, (tuple, list)) or not jobs:
-            raise RuntimeError("Job discovery returned no opportunities.")
         progressed_job_ids = {
             application.job_id
             for application in self._applications.list(state.request.user_id)
             if application.status is not JobApplicationStatus.SAVED
         }
-        eligible_jobs = tuple(
-            job
-            for job in jobs
-            if getattr(job, "job_id", None) not in progressed_job_ids
-        )
+        search_agent = self._agents.resolve("job_search")
+        eligible_jobs: tuple[Any, ...] = ()
+        saw_jobs = False
+        for page in range(1, self.MAX_DISCOVERY_PAGES + 1):
+            context = self._context(
+                state,
+                {
+                    "keyword": state.request.keyword,
+                    "location": state.request.location,
+                    "page": page,
+                    "page_size": 20,
+                },
+            )
+            result = search_agent.execute(context)
+            if not result.success:
+                raise RuntimeError("Job discovery failed.")
+            jobs = result.metadata.get("jobs", ())
+            if not isinstance(jobs, (tuple, list)):
+                raise RuntimeError("Job discovery returned malformed opportunities.")
+            saw_jobs = saw_jobs or bool(jobs)
+            eligible: list[Any] = []
+            for job in jobs:
+                raw_job_id = getattr(job, "job_id", None)
+                if not isinstance(raw_job_id, str):
+                    continue
+                try:
+                    normalized_job_id = self._external_identifier(raw_job_id, "job_id")
+                except (TypeError, ValueError):
+                    continue
+                if normalized_job_id not in progressed_job_ids:
+                    eligible.append(job)
+            eligible_jobs = tuple(eligible)
+            if eligible_jobs or not self._has_next_search_page(result.metadata, page):
+                break
+        if not saw_jobs:
+            raise RuntimeError("Job discovery returned no opportunities.")
         if not eligible_jobs:
             raise RuntimeError(
                 "Job discovery returned no unprogressed opportunities; "
@@ -749,6 +768,20 @@ class AutonomousCareerLoop:
         state.selected_job_evidence_count = selection.evidence_count
         state.selected_job_decision_reason = selection.reason
         state.phase = CareerLoopPhase.DECISION
+
+    @staticmethod
+    def _has_next_search_page(metadata: Any, current_page: int) -> bool:
+        if not isinstance(metadata, Mapping):
+            return False
+        total = metadata.get("total")
+        page_size = metadata.get("page_size")
+        page = metadata.get("page", current_page)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 1
+            for value in (total, page_size, page)
+        ):
+            return False
+        return page * page_size < total
 
     def _decide(self, state: CareerLoopState) -> None:
         decision = self._decision_engine.next_action(
