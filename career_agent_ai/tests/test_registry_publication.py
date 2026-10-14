@@ -167,6 +167,30 @@ def test_receipt_rejects_ambiguous_lowercase_single_label_registry_host():
         ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
 
 
+@pytest.mark.parametrize("repository,error", [
+    ("docker.io/ubuntu", "library namespace"),
+    ("index.docker.io/library/ubuntu", "noncanonical Docker Hub host"),
+])
+def test_receipt_rejects_docker_hub_aliases(repository, error):
+    reference = repository + "@" + DIGEST
+
+    with pytest.raises(PromotionManifestError, match=error):
+        ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+
+def test_receipt_accepts_canonical_docker_hub_library_reference():
+    repository = "docker.io/library/ubuntu"
+    reference = repository + "@" + DIGEST
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+    receipt = create_registry_publication_receipt(
+        _manifest(), registry_reference=reference,
+        expected_repository=repository, provenance_json=provenance.to_json(),
+    )
+
+    assert receipt.registry_reference == reference
+
+
 def test_receipt_applies_length_limit_to_path_not_registry_host():
     host = ".".join(("a" * 63, "b" * 63, "c" * 63, "d" * 61))
     repository = f"{host}/abc"
