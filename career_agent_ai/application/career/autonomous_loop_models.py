@@ -170,6 +170,11 @@ class CareerLoopState:
     selected_job_title: str | None = None
     selected_company: str | None = None
     selected_company_id: str | None = None
+    selected_job_relevance_score: float | None = None
+    selected_job_outcome_adjustment: float | None = None
+    selected_job_score: float | None = None
+    selected_job_evidence_count: int = 0
+    selected_job_decision_reason: str | None = None
     application_id: str | None = None
     application_artifact_content: str | None = None
     application_artifact_sha256: str | None = None

@@ -109,6 +109,9 @@ adjustment is confidence-shrunk for sparse history and strictly bounded so histo
 feedback cannot overwhelm current job relevance. Every result exposes the baseline,
 adjustment, evidence count, and plain-language reason; another candidate's history is
 never consulted. Saved, merely applied, and withdrawn records remain neutral.
+The restart-safe autonomous loop uses this scorer during discovery and persists the
+baseline, bounded adjustment, final score, evidence count, and explanation with the
+selected vacancy so a resumed process can audit the original decision.
 
 ---
 
