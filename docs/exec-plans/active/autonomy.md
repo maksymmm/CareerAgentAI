@@ -502,7 +502,7 @@ Acceptance criteria:
 - [x] Preserve tenant isolation and expose an explanation for every adjustment.
 - [x] Cover positive, negative, sparse, historical-funnel, and isolation behavior.
 - [x] Feed the adaptive scorer into the durable autonomous-loop discovery phase.
-- [ ] Extend learning from employer outcomes to role/skill attributes with bias and
+- [x] Extend learning from employer outcomes to role/skill attributes with bias and
   exploration guardrails.
 
 Delivered in the first unit: `AdaptiveJobRanker` composes the existing relevance
@@ -511,5 +511,8 @@ when the application later ends in rejection, ignores non-outcome states, applie
 confidence shrinkage, and caps the adjustment so current relevance remains
 authoritative. The autonomous discovery phase now persists the baseline, adjustment,
 final score, evidence count, and explanation beside the selected job, preserving the
-decision across restart. The next unit extends learning to role and skill attributes
-with explicit bias and exploration guardrails.
+decision across restart. Tracked applications retain normalized role/requested-skill
+attributes, and repeated outcomes transfer safely across employers. Attribute evidence
+requires two applications, each application counts once even when multiple attributes
+match, the relevance-relative cap still applies, and a small bounded exploration bonus
+prevents unseen attributes from being permanently excluded.

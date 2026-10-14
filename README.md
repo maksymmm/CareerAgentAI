@@ -112,6 +112,12 @@ never consulted. Saved, merely applied, and withdrawn records remain neutral.
 The restart-safe autonomous loop uses this scorer during discovery and persists the
 baseline, bounded adjustment, final score, evidence count, and explanation with the
 selected vacancy so a resumed process can audit the original decision.
+New tracked applications also retain normalized role and requested-skill attributes.
+Repeated outcomes for those attributes can transfer learning across employers, but a
+single result is ignored as attribute evidence, duplicate matches from one application
+count once, and the existing relevance-relative cap remains authoritative. A small
+bounded exploration bonus gives unseen attributes a chance to collect evidence instead
+of permanently reinforcing the first observed outcome.
 
 ---
 

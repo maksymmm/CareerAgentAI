@@ -42,6 +42,8 @@ class JobApplication:
     job_id: str
     status: JobApplicationStatus
     company_id: str = ""
+    job_title: str = ""
+    job_skills: tuple[str, ...] = ()
     external_action_operation_ids: tuple[str, ...] = ()
     timeline: tuple["ApplicationTimelineEvent", ...] = ()
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -59,6 +61,21 @@ class JobApplication:
         if not isinstance(self.company_id, str) or len(self.company_id.strip()) > 200:
             raise ValueError("company_id must be a string of at most 200 characters.")
         object.__setattr__(self, "company_id", self.company_id.strip())
+        if not isinstance(self.job_title, str) or len(self.job_title.strip()) > 500:
+            raise ValueError("job_title must be a string of at most 500 characters.")
+        object.__setattr__(self, "job_title", self.job_title.strip())
+        skills = tuple(self.job_skills)
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value.strip()) > 100
+            for value in skills
+        ):
+            raise ValueError("job_skills must contain non-empty strings of at most 100 characters.")
+        normalized_skills = tuple(dict.fromkeys(value.strip().casefold() for value in skills))
+        if len(normalized_skills) > 50:
+            raise ValueError("job_skills must contain at most 50 unique values.")
+        object.__setattr__(self, "job_skills", normalized_skills)
         if not isinstance(self.status, JobApplicationStatus):
             raise ValueError("status must be a JobApplicationStatus.")
         if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:

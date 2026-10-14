@@ -61,6 +61,38 @@ def test_create_transition_and_restart_recovery(tmp_path):
     reopened.close()
 
 
+def test_role_and_skill_attributes_survive_restart(tmp_path):
+    path = str(tmp_path / "application-attributes.db")
+    database = SQLiteDatabase(path)
+    repository = SQLiteJobApplicationRepository(database)
+    item = replace(
+        application(), job_title="Backend Engineer", job_skills=("Python", "SQL")
+    )
+    repository.add(item)
+    database.close()
+
+    reopened = SQLiteDatabase(path)
+    recovered = SQLiteJobApplicationRepository(reopened).get("app-1")
+
+    assert recovered == item
+    assert recovered is not None
+    assert recovered.job_skills == ("python", "sql")
+    reopened.close()
+
+
+def test_malformed_persisted_job_attributes_are_rejected():
+    database = SQLiteDatabase()
+    repository = SQLiteJobApplicationRepository(database)
+    repository.add(application())
+    database.connection.execute(
+        "UPDATE job_applications SET job_skills_json = '{}' WHERE application_id = 'app-1'"
+    )
+    database.connection.commit()
+
+    with pytest.raises(ValueError, match="Persisted job application is malformed"):
+        repository.get("app-1")
+
+
 @pytest.mark.parametrize("repository_factory", [InMemoryJobApplicationRepository, lambda: SQLiteJobApplicationRepository(SQLiteDatabase())])
 def test_duplicate_id_and_user_job_are_prevented(repository_factory):
     repository = repository_factory()
