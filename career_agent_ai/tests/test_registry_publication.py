@@ -45,7 +45,13 @@ def test_receipt_binds_source_registry_manifest_and_provenance():
     assert receipt.promotion_manifest_sha256 == "sha256:" + hashlib.sha256(
         _manifest().to_json().encode("ascii")
     ).hexdigest()
-    assert RegistryPublicationReceipt.from_json(receipt.to_json()) == receipt
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=REFERENCE)
+    assert RegistryPublicationReceipt.from_json(
+        receipt.to_json(),
+        manifest=_manifest(),
+        expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+        provenance_json=provenance.to_json(),
+    ) == receipt
     receipt.verify_deployment_reference(REFERENCE)
 
 
@@ -97,6 +103,20 @@ def test_receipt_rejects_untrusted_repository_even_with_matching_provenance():
         )
 
 
+@pytest.mark.parametrize("component", ["my__image", "my--image"])
+def test_receipt_accepts_valid_repeated_repository_separators(component):
+    reference = f"ghcr.io/team/{component}@{DIGEST}"
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=reference)
+
+    receipt = create_registry_publication_receipt(
+        _manifest(), registry_reference=reference,
+        expected_repository=f"ghcr.io/team/{component}",
+        provenance_json=provenance.to_json(),
+    )
+
+    assert receipt.registry_reference == reference
+
+
 @pytest.mark.parametrize("source,subject", [
     ("d" * 40, REFERENCE),
     (SOURCE, "ghcr.io/maksymmm/careeragentai-candidate@sha256:" + "d" * 64),
@@ -130,8 +150,35 @@ def test_deployment_must_use_exact_verified_reference(reference):
     lambda value: value.replace('{', '{\n', 1),
 ])
 def test_receipt_parser_rejects_untrusted_or_noncanonical_json(mutator):
+    provenance = ProvenanceStatement(source_commit=SOURCE, subject_reference=REFERENCE)
     with pytest.raises(PromotionManifestError):
-        RegistryPublicationReceipt.from_json(mutator(_receipt().to_json()))
+        RegistryPublicationReceipt.from_json(
+            mutator(_receipt().to_json()),
+            manifest=_manifest(),
+            expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+            provenance_json=provenance.to_json(),
+        )
+
+
+def test_receipt_parser_rejects_canonical_receipt_from_untrusted_storage():
+    hostile_reference = "attacker.example/image@" + DIGEST
+    hostile = RegistryPublicationReceipt(
+        source_commit=SOURCE,
+        registry_reference=hostile_reference,
+        promotion_manifest_sha256=DIGEST,
+        provenance_sha256=DIGEST,
+    )
+    trusted_provenance = ProvenanceStatement(
+        source_commit=SOURCE, subject_reference=REFERENCE
+    )
+
+    with pytest.raises(PromotionManifestError):
+        RegistryPublicationReceipt.from_json(
+            hostile.to_json(),
+            manifest=_manifest(),
+            expected_repository="ghcr.io/maksymmm/careeragentai-candidate",
+            provenance_json=trusted_provenance.to_json(),
+        )
 
 
 def test_receipt_rejects_production_environment():

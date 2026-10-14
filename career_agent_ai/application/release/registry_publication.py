@@ -15,9 +15,10 @@ from career_agent_ai.application.release.promotion_manifest import (
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+_PATH_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
 _REGISTRY_REFERENCE = re.compile(
     rf"(?P<repository>(?:{_HOST_LABEL})(?:\.(?:{_HOST_LABEL}))*(?::[0-9]+)?"
-    r"/(?:[a-z0-9]+(?:[._-][a-z0-9]+)*)(?:/(?:[a-z0-9]+(?:[._-][a-z0-9]+)*))*)@"
+    rf"/(?:{_PATH_COMPONENT})(?:/(?:{_PATH_COMPONENT}))*)@"
     r"(?P<digest>sha256:[0-9a-f]{64})\Z"
 )
 
@@ -121,7 +122,14 @@ class RegistryPublicationReceipt:
         return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
 
     @classmethod
-    def from_json(cls, value: str) -> "RegistryPublicationReceipt":
+    def from_json(
+        cls,
+        value: str,
+        *,
+        manifest: PromotionManifest,
+        expected_repository: str,
+        provenance_json: str,
+    ) -> "RegistryPublicationReceipt":
         try:
             payload = json.loads(value, object_pairs_hook=_reject_duplicate_keys)
         except (json.JSONDecodeError, TypeError) as exc:
@@ -143,6 +151,14 @@ class RegistryPublicationReceipt:
         receipt = cls(**payload)
         if receipt.to_json() != value:
             raise PromotionManifestError("registry receipt JSON is not canonical")
+        expected = create_registry_publication_receipt(
+            manifest,
+            registry_reference=receipt.registry_reference,
+            expected_repository=expected_repository,
+            provenance_json=provenance_json,
+        )
+        if receipt != expected:
+            raise PromotionManifestError("registry receipt does not match trusted evidence")
         return receipt
 
 
