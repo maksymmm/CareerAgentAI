@@ -207,8 +207,8 @@ jobs:
           import re
           from pathlib import Path
 
-          digest = re.compile(r"sha256:[0-9a-f]{64}\\Z")
-          source = re.compile(r"[0-9a-f]{40}\\Z")
+          digest = re.compile(r"sha256:[0-9a-f]{64}\Z")
+          source = re.compile(r"[0-9a-f]{40}\Z")
           reference = os.environ["REGISTRY_REFERENCE"]
           repository = "localhost:5000/careeragentai/candidate"
           prefix = repository + "@"
