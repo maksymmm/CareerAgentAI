@@ -536,6 +536,14 @@ transport-neutral and performs no external action. The next isolated priority is
 sandbox-only authenticated HTTP boundary that consumes this contract without adding a
 real orchestrator adapter or deployment credential.
 
+Delivered in the sandbox HTTP-boundary unit: authenticated operators can fetch the
+immutable promotion prompt and submit approve/decline decisions through a strict,
+documented WSGI endpoint. Operator identity, scopes, and URL operation identity are
+bound server-side; malformed, under-scoped, stale, substituted, or ambiguous JSON
+requests fail closed. The endpoint validates intent only and cannot execute a
+promotion. The next isolated priority is to persist a single-use approval receipt and
+connect it to the dry-run executor without adding a real provider or deployment secret.
+
 ## 11. Candidate-outcome adaptive ranking
 
 Status: **IN PROGRESS**
