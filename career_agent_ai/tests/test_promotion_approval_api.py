@@ -214,3 +214,29 @@ def test_openapi_success_schemas_describe_actual_json_fields():
     assert set(schema["properties"]["details"]["required"]) == set(prompt["details"])
     result = path["post"]["responses"]["200"]["content"]["application/json"]["schema"]
     assert set(result["required"]) == {"operation_id", "decision", "validated"}
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("status", list(ExternalActionStatus))
+@pytest.mark.parametrize("action_type", ["application.submit", "message.send", "calendar.respond"])
+def test_foreign_workflow_operations_are_uniformly_unavailable(method, status, action_type):
+    foreign = replace(operation(), action_type=action_type, status=status, result={}, error="previous failure")
+    application = PromotionApprovalWSGIApp(
+        Operations(foreign),
+        resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset({"release:promote:dry-run"})),
+    )
+    (response_status, _), payload = request(application, method=method, body={})
+    assert response_status == "404 Not Found"
+    assert payload == {"error": "not_found"}
+
+
+def test_openapi_documents_json_error_contracts_for_both_operations():
+    path = promotion_approval_openapi_document()["paths"]["/v1/release/promotions/{operation_id}/approval"]
+    for method in ("get", "post"):
+        for code in ("400", "401", "403", "404", "405", "409", "415", "500"):
+            schema = path[method]["responses"][code]["content"]["application/json"]["schema"]
+            assert schema["required"] == ["error"]
+            assert schema["properties"]["error"]["type"] == "string"
+            assert schema["additionalProperties"] is False
+        bad_request = path[method]["responses"]["400"]["content"]["application/json"]["schema"]
+        assert bad_request["properties"]["message"]["maxLength"] == 500
