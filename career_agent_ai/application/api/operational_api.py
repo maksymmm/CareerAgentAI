@@ -101,9 +101,10 @@ class OperationalWSGIApp:
                 return self._respond(start_response, "200 OK", self._service.health())
             if path == "/v1/operational/issues":
                 authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
+                scheme, separator, credentials = authorization.partition(" ")
                 supplied = (
-                    authorization[7:]
-                    if authorization.startswith("Bearer ")
+                    credentials
+                    if separator and scheme.casefold() == "bearer"
                     else ""
                 )
                 try:
