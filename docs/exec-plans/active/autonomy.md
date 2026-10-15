@@ -573,6 +573,10 @@ bounded exploration boost emitted by AdaptiveJobRanker (or neutral zero). Negati
 or arbitrary zero-evidence adjustments remain invalid. SQLite approval-gate restart
 coverage includes unrelated historical employer/attribute outcomes.
 
+Security regression hardening: returned agent messages are redacted before entering
+career step state, SQLite run persistence, or durable run summaries. Regression
+tests cover both successful and failed agent results and reloaded run state.
+
 Status: **IN PROGRESS**
 
 Goal: move job selection beyond static relevance by learning safely from the
