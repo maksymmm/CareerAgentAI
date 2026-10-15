@@ -79,6 +79,13 @@ class PromotionApprovalWSGIApp:
                     [("WWW-Authenticate", "Bearer")],
                 )
             operation = self._operations.get(operation_id)
+        except Exception:
+            return self._respond(
+                start_response,
+                "500 Internal Server Error",
+                {"error": "internal_error"},
+            )
+        try:
             if operation is None:
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
             prompt = build_promotion_approval_prompt(
