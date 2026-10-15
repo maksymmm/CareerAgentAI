@@ -15,6 +15,9 @@ from career_agent_ai.application.external_actions import (
     ExternalActionOperation,
     ExternalActionStatus,
 )
+from career_agent_ai.application.release.promotion_execution import (
+    validate_promotion_plan_payload,
+)
 
 _ACTION_TYPE = "release.promote.dry-run"
 _REQUIRED_SCOPE = "release:promote:dry-run"
@@ -122,9 +125,15 @@ def build_promotion_approval_prompt(
         raise ValueError("operation is not a dry-run promotion")
     if operation.status != ExternalActionStatus.PREPARED:
         raise ValueError("promotion operation is not awaiting approval")
-    if set(_VISIBLE_FIELDS) - set(operation.payload):
-        raise ValueError("promotion operation payload is incomplete")
-    details = {name: operation.payload[name] for name in _VISIBLE_FIELDS}
+    plan = validate_promotion_plan_payload(operation.payload)
+    details = {
+        "environment": plan.environment,
+        "execution_mode": plan.execution_mode,
+        "plan_sha256": operation.payload["plan_sha256"],
+        "rollback_reference": plan.rollback_reference,
+        "source_commit": plan.source_commit,
+        "target_reference": plan.target_reference,
+    }
     encoded = json.dumps(
         {
             "action_type": _ACTION_TYPE,
