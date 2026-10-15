@@ -92,6 +92,39 @@ def test_boundary_rejects_missing_auth_scope_and_unknown_operation():
     assert request(app(), path="/v1/release/promotions/missing/approval")[0][0] == "404 Not Found"
 
 
+def test_boundary_sanitizes_operation_repository_failures():
+    class FailingOperations:
+        def get(self, operation_id):
+            raise RuntimeError("database password must not escape")
+
+    application = PromotionApprovalWSGIApp(
+        FailingOperations(),
+        resolve_bearer=lambda token: ReleaseOperator(
+            "operator:release", frozenset({"release:promote:dry-run"})
+        ),
+    )
+
+    (status, _), payload = request(application)
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+
+
+def test_boundary_reports_authentication_backend_failures_as_server_errors():
+    def failing_resolver(token):
+        raise RuntimeError("identity provider secret must not escape")
+
+    application = PromotionApprovalWSGIApp(
+        Operations(operation()),
+        resolve_bearer=failing_resolver,
+    )
+
+    (status, _), payload = request(application)
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+
+
 def test_boundary_rejects_stale_or_client_supplied_identity_fields():
     _, prompt = request(app())
     stale = {"schema_version": 1, "action_fingerprint": "0" * 64, "decision": "approve"}
