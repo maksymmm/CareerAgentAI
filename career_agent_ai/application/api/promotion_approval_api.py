@@ -69,18 +69,18 @@ class PromotionApprovalWSGIApp:
                 "400 Bad Request",
                 {"error": "invalid_request", "message": str(exc)[:500]},
             )
-        operator = self._authenticate(environ)
-        if operator is None:
-            return self._respond(
-                start_response,
-                "401 Unauthorized",
-                {"error": "unauthorized"},
-                [("WWW-Authenticate", "Bearer")],
-            )
-        operation = self._operations.get(operation_id)
-        if operation is None:
-            return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         try:
+            operator = self._authenticate(environ)
+            if operator is None:
+                return self._respond(
+                    start_response,
+                    "401 Unauthorized",
+                    {"error": "unauthorized"},
+                    [("WWW-Authenticate", "Bearer")],
+                )
+            operation = self._operations.get(operation_id)
+            if operation is None:
+                return self._respond(start_response, "404 Not Found", {"error": "not_found"})
             prompt = build_promotion_approval_prompt(
                 operation,
                 operator_id=operator.operator_id,
@@ -137,10 +137,7 @@ class PromotionApprovalWSGIApp:
         token = credentials.strip() if separator and scheme.casefold() == "bearer" else ""
         if not token:
             return None
-        try:
-            operator = self._resolve_bearer(token)
-        except Exception:
-            return None
+        operator = self._resolve_bearer(token)
         return operator if isinstance(operator, ReleaseOperator) else None
 
     def _read_json(self, environ: Mapping[str, Any]) -> Mapping[str, Any]:
