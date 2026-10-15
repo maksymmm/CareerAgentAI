@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from io import BytesIO
 
 import pytest
@@ -140,6 +141,29 @@ def test_boundary_rejects_stale_or_client_supplied_identity_fields():
         "operator_id": "operator:other",
     }
     assert request(app(), method="POST", body=injected)[0][0] == "400 Bad Request"
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("corruption", ["missing_fields", "bad_checksum"])
+def test_corrupt_persisted_intent_returns_sanitized_server_error(method, corruption):
+    persisted = operation()
+    if corruption == "missing_fields":
+        persisted = replace(persisted, payload={"corrupt": "internal storage detail"})
+    else:
+        persisted = replace(
+            persisted, payload={**persisted.payload, "plan_sha256": "sha256:" + "0" * 64}
+        )
+    application = PromotionApprovalWSGIApp(
+        Operations(persisted),
+        resolve_bearer=lambda token: ReleaseOperator(
+            "operator:release", frozenset({"release:promote:dry-run"})
+        ),
+    )
+
+    (status, _), payload = request(application, method=method, body={})
+
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
 
 
 def test_boundary_rejects_invalid_transport_inputs_and_methods():
