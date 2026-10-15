@@ -75,6 +75,15 @@ def test_prompt_requires_exact_scope_and_prepared_release_operation():
         )
 
 
+def test_prompt_rejects_operation_id_the_executor_cannot_consume():
+    with pytest.raises(ValueError, match="operation_id is invalid"):
+        build_promotion_approval_prompt(
+            replace(_operation(), operation_id="promote/release-1"),
+            operator_id="operator:release",
+            granted_scopes={"release:promote:dry-run"},
+        )
+
+
 @pytest.mark.parametrize(
     "changes",
     [
