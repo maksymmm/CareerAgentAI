@@ -555,6 +555,10 @@ connect it to the dry-run executor without adding a real provider or deployment 
 
 ## 11. Candidate-outcome adaptive ranking
 
+Diagnostic hardening: quoted secret redaction consumes escaped quotes and backslashes
+without exposing secret suffixes. Operational bearer parsing accepts repeated spaces
+after the scheme while preserving exact credential comparison.
+
 Operational HTTP hardening: bearer authentication scheme parsing is case-insensitive,
 while credential comparison remains case-sensitive and constant-time. Regression
 coverage accepts four scheme casings and rejects altered credentials for each.
