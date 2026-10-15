@@ -250,6 +250,31 @@ def test_identical_start_replay_returns_existing_run_without_new_execution(tmp_p
     database.close()
 
 
+def test_exploration_snapshot_survives_approval_and_restart(tmp_path):
+    path = str(tmp_path / "exploration-restart.sqlite")
+    database, loop, applications, *_ = build_stack(path)
+    historical = JobApplication(
+        application_id="unrelated-history", user_id="user-1", job_id="old-job",
+        company_id="other-company", job_title="Software Engineer", job_skills=("python",),
+        status=JobApplicationStatus.SAVED, created_at=CREATED, updated_at=CREATED,
+    ).transition(JobApplicationStatus.APPLIED, occurred_at=CREATED + timedelta(minutes=1)).transition(
+        JobApplicationStatus.INTERVIEW, occurred_at=CREATED + timedelta(minutes=2)
+    )
+    applications.add(historical)
+    loop.start(request(with_schedule=False), run_id="exploration-restart")
+    state = loop._states.get("exploration-restart")
+    assert state.selected_job_evidence_count == 0
+    assert state.selected_job_outcome_adjustment > 0
+    assert state.pending_human_action is not None
+    database.close()
+
+    database, restarted, *_ = build_stack(path)
+    durable = restarted._states.get("exploration-restart")
+    assert durable.selected_job_score == state.selected_job_score
+    assert durable.pending_human_action == state.pending_human_action
+    database.close()
+
+
 def test_search_persists_explainable_candidate_outcome_score_across_restart(tmp_path):
     path = str(tmp_path / "adaptive-search.sqlite")
     database, loop, applications, *_ = build_stack(path, max_iterations=1)
