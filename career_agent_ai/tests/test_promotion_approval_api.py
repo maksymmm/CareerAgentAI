@@ -12,7 +12,7 @@ from career_agent_ai.application.api import (
     ReleaseOperator,
     promotion_approval_openapi_document,
 )
-from career_agent_ai.application.external_actions import ExternalActionOperation
+from career_agent_ai.application.external_actions import ExternalActionOperation, ExternalActionStatus
 from career_agent_ai.application.release import DryRunPromotionPlan
 
 
@@ -180,3 +180,37 @@ def test_openapi_documents_bearer_auth_and_server_bound_identity():
     assert set(schema["required"]) == {"schema_version", "action_fingerprint", "decision"}
     assert "operator_id" not in schema["properties"]
     assert "operation_id" not in schema["properties"]
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("status", [s for s in ExternalActionStatus if s != ExternalActionStatus.PREPARED])
+def test_non_prepared_operations_are_conflicts(method, status):
+    application = PromotionApprovalWSGIApp(
+        Operations(replace(operation(), status=status, result={}, error="previous failure")),
+        resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset({"release:promote:dry-run"})),
+    )
+    (response_status, _), payload = request(application, method=method, body={})
+    assert response_status == "409 Conflict"
+    assert payload == {"error": "operation_not_awaiting_approval"}
+
+
+def test_under_scoped_operator_cannot_probe_repository():
+    class UnreadableOperations:
+        def get(self, operation_id):
+            raise AssertionError("under-scoped caller must not access storage")
+
+    application = PromotionApprovalWSGIApp(
+        UnreadableOperations(), resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset())
+    )
+    for identifier in ("promote:release-1", "missing"):
+        assert request(application, path=f"/v1/release/promotions/{identifier}/approval")[0][0] == "403 Forbidden"
+
+
+def test_openapi_success_schemas_describe_actual_json_fields():
+    path = promotion_approval_openapi_document()["paths"]["/v1/release/promotions/{operation_id}/approval"]
+    _, prompt = request(app())
+    schema = path["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(schema["required"]) == set(prompt)
+    assert set(schema["properties"]["details"]["required"]) == set(prompt["details"])
+    result = path["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(result["required"]) == {"operation_id", "decision", "validated"}
