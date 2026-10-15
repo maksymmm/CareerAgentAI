@@ -1674,16 +1674,19 @@ def test_operational_wsgi_accepts_case_insensitive_scheme_but_not_wrong_token(sc
 
 
 @pytest.mark.parametrize("token", ["x" * 31 + " ", " " + "x" * 31, " " + "x" * 30 + " "])
-def test_operational_wsgi_preserves_configured_credential_whitespace(token):
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer ", "BEARER   "])
+def test_operational_wsgi_preserves_configured_credential_whitespace(token, scheme):
     database = SQLiteDatabase()
     app = OperationalWSGIApp(
         OperationalApiService(SQLiteOperationalProbe(database), clock=lambda: NOW),
         bearer_token=token,
     )
-    accepted, _ = _wsgi_call(app, "/v1/operational/issues", token=token)
+    accepted, _ = _wsgi_call(app, "/v1/operational/issues", token=token, scheme=scheme)
     assert accepted["status"] == "200 OK"
-    denied, _ = _wsgi_call(app, "/v1/operational/issues", token=token + " ")
+    denied, _ = _wsgi_call(app, "/v1/operational/issues", token=token + " ", scheme=scheme)
     assert denied["status"] == "401 Unauthorized"
+    foreign_prefix, _ = _wsgi_call(app, "/v1/operational/issues", token="z" + token, scheme=scheme)
+    assert foreign_prefix["status"] == "401 Unauthorized"
     database.close()
 
 
