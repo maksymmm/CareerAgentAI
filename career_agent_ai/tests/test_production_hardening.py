@@ -1593,7 +1593,7 @@ def test_migration_runner_rejects_unsorted_input(migration):
         runner.apply(values)
 
 
-def _wsgi_call(app, path, *, query="", token=None, method="GET"):
+def _wsgi_call(app, path, *, query="", token=None, method="GET", scheme="Bearer"):
     captured = {}
 
     def start_response(status, headers):
@@ -1606,7 +1606,7 @@ def _wsgi_call(app, path, *, query="", token=None, method="GET"):
         "QUERY_STRING": query,
     }
     if token is not None:
-        environ["HTTP_AUTHORIZATION"] = f"Bearer {token}"
+        environ["HTTP_AUTHORIZATION"] = f"{scheme} {token}"
     chunks = app(environ, start_response)
     body = json.loads(b"".join(chunks).decode("utf-8"))
     return captured, body
@@ -1644,6 +1644,20 @@ def test_operational_api_is_authenticated_read_only_and_openapi_matches():
     assert "/healthz" in spec["paths"]
     assert "/v1/operational/issues" in spec["paths"]
 
+
+
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER", "bEaReR"])
+def test_operational_wsgi_accepts_case_insensitive_scheme_but_not_wrong_token(scheme):
+    database = SQLiteDatabase()
+    service = OperationalApiService(SQLiteOperationalProbe(database), clock=lambda: NOW)
+    token = "CaseSensitiveToken" * 3
+    app = OperationalWSGIApp(service, bearer_token=token)
+    accepted, _ = _wsgi_call(app, "/v1/operational/issues", token=token, scheme=scheme)
+    denied, body = _wsgi_call(app, "/v1/operational/issues", token=token.lower(), scheme=scheme)
+    assert accepted["status"] == "200 OK"
+    assert denied["status"] == "401 Unauthorized"
+    assert body == {"error": "unauthorized"}
+    database.close()
 
 
 def test_operational_wsgi_non_ascii_request_token_is_unauthorized():
