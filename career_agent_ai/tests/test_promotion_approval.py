@@ -50,6 +50,10 @@ def test_prompt_is_minimal_scoped_and_does_not_expose_receipt_checksum():
     assert wire["allowed_decisions"] == ["approve", "decline"]
     assert "publication_receipt_sha256" not in wire["details"]
     assert "operator_id" not in wire
+    with pytest.raises(TypeError):
+        prompt.details["target_reference"] = "substituted"
+    wire["details"]["target_reference"] = "display-only mutation"
+    assert prompt.to_dict()["details"]["target_reference"] != "display-only mutation"
 
 
 def test_prompt_requires_exact_scope_and_prepared_release_operation():
