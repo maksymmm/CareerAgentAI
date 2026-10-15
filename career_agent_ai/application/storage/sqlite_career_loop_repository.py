@@ -565,8 +565,11 @@ class SQLiteCareerLoopRepository:
             raise ValueError("Persisted adaptive score snapshot is incomplete.")
         if not abs(score - (relevance + adjustment)) <= 1e-6:
             raise ValueError("Persisted adaptive score snapshot is inconsistent.")
-        if evidence == 0 and adjustment != 0:
-            raise ValueError("Adaptive adjustment requires outcome evidence.")
+        if evidence == 0:
+            exploration = AdaptiveJobRanker._exploration_adjustment(relevance)
+            if adjustment not in (0.0, exploration):
+                raise ValueError("Zero-evidence adjustment must be a bounded exploration boost.")
+            return relevance, adjustment, score, evidence, reason
         confidence = evidence / (evidence + AdaptiveJobRanker.PRIOR_STRENGTH)
         active_cap = min(
             AdaptiveJobRanker.MAX_ADJUSTMENT,
