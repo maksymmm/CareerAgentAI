@@ -42,7 +42,7 @@ _SENSITIVE_QUOTED_ASSIGNMENT_PATTERN = re.compile(
         \s*[:=]\s*
     )
     (["'])
-    .*?
+    (?:\\[\s\S]|(?!\2)[^\\])*
     \2
     """
 )

@@ -1122,6 +1122,19 @@ def test_redaction_covers_basic_authorization_and_quoted_secret_whitespace():
     assert rendered.count("[REDACTED]") == 2
 
 
+@pytest.mark.parametrize("diagnostic", [
+    json.dumps({"password": 'abc" secret tail', "safe": "visible"}),
+    json.dumps({"api_key": 'abc\\" secret tail', "safe": "visible"}),
+    "password='abc\\' secret tail' safe=visible",
+])
+def test_redaction_masks_complete_escape_aware_quoted_values(diagnostic):
+    rendered = redact_mapping({"diagnostic": diagnostic})["diagnostic"]
+    assert "secret tail" not in rendered
+    assert "abc" not in rendered
+    assert "visible" in rendered
+    assert "[REDACTED]" in rendered
+
+
 def test_structured_logging_normalizes_non_finite_numbers_to_valid_json():
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -1646,7 +1659,7 @@ def test_operational_api_is_authenticated_read_only_and_openapi_matches():
 
 
 
-@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER", "bEaReR"])
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER", "bEaReR", "bearer ", "BEARER   "])
 def test_operational_wsgi_accepts_case_insensitive_scheme_but_not_wrong_token(scheme):
     database = SQLiteDatabase()
     service = OperationalApiService(SQLiteOperationalProbe(database), clock=lambda: NOW)
@@ -1657,6 +1670,23 @@ def test_operational_wsgi_accepts_case_insensitive_scheme_but_not_wrong_token(sc
     assert accepted["status"] == "200 OK"
     assert denied["status"] == "401 Unauthorized"
     assert body == {"error": "unauthorized"}
+    database.close()
+
+
+@pytest.mark.parametrize("token", ["x" * 31 + " ", " " + "x" * 31, " " + "x" * 30 + " "])
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer ", "BEARER   "])
+def test_operational_wsgi_preserves_configured_credential_whitespace(token, scheme):
+    database = SQLiteDatabase()
+    app = OperationalWSGIApp(
+        OperationalApiService(SQLiteOperationalProbe(database), clock=lambda: NOW),
+        bearer_token=token,
+    )
+    accepted, _ = _wsgi_call(app, "/v1/operational/issues", token=token, scheme=scheme)
+    assert accepted["status"] == "200 OK"
+    denied, _ = _wsgi_call(app, "/v1/operational/issues", token=token + " ", scheme=scheme)
+    assert denied["status"] == "401 Unauthorized"
+    foreign_prefix, _ = _wsgi_call(app, "/v1/operational/issues", token="z" + token, scheme=scheme)
+    assert foreign_prefix["status"] == "401 Unauthorized"
     database.close()
 
 
