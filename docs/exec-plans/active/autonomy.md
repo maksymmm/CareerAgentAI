@@ -558,6 +558,9 @@ connect it to the dry-run executor without adding a real provider or deployment 
 Diagnostic hardening: quoted secret redaction consumes escaped quotes and backslashes
 without exposing secret suffixes. Operational bearer parsing accepts repeated spaces
 after the scheme while preserving exact credential comparison.
+Compatibility guard: configured tokens with leading/trailing spaces retain exact
+matching; only an additional comparison permits repeated scheme-separator spaces,
+never trimming credential suffixes.
 
 Operational HTTP hardening: bearer authentication scheme parsing is case-insensitive,
 while credential comparison remains case-sensitive and constant-time. Regression
