@@ -376,6 +376,10 @@ An operator-facing approval contract now exposes only the immutable dry-run tran
 requires the exact `release:promote:dry-run` authorization scope, and binds each
 approve/decline response to the authenticated operator, operation ID, and displayed
 plan fingerprint. It remains transport-neutral and cannot execute a promotion itself.
+A dependency-free WSGI boundary exposes that contract at
+`/v1/release/promotions/{operation_id}/approval` for sandbox integration. Bearer
+authentication resolves the operator and scopes server-side; clients cannot supply or
+override either identity, and a validated response still performs no deployment.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
