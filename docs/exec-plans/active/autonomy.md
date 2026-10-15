@@ -555,6 +555,10 @@ connect it to the dry-run executor without adding a real provider or deployment 
 
 ## 11. Candidate-outcome adaptive ranking
 
+Operational HTTP hardening: bearer authentication scheme parsing is case-insensitive,
+while credential comparison remains case-sensitive and constant-time. Regression
+coverage accepts four scheme casings and rejects altered credentials for each.
+
 Recovery hardening: zero-direct-evidence snapshots accept only the exact rounded,
 bounded exploration boost emitted by AdaptiveJobRanker (or neutral zero). Negative
 or arbitrary zero-evidence adjustments remain invalid. SQLite approval-gate restart
