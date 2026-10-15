@@ -88,7 +88,7 @@ class PromotionApprovalWSGIApp:
                 {"error": "internal_error"},
             )
         try:
-            if operation is None:
+            if operation is None or operation.action_type != "release.promote.dry-run":
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
             if operation.status != ExternalActionStatus.PREPARED:
                 return self._respond(
@@ -245,6 +245,18 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                 "required": list(properties), "additionalProperties": False,
             }}},
         }
+    error_responses = {}
+    for code, error in {
+        "400": "invalid_request", "401": "unauthorized", "403": "forbidden",
+        "404": "not_found", "405": "method_not_allowed",
+        "409": "operation_not_awaiting_approval", "415": "unsupported_media_type",
+        "500": "internal_error",
+    }.items():
+        error_responses[code] = response(error, {"error": {"type": "string", "const": error}})
+        if code == "400":
+            error_responses[code]["content"]["application/json"]["schema"]["properties"]["message"] = {
+                "type": "string", "maxLength": 500,
+            }
     return {
         "openapi": "3.1.0",
         "info": {"title": "CareerAgentAI Promotion Approval", "version": "1.0.0"},
@@ -259,7 +271,7 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                 "get": {
                     "security": [{"bearerAuth": []}],
                     "responses": {"200": response("Immutable promotion approval prompt", prompt_properties),
-                                  "409": {"description": "Operation no longer awaits approval"}},
+                                  **error_responses},
                 },
                 "post": {
                     "security": [{"bearerAuth": []}],
@@ -281,7 +293,7 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                         },
                     },
                     "responses": {"200": response("Decision validated against current intent", result_properties),
-                                  "409": {"description": "Operation no longer awaits approval"}},
+                                  **error_responses},
                 },
             }
         },
