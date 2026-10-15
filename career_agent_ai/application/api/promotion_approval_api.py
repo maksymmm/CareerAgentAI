@@ -93,6 +93,15 @@ class PromotionApprovalWSGIApp:
                 operator_id=operator.operator_id,
                 granted_scopes=operator.scopes,
             )
+        except PermissionError:
+            return self._respond(start_response, "403 Forbidden", {"error": "forbidden"})
+        except Exception:
+            return self._respond(
+                start_response,
+                "500 Internal Server Error",
+                {"error": "internal_error"},
+            )
+        try:
             if method == "GET":
                 return self._respond(start_response, "200 OK", prompt.to_dict())
             if str(environ.get("CONTENT_TYPE", "")).partition(";")[0].strip().casefold() != "application/json":
