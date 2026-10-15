@@ -296,6 +296,12 @@ def _plan_from_payload(payload: Mapping[str, Any]) -> DryRunPromotionPlan:
     return plan
 
 
+def validate_promotion_plan_payload(payload: Mapping[str, Any]) -> DryRunPromotionPlan:
+    """Reconstruct and checksum-validate one persisted dry-run promotion intent."""
+
+    return _plan_from_payload(payload)
+
+
 def _result_from_operation(
     operation: ExternalActionOperation,
     plan: DryRunPromotionPlan,
