@@ -527,6 +527,15 @@ restart-safe to replay. The next
 isolated priority is an authenticated candidate/operator approval projection for this
 release action; no real orchestrator adapter or deployment credential may be added yet.
 
+Delivered in the operator approval-contract unit: only prepared dry-run promotion
+operations can be projected, the exact `release:promote:dry-run` scope is mandatory,
+and approve/decline submissions are rebound to the current durable intent before use.
+The fingerprint covers the authenticated operator, operation ID and visible transition,
+so foreign, under-scoped, stale and substituted decisions fail closed. The contract is
+transport-neutral and performs no external action. The next isolated priority is a
+sandbox-only authenticated HTTP boundary that consumes this contract without adding a
+real orchestrator adapter or deployment credential.
+
 ## 11. Candidate-outcome adaptive ranking
 
 Status: **IN PROGRESS**
