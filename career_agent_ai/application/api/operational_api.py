@@ -103,7 +103,7 @@ class OperationalWSGIApp:
                 authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
                 scheme, separator, credentials = authorization.partition(" ")
                 supplied = (
-                    credentials.strip()
+                    credentials
                     if separator and scheme.casefold() == "bearer"
                     else ""
                 )
@@ -111,7 +111,9 @@ class OperationalWSGIApp:
                     supplied_bytes = supplied.encode("ascii")
                 except UnicodeEncodeError:
                     supplied_bytes = b""
-                if not hmac.compare_digest(supplied_bytes, self._bearer_token):
+                exact_match = hmac.compare_digest(supplied_bytes, self._bearer_token)
+                spaced_match = hmac.compare_digest(supplied_bytes.lstrip(b" "), self._bearer_token)
+                if not (exact_match or spaced_match):
                     return self._respond(
                         start_response,
                         "401 Unauthorized",
