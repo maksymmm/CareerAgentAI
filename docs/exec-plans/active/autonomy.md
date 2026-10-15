@@ -546,6 +546,8 @@ request validation: even ValueError, TypeError and PermissionError return saniti
 500 responses, while invalid requests and insufficient scopes retain 400/403.
 Persisted-intent projection failures, including malformed payloads and bad plan
 checksums, also return sanitized 500 responses for both GET and POST.
+Scope authorization precedes repository access to prevent operation enumeration.
+Non-prepared operations return 409, and OpenAPI describes both JSON success bodies.
 The next isolated priority is to persist a single-use approval receipt and
 connect it to the dry-run executor without adding a real provider or deployment secret.
 
