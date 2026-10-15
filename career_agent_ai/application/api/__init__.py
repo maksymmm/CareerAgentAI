@@ -7,6 +7,11 @@ from .candidate_approval_api import (
 )
 
 from .operational_api import OperationalApiService, OperationalWSGIApp, openapi_document
+from .promotion_approval_api import (
+    PromotionApprovalWSGIApp,
+    ReleaseOperator,
+    promotion_approval_openapi_document,
+)
 
 __all__ = [
     "CandidateApprovalWSGIApp",
@@ -15,4 +20,7 @@ __all__ = [
     "OperationalApiService",
     "OperationalWSGIApp",
     "openapi_document",
+    "PromotionApprovalWSGIApp",
+    "ReleaseOperator",
+    "promotion_approval_openapi_document",
 ]
