@@ -555,6 +555,11 @@ connect it to the dry-run executor without adding a real provider or deployment 
 
 ## 11. Candidate-outcome adaptive ranking
 
+Recovery hardening: zero-direct-evidence snapshots accept only the exact rounded,
+bounded exploration boost emitted by AdaptiveJobRanker (or neutral zero). Negative
+or arbitrary zero-evidence adjustments remain invalid. SQLite approval-gate restart
+coverage includes unrelated historical employer/attribute outcomes.
+
 Status: **IN PROGRESS**
 
 Goal: move job selection beyond static relevance by learning safely from the
