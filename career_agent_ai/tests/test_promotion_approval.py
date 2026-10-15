@@ -1,4 +1,5 @@
 from dataclasses import replace
+import hashlib
 
 import pytest
 
@@ -6,23 +7,30 @@ from career_agent_ai.application.external_actions import ExternalActionOperation
 from career_agent_ai.application.release import (
     PromotionApprovalDecision,
     PromotionApprovalSubmission,
+    DryRunPromotionPlan,
     build_promotion_approval_prompt,
     validate_promotion_approval_submission,
 )
 
 
 def _operation(**payload_changes):
-    payload = {
-        "environment": "sandbox",
+    base = {
+        "environment": "non-production",
         "execution_mode": "dry-run",
-        "plan_sha256": "sha256:" + "a" * 64,
         "publication_receipt_sha256": "sha256:" + "b" * 64,
         "rollback_reference": "registry.example/app@sha256:" + "c" * 64,
         "schema_version": 1,
         "source_commit": "d" * 40,
         "target_reference": "registry.example/app@sha256:" + "e" * 64,
     }
-    payload.update(payload_changes)
+    base.update({key: value for key, value in payload_changes.items() if key != "plan_sha256"})
+    plan = DryRunPromotionPlan(**{key: base[key] for key in (
+        "source_commit", "target_reference", "rollback_reference",
+        "publication_receipt_sha256", "environment", "execution_mode", "schema_version"
+    )})
+    payload = {**base, "plan_sha256": "sha256:" + hashlib.sha256(plan.to_json().encode("ascii")).hexdigest()}
+    if "plan_sha256" in payload_changes:
+        payload["plan_sha256"] = payload_changes["plan_sha256"]
     return ExternalActionOperation(
         operation_id="promote:release-1",
         action_type="release.promote.dry-run",
@@ -62,6 +70,23 @@ def test_prompt_requires_exact_scope_and_prepared_release_operation():
     with pytest.raises(ValueError, match="not awaiting approval"):
         build_promotion_approval_prompt(
             replace(_operation(), status=ExternalActionStatus.IN_PROGRESS),
+            operator_id="operator:release",
+            granted_scopes={"release:promote:dry-run"},
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"environment": "production"},
+        {"execution_mode": "live"},
+        {"plan_sha256": "sha256:" + "0" * 64},
+    ],
+)
+def test_prompt_revalidates_the_complete_durable_dry_run_plan(changes):
+    with pytest.raises(ValueError):
+        build_promotion_approval_prompt(
+            _operation(**changes),
             operator_id="operator:release",
             granted_scopes={"release:promote:dry-run"},
         )
