@@ -544,6 +544,8 @@ requests fail closed. The endpoint validates intent only and cannot execute a
 promotion. Backend authentication and operation-read failures are isolated from
 request validation: even ValueError, TypeError and PermissionError return sanitized
 500 responses, while invalid requests and insufficient scopes retain 400/403.
+Persisted-intent projection failures, including malformed payloads and bad plan
+checksums, also return sanitized 500 responses for both GET and POST.
 The next isolated priority is to persist a single-use approval receipt and
 connect it to the dry-run executor without adding a real provider or deployment secret.
 
