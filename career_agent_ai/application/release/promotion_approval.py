@@ -16,12 +16,13 @@ from career_agent_ai.application.external_actions import (
     ExternalActionStatus,
 )
 from career_agent_ai.application.release.promotion_execution import (
+    validate_promotion_operation_id,
     validate_promotion_plan_payload,
 )
 
 _ACTION_TYPE = "release.promote.dry-run"
 _REQUIRED_SCOPE = "release:promote:dry-run"
-_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}\Z")
+_OPERATOR_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
 _VISIBLE_FIELDS = (
     "environment",
@@ -74,8 +75,10 @@ class PromotionApprovalSubmission:
     decision: PromotionApprovalDecision
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "operation_id", _identifier(self.operation_id, "operation_id"))
-        object.__setattr__(self, "operator_id", _identifier(self.operator_id, "operator_id"))
+        object.__setattr__(
+            self, "operation_id", validate_promotion_operation_id(self.operation_id)
+        )
+        object.__setattr__(self, "operator_id", _operator_identifier(self.operator_id))
         if not isinstance(self.action_fingerprint, str) or not _FINGERPRINT.fullmatch(
             self.action_fingerprint
         ):
@@ -117,7 +120,8 @@ def build_promotion_approval_prompt(
 ) -> PromotionApprovalPrompt:
     """Project a prepared dry-run promotion after authenticated scope validation."""
 
-    operator_id = _identifier(operator_id, "operator_id")
+    operator_id = _operator_identifier(operator_id)
+    operation_id = validate_promotion_operation_id(operation.operation_id)
     scopes = _validated_scopes(granted_scopes)
     if _REQUIRED_SCOPE not in scopes:
         raise PermissionError("operator lacks the required promotion approval scope")
@@ -137,7 +141,7 @@ def build_promotion_approval_prompt(
     encoded = json.dumps(
         {
             "action_type": _ACTION_TYPE,
-            "operation_id": operation.operation_id,
+            "operation_id": operation_id,
             "operator_id": operator_id,
             "required_scope": _REQUIRED_SCOPE,
             "details": details,
@@ -148,7 +152,7 @@ def build_promotion_approval_prompt(
         allow_nan=False,
     ).encode("ascii")
     return PromotionApprovalPrompt(
-        operation_id=operation.operation_id,
+        operation_id=operation_id,
         operator_id=operator_id,
         required_scope=_REQUIRED_SCOPE,
         details=MappingProxyType(dict(details)),
@@ -179,9 +183,9 @@ def validate_promotion_approval_submission(
     return submission.decision
 
 
-def _identifier(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
-        raise ValueError(f"{field} is invalid")
+def _operator_identifier(value: Any) -> str:
+    if not isinstance(value, str) or not _OPERATOR_IDENTIFIER.fullmatch(value):
+        raise ValueError("operator_id is invalid")
     return value
 
 
