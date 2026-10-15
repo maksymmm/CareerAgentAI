@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 from career_agent_ai.application.external_actions import (
@@ -141,7 +142,7 @@ def build_promotion_approval_prompt(
         operation_id=operation.operation_id,
         operator_id=operator_id,
         required_scope=_REQUIRED_SCOPE,
-        details=details,
+        details=MappingProxyType(dict(details)),
         action_fingerprint=sha256(encoded).hexdigest(),
     )
 
