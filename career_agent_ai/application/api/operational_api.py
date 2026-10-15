@@ -103,7 +103,7 @@ class OperationalWSGIApp:
                 authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
                 scheme, separator, credentials = authorization.partition(" ")
                 supplied = (
-                    credentials
+                    credentials.strip()
                     if separator and scheme.casefold() == "bearer"
                     else ""
                 )
