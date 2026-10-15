@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
-from career_agent_ai.application.external_actions import ExternalActionOperation
+from career_agent_ai.application.external_actions import ExternalActionOperation, ExternalActionStatus
 from career_agent_ai.application.release import (
     PromotionApprovalSubmission,
     build_promotion_approval_prompt,
@@ -78,6 +78,8 @@ class PromotionApprovalWSGIApp:
                     {"error": "unauthorized"},
                     [("WWW-Authenticate", "Bearer")],
                 )
+            if "release:promote:dry-run" not in operator.scopes:
+                return self._respond(start_response, "403 Forbidden", {"error": "forbidden"})
             operation = self._operations.get(operation_id)
         except Exception:
             return self._respond(
@@ -88,6 +90,10 @@ class PromotionApprovalWSGIApp:
         try:
             if operation is None:
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
+            if operation.status != ExternalActionStatus.PREPARED:
+                return self._respond(
+                    start_response, "409 Conflict", {"error": "operation_not_awaiting_approval"}
+                )
             prompt = build_promotion_approval_prompt(
                 operation,
                 operator_id=operator.operator_id,
@@ -210,6 +216,35 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
         "required": True,
         "schema": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"},
     }
+    prompt_properties = {
+        "schema_version": {"type": "integer", "const": 1},
+        "operation_id": operation_parameter["schema"],
+        "action_type": {"type": "string", "const": "release.promote.dry-run"},
+        "required_scope": {"type": "string", "const": "release:promote:dry-run"},
+        "details": {
+            "type": "object",
+            "required": ["environment", "execution_mode", "plan_sha256", "rollback_reference", "source_commit", "target_reference"],
+            "properties": {key: {"type": "string"} for key in (
+                "environment", "execution_mode", "plan_sha256", "rollback_reference", "source_commit", "target_reference"
+            )},
+            "additionalProperties": False,
+        },
+        "action_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "allowed_decisions": {"type": "array", "items": {"type": "string", "enum": ["approve", "decline"]}},
+    }
+    result_properties = {
+        "operation_id": operation_parameter["schema"],
+        "decision": {"type": "string", "enum": ["approve", "decline"]},
+        "validated": {"type": "boolean", "const": True},
+    }
+    def response(description: str, properties: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": {"application/json": {"schema": {
+                "type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False,
+            }}},
+        }
     return {
         "openapi": "3.1.0",
         "info": {"title": "CareerAgentAI Promotion Approval", "version": "1.0.0"},
@@ -223,7 +258,8 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                 "parameters": [operation_parameter],
                 "get": {
                     "security": [{"bearerAuth": []}],
-                    "responses": {"200": {"description": "Immutable promotion approval prompt"}},
+                    "responses": {"200": response("Immutable promotion approval prompt", prompt_properties),
+                                  "409": {"description": "Operation no longer awaits approval"}},
                 },
                 "post": {
                     "security": [{"bearerAuth": []}],
@@ -244,7 +280,8 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                             }
                         },
                     },
-                    "responses": {"200": {"description": "Decision validated against current intent"}},
+                    "responses": {"200": response("Decision validated against current intent", result_properties),
+                                  "409": {"description": "Operation no longer awaits approval"}},
                 },
             }
         },
