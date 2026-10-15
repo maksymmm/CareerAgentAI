@@ -112,7 +112,11 @@ class OperationalWSGIApp:
                 except UnicodeEncodeError:
                     supplied_bytes = b""
                 exact_match = hmac.compare_digest(supplied_bytes, self._bearer_token)
-                spaced_match = hmac.compare_digest(supplied_bytes.lstrip(b" "), self._bearer_token)
+                token_length = len(self._bearer_token)
+                prefix = supplied_bytes[:-token_length]
+                suffix = supplied_bytes[-token_length:]
+                spaced_match = hmac.compare_digest(suffix, self._bearer_token)
+                spaced_match = spaced_match and bool(prefix) and not prefix.strip(b" ")
                 if not (exact_match or spaced_match):
                     return self._respond(
                         start_response,
