@@ -4,6 +4,8 @@ import hashlib
 import json
 from io import BytesIO
 
+import pytest
+
 from career_agent_ai.application.api import (
     PromotionApprovalWSGIApp,
     ReleaseOperator,
@@ -92,10 +94,11 @@ def test_boundary_rejects_missing_auth_scope_and_unknown_operation():
     assert request(app(), path="/v1/release/promotions/missing/approval")[0][0] == "404 Not Found"
 
 
-def test_boundary_sanitizes_operation_repository_failures():
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError, TypeError, PermissionError])
+def test_boundary_sanitizes_operation_repository_failures(failure):
     class FailingOperations:
         def get(self, operation_id):
-            raise RuntimeError("database password must not escape")
+            raise failure("database password must not escape")
 
     application = PromotionApprovalWSGIApp(
         FailingOperations(),
@@ -110,9 +113,10 @@ def test_boundary_sanitizes_operation_repository_failures():
     assert payload == {"error": "internal_error"}
 
 
-def test_boundary_reports_authentication_backend_failures_as_server_errors():
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError, TypeError, PermissionError])
+def test_boundary_reports_authentication_backend_failures_as_server_errors(failure):
     def failing_resolver(token):
-        raise RuntimeError("identity provider secret must not escape")
+        raise failure("identity provider secret must not escape")
 
     application = PromotionApprovalWSGIApp(
         Operations(operation()),
