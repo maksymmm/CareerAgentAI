@@ -20,6 +20,15 @@ from career_agent_ai.application.release.promotion_execution import (
     PromotionPreExecutionError,
     PromotionExecutionResult,
     PromotionExecutionService,
+    validate_promotion_operation_id,
+    validate_promotion_plan_payload,
+)
+from career_agent_ai.application.release.promotion_approval import (
+    PromotionApprovalDecision,
+    PromotionApprovalPrompt,
+    PromotionApprovalSubmission,
+    build_promotion_approval_prompt,
+    validate_promotion_approval_submission,
 )
 
 __all__ = [
@@ -36,4 +45,11 @@ __all__ = [
     "PromotionPreExecutionError",
     "PromotionExecutionResult",
     "PromotionExecutionService",
+    "validate_promotion_operation_id",
+    "validate_promotion_plan_payload",
+    "PromotionApprovalDecision",
+    "PromotionApprovalPrompt",
+    "PromotionApprovalSubmission",
+    "build_promotion_approval_prompt",
+    "validate_promotion_approval_submission",
 ]

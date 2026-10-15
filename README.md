@@ -372,6 +372,10 @@ references that exactly match the durable plan; planned values are never substit
 for provider observations. Provider exceptions are conservatively ambiguous unless the
 adapter explicitly proves they occurred before any external effect, and matching
 reconciliation decisions are safe to replay after a lost response.
+An operator-facing approval contract now exposes only the immutable dry-run transition,
+requires the exact `release:promote:dry-run` authorization scope, and binds each
+approve/decline response to the authenticated operator, operation ID, and displayed
+plan fingerprint. It remains transport-neutral and cannot execute a promotion itself.
 Every consequential external action uses a stable idempotency key and the existing
 `ExternalActionService`. Application submission is scoped to the durable application
 identity rather than an individual run, so a later run cannot silently submit the
