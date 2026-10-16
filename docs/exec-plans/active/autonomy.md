@@ -550,8 +550,20 @@ Scope authorization precedes repository access to prevent operation enumeration.
 Non-prepared operations return 409, and OpenAPI describes both JSON success bodies.
 Foreign workflow actions return 404 regardless of lifecycle state; release scope
 cannot reveal their state. OpenAPI also defines JSON error contracts for all statuses.
-The next isolated priority is to persist a single-use approval receipt and
-connect it to the dry-run executor without adding a real provider or deployment secret.
+Delivered: PromotionApprovalReceiptService persists immutable approve/decline decisions
+and atomically claims approval before the fixed no-I/O dry-run executor. Restart,
+replay, scope/identity, stale fingerprint, and immutable-decline regressions are covered.
+Claimed receipts are never automatically reused after a crash.
+Explicit recover_claim() classifies mid-execution crashes for reconciliation without
+adapter I/O; SQLite restart tests cover unauthorized recovery and repeated recovery.
+The receipt service is exported from the public release package.
+Recovery covers both receipt/executor boundaries: claimed but not started receipts
+require inspection, while durable success completes the receipt only after exact
+result validation. Neither path calls the adapter; repeated recovery is idempotent.
+Durable success results must contain exactly the four execution evidence fields;
+recovery never fills omitted evidence from dataclass defaults.
+The next isolated priority is HTTP composition for durable receipt recording and
+explicit dry-run consumption, with sanitized errors and documented conflict responses.
 
 ## 11. Candidate-outcome adaptive ranking
 

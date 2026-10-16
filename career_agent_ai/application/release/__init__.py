@@ -31,7 +31,12 @@ from career_agent_ai.application.release.promotion_approval import (
     validate_promotion_approval_submission,
 )
 
+from career_agent_ai.application.release.promotion_approval_receipt import (
+    PromotionApprovalReceiptService,
+)
+
 __all__ = [
+    "PromotionApprovalReceiptService",
     "PromotionManifest",
     "PromotionManifestError",
     "create_promotion_manifest",
