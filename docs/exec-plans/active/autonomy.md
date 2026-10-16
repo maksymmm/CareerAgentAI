@@ -566,6 +566,9 @@ Delivered: optional HTTP receipt composition durably records validated decisions
 preserves identical retry behavior, returns 409 for conflicting decisions and sanitized
 500 for receipt backend failures. SQLite restart tests prove recording does not execute.
 The next isolated priority is explicit HTTP dry-run consumption and recovery routes.
+HTTP receipt retries remain idempotent after execution/restart: only an identical
+existing receipt can be returned; changed decisions conflict and no execution or
+receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
