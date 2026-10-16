@@ -34,7 +34,7 @@ class PromotionOperationReader(Protocol):
 
 
 class PromotionApprovalWSGIApp:
-    """Expose promotion prompts and validate decisions without executing promotion."""
+    """Expose approval recording and explicit no-I/O dry-run execution routes."""
 
     MAX_BODY_BYTES = 4_096
 
@@ -55,15 +55,16 @@ class PromotionApprovalWSGIApp:
         """Handle one authenticated WSGI approval request."""
 
         parts = str(environ.get("PATH_INFO", "")).strip("/").split("/")
-        if len(parts) != 5 or parts[:3] != ["v1", "release", "promotions"] or parts[4] != "approval":
+        if len(parts) != 5 or parts[:3] != ["v1", "release", "promotions"] or parts[4] not in {"approval", "execute-dry-run", "recover-dry-run"}:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
+        execution_route = parts[4] != "approval"
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
-        if method not in {"GET", "POST"}:
+        if method not in ({"POST"} if execution_route else {"GET", "POST"}):
             return self._respond(
                 start_response,
                 "405 Method Not Allowed",
                 {"error": "method_not_allowed"},
-                [("Allow", "GET, POST")],
+                [("Allow", "POST" if execution_route else "GET, POST")],
             )
         try:
             operation_id = validate_promotion_operation_id(parts[3])
@@ -94,6 +95,8 @@ class PromotionApprovalWSGIApp:
         try:
             if operation is None or operation.action_type != "release.promote.dry-run":
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
+            if execution_route:
+                return self._execute_request(environ, start_response, operation_id, operator, parts[4])
             if operation.status != ExternalActionStatus.PREPARED and not (
                 method == "POST" and self._receipts is not None
             ):
@@ -172,6 +175,36 @@ class PromotionApprovalWSGIApp:
                 "500 Internal Server Error",
                 {"error": "internal_error"},
             )
+
+    def _execute_request(
+        self, environ: Mapping[str, Any], start_response: Callable,
+        operation_id: str, operator: ReleaseOperator, route: str,
+    ) -> Iterable[bytes]:
+        """Consume or recover a durable approval through the fixed no-I/O service."""
+        if self._receipts is None:
+            return self._respond(start_response, "404 Not Found", {"error": "not_found"})
+        if str(environ.get("CONTENT_TYPE", "")).partition(";")[0].strip().casefold() != "application/json":
+            return self._respond(start_response, "415 Unsupported Media Type", {"error": "unsupported_media_type"})
+        try:
+            payload = self._read_json(environ)
+            if set(payload) != {"schema_version"} or isinstance(payload["schema_version"], bool) or payload["schema_version"] != 1:
+                raise ValueError("execution request must contain only schema_version 1")
+        except (TypeError, ValueError):
+            return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
+        try:
+            action = self._receipts.consume if route == "execute-dry-run" else self._receipts.recover_claim
+            receipt = action(operation_id, authenticated_operator_id=operator.operator_id,
+                             granted_scopes=tuple(operator.scopes))
+        except PermissionError:
+            return self._respond(start_response, "403 Forbidden", {"error": "forbidden"})
+        except (OperationConflictError, ValueError, KeyError):
+            return self._respond(start_response, "409 Conflict", {"error": "execution_conflict"})
+        except Exception:
+            return self._respond(start_response, "500 Internal Server Error", {"error": "internal_error"})
+        return self._respond(start_response, "200 OK", {
+            "operation_id": operation_id, "receipt_status": receipt.status.value,
+            "execution_mode": "dry-run",
+        })
 
     def _authenticate(self, environ: Mapping[str, Any]) -> ReleaseOperator | None:
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
@@ -280,7 +313,7 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
     error_responses["409"]["content"]["application/json"]["schema"]["properties"]["error"] = {
         "type": "string", "enum": ["operation_not_awaiting_approval", "approval_conflict"],
     }
-    return {
+    document = {
         "openapi": "3.1.0",
         "info": {"title": "CareerAgentAI Promotion Approval", "version": "1.0.0"},
         "components": {
@@ -321,3 +354,21 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
             }
         },
     }
+    for route in ("execute-dry-run", "recover-dry-run"):
+        responses = dict(error_responses)
+        responses["409"] = response("Execution conflict", {"error": {"const": "execution_conflict", "type": "string"}})
+        responses["200"] = response("Dry-run receipt outcome", {
+            "operation_id": operation_parameter["schema"],
+            "receipt_status": {"type": "string", "enum": ["succeeded", "reconciliation_required"]},
+            "execution_mode": {"const": "dry-run", "type": "string"},
+        })
+        document["paths"]["/v1/release/promotions/{operation_id}/" + route] = {
+            "parameters": [operation_parameter],
+            "post": {"security": [{"bearerAuth": []}], "responses": responses,
+                     "requestBody": {"required": True, "content": {"application/json": {"schema": {
+                         "type": "object", "required": ["schema_version"],
+                         "properties": {"schema_version": {"type": "integer", "const": 1}},
+                         "additionalProperties": False,
+                     }}}}},
+        }
+    return document
