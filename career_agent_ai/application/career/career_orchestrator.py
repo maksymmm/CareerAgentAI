@@ -137,9 +137,12 @@ class CareerOrchestrator:
         self,
         run_id: str,
         human_result: Any | None = None,
+        *,
+        user_id: str,
     ) -> CareerRunResult:
         """Resume one paused run after its human gate validates explicit approval."""
         with self._resume_lock:
+            self._assert_run_owner(run_id, user_id)
             try:
                 return self._resume_locked(run_id, human_result)
             except CareerRunConflictError:
@@ -148,9 +151,10 @@ class CareerOrchestrator:
                 self._runs.pop(run_id, None)
                 raise
 
-    def continue_run(self, run_id: str) -> CareerRunResult:
+    def continue_run(self, run_id: str, *, user_id: str) -> CareerRunResult:
         """Reclaim and continue one durable RUNNING run under an execution lease."""
         with self._resume_lock:
+            self._assert_run_owner(run_id, user_id)
             try:
                 if self._run_repository is None:
                     state = self._runs.get(run_id)
@@ -162,6 +166,18 @@ class CareerOrchestrator:
             except CareerRunConflictError:
                 self._runs.pop(run_id, None)
                 raise
+
+    def _assert_run_owner(self, run_id: str, user_id: str) -> None:
+        """Reject foreign or missing runs before acquiring a lease or mutating state."""
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ValueError("user_id must be a non-empty string.")
+        state = (
+            self._run_repository.get(run_id)
+            if self._run_repository is not None
+            else self._runs.get(run_id)
+        )
+        if state is None or state.user_id != user_id.strip():
+            raise KeyError(f"Unknown career run '{run_id}'.")
 
     def _continue_running_state(self, state: CareerRunState) -> CareerRunResult:
         """Continue a running state or idempotently finalize a completed checkpoint."""

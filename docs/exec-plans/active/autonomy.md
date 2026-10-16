@@ -555,6 +555,12 @@ connect it to the dry-run executor without adding a real provider or deployment 
 
 ## 11. Candidate-outcome adaptive ranking
 
+P1 recovery isolation: CareerOrchestrator resume/continue entry points now require
+the caller's authenticated user_id. Foreign and missing runs fail identically
+before lease acquisition, approval persistence, or execution. Existing recovery
+callers supply owner identity explicitly; in-memory and SQLite regressions cover
+foreign/missing/invalid identity and preserve legitimate owner recovery.
+
 Diagnostic hardening: quoted secret redaction consumes escaped quotes and backslashes
 without exposing secret suffixes. Operational bearer parsing accepts repeated spaces
 after the scheme while preserving exact credential comparison.
