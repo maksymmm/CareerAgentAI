@@ -578,7 +578,11 @@ Integration tests cover approval/execute across runtime restart, replay/recovery
 concurrent request threads, policy rejection and response-failure cleanup.
 Startup also verifies main-database writability with transactional DDL rolled back
 before returning; read-only/immutable URIs fail composition without changing data.
-The next isolated priority is packaged operator service startup and HTTP smoke coverage.
+Delivered: loopback-only operator HTTP entrypoint with startup auth/listener
+validation, fixed dry-run scope, constant-time bearer comparison and context-managed
+shutdown. Actual HTTP smoke covers approval, runtime restart, execution, replay and
+recovery; invalid startup and listener-bind cleanup are regression-tested.
+The next isolated priority is operator-service health/readiness and container smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
 receipt lifecycle mutation occurs during recording.
