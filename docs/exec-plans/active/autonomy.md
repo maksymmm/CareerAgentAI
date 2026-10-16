@@ -576,6 +576,8 @@ Delivered: explicitly gated operator sandbox runtime with injected authenticatio
 durable request-local SQLite, fixed no-I/O execution and deterministic cleanup.
 Integration tests cover approval/execute across runtime restart, replay/recovery,
 concurrent request threads, policy rejection and response-failure cleanup.
+Startup also verifies main-database writability with transactional DDL rolled back
+before returning; read-only/immutable URIs fail composition without changing data.
 The next isolated priority is packaged operator service startup and HTTP smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
