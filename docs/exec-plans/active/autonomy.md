@@ -572,7 +572,11 @@ HTTP regression coverage also verifies missing/under-scoped/foreign operators on
 both execution routes and idempotent SQLite restart recovery without adapter calls.
 Execution HTTP errors distinguish explicit lifecycle conflicts (409) from corrupt
 durable receipts/plans (sanitized 500), with no durable mutations on corruption.
-The next isolated priority is runtime/operator composition and end-to-end sandbox smoke coverage.
+Delivered: explicitly gated operator sandbox runtime with injected authentication,
+durable request-local SQLite, fixed no-I/O execution and deterministic cleanup.
+Integration tests cover approval/execute across runtime restart, replay/recovery,
+concurrent request threads, policy rejection and response-failure cleanup.
+The next isolated priority is packaged operator service startup and HTTP smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
 receipt lifecycle mutation occurs during recording.
