@@ -76,7 +76,7 @@ class PromotionServiceWSGIApp:
             database = None
             try:
                 database = SQLiteDatabase.open_read_only(self._database_path)
-                database.connection.execute("SELECT operation_id, action_type, payload_json, status FROM external_action_operations LIMIT 0")
+                database.connection.execute("SELECT operation_id, action_type, payload_json, status, result_json, error, created_at, updated_at FROM external_action_operations LIMIT 0")
             except Exception:
                 return self._respond(start_response, "503 Service Unavailable", b'{"status":"unavailable"}')
             finally:
