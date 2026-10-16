@@ -231,7 +231,7 @@ def test_human_gated_run_can_be_resumed():
     assert paused.stopped_reason == "human_action_required"
     assert orchestrator._workflow.workflow.status == WorkflowState.PAUSED
 
-    resumed = orchestrator.resume(paused.run_id, human_result={"approved": True})
+    resumed = orchestrator.resume(paused.run_id, user_id="user-1", human_result={"approved": True})
 
     assert resumed.success is True
     assert resumed.stopped_reason is None
@@ -265,7 +265,7 @@ def test_human_gated_run_does_not_block_a_new_run():
 
 def test_resume_unknown_run_is_rejected():
     with pytest.raises(KeyError):
-        make_orchestrator().resume("missing-run")
+        make_orchestrator().resume("missing-run", user_id="user-1")
 
 
 def test_resume_completed_run_is_rejected_as_unknown():
@@ -273,7 +273,7 @@ def test_resume_completed_run_is_rejected_as_unknown():
     completed = orchestrator.run("user-1", "Find a job")
 
     with pytest.raises(KeyError, match="Unknown career run"):
-        orchestrator.resume(completed.run_id)
+        orchestrator.resume(completed.run_id, user_id="user-1")
 
 
 def test_run_contains_agent_failure_without_raising():
@@ -358,6 +358,56 @@ def test_returned_agent_messages_are_redacted_before_persistence(tmp_path, succe
     assert result.steps[0].success is success
 
 
+@pytest.mark.parametrize("durable", [False, True])
+@pytest.mark.parametrize("method", ["resume", "continue_run"])
+def test_recovery_rejects_foreign_owner_without_mutation(tmp_path, durable, method):
+    class LeaseTrackingRepository(SQLiteCareerRunRepository):
+        acquisitions = 0
+
+        def acquire_lease(self, *args, **kwargs):
+            self.acquisitions += 1
+            return super().acquire_lease(*args, **kwargs)
+
+    repository = (
+        LeaseTrackingRepository(SQLiteDatabase(str(tmp_path / "owner.sqlite")))
+        if durable else None
+    )
+    registry = AgentRegistry()
+    registry.register(FakeAgent("job_search", result=AgentResult(
+        success=True, agent_id="job_search", metadata={"requires_human": True},
+    )))
+    orchestrator = CareerOrchestrator(
+        memory_engine=MemoryEngine(), workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry), run_repository=repository,
+    )
+    paused = orchestrator.run("user-1", "Find a job")
+    if repository:
+        repository.acquisitions = 0
+        orchestrator = CareerOrchestrator(
+            memory_engine=MemoryEngine(), workflow_engine=WorkflowEngine(),
+            agent_factory=AgentFactory(registry), run_repository=repository,
+        )
+    state = repository.get(paused.run_id) if repository else orchestrator._runs[paused.run_id]
+    before = (state.version, dict(state.payload), tuple(state.steps))
+    recovery = getattr(orchestrator, method)
+    kwargs = {"human_result": True} if method == "resume" else {}
+    with pytest.raises(KeyError) as foreign:
+        recovery(paused.run_id, user_id="user-2", **kwargs)
+    with pytest.raises(KeyError) as missing:
+        recovery("missing", user_id="user-2", **kwargs)
+    assert str(foreign.value).replace(paused.run_id, "missing") == str(missing.value)
+    after = repository.get(paused.run_id) if repository else orchestrator._runs[paused.run_id]
+    assert (after.version, after.payload, tuple(after.steps)) == before
+    if repository:
+        assert repository.acquisitions == 0
+    with pytest.raises(ValueError):
+        recovery(paused.run_id, user_id=" ", **kwargs)
+    with pytest.raises(TypeError):
+        recovery(paused.run_id, **kwargs)
+    if method == "resume":
+        assert recovery(paused.run_id, user_id="user-1", **kwargs).success
+
+
 def test_empty_objective_is_rejected():
     with pytest.raises(ValueError):
         make_orchestrator().plan("   ")
@@ -402,7 +452,7 @@ def test_resume_persists_approval_before_next_agent_execution(tmp_path):
     )
 
     with pytest.raises(SystemExit, match="simulated process death"):
-        orchestrator.resume(paused.run_id, human_result={"approved": True})
+        orchestrator.resume(paused.run_id, user_id="user-1", human_result={"approved": True})
 
     durable = repository.get(paused.run_id)
     assert durable is not None
@@ -456,7 +506,7 @@ def test_paused_run_survives_process_restart(tmp_path):
     )
 
     resumed = second_orchestrator.resume(
-        paused.run_id,
+        paused.run_id, user_id="user-1",
         human_result={"approved": True},
     )
 
@@ -695,7 +745,7 @@ def test_concurrent_cross_process_resumes_execute_next_agent_once(tmp_path):
         try:
             try:
                 return orchestrator.resume(
-                    paused.run_id,
+                    paused.run_id, user_id="user-1",
                     human_result={"approved": True},
                 )
             except (CareerRunConflictError, KeyError):
@@ -757,7 +807,7 @@ def test_durable_running_run_can_continue_after_process_restart(tmp_path):
         run_repository=second_repository,
     )
 
-    result = second.continue_run(run_id)
+    result = second.continue_run(run_id, user_id="user-1")
 
     assert result.success is True
     assert tuple(step.action for step in result.steps) == ("job_search",)
@@ -826,7 +876,7 @@ def test_concurrent_running_recovery_is_fenced_before_agent_execution(tmp_path):
         )
         try:
             try:
-                return worker.continue_run(run_id)
+                return worker.continue_run(run_id, user_id="user-1")
             except (CareerRunConflictError, KeyError):
                 return "conflict"
         finally:
@@ -899,7 +949,7 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_agent_call(tmp_pat
     def run_first_worker():
         first_db, first = make_worker(blocking_agent)
         try:
-            return first.continue_run(run_id)
+            return first.continue_run(run_id, user_id="user-1")
         finally:
             first_db.close()
 
@@ -914,7 +964,7 @@ def test_execution_lease_heartbeat_blocks_reclaim_during_long_agent_call(tmp_pat
         second_db, second = make_worker(FakeAgent("job_search"))
         try:
             with pytest.raises(CareerRunConflictError, match="leased"):
-                second.continue_run(run_id)
+                second.continue_run(run_id, user_id="user-1")
         finally:
             second_db.close()
 
@@ -984,7 +1034,7 @@ def test_execution_lease_heartbeat_retries_transient_sqlite_lock(tmp_path):
             run_repository=first_repo,
         )
         try:
-            return first.continue_run(run_id)
+            return first.continue_run(run_id, user_id="user-1")
         finally:
             first_db.close()
 
@@ -1005,7 +1055,7 @@ def test_execution_lease_heartbeat_retries_transient_sqlite_lock(tmp_path):
         )
         try:
             with pytest.raises(CareerRunConflictError, match="leased"):
-                second.continue_run(run_id)
+                second.continue_run(run_id, user_id="user-1")
         finally:
             second_db.close()
 
@@ -1107,7 +1157,7 @@ def test_continue_run_rejects_paused_human_gate(tmp_path):
         run_repository=repository,
     )
     with pytest.raises(RuntimeError, match="running"):
-        restarted.continue_run(paused.run_id)
+        restarted.continue_run(paused.run_id, user_id="user-1")
     database.close()
 
 
@@ -1129,7 +1179,7 @@ def test_resume_without_explicit_approval_does_not_cross_human_gate():
     )
 
     with pytest.raises(PermissionError, match="affirmative human approval"):
-        orchestrator.resume(paused.run_id)
+        orchestrator.resume(paused.run_id, user_id="user-1")
 
     assert orchestrator._workflow.workflow is not None
     assert orchestrator._workflow.workflow.status == WorkflowState.PAUSED
@@ -1164,7 +1214,7 @@ def test_resume_rejects_non_affirmative_human_results(human_result):
     )
 
     with pytest.raises(PermissionError, match="affirmative human approval"):
-        orchestrator.resume(paused.run_id, human_result=human_result)
+        orchestrator.resume(paused.run_id, user_id="user-1", human_result=human_result)
 
     assert orchestrator._workflow.workflow is not None
     assert orchestrator._workflow.workflow.status == WorkflowState.PAUSED
@@ -1188,7 +1238,7 @@ def test_resume_accepts_boolean_true_as_explicit_approval():
         {"actions": ["job_application", "resume"]},
     )
 
-    resumed = orchestrator.resume(paused.run_id, human_result=True)
+    resumed = orchestrator.resume(paused.run_id, user_id="user-1", human_result=True)
 
     assert resumed.success is True
     assert next_agent.last_context is not None
@@ -1243,7 +1293,7 @@ def test_completed_run_finalization_can_retry_after_memory_failure(tmp_path):
         agent_factory=AgentFactory(AgentRegistry()),
         run_repository=repository,
     )
-    result = restarted.continue_run(run_id)
+    result = restarted.continue_run(run_id, user_id="user-1")
 
     assert result.success is True
     assert tuple(step.action for step in result.steps) == ("job_search",)
