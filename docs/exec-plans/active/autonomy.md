@@ -565,7 +565,14 @@ recovery never fills omitted evidence from dataclass defaults.
 Delivered: optional HTTP receipt composition durably records validated decisions,
 preserves identical retry behavior, returns 409 for conflicting decisions and sanitized
 500 for receipt backend failures. SQLite restart tests prove recording does not execute.
-The next isolated priority is explicit HTTP dry-run consumption and recovery routes.
+Delivered: authenticated POST-only execute-dry-run/recover-dry-run routes consume
+durable approvals or inspect interrupted execution via the fixed no-I/O service.
+Strict version-only JSON, sanitized errors, replay conflicts and OpenAPI are covered.
+HTTP regression coverage also verifies missing/under-scoped/foreign operators on
+both execution routes and idempotent SQLite restart recovery without adapter calls.
+Execution HTTP errors distinguish explicit lifecycle conflicts (409) from corrupt
+durable receipts/plans (sanitized 500), with no durable mutations on corruption.
+The next isolated priority is runtime/operator composition and end-to-end sandbox smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
 receipt lifecycle mutation occurs during recording.

@@ -35,7 +35,8 @@ def test_approval_survives_restart_and_is_consumed_once(tmp_path):
     result = service.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
     assert result.status == ExternalActionStatus.SUCCEEDED
     assert result.result["execution_mode"] == "dry-run"
-    with pytest.raises(ValueError):
+    from career_agent_ai.application.external_actions.external_action_repository import OperationConflictError
+    with pytest.raises(OperationConflictError):
         service.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
 
 
@@ -110,7 +111,8 @@ def test_mid_execution_restart_is_reconciled_without_adapter_retry(tmp_path):
     assert recovered.status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert repository.get("promotion:one").status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert restarted.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES) == recovered
-    with pytest.raises(ValueError):
+    from career_agent_ai.application.external_actions.external_action_repository import OperationConflictError
+    with pytest.raises(OperationConflictError):
         restarted.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
     assert restarted._executor._external_actions._adapter._adapter._results == {}
 
@@ -118,7 +120,8 @@ def test_mid_execution_restart_is_reconciled_without_adapter_retry(tmp_path):
 def test_unclaimed_approval_cannot_be_recovered():
     repository, service, submission = prepare(SQLiteDatabase())
     service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
-    with pytest.raises(ValueError):
+    from career_agent_ai.application.external_actions.external_action_repository import OperationConflictError
+    with pytest.raises(OperationConflictError):
         service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
 
 

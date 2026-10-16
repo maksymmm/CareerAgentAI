@@ -111,6 +111,89 @@ def test_http_decision_is_durable_idempotent_and_never_executes(tmp_path):
     assert repository.get(recovered.operation_id) == before_receipt
 
 
+def test_http_dry_run_requires_receipt_and_never_reuses_it():
+    from career_agent_ai.application.release import PromotionApprovalReceiptService
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase())
+    repository.create(operation())
+    application = PromotionApprovalWSGIApp(repository, receipts=PromotionApprovalReceiptService(repository),
+        resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset({"release:promote:dry-run"})))
+    path = "/v1/release/promotions/promote:release-1/execute-dry-run"
+    assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "403 Forbidden"
+    _, prompt = request(application)
+    assert request(application, method="POST", body={"schema_version": 1, "decision": "approve", "action_fingerprint": prompt["action_fingerprint"]})[0][0] == "200 OK"
+    assert request(application, path=path)[0][0] == "405 Method Not Allowed"
+    assert request(application, method="POST", path=path, body={"schema_version": 1, "approved": True})[0][0] == "400 Bad Request"
+    (status, _), result = request(application, method="POST", path=path, body={"schema_version": 1})
+    assert status == "200 OK"
+    assert result["execution_mode"] == "dry-run"
+    assert result["receipt_status"] == "succeeded"
+    assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "409 Conflict"
+    recovery = path.replace("execute-dry-run", "recover-dry-run")
+    assert request(application, method="POST", path=recovery, body={"schema_version": 1})[0][0] == "200 OK"
+
+
+@pytest.mark.parametrize("route", ["execute-dry-run", "recover-dry-run"])
+def test_execution_routes_require_configured_receipts_and_json(route):
+    path = "/v1/release/promotions/promote:release-1/" + route
+    assert request(app(), method="POST", path=path, body={"schema_version": 1})[0][0] == "404 Not Found"
+    application = app()
+    application._receipts = object()
+    assert request(application, method="POST", path=path, body={}, content_type="text/plain")[0][0] == "415 Unsupported Media Type"
+    assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "500 Internal Server Error"
+
+
+@pytest.mark.parametrize("route", ["execute-dry-run", "recover-dry-run"])
+@pytest.mark.parametrize("identity", ["missing", "under-scoped", "foreign"])
+def test_execution_routes_reject_unauthorized_operators_without_state_changes(route, identity):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService, PromotionApprovalSubmission, build_promotion_approval_prompt
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase())
+    original = repository.create(operation())
+    service = PromotionApprovalReceiptService(repository)
+    scopes = frozenset({"release:promote:dry-run"})
+    prompt = build_promotion_approval_prompt(original, operator_id="owner", granted_scopes=scopes)
+    receipt = service.record(PromotionApprovalSubmission(original.operation_id, "owner", prompt.action_fingerprint, "approve"),
+        authenticated_operator_id="owner", granted_scopes=tuple(scopes))
+    operator = None if identity == "missing" else ReleaseOperator("foreign" if identity == "foreign" else "owner", scopes if identity == "foreign" else frozenset())
+    application = PromotionApprovalWSGIApp(repository, receipts=service, resolve_bearer=lambda token: operator)
+    (status, _), result = request(application, method="POST",
+        path="/v1/release/promotions/promote:release-1/" + route, body={"schema_version": 1})
+    assert status == ("401 Unauthorized" if identity == "missing" else "403 Forbidden")
+    assert repository.get(original.operation_id) == original
+    assert repository.get(receipt.operation_id) == receipt
+
+
+def test_http_recovery_after_claim_restart_never_executes(tmp_path):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService, PromotionApprovalSubmission, build_promotion_approval_prompt
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    path = str(tmp_path / "http-recovery.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteExternalActionOperationRepository(database)
+    original = repository.create(operation())
+    scopes = frozenset({"release:promote:dry-run"})
+    prompt = build_promotion_approval_prompt(original, operator_id="owner", granted_scopes=scopes)
+    receipt = PromotionApprovalReceiptService(repository).record(
+        PromotionApprovalSubmission(original.operation_id, "owner", prompt.action_fingerprint, "approve"),
+        authenticated_operator_id="owner", granted_scopes=tuple(scopes))
+    repository.transition(receipt.operation_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS)
+    database.close()
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase(path))
+    service = PromotionApprovalReceiptService(repository)
+    application = PromotionApprovalWSGIApp(repository, receipts=service,
+        resolve_bearer=lambda token: ReleaseOperator("owner", scopes))
+    route = "/v1/release/promotions/promote:release-1/recover-dry-run"
+    for _ in range(2):
+        (status, _), result = request(application, method="POST", path=route, body={"schema_version": 1})
+        assert status == "200 OK"
+        assert result["receipt_status"] == "reconciliation_required"
+    assert repository.get(original.operation_id).status == ExternalActionStatus.PREPARED
+    assert service._executor._external_actions._adapter._adapter._results == {}
+
+
 @pytest.mark.parametrize("error", [ValueError, TypeError, PermissionError, RuntimeError])
 def test_receipt_backend_failures_are_sanitized(error):
     class BrokenReceipts:
@@ -124,6 +207,37 @@ def test_receipt_backend_failures_are_sanitized(error):
     })
     assert status == "500 Internal Server Error"
     assert result == {"error": "internal_error"}
+
+
+@pytest.mark.parametrize("route", ["execute-dry-run", "recover-dry-run"])
+@pytest.mark.parametrize("corruption", ["receipt", "plan"])
+def test_execution_corrupt_durable_state_is_sanitized_server_error(route, corruption):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService, PromotionApprovalSubmission, build_promotion_approval_prompt
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase())
+    original = repository.create(operation())
+    scopes = frozenset({"release:promote:dry-run"})
+    service = PromotionApprovalReceiptService(repository)
+    prompt = build_promotion_approval_prompt(original, operator_id="owner", granted_scopes=scopes)
+    receipt = service.record(PromotionApprovalSubmission(original.operation_id, "owner", prompt.action_fingerprint, "approve"),
+        authenticated_operator_id="owner", granted_scopes=tuple(scopes))
+
+    class CorruptReader:
+        def get(self, operation_id):
+            value = repository.get(operation_id)
+            corrupt_id = receipt.operation_id if corruption == "receipt" else original.operation_id
+            return replace(value, payload={"private": "synthetic-secret"}) if operation_id == corrupt_id else value
+
+    service = PromotionApprovalReceiptService(CorruptReader())
+    application = PromotionApprovalWSGIApp(repository, receipts=service,
+        resolve_bearer=lambda token: ReleaseOperator("owner", scopes))
+    (status, _), payload = request(application, method="POST",
+        path="/v1/release/promotions/promote:release-1/" + route, body={"schema_version": 1})
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+    assert repository.get(original.operation_id) == original
+    assert repository.get(receipt.operation_id) == receipt
 
 
 def test_authenticated_operator_can_read_and_validate_current_prompt():
