@@ -317,6 +317,47 @@ def test_agent_exception_credentials_are_redacted_from_result_and_memory():
     assert "[REDACTED]" in serialized_summary
 
 
+@pytest.mark.parametrize("success", [True, False])
+def test_returned_agent_messages_are_redacted_before_persistence(tmp_path, success):
+    memory = MemoryEngine()
+    class InspectingRepository(SQLiteCareerRunRepository):
+        persisted_steps = None
+
+        def delete(self, run_id, *, lease_owner=None):
+            self.persisted_steps = self.get(run_id).steps
+            return super().delete(run_id, lease_owner=lease_owner)
+
+    repository = InspectingRepository(
+        SQLiteDatabase(str(tmp_path / "redacted-messages.sqlite"))
+    )
+    registry = AgentRegistry()
+    registry.register(FakeAgent(
+        "job_search",
+        result=AgentResult(
+            success=success,
+            agent_id="job_search",
+            messages=("provider api_key=synthetic-test-secret", "ordinary diagnostic"),
+        ),
+    ))
+    orchestrator = CareerOrchestrator(
+        memory_engine=memory,
+        workflow_engine=WorkflowEngine(),
+        agent_factory=AgentFactory(registry),
+        run_repository=repository,
+    )
+
+    result = orchestrator.run("user-1", "Find a job")
+    summary = memory.get(f"career_run:user-1:{result.run_id}", user_id="user-1")
+
+    assert repository.persisted_steps is not None
+    assert summary is not None
+    for value in (result.steps, repository.persisted_steps, summary.value):
+        assert "synthetic-test-secret" not in str(value)
+        assert "[REDACTED]" in str(value)
+        assert "ordinary diagnostic" in str(value)
+    assert result.steps[0].success is success
+
+
 def test_empty_objective_is_rejected():
     with pytest.raises(ValueError):
         make_orchestrator().plan("   ")

@@ -308,7 +308,7 @@ class CareerOrchestrator:
                 step_id=step.id,
                 action=step.action,
                 success=result.success,
-                messages=result.messages,
+                messages=tuple(redact_text(message) for message in result.messages),
                 metadata=durable_metadata,
             )
             state.add_step(step_result)
