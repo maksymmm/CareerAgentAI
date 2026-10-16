@@ -4,7 +4,7 @@ from career_agent_ai.application.external_actions import ExternalActionOperation
 from career_agent_ai.application.release.promotion_approval import (
     PromotionApprovalSubmission, build_promotion_approval_prompt,
 )
-from career_agent_ai.application.release.promotion_approval_receipt import PromotionApprovalReceiptService
+from career_agent_ai.application.release import PromotionApprovalReceiptService
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
 from career_agent_ai.tests.test_promotion_execution import _plan, _service, DryRunPromotionAdapter
@@ -84,3 +84,39 @@ def test_decline_cannot_be_replaced_by_approval():
         service.record(PromotionApprovalSubmission(
             submission.operation_id, submission.operator_id, submission.action_fingerprint, "approve",
         ), authenticated_operator_id="operator", granted_scopes=SCOPES)
+
+
+def test_mid_execution_restart_is_reconciled_without_adapter_retry(tmp_path):
+    class CrashingAdapter:
+        def promote(self, *args, **kwargs):
+            raise SystemExit("simulated process loss")
+
+    path = str(tmp_path / "interrupted.sqlite")
+    database = SQLiteDatabase(path)
+    repository, service, submission = prepare(database)
+    receipt = service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
+    service._executor, _ = _service(database, CrashingAdapter())
+    with pytest.raises(SystemExit):
+        service.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+    database.close()
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase(path))
+    restarted = PromotionApprovalReceiptService(repository)
+    for operator, scopes in (("foreign", SCOPES), ("operator", ())):
+        with pytest.raises(PermissionError):
+            restarted.recover_claim("promotion:one", authenticated_operator_id=operator, granted_scopes=scopes)
+        assert repository.get("promotion:one").status == ExternalActionStatus.IN_PROGRESS
+        assert repository.get(receipt.operation_id).status == ExternalActionStatus.IN_PROGRESS
+    recovered = restarted.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+    assert recovered.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert repository.get("promotion:one").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert restarted.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES) == recovered
+    with pytest.raises(ValueError):
+        restarted.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+    assert restarted._executor._external_actions._adapter._adapter._results == {}
+
+
+def test_unclaimed_approval_cannot_be_recovered():
+    repository, service, submission = prepare(SQLiteDatabase())
+    service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
+    with pytest.raises(ValueError):
+        service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
