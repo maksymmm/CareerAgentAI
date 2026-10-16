@@ -94,3 +94,49 @@ def test_bind_failure_closes_sandbox(tmp_path, monkeypatch):
         with promotion_service_from_env(environment(tmp_path)):
             pytest.fail("must not start")
     assert len(closed) == 1
+
+
+@pytest.mark.parametrize("state", ["missing", "empty", "corrupt", "ready"])
+def test_probes_are_read_only_sanitized_and_do_not_require_auth(tmp_path, state):
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "probe.sqlite"
+    if state == "empty":
+        path.touch()
+    elif state == "corrupt":
+        path.write_bytes(b"private corrupt storage detail")
+    elif state == "ready":
+        database = SQLiteDatabase(str(path))
+        SQLiteExternalActionOperationRepository(database).create(operation())
+        database.close()
+    before = path.read_bytes() if path.exists() else None
+    def forbidden(*args):
+        raise AssertionError("probe must not reach workflow")
+    application = PromotionServiceWSGIApp(forbidden, database_path=str(path))
+    assert request(application, path="/healthz", token="")[0][0] == "200 OK"
+    (status, headers), payload = request(application, path="/readyz", token="")
+    assert status == ("200 OK" if state == "ready" else "503 Service Unavailable")
+    assert payload == {"status": "ok" if state == "ready" else "unavailable"}
+    assert ("Cache-Control", "no-store") in headers
+    assert request(application, method="POST", path="/readyz", body={})[0][0] == "405 Method Not Allowed"
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+def test_http_probe_routes_and_openapi(tmp_path):
+    from career_agent_ai.application.runtime.promotion_service import promotion_service_openapi_document
+    with promotion_service_from_env(environment(tmp_path)) as server:
+        for path in ("/healthz", "/readyz"):
+            worker = Thread(target=server.handle_request)
+            worker.start()
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            try:
+                connection.request("GET", path)
+                response = connection.getresponse()
+                assert response.status == 200
+                assert json.loads(response.read()) == {"status": "ok"}
+            finally:
+                connection.close()
+                worker.join(timeout=5)
+    document = promotion_service_openapi_document()
+    assert document["paths"]["/readyz"]["get"]["security"] == []
+    assert "503" in document["paths"]["/readyz"]["get"]["responses"]
