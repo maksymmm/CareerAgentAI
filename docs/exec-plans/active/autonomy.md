@@ -586,6 +586,8 @@ Delivered: operator-service public GET-only liveness and read-only schema readin
 sanitized unavailable responses and no replacement DB creation. Startup initializes
 operation schema before binding. HTTP smoke and missing/empty/corrupt/ready storage
 regressions prove probes do not mutate state; service OpenAPI includes both probes.
+Readiness validates all eight repository read columns, rejecting partial legacy
+schemas rather than reporting ready before workflow reads fail.
 The next isolated priority is operator-service container smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
