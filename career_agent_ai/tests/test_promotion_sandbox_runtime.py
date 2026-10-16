@@ -104,3 +104,31 @@ def test_invalid_resolver_is_rejected_before_storage(tmp_path):
     with pytest.raises(TypeError):
         build_promotion_sandbox_app_from_env(resolve_bearer=None, environ=environment(tmp_path))
     assert not (tmp_path / "promotion.sqlite").exists()
+
+
+@pytest.mark.parametrize("query", ["mode=ro", "immutable=1", "mode=rw&immutable=1", "mode=%72%6f"])
+def test_read_only_storage_rejected_without_changing_existing_data(tmp_path, query):
+    path = tmp_path / "existing.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE retained (value TEXT)")
+        connection.execute("INSERT INTO retained VALUES ('unchanged')")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="writable SQLite"):
+        build_promotion_sandbox_app_from_env(resolve_bearer=resolve,
+            environ={**environment(tmp_path), "CAREER_AGENT_DB_PATH": f"file:{path}?{query}"})
+    assert path.read_bytes() == before
+
+
+def test_writable_startup_probe_rolls_back_schema_and_rows(tmp_path):
+    env = environment(tmp_path)
+    path = env["CAREER_AGENT_DB_PATH"]
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE retained (value TEXT)")
+        connection.execute("INSERT INTO retained VALUES ('unchanged')")
+    with build_promotion_sandbox_app_from_env(resolve_bearer=resolve, environ=env):
+        pass
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [("retained",)]
+        assert connection.execute("SELECT value FROM retained").fetchall() == [("unchanged",)]
+        connection.execute("BEGIN IMMEDIATE")
+        connection.rollback()
