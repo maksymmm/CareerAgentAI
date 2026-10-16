@@ -120,3 +120,38 @@ def test_unclaimed_approval_cannot_be_recovered():
     service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
     with pytest.raises(ValueError):
         service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+
+
+@pytest.mark.parametrize("executed", [False, True])
+def test_recovery_at_receipt_execution_boundaries(tmp_path, executed):
+    path = str(tmp_path / "boundary.sqlite")
+    database = SQLiteDatabase(path)
+    repository, service, submission = prepare(database)
+    receipt = service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
+    repository.transition(receipt.operation_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS)
+    if executed:
+        service._executor.execute("promotion:one", plan=_plan(), human_approved=True)
+    database.close()
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase(path))
+    restarted = PromotionApprovalReceiptService(repository)
+    recovered = restarted.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+    expected = ExternalActionStatus.SUCCEEDED if executed else ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert recovered.status == expected
+    if executed:
+        assert dict(recovered.result) == dict(repository.get("promotion:one").result)
+    else:
+        assert repository.get("promotion:one").status == ExternalActionStatus.PREPARED
+    assert restarted.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES) == recovered
+    assert restarted._executor._external_actions._adapter._adapter._results == {}
+
+
+def test_recovery_rejects_substituted_durable_success_result():
+    repository, service, submission = prepare(SQLiteDatabase())
+    receipt = service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
+    repository.transition(receipt.operation_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS)
+    service._executor.execute("promotion:one", plan=_plan(), human_approved=True)
+    operation = repository.get("promotion:one")
+    repository.replace_succeeded_result("promotion:one", {**operation.result, "target_reference": _plan().rollback_reference})
+    with pytest.raises(ValueError):
+        service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+    assert repository.get(receipt.operation_id).status == ExternalActionStatus.IN_PROGRESS
