@@ -6,6 +6,7 @@ from dataclasses import replace
 from career_agent_ai.application.external_actions import ExternalActionService, ExternalActionStatus
 from career_agent_ai.application.external_actions.external_action_repository import (
     ExternalActionOperationRepository,
+    OperationConflictError,
 )
 from career_agent_ai.application.release.promotion_approval import (
     PromotionApprovalDecision,
@@ -47,8 +48,12 @@ class PromotionApprovalReceiptService:
         operation = self._repository.get(submission.operation_id)
         if operation is None:
             raise KeyError("Unknown promotion operation")
+        existing = self._repository.get(self._receipt_id(submission.operation_id))
+        if existing is None and operation.status != ExternalActionStatus.PREPARED:
+            raise OperationConflictError("A completed operation cannot accept a new approval")
         decision = validate_promotion_approval_submission(
-            operation, authenticated_operator_id=authenticated_operator_id,
+            replace(operation, status=ExternalActionStatus.PREPARED) if existing else operation,
+            authenticated_operator_id=authenticated_operator_id,
             granted_scopes=granted_scopes, submission=submission,
         )
         return self._repository.create(ExternalActionOperation(
