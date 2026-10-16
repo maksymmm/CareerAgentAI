@@ -378,7 +378,10 @@ application service can be injected as `receipts=` into the HTTP approval endpoi
 POST then durably records the validated immutable decision, identical retries succeed,
 conflicting decisions return 409, and backend failures return sanitized 500 errors.
 Without receipt injection the endpoint remains validation-only. Neither mode executes
-promotion; explicit HTTP dry-run consumption is the next isolated integration step.
+promotion. Separate authenticated POST-only `execute-dry-run` and `recover-dry-run`
+routes accept only `{"schema_version":1}` and require receipt-service injection.
+They consume durable approval once or classify recovery without live provider I/O;
+replays conflict rather than rerunning the adapter. OpenAPI describes both routes.
 Its explicit `recover_claim()` classifies both interrupted operation and consumed
 receipt as reconciliation-required after revalidating operator/scope/intent binding;
 it never calls the adapter and repeated classification is idempotent.
