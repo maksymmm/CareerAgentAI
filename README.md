@@ -369,6 +369,12 @@ external-action lifecycle. It persists intent before execution, requires literal
 approval, uses a stable operation ID for idempotency, and moves restarted or mismatched
 outcomes to reconciliation instead of retrying. The only included adapter is a
 deterministic in-memory dry run with no registry, orchestrator, credential or network I/O.
+`PromotionApprovalReceiptService` persists an immutable operator decision bound to
+the exact intent fingerprint and consumes approval atomically before invoking a fixed
+no-I/O dry-run adapter. SQLite restarts retain the decision; declined, foreign,
+under-scoped, stale, or already-claimed approvals cannot start execution. A crash
+after claiming approval requires inspection, never automatic receipt reuse. This
+application service is not yet wired into the validation-only HTTP approval endpoint.
 Confirming an ambiguous success requires independently observed target and rollback
 references that exactly match the durable plan; planned values are never substituted
 for provider observations. Provider exceptions are conservatively ambiguous unless the
