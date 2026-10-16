@@ -158,3 +158,37 @@ def test_readiness_rejects_partial_workflow_schema_without_mutation(tmp_path, mi
     assert status == "503 Service Unavailable"
     assert payload == {"status": "unavailable"}
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("key", ["none", "partial", "composite", "unique", "primary"])
+def test_readiness_requires_single_column_nonpartial_unique_operation_key(tmp_path, key):
+    import sqlite3
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "keys.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE external_action_operations (operation_id TEXT" +
+            (" PRIMARY KEY" if key == "primary" else "") +
+            ", action_type TEXT, payload_json TEXT, status TEXT, result_json TEXT, error TEXT, created_at TEXT, updated_at TEXT)")
+        if key in {"partial", "composite", "unique"}:
+            connection.execute("CREATE UNIQUE INDEX operation_key ON external_action_operations (" +
+                ("operation_id, action_type" if key == "composite" else "operation_id") + ")" +
+                (" WHERE status='prepared'" if key == "partial" else ""))
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    app = PromotionServiceWSGIApp(lambda *args: None, database_path=str(path))
+    assert request(app, path="/readyz")[0][0] == ("200 OK" if key in {"primary", "unique"} else "503 Service Unavailable")
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
+def test_wal_readiness_fails_closed_without_creating_sidecars(tmp_path):
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "wal.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteExternalActionOperationRepository(database)
+    database.connection.execute("PRAGMA journal_mode=WAL")
+    database.close()
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    app = PromotionServiceWSGIApp(lambda *args: None, database_path=str(path))
+    assert request(app, path="/readyz")[0][0] == "503 Service Unavailable"
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
