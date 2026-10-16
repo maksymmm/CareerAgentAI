@@ -588,6 +588,9 @@ operation schema before binding. HTTP smoke and missing/empty/corrupt/ready stor
 regressions prove probes do not mutate state; service OpenAPI includes both probes.
 Readiness validates all eight repository read columns, rejecting partial legacy
 schemas rather than reporting ready before workflow reads fail.
+Readiness also requires a single-column non-partial unique operation-ID index.
+Immutable schema snapshots avoid sidecar creation; WAL/URI configurations report
+unavailable rather than ignoring live WAL evidence or writing checkpoints.
 The next isolated priority is operator-service container smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
