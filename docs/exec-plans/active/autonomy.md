@@ -568,6 +568,8 @@ preserves identical retry behavior, returns 409 for conflicting decisions and sa
 Delivered: authenticated POST-only execute-dry-run/recover-dry-run routes consume
 durable approvals or inspect interrupted execution via the fixed no-I/O service.
 Strict version-only JSON, sanitized errors, replay conflicts and OpenAPI are covered.
+HTTP regression coverage also verifies missing/under-scoped/foreign operators on
+both execution routes and idempotent SQLite restart recovery without adapter calls.
 The next isolated priority is runtime/operator composition and end-to-end sandbox smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
