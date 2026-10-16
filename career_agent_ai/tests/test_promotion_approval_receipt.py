@@ -155,3 +155,23 @@ def test_recovery_rejects_substituted_durable_success_result():
     with pytest.raises(ValueError):
         service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
     assert repository.get(receipt.operation_id).status == ExternalActionStatus.IN_PROGRESS
+
+
+@pytest.mark.parametrize("field", [
+    "execution_mode", "execution_id", "target_reference", "rollback_reference", "extra",
+])
+def test_recovery_rejects_inexact_durable_result_fields(field):
+    repository, service, submission = prepare(SQLiteDatabase())
+    receipt = service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
+    repository.transition(receipt.operation_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS)
+    service._executor.execute("promotion:one", plan=_plan(), human_approved=True)
+    result = dict(repository.get("promotion:one").result)
+    if field == "extra":
+        result[field] = "unexpected"
+    else:
+        result.pop(field)
+    repository.replace_succeeded_result("promotion:one", result)
+    with pytest.raises(ValueError, match="fields do not match"):
+        service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+    assert repository.get(receipt.operation_id).status == ExternalActionStatus.IN_PROGRESS
+    assert dict(repository.get("promotion:one").result) == result
