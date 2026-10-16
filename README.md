@@ -374,7 +374,11 @@ the exact intent fingerprint and consumes approval atomically before invoking a 
 no-I/O dry-run adapter. SQLite restarts retain the decision; declined, foreign,
 under-scoped, stale, or already-claimed approvals cannot start execution. A crash
 after claiming approval requires inspection, never automatic receipt reuse. This
-application service is not yet wired into the validation-only HTTP approval endpoint.
+application service can be injected as `receipts=` into the HTTP approval endpoint:
+POST then durably records the validated immutable decision, identical retries succeed,
+conflicting decisions return 409, and backend failures return sanitized 500 errors.
+Without receipt injection the endpoint remains validation-only. Neither mode executes
+promotion; explicit HTTP dry-run consumption is the next isolated integration step.
 Its explicit `recover_claim()` classifies both interrupted operation and consumed
 receipt as reconciliation-required after revalidating operator/scope/intent binding;
 it never calls the adapter and repeated classification is idempotent.

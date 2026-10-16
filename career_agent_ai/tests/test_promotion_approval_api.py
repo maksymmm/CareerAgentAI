@@ -66,6 +66,52 @@ def request(application, *, method="GET", token="valid", body=None, path=None, c
     return responses[0], json.loads(response)
 
 
+def test_http_decision_is_durable_idempotent_and_never_executes(tmp_path):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    path = str(tmp_path / "http-receipt.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteExternalActionOperationRepository(database)
+    repository.create(operation())
+    receipts = PromotionApprovalReceiptService(repository)
+    application = PromotionApprovalWSGIApp(
+        repository, receipts=receipts,
+        resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset({"release:promote:dry-run"})),
+    )
+    _, prompt = request(application)
+    body = {"schema_version": 1, "action_fingerprint": prompt["action_fingerprint"], "decision": "approve"}
+    for _ in range(2):
+        (status, _), result = request(application, method="POST", body=body)
+        assert status == "200 OK"
+    (status, _), result = request(application, method="POST", body={**body, "decision": "decline"})
+    assert status == "409 Conflict"
+    assert result == {"error": "approval_conflict"}
+    assert repository.get("promote:release-1").status == ExternalActionStatus.PREPARED
+    database.close()
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase(path))
+    recovered = PromotionApprovalReceiptService(repository).consume(
+        "promote:release-1", authenticated_operator_id="operator:release",
+        granted_scopes=("release:promote:dry-run",),
+    )
+    assert recovered.status == ExternalActionStatus.SUCCEEDED
+
+
+@pytest.mark.parametrize("error", [ValueError, TypeError, PermissionError, RuntimeError])
+def test_receipt_backend_failures_are_sanitized(error):
+    class BrokenReceipts:
+        def record(self, *args, **kwargs):
+            raise error("api_key=synthetic-secret")
+    application = app()
+    application._receipts = BrokenReceipts()
+    _, prompt = request(application)
+    (status, _), result = request(application, method="POST", body={
+        "schema_version": 1, "action_fingerprint": prompt["action_fingerprint"], "decision": "approve",
+    })
+    assert status == "500 Internal Server Error"
+    assert result == {"error": "internal_error"}
+
+
 def test_authenticated_operator_can_read_and_validate_current_prompt():
     (status, headers), prompt = request(app())
     assert status == "200 OK"
