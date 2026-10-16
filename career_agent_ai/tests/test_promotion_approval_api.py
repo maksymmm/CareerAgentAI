@@ -144,6 +144,56 @@ def test_execution_routes_require_configured_receipts_and_json(route):
     assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "500 Internal Server Error"
 
 
+@pytest.mark.parametrize("route", ["execute-dry-run", "recover-dry-run"])
+@pytest.mark.parametrize("identity", ["missing", "under-scoped", "foreign"])
+def test_execution_routes_reject_unauthorized_operators_without_state_changes(route, identity):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService, PromotionApprovalSubmission, build_promotion_approval_prompt
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase())
+    original = repository.create(operation())
+    service = PromotionApprovalReceiptService(repository)
+    scopes = frozenset({"release:promote:dry-run"})
+    prompt = build_promotion_approval_prompt(original, operator_id="owner", granted_scopes=scopes)
+    receipt = service.record(PromotionApprovalSubmission(original.operation_id, "owner", prompt.action_fingerprint, "approve"),
+        authenticated_operator_id="owner", granted_scopes=tuple(scopes))
+    operator = None if identity == "missing" else ReleaseOperator("foreign" if identity == "foreign" else "owner", scopes if identity == "foreign" else frozenset())
+    application = PromotionApprovalWSGIApp(repository, receipts=service, resolve_bearer=lambda token: operator)
+    (status, _), result = request(application, method="POST",
+        path="/v1/release/promotions/promote:release-1/" + route, body={"schema_version": 1})
+    assert status == ("401 Unauthorized" if identity == "missing" else "403 Forbidden")
+    assert repository.get(original.operation_id) == original
+    assert repository.get(receipt.operation_id) == receipt
+
+
+def test_http_recovery_after_claim_restart_never_executes(tmp_path):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService, PromotionApprovalSubmission, build_promotion_approval_prompt
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    path = str(tmp_path / "http-recovery.sqlite")
+    database = SQLiteDatabase(path)
+    repository = SQLiteExternalActionOperationRepository(database)
+    original = repository.create(operation())
+    scopes = frozenset({"release:promote:dry-run"})
+    prompt = build_promotion_approval_prompt(original, operator_id="owner", granted_scopes=scopes)
+    receipt = PromotionApprovalReceiptService(repository).record(
+        PromotionApprovalSubmission(original.operation_id, "owner", prompt.action_fingerprint, "approve"),
+        authenticated_operator_id="owner", granted_scopes=tuple(scopes))
+    repository.transition(receipt.operation_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS)
+    database.close()
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase(path))
+    service = PromotionApprovalReceiptService(repository)
+    application = PromotionApprovalWSGIApp(repository, receipts=service,
+        resolve_bearer=lambda token: ReleaseOperator("owner", scopes))
+    route = "/v1/release/promotions/promote:release-1/recover-dry-run"
+    for _ in range(2):
+        (status, _), result = request(application, method="POST", path=route, body={"schema_version": 1})
+        assert status == "200 OK"
+        assert result["receipt_status"] == "reconciliation_required"
+    assert repository.get(original.operation_id).status == ExternalActionStatus.PREPARED
+    assert service._executor._external_actions._adapter._adapter._results == {}
+
+
 @pytest.mark.parametrize("error", [ValueError, TypeError, PermissionError, RuntimeError])
 def test_receipt_backend_failures_are_sanitized(error):
     class BrokenReceipts:
