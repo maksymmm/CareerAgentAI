@@ -375,6 +375,9 @@ no-I/O dry-run adapter. SQLite restarts retain the decision; declined, foreign,
 under-scoped, stale, or already-claimed approvals cannot start execution. A crash
 after claiming approval requires inspection, never automatic receipt reuse. This
 application service is not yet wired into the validation-only HTTP approval endpoint.
+Its explicit `recover_claim()` classifies both interrupted operation and consumed
+receipt as reconciliation-required after revalidating operator/scope/intent binding;
+it never calls the adapter and repeated classification is idempotent.
 Confirming an ambiguous success requires independently observed target and rollback
 references that exactly match the durable plan; planned values are never substituted
 for provider observations. Provider exceptions are conservatively ambiguous unless the
