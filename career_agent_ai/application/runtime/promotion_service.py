@@ -8,6 +8,9 @@ import hmac
 import ipaddress
 import os
 import signal
+import sqlite3
+from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Callable, Iterable, Iterator, Mapping
 from wsgiref.simple_server import WSGIServer, make_server
 
@@ -75,8 +78,25 @@ class PromotionServiceWSGIApp:
         if path == "/readyz":
             database = None
             try:
-                database = SQLiteDatabase.open_read_only(self._database_path)
-                database.connection.execute("SELECT operation_id, action_type, payload_json, status, result_json, error, created_at, updated_at FROM external_action_operations LIMIT 0")
+                # Immutable snapshot reads cannot create journal/shared-memory files.
+                # WAL is deliberately unavailable: ignoring a live WAL is not a
+                # trustworthy readiness snapshot. URI paths require separate support.
+                if self._database_path.startswith("file:"):
+                    raise ValueError("Readiness requires an ordinary SQLite path")
+                path = Path(self._database_path).absolute()
+                with path.open("rb") as source:
+                    header = source.read(100)
+                if len(header) != 100 or header[:16] != b"SQLite format 3\x00" or header[18:20] != b"\x01\x01":
+                    raise ValueError("Readiness requires rollback-journal storage")
+                database = sqlite3.connect(f"file:{quote(str(path), safe='/')}?mode=ro&immutable=1", uri=True)
+                database.execute("SELECT operation_id, action_type, payload_json, status, result_json, error, created_at, updated_at FROM external_action_operations LIMIT 0")
+                unique = False
+                for name, is_unique, partial in database.execute('SELECT name, "unique", partial FROM pragma_index_list(?)', ("external_action_operations",)):
+                    columns = [row[2] for row in database.execute("SELECT * FROM pragma_index_info(?)", (name,))]
+                    if is_unique and not partial and columns == ["operation_id"]:
+                        unique = True
+                if not unique:
+                    raise ValueError("Operation IDs require a non-partial unique key")
             except Exception:
                 return self._respond(start_response, "503 Service Unavailable", b'{"status":"unavailable"}')
             finally:
