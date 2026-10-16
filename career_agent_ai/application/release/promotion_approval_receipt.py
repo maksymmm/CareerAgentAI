@@ -134,6 +134,10 @@ class PromotionApprovalReceiptService:
             plan = validate_promotion_plan_payload(operation.payload)
             if operation.result is None:
                 raise ValueError("Successful promotion has no durable result")
+            if set(operation.result) != {
+                "execution_id", "execution_mode", "target_reference", "rollback_reference",
+            }:
+                raise ValueError("Successful promotion result fields do not match schema")
             result = PromotionExecutionResult(**dict(operation.result))
             plan.verify_target_reference(result.target_reference)
             plan.verify_rollback_reference(result.rollback_reference)
