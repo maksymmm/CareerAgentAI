@@ -15,6 +15,7 @@ from career_agent_ai.application.release.promotion_approval import (
 from career_agent_ai.application.release.promotion_execution import (
     DryRunPromotionAdapter,
     PromotionExecutionService,
+    PromotionExecutionResult,
     validate_promotion_operation_id,
     validate_promotion_plan_payload,
 )
@@ -129,6 +130,31 @@ class PromotionApprovalReceiptService:
         if decision != PromotionApprovalDecision.APPROVE:
             raise PermissionError("Promotion was declined")
         recoverable = {ExternalActionStatus.IN_PROGRESS, ExternalActionStatus.RECONCILIATION_REQUIRED}
+        if operation.status == ExternalActionStatus.SUCCEEDED:
+            plan = validate_promotion_plan_payload(operation.payload)
+            if operation.result is None:
+                raise ValueError("Successful promotion has no durable result")
+            result = PromotionExecutionResult(**dict(operation.result))
+            plan.verify_target_reference(result.target_reference)
+            plan.verify_rollback_reference(result.rollback_reference)
+            if receipt.status == ExternalActionStatus.SUCCEEDED:
+                if dict(receipt.result or {}) != result.as_dict():
+                    raise ValueError("Receipt result does not match durable execution")
+                return receipt
+            if receipt.status not in recoverable:
+                raise ValueError("Only a consumed approval can be completed")
+            return self._repository.transition(
+                receipt_id, receipt.status, ExternalActionStatus.SUCCEEDED,
+                result=result.as_dict(),
+            )
+        if operation.status == ExternalActionStatus.PREPARED and receipt.status in recoverable:
+            if receipt.status == ExternalActionStatus.RECONCILIATION_REQUIRED:
+                return receipt
+            return self._repository.transition(
+                receipt_id, ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+                error="Approval consumed before execution; inspect before any further action",
+            )
         if receipt.status not in recoverable or operation.status not in recoverable:
             raise ValueError("Only an interrupted promotion execution can be recovered")
         if operation.status == ExternalActionStatus.IN_PROGRESS:
