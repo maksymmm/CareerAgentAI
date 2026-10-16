@@ -557,6 +557,9 @@ Claimed receipts are never automatically reused after a crash.
 Explicit recover_claim() classifies mid-execution crashes for reconciliation without
 adapter I/O; SQLite restart tests cover unauthorized recovery and repeated recovery.
 The receipt service is exported from the public release package.
+Recovery covers both receipt/executor boundaries: claimed but not started receipts
+require inspection, while durable success completes the receipt only after exact
+result validation. Neither path calls the adapter; repeated recovery is idempotent.
 The next isolated priority is HTTP composition for durable receipt recording and
 explicit dry-run consumption, with sanitized errors and documented conflict responses.
 
