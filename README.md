@@ -68,7 +68,9 @@ It supports:
 - bounded execution
 - agent failure handling
 - human-action gates
-- in-memory resume of paused runs
+- in-memory resume of paused runs; `CareerOrchestrator.resume()` and
+  `continue_run()` require authenticated `user_id` as a keyword argument and reject
+  foreign/missing runs before acquiring an execution lease or changing state
 - SQLite-backed recovery of paused runs after process restart
 - run summaries in memory
 
