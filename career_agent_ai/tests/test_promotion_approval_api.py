@@ -209,6 +209,37 @@ def test_receipt_backend_failures_are_sanitized(error):
     assert result == {"error": "internal_error"}
 
 
+@pytest.mark.parametrize("route", ["execute-dry-run", "recover-dry-run"])
+@pytest.mark.parametrize("corruption", ["receipt", "plan"])
+def test_execution_corrupt_durable_state_is_sanitized_server_error(route, corruption):
+    from career_agent_ai.application.release import PromotionApprovalReceiptService, PromotionApprovalSubmission, build_promotion_approval_prompt
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase())
+    original = repository.create(operation())
+    scopes = frozenset({"release:promote:dry-run"})
+    service = PromotionApprovalReceiptService(repository)
+    prompt = build_promotion_approval_prompt(original, operator_id="owner", granted_scopes=scopes)
+    receipt = service.record(PromotionApprovalSubmission(original.operation_id, "owner", prompt.action_fingerprint, "approve"),
+        authenticated_operator_id="owner", granted_scopes=tuple(scopes))
+
+    class CorruptReader:
+        def get(self, operation_id):
+            value = repository.get(operation_id)
+            corrupt_id = receipt.operation_id if corruption == "receipt" else original.operation_id
+            return replace(value, payload={"private": "synthetic-secret"}) if operation_id == corrupt_id else value
+
+    service = PromotionApprovalReceiptService(CorruptReader())
+    application = PromotionApprovalWSGIApp(repository, receipts=service,
+        resolve_bearer=lambda token: ReleaseOperator("owner", scopes))
+    (status, _), payload = request(application, method="POST",
+        path="/v1/release/promotions/promote:release-1/" + route, body={"schema_version": 1})
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+    assert repository.get(original.operation_id) == original
+    assert repository.get(receipt.operation_id) == receipt
+
+
 def test_authenticated_operator_can_read_and_validate_current_prompt():
     (status, headers), prompt = request(app())
     assert status == "200 OK"
