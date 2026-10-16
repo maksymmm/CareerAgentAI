@@ -13,7 +13,9 @@ from career_agent_ai.application.release import (
     build_promotion_approval_prompt,
     validate_promotion_approval_submission,
     validate_promotion_operation_id,
+    PromotionApprovalReceiptService,
 )
+from career_agent_ai.application.external_actions.external_action_repository import OperationConflictError
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,11 +43,13 @@ class PromotionApprovalWSGIApp:
         operations: PromotionOperationReader,
         *,
         resolve_bearer: Callable[[str], ReleaseOperator | None],
+        receipts: PromotionApprovalReceiptService | None = None,
     ) -> None:
         if not callable(resolve_bearer):
             raise TypeError("resolve_bearer must be callable")
         self._operations = operations
         self._resolve_bearer = resolve_bearer
+        self._receipts = receipts
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
         """Handle one authenticated WSGI approval request."""
@@ -133,6 +137,20 @@ class PromotionApprovalWSGIApp:
                 granted_scopes=operator.scopes,
                 submission=submission,
             )
+            if self._receipts is not None:
+                try:
+                    self._receipts.record(
+                        submission, authenticated_operator_id=operator.operator_id,
+                        granted_scopes=tuple(operator.scopes),
+                    )
+                except OperationConflictError:
+                    return self._respond(
+                        start_response, "409 Conflict", {"error": "approval_conflict"},
+                    )
+                except Exception:
+                    return self._respond(
+                        start_response, "500 Internal Server Error", {"error": "internal_error"},
+                    )
             return self._respond(
                 start_response,
                 "200 OK",
@@ -257,6 +275,9 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
             error_responses[code]["content"]["application/json"]["schema"]["properties"]["message"] = {
                 "type": "string", "maxLength": 500,
             }
+    error_responses["409"]["content"]["application/json"]["schema"]["properties"]["error"] = {
+        "type": "string", "enum": ["operation_not_awaiting_approval", "approval_conflict"],
+    }
     return {
         "openapi": "3.1.0",
         "info": {"title": "CareerAgentAI Promotion Approval", "version": "1.0.0"},
@@ -292,7 +313,7 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                             }
                         },
                     },
-                    "responses": {"200": response("Decision validated against current intent", result_properties),
+                    "responses": {"200": response("Decision validated; durably recorded when receipt persistence is configured; never executes promotion", result_properties),
                                   **error_responses},
                 },
             }
