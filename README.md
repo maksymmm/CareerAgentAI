@@ -382,6 +382,14 @@ promotion. Separate authenticated POST-only `execute-dry-run` and `recover-dry-r
 routes accept only `{"schema_version":1}` and require receipt-service injection.
 They consume durable approval once or classify recovery without live provider I/O;
 replays conflict rather than rerunning the adapter. OpenAPI describes both routes.
+`build_promotion_sandbox_app_from_env()` in `application.runtime.promotion_sandbox`
+composes these routes with injected server-side operator authentication and lazy,
+request-local SQLite repositories. Set `CAREER_AGENT_PROMOTION_SANDBOX=true` and a
+durable `CAREER_AGENT_DB_PATH`; network providers and consequential-action flags
+must remain disabled. Routing and authentication precede request storage access,
+connections close even on response failures, and runtime close blocks new requests.
+The composition accepts no deployment adapter and exposes no HTTP intent-creation
+route; trusted callers must prepare the exact dry-run intent separately.
 Its explicit `recover_claim()` classifies both interrupted operation and consumed
 receipt as reconciliation-required after revalidating operator/scope/intent binding;
 it never calls the adapter and repeated classification is idempotent.
