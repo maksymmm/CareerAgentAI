@@ -390,6 +390,16 @@ must remain disabled. Routing and authentication precede request storage access,
 connections close even on response failures, and runtime close blocks new requests.
 The composition accepts no deployment adapter and exposes no HTTP intent-creation
 route; trusted callers must prepare the exact dry-run intent separately.
+Run the local operator HTTP service with
+`python -m career_agent_ai.application.runtime.promotion_service`.
+In addition to the sandbox/database flags above, supply
+`CAREER_AGENT_PROMOTION_OPERATOR_ID` and a 32+ character ASCII
+`CAREER_AGENT_PROMOTION_BEARER_TOKEN` at runtime. The listener defaults to
+`127.0.0.1:8081`; `CAREER_AGENT_PROMOTION_HOST` must remain IPv4 loopback and
+`CAREER_AGENT_PROMOTION_PORT` must be 0–65535. The server assigns only the
+dry-run scope, compares tokens in constant time, and closes its listener/runtime
+on SIGTERM, interruption or startup failure. It exposes the existing promotion
+OpenAPI route contract, not a production deployment endpoint.
 Its explicit `recover_claim()` classifies both interrupted operation and consumed
 receipt as reconciliation-required after revalidating operator/scope/intent binding;
 it never calls the adapter and repeated classification is idempotent.
