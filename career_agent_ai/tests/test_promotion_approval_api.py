@@ -95,6 +95,20 @@ def test_http_decision_is_durable_idempotent_and_never_executes(tmp_path):
         granted_scopes=("release:promote:dry-run",),
     )
     assert recovered.status == ExternalActionStatus.SUCCEEDED
+    application = PromotionApprovalWSGIApp(
+        repository, receipts=PromotionApprovalReceiptService(repository),
+        resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset({"release:promote:dry-run"})),
+    )
+    before_operation = repository.get("promote:release-1")
+    before_receipt = repository.get(recovered.operation_id)
+    (status, _), result = request(application, method="POST", body=body)
+    assert status == "200 OK"
+    assert result["validated"] is True
+    (status, _), result = request(application, method="POST", body={**body, "decision": "decline"})
+    assert status == "409 Conflict"
+    assert result == {"error": "approval_conflict"}
+    assert repository.get("promote:release-1") == before_operation
+    assert repository.get(recovered.operation_id) == before_receipt
 
 
 @pytest.mark.parametrize("error", [ValueError, TypeError, PermissionError, RuntimeError])

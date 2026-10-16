@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
@@ -94,12 +94,14 @@ class PromotionApprovalWSGIApp:
         try:
             if operation is None or operation.action_type != "release.promote.dry-run":
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-            if operation.status != ExternalActionStatus.PREPARED:
+            if operation.status != ExternalActionStatus.PREPARED and not (
+                method == "POST" and self._receipts is not None
+            ):
                 return self._respond(
                     start_response, "409 Conflict", {"error": "operation_not_awaiting_approval"}
                 )
             prompt = build_promotion_approval_prompt(
-                operation,
+                replace(operation, status=ExternalActionStatus.PREPARED),
                 operator_id=operator.operator_id,
                 granted_scopes=operator.scopes,
             )
@@ -132,7 +134,7 @@ class PromotionApprovalWSGIApp:
                 }
             )
             decision = validate_promotion_approval_submission(
-                operation,
+                replace(operation, status=ExternalActionStatus.PREPARED),
                 authenticated_operator_id=operator.operator_id,
                 granted_scopes=operator.scopes,
                 submission=submission,
