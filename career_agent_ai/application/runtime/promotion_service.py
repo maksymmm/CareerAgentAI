@@ -8,12 +8,15 @@ import hmac
 import ipaddress
 import os
 import signal
-from typing import Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 from wsgiref.simple_server import WSGIServer, make_server
 
-from career_agent_ai.application.api import OperationalWSGIApp, ReleaseOperator
+from career_agent_ai.application.api import OperationalWSGIApp, ReleaseOperator, promotion_approval_openapi_document
 from career_agent_ai.application.career.autonomous_loop_models import validate_loop_identifier
 from .promotion_sandbox import build_promotion_sandbox_app_from_env
+from .config import RuntimeConfig
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
 
 
 @dataclass(frozen=True)
@@ -55,12 +58,65 @@ class PromotionServiceConfig:
         return ReleaseOperator(self.operator_id, frozenset({"release:promote:dry-run"}))
 
 
+class PromotionServiceWSGIApp:
+    """Add storage-independent liveness and non-mutating readiness probes."""
+
+    def __init__(self, app: Callable, *, database_path: str) -> None:
+        self._app = app
+        self._database_path = database_path
+
+    def __call__(self, environ: Mapping[str, Any], start_response: Callable) -> Iterable[bytes]:
+        """Serve GET-only probes without exposing storage or operation details."""
+        path = environ.get("PATH_INFO", "")
+        if path not in {"/healthz", "/readyz"}:
+            return self._app(environ, start_response)
+        if environ.get("REQUEST_METHOD", "GET") != "GET":
+            return self._respond(start_response, "405 Method Not Allowed", b'{"error":"method_not_allowed"}', [("Allow", "GET")])
+        if path == "/readyz":
+            database = None
+            try:
+                database = SQLiteDatabase.open_read_only(self._database_path)
+                database.connection.execute("SELECT operation_id, action_type, payload_json, status FROM external_action_operations LIMIT 0")
+            except Exception:
+                return self._respond(start_response, "503 Service Unavailable", b'{"status":"unavailable"}')
+            finally:
+                if database is not None:
+                    database.close()
+        return self._respond(start_response, "200 OK", b'{"status":"ok"}')
+
+    @staticmethod
+    def _respond(start_response: Callable, status: str, body: bytes, extra: list | None = None) -> list[bytes]:
+        start_response(status, [("Content-Type", "application/json; charset=utf-8"),
+            ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
+            ("X-Content-Type-Options", "nosniff"), *(extra or [])])
+        return [body]
+
+
+def promotion_service_openapi_document() -> dict[str, Any]:
+    """Extend the authenticated promotion contract with public GET-only probes."""
+    document = promotion_approval_openapi_document()
+    for path in ("/healthz", "/readyz"):
+        responses = {"200": {"description": "Service is live" if path == "/healthz" else "Existing storage schema is readable"},
+                     "405": {"description": "Only GET is supported"}}
+        if path == "/readyz":
+            responses["503"] = {"description": "Storage unavailable; sanitized response, no database creation"}
+        document["paths"][path] = {"get": {"security": [], "responses": responses}}
+    return document
+
+
 @contextmanager
 def promotion_service_from_env(environ: Mapping[str, str] | None = None) -> Iterator[WSGIServer]:
     """Own the listener and sandbox lifecycle, including listener-bind failures."""
     config = PromotionServiceConfig.from_env(environ)
     with build_promotion_sandbox_app_from_env(resolve_bearer=config.resolve_bearer, environ=environ) as app:
-        with make_server(config.host, config.port, app) as server:
+        database_path = RuntimeConfig.from_env(environ).database_path
+        database = SQLiteDatabase(database_path)
+        try:
+            SQLiteExternalActionOperationRepository(database)
+        finally:
+            database.close()
+        service = PromotionServiceWSGIApp(app, database_path=database_path)
+        with make_server(config.host, config.port, service) as server:
             yield server
 
 
