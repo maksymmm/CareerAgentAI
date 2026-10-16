@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import sqlite3
+from uuid import uuid4
 from typing import Any, Callable, Iterable, Mapping
 
 from career_agent_ai.application.api import PromotionApprovalWSGIApp, ReleaseOperator
@@ -106,6 +108,16 @@ def build_promotion_sandbox_app_from_env(*,
     try:
         if database.is_memory:
             raise ValueError("Promotion sandbox requires durable storage")
+        try:
+            # Exercise the main database, not TEMP: TEMP can be writable on a
+            # read-only connection. Explicit BEGIN makes SQLite DDL rollback-safe.
+            database.connection.execute("BEGIN IMMEDIATE")
+            probe_name = "promotion_write_probe_" + uuid4().hex
+            database.connection.execute(f'CREATE TABLE "{probe_name}" (value INTEGER)')
+        except sqlite3.Error as exc:
+            raise ValueError("Promotion sandbox requires writable SQLite storage") from exc
+        finally:
+            database.connection.rollback()
     finally:
         database.close()
     return RuntimePromotionSandboxApp(database_path=config.database_path, resolve_bearer=resolve_bearer)
