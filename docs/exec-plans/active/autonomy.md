@@ -582,7 +582,11 @@ Delivered: loopback-only operator HTTP entrypoint with startup auth/listener
 validation, fixed dry-run scope, constant-time bearer comparison and context-managed
 shutdown. Actual HTTP smoke covers approval, runtime restart, execution, replay and
 recovery; invalid startup and listener-bind cleanup are regression-tested.
-The next isolated priority is operator-service health/readiness and container smoke coverage.
+Delivered: operator-service public GET-only liveness and read-only schema readiness,
+sanitized unavailable responses and no replacement DB creation. Startup initializes
+operation schema before binding. HTTP smoke and missing/empty/corrupt/ready storage
+regressions prove probes do not mutate state; service OpenAPI includes both probes.
+The next isolated priority is operator-service container smoke coverage.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
 receipt lifecycle mutation occurs during recording.
