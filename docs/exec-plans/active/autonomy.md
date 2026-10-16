@@ -554,6 +554,9 @@ Delivered: PromotionApprovalReceiptService persists immutable approve/decline de
 and atomically claims approval before the fixed no-I/O dry-run executor. Restart,
 replay, scope/identity, stale fingerprint, and immutable-decline regressions are covered.
 Claimed receipts are never automatically reused after a crash.
+Explicit recover_claim() classifies mid-execution crashes for reconciliation without
+adapter I/O; SQLite restart tests cover unauthorized recovery and repeated recovery.
+The receipt service is exported from the public release package.
 The next isolated priority is HTTP composition for durable receipt recording and
 explicit dry-run consumption, with sanitized errors and documented conflict responses.
 
