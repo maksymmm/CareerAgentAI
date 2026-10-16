@@ -405,6 +405,10 @@ read-only and checks the operation schema, returning sanitized 503 on missing,
 empty or corrupt storage without creating a replacement or advancing operations.
 Startup initializes the operation schema before binding. Readiness is a read/schema
 check, not permission to execute or a guarantee of future write availability.
+Readiness requires a non-partial unique operation-ID key and uses an immutable
+schema snapshot to avoid SQLite sidecar creation. It fails closed for WAL-mode
+databases and SQLite URI paths; use an ordinary rollback-journal database path for
+this operator service. It does not ignore live WAL evidence or perform checkpoints.
 `promotion_service_openapi_document()` includes these probes; all responses disable caching.
 Its explicit `recover_claim()` classifies both interrupted operation and consumed
 receipt as reconciliation-required after revalidating operator/scope/intent binding;
