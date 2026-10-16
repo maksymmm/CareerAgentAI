@@ -140,3 +140,21 @@ def test_http_probe_routes_and_openapi(tmp_path):
     document = promotion_service_openapi_document()
     assert document["paths"]["/readyz"]["get"]["security"] == []
     assert "503" in document["paths"]["/readyz"]["get"]["responses"]
+
+
+@pytest.mark.parametrize("missing", ["result_json", "error", "created_at", "updated_at", "all_four"])
+def test_readiness_rejects_partial_workflow_schema_without_mutation(tmp_path, missing):
+    import sqlite3
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "partial.sqlite"
+    columns = ("operation_id", "action_type", "payload_json", "status", "result_json", "error", "created_at", "updated_at")
+    retained = columns[:4] if missing == "all_four" else tuple(column for column in columns if column != missing)
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE external_action_operations (" + ", ".join(column + " TEXT" for column in retained) + ")")
+    before = path.read_bytes()
+    app = PromotionServiceWSGIApp(lambda *args: pytest.fail("probe reached workflow"), database_path=str(path))
+    (status, _), payload = request(app, path="/readyz", token="")
+    assert status == "503 Service Unavailable"
+    assert payload == {"status": "unavailable"}
+    assert path.read_bytes() == before
