@@ -85,12 +85,14 @@ class PromotionApprovalReceiptService:
         if operation is None or submission.operation_id != operation_id:
             raise ValueError("Approval does not match the promotion operation")
         decision = validate_promotion_approval_submission(
-            operation, authenticated_operator_id=authenticated_operator_id,
+            replace(operation, status=ExternalActionStatus.PREPARED), authenticated_operator_id=authenticated_operator_id,
             granted_scopes=granted_scopes, submission=submission,
         )
         if decision != PromotionApprovalDecision.APPROVE:
             raise PermissionError("Promotion was declined")
         plan = validate_promotion_plan_payload(operation.payload)
+        if operation.status != ExternalActionStatus.PREPARED:
+            raise OperationConflictError("Promotion operation is not awaiting execution")
         self._repository.transition(
             receipt_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS,
         )
@@ -151,7 +153,7 @@ class PromotionApprovalReceiptService:
                     raise ValueError("Receipt result does not match durable execution")
                 return receipt
             if receipt.status not in recoverable:
-                raise ValueError("Only a consumed approval can be completed")
+                raise OperationConflictError("Only a consumed approval can be completed")
             return self._repository.transition(
                 receipt_id, receipt.status, ExternalActionStatus.SUCCEEDED,
                 result=result.as_dict(),
@@ -165,7 +167,7 @@ class PromotionApprovalReceiptService:
                 error="Approval consumed before execution; inspect before any further action",
             )
         if receipt.status not in recoverable or operation.status not in recoverable:
-            raise ValueError("Only an interrupted promotion execution can be recovered")
+            raise OperationConflictError("Only an interrupted promotion execution can be recovered")
         if operation.status == ExternalActionStatus.IN_PROGRESS:
             self._repository.transition(
                 operation_id, ExternalActionStatus.IN_PROGRESS,
