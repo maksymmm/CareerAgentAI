@@ -111,6 +111,39 @@ def test_http_decision_is_durable_idempotent_and_never_executes(tmp_path):
     assert repository.get(recovered.operation_id) == before_receipt
 
 
+def test_http_dry_run_requires_receipt_and_never_reuses_it():
+    from career_agent_ai.application.release import PromotionApprovalReceiptService
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    repository = SQLiteExternalActionOperationRepository(SQLiteDatabase())
+    repository.create(operation())
+    application = PromotionApprovalWSGIApp(repository, receipts=PromotionApprovalReceiptService(repository),
+        resolve_bearer=lambda token: ReleaseOperator("operator:release", frozenset({"release:promote:dry-run"})))
+    path = "/v1/release/promotions/promote:release-1/execute-dry-run"
+    assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "403 Forbidden"
+    _, prompt = request(application)
+    assert request(application, method="POST", body={"schema_version": 1, "decision": "approve", "action_fingerprint": prompt["action_fingerprint"]})[0][0] == "200 OK"
+    assert request(application, path=path)[0][0] == "405 Method Not Allowed"
+    assert request(application, method="POST", path=path, body={"schema_version": 1, "approved": True})[0][0] == "400 Bad Request"
+    (status, _), result = request(application, method="POST", path=path, body={"schema_version": 1})
+    assert status == "200 OK"
+    assert result["execution_mode"] == "dry-run"
+    assert result["receipt_status"] == "succeeded"
+    assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "409 Conflict"
+    recovery = path.replace("execute-dry-run", "recover-dry-run")
+    assert request(application, method="POST", path=recovery, body={"schema_version": 1})[0][0] == "200 OK"
+
+
+@pytest.mark.parametrize("route", ["execute-dry-run", "recover-dry-run"])
+def test_execution_routes_require_configured_receipts_and_json(route):
+    path = "/v1/release/promotions/promote:release-1/" + route
+    assert request(app(), method="POST", path=path, body={"schema_version": 1})[0][0] == "404 Not Found"
+    application = app()
+    application._receipts = object()
+    assert request(application, method="POST", path=path, body={}, content_type="text/plain")[0][0] == "415 Unsupported Media Type"
+    assert request(application, method="POST", path=path, body={"schema_version": 1})[0][0] == "500 Internal Server Error"
+
+
 @pytest.mark.parametrize("error", [ValueError, TypeError, PermissionError, RuntimeError])
 def test_receipt_backend_failures_are_sanitized(error):
     class BrokenReceipts:
