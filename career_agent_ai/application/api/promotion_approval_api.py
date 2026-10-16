@@ -197,7 +197,7 @@ class PromotionApprovalWSGIApp:
                              granted_scopes=tuple(operator.scopes))
         except PermissionError:
             return self._respond(start_response, "403 Forbidden", {"error": "forbidden"})
-        except (OperationConflictError, ValueError, KeyError):
+        except OperationConflictError:
             return self._respond(start_response, "409 Conflict", {"error": "execution_conflict"})
         except Exception:
             return self._respond(start_response, "500 Internal Server Error", {"error": "internal_error"})
