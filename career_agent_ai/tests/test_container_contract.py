@@ -241,7 +241,7 @@ def test_operator_container_workflow_scripts_survive_service_restart(tmp_path, m
     )[0]
     scripts = [textwrap.dedent(part.split("          PY", 1)[0])
                for part in smoke.split("<<'PY'\n")[1:]]
-    assert len(scripts) == 3
+    assert len(scripts) == 4
     environ = {
         "CAREER_AGENT_DB_PATH": str(tmp_path / "operator.sqlite"),
         "CAREER_AGENT_PROMOTION_SANDBOX": "true",
@@ -267,6 +267,16 @@ def test_operator_container_workflow_scripts_survive_service_restart(tmp_path, m
                     assert not worker.is_alive()
     finally:
         os.umask(previous_umask)
+
+
+def test_container_status_smoke_covers_terminal_restart_and_read_only_snapshot():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke = workflow.split("# Seed only a synthetic no-I/O intent", 1)[1]
+    assert smoke.count("docker start careeragent-operator-ci") == 2
+    assert '"operation_status": "prepared"' in smoke
+    assert smoke.count('"operation_status": "succeeded"') == 2
+    assert smoke.count("assert database_path.read_bytes() == before") == 2
+    assert smoke.count('response.headers["Cache-Control"] == "no-store"') == 2
 
 
 def test_ci_generates_and_verifies_pinned_release_evidence():
