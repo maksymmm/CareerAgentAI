@@ -55,16 +55,17 @@ class PromotionApprovalWSGIApp:
         """Handle one authenticated WSGI approval request."""
 
         parts = str(environ.get("PATH_INFO", "")).strip("/").split("/")
-        if len(parts) != 5 or parts[:3] != ["v1", "release", "promotions"] or parts[4] not in {"approval", "execute-dry-run", "recover-dry-run"}:
+        if len(parts) != 5 or parts[:3] != ["v1", "release", "promotions"] or parts[4] not in {"approval", "status", "execute-dry-run", "recover-dry-run"}:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-        execution_route = parts[4] != "approval"
+        execution_route = parts[4] in {"execute-dry-run", "recover-dry-run"}
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
-        if method not in ({"POST"} if execution_route else {"GET", "POST"}):
+        allowed = {"GET"} if parts[4] == "status" else ({"POST"} if execution_route else {"GET", "POST"})
+        if method not in allowed:
             return self._respond(
                 start_response,
                 "405 Method Not Allowed",
                 {"error": "method_not_allowed"},
-                [("Allow", "POST" if execution_route else "GET, POST")],
+                [("Allow", ", ".join(sorted(allowed)))],
             )
         try:
             operation_id = validate_promotion_operation_id(parts[3])
@@ -95,6 +96,16 @@ class PromotionApprovalWSGIApp:
         try:
             if operation is None or operation.action_type != "release.promote.dry-run":
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
+            if parts[4] == "status":
+                # Validate intent even for terminal snapshots; never classify or execute.
+                build_promotion_approval_prompt(
+                    replace(operation, status=ExternalActionStatus.PREPARED),
+                    operator_id=operator.operator_id, granted_scopes=operator.scopes,
+                )
+                return self._respond(start_response, "200 OK", {
+                    "schema_version": 1, "operation_id": operation.operation_id,
+                    "operation_status": operation.status.value, "execution_mode": "dry-run",
+                })
             if execution_route:
                 return self._execute_request(environ, start_response, operation_id, operator, parts[4])
             if operation.status != ExternalActionStatus.PREPARED and not (
@@ -371,4 +382,15 @@ def promotion_approval_openapi_document() -> dict[str, Any]:
                          "additionalProperties": False,
                      }}}}},
         }
+    document["paths"]["/v1/release/promotions/{operation_id}/status"] = {
+        "parameters": [operation_parameter],
+        "get": {"security": [{"bearerAuth": []}], "responses": {
+            "200": response("Read-only operation snapshot; not receipt state or permission to execute", {
+                "schema_version": {"type": "integer", "const": 1},
+                "operation_id": operation_parameter["schema"],
+                "operation_status": {"type": "string", "enum": [status.value for status in ExternalActionStatus]},
+                "execution_mode": {"type": "string", "const": "dry-run"},
+            }), **{code: error_responses[code] for code in ("400", "401", "403", "404", "405", "500")},
+        }},
+    }
     return document
