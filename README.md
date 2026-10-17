@@ -410,6 +410,12 @@ schema snapshot to avoid SQLite sidecar creation. It fails closed for WAL-mode
 databases and SQLite URI paths; use an ordinary rollback-journal database path for
 this operator service. It does not ignore live WAL evidence or perform checkpoints.
 `promotion_service_openapi_document()` includes these probes; all responses disable caching.
+`GET /v1/release/promotions/{operation_id}/status` requires the same authenticated
+dry-run scope and returns only schema version, operation ID, operation status and
+execution mode, with no-store headers. It validates the intent but never executes,
+classifies recovery or changes state. This is operation state only: a prepared
+operation may already have a consumed approval receipt, so the snapshot is never
+permission to execute or reuse approval.
 Its explicit `recover_claim()` classifies both interrupted operation and consumed
 receipt as reconciliation-required after revalidating operator/scope/intent binding;
 it never calls the adapter and repeated classification is idempotent.
