@@ -198,6 +198,30 @@ def test_ci_smokes_read_only_candidate_container():
     assert '"/readyz"' in workflow
 
 
+def test_ci_smokes_isolated_operator_before_publishing_evidence():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke = workflow.split("- name: Smoke isolated operator service container", 1)[1].split(
+        "- name: Upload immutable release evidence", 1
+    )[0]
+    for required in (
+        "--network none --no-healthcheck --read-only",
+        "--tmpfs /tmp:rw,noexec,nosuid,size=16m",
+        "CAREER_AGENT_PROMOTION_SANDBOX=true",
+        "CAREER_AGENT_PROMOTION_OPERATOR_ID=operator-ci",
+        "umask 077; exec python -m career_agent_ai.application.runtime.promotion_service",
+        "urllib.request.ProxyHandler({})",
+        '(None, 401), ("s" * 32, 404)',
+        '"/healthz", "/readyz"',
+        "operator.sqlite)",
+        "docker stop --time 10 careeragent-operator-ci",
+        "{{.State.ExitCode}}",
+        "trap cleanup EXIT",
+    ):
+        assert required in smoke
+    assert "--publish" not in smoke
+    assert "--user root" not in smoke
+
+
 def test_ci_generates_and_verifies_pinned_release_evidence():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
