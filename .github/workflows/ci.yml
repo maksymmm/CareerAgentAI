@@ -424,6 +424,16 @@ jobs:
           headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"],
                      "Content-Type": "application/json"}
           for route, expected in (("execute-dry-run", 200), ("execute-dry-run", 409), ("recover-dry-run", 200)):
+              if route == "execute-dry-run" and expected == 200:
+                  from pathlib import Path
+                  database_path = Path(os.environ["CAREER_AGENT_DB_PATH"])
+                  before = database_path.read_bytes()
+                  with opener.open(urllib.request.Request(base + "status", headers=headers), timeout=5) as response:
+                      assert response.status == 200
+                      assert response.headers["Cache-Control"] == "no-store"
+                      assert json.load(response) == {"schema_version": 1, "operation_id": "promote:container-smoke",
+                                                     "operation_status": "prepared", "execution_mode": "dry-run"}
+                  assert database_path.read_bytes() == before
               request = urllib.request.Request(base + route, data=b'{"schema_version":1}', headers=headers)
               try:
                   with opener.open(request, timeout=5) as response:
@@ -431,6 +441,52 @@ jobs:
                       assert json.load(response)["execution_mode"] == "dry-run"
               except urllib.error.HTTPError as error:
                   assert error.code == expected == 409
+              from pathlib import Path
+              database_path = Path(os.environ["CAREER_AGENT_DB_PATH"])
+              before = database_path.read_bytes()
+              with opener.open(urllib.request.Request(base + "status", headers=headers), timeout=5) as response:
+                  assert response.status == 200
+                  assert response.headers["Cache-Control"] == "no-store"
+                  assert json.load(response) == {"schema_version": 1, "operation_id": "promote:container-smoke",
+                                                 "operation_status": "succeeded", "execution_mode": "dry-run"}
+              assert database_path.read_bytes() == before
+          PY
+          docker stop --time 10 careeragent-operator-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
+          # A second restart must preserve the terminal status, not rerun execution.
+          docker cp careeragent-operator-ci:/var/lib/careeragent/operator.sqlite "$RUNNER_TEMP/operator-before-restart.sqlite"
+          expected_db_sha256="$(sha256sum "$RUNNER_TEMP/operator-before-restart.sqlite" | cut -d ' ' -f 1)"
+          docker start careeragent-operator-ci
+          docker exec -i --env EXPECTED_DB_SHA256="$expected_db_sha256" careeragent-operator-ci python -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for attempt in range(30):
+              try:
+                  with opener.open("http://127.0.0.1:8081/readyz", timeout=2) as response:
+                      assert response.status == 200
+                      break
+              except (OSError, urllib.error.URLError):
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          database_path = Path(os.environ["CAREER_AGENT_DB_PATH"])
+          before = database_path.read_bytes()
+          assert hashlib.sha256(before).hexdigest() == os.environ["EXPECTED_DB_SHA256"]
+          headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"]}
+          request = urllib.request.Request(
+              "http://127.0.0.1:8081/v1/release/promotions/promote:container-smoke/status", headers=headers)
+          with opener.open(request, timeout=5) as response:
+              assert response.status == 200
+              assert response.headers["Cache-Control"] == "no-store"
+              assert json.load(response) == {"schema_version": 1, "operation_id": "promote:container-smoke",
+                                             "operation_status": "succeeded", "execution_mode": "dry-run"}
+          assert database_path.read_bytes() == before
           PY
           docker stop --time 10 careeragent-operator-ci
           test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"

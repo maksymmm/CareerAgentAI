@@ -608,7 +608,15 @@ Operator-facing GET status visibility now exposes a minimal authenticated operat
 snapshot without execution, recovery classification, private payload or errors.
 It is explicitly not approval-receipt state or permission to retry. Regression tests
 cover every lifecycle state, auth-before-storage, method gates and corrupt intent.
-The next isolated priority is HTTP restart coverage for status snapshots.
+HTTP restart coverage proves prepared status survives startup without database
+mutation. The container smoke now checks exact prepared/succeeded snapshots around
+execute, replay conflict and recovery, no-store and byte-identical storage after GET,
+then restarts again to verify retained terminal status. Embedded Python smoke scripts
+are executed by a regression against the real local HTTP composition; Docker evidence
+still requires reviewed integration CI. Next: verify this expanded release-job smoke.
+Review hardening applies no-store/byte stability checks to prepared snapshots too.
+The terminal restart baseline is copied from the stopped container before startup;
+its SHA-256 must still match after readiness, catching startup-time state rewrites.
 Execution evidence remains required from the post-merge integration CI; local
 workflow contract tests alone do not establish container readiness.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
