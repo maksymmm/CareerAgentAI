@@ -106,6 +106,73 @@ def test_status_runtime_does_not_recreate_missing_storage(tmp_path):
     assert not path.exists()
 
 
+def test_operator_ui_headers_methods_and_no_storage(tmp_path):
+    from career_agent_ai.application.runtime.promotion_sandbox import RuntimePromotionSandboxApp
+    app = RuntimePromotionSandboxApp(database_path=str(tmp_path / "missing.sqlite"),
+                                     resolve_bearer=lambda _: pytest.fail("static UI must not authenticate"))
+    responses = []
+    body = b"".join(app({"PATH_INFO": "/sandbox/operator", "REQUEST_METHOD": "GET"},
+                        lambda status, headers: responses.append((status, dict(headers)))))
+    assert responses[0][0] == "200 OK"
+    assert responses[0][1]["Cache-Control"] == "no-store"
+    assert "connect-src 'self'" in responses[0][1]["Content-Security-Policy"]
+    assert responses[0][1]["Referrer-Policy"] == "no-referrer"
+    for forbidden in (b"localStorage", b"sessionStorage", b"innerHTML", b"execute-dry-run", b"recover-dry-run"):
+        assert forbidden not in body
+    responses.clear()
+    assert b"".join(app({"PATH_INFO": "/sandbox/operator", "REQUEST_METHOD": "POST"},
+                        lambda status, headers: responses.append(status)))) == b""
+    assert responses == ["405 Method Not Allowed"]
+    assert not (tmp_path / "missing.sqlite").exists()
+    app.close()
+
+
+def test_operator_ui_browser_prompt_binding_and_approval(tmp_path):
+    browser_api = pytest.importorskip("playwright.sync_api")
+    env = environment(tmp_path)
+    database = SQLiteDatabase(env["CAREER_AGENT_DB_PATH"])
+    SQLiteExternalActionOperationRepository(database).create(operation())
+    database.close()
+    with promotion_service_from_env(env) as server, browser_api.sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except browser_api.Error as error:
+            if "Executable doesn't exist" in str(error):
+                pytest.skip("Chromium unavailable locally")
+            raise
+        worker = Thread(target=server.serve_forever)
+        worker.start()
+        try:
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/operator")
+            page.locator("#token").fill(env["CAREER_AGENT_PROMOTION_BEARER_TOKEN"])
+            page.locator("#operation").fill("promote:release-1")
+            page.locator("#load").click()
+            page.wait_for_function("!document.getElementById('approve').disabled")
+            page.locator("#operation").fill("promote:other")
+            assert page.locator("#approve").is_disabled()
+            page.locator("#operation").fill("promote:release-1")
+            page.locator("#load").click()
+            page.wait_for_function("!document.getElementById('approve').disabled")
+            page.locator("#approve").click()
+            page.wait_for_function("document.getElementById('result').textContent.includes('validated')")
+            assert page.locator("#approve").is_disabled()
+            page.locator("#status").click()
+            page.wait_for_function("document.getElementById('result').textContent.includes('prepared')")
+            page.reload()
+            assert page.locator("#token").input_value() == ""
+            assert page.locator("#approve").is_disabled()
+        finally:
+            browser.close()
+            server.shutdown()
+            worker.join(timeout=5)
+    database = SQLiteDatabase(env["CAREER_AGENT_DB_PATH"])
+    try:
+        assert SQLiteExternalActionOperationRepository(database).get("promote:release-1").status.value == "prepared"
+    finally:
+        database.close()
+
+
 def test_bind_failure_closes_sandbox(tmp_path, monkeypatch):
     from career_agent_ai.application.runtime import promotion_service
     from career_agent_ai.application.runtime.promotion_sandbox import RuntimePromotionSandboxApp
