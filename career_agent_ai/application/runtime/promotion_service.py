@@ -8,12 +8,18 @@ import hmac
 import ipaddress
 import os
 import signal
-from typing import Iterator, Mapping
+import sqlite3
+from pathlib import Path
+from urllib.parse import quote
+from typing import Any, Callable, Iterable, Iterator, Mapping
 from wsgiref.simple_server import WSGIServer, make_server
 
-from career_agent_ai.application.api import OperationalWSGIApp, ReleaseOperator
+from career_agent_ai.application.api import OperationalWSGIApp, ReleaseOperator, promotion_approval_openapi_document
 from career_agent_ai.application.career.autonomous_loop_models import validate_loop_identifier
 from .promotion_sandbox import build_promotion_sandbox_app_from_env
+from .config import RuntimeConfig
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
 
 
 @dataclass(frozen=True)
@@ -55,12 +61,82 @@ class PromotionServiceConfig:
         return ReleaseOperator(self.operator_id, frozenset({"release:promote:dry-run"}))
 
 
+class PromotionServiceWSGIApp:
+    """Add storage-independent liveness and non-mutating readiness probes."""
+
+    def __init__(self, app: Callable, *, database_path: str) -> None:
+        self._app = app
+        self._database_path = database_path
+
+    def __call__(self, environ: Mapping[str, Any], start_response: Callable) -> Iterable[bytes]:
+        """Serve GET-only probes without exposing storage or operation details."""
+        path = environ.get("PATH_INFO", "")
+        if path not in {"/healthz", "/readyz"}:
+            return self._app(environ, start_response)
+        if environ.get("REQUEST_METHOD", "GET") != "GET":
+            return self._respond(start_response, "405 Method Not Allowed", b'{"error":"method_not_allowed"}', [("Allow", "GET")])
+        if path == "/readyz":
+            database = None
+            try:
+                # Immutable snapshot reads cannot create journal/shared-memory files.
+                # WAL is deliberately unavailable: ignoring a live WAL is not a
+                # trustworthy readiness snapshot. URI paths require separate support.
+                if self._database_path.startswith("file:"):
+                    raise ValueError("Readiness requires an ordinary SQLite path")
+                path = Path(self._database_path).absolute()
+                with path.open("rb") as source:
+                    header = source.read(100)
+                if len(header) != 100 or header[:16] != b"SQLite format 3\x00" or header[18:20] != b"\x01\x01":
+                    raise ValueError("Readiness requires rollback-journal storage")
+                database = sqlite3.connect(f"file:{quote(str(path), safe='/')}?mode=ro&immutable=1", uri=True)
+                database.execute("SELECT operation_id, action_type, payload_json, status, result_json, error, created_at, updated_at FROM external_action_operations LIMIT 0")
+                unique = False
+                for name, is_unique, partial in database.execute('SELECT name, "unique", partial FROM pragma_index_list(?)', ("external_action_operations",)):
+                    columns = [row[2] for row in database.execute("SELECT * FROM pragma_index_info(?)", (name,))]
+                    if is_unique and not partial and columns == ["operation_id"]:
+                        unique = True
+                if not unique:
+                    raise ValueError("Operation IDs require a non-partial unique key")
+            except Exception:
+                return self._respond(start_response, "503 Service Unavailable", b'{"status":"unavailable"}')
+            finally:
+                if database is not None:
+                    database.close()
+        return self._respond(start_response, "200 OK", b'{"status":"ok"}')
+
+    @staticmethod
+    def _respond(start_response: Callable, status: str, body: bytes, extra: list | None = None) -> list[bytes]:
+        start_response(status, [("Content-Type", "application/json; charset=utf-8"),
+            ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
+            ("X-Content-Type-Options", "nosniff"), *(extra or [])])
+        return [body]
+
+
+def promotion_service_openapi_document() -> dict[str, Any]:
+    """Extend the authenticated promotion contract with public GET-only probes."""
+    document = promotion_approval_openapi_document()
+    for path in ("/healthz", "/readyz"):
+        responses = {"200": {"description": "Service is live" if path == "/healthz" else "Existing storage schema is readable"},
+                     "405": {"description": "Only GET is supported"}}
+        if path == "/readyz":
+            responses["503"] = {"description": "Storage unavailable; sanitized response, no database creation"}
+        document["paths"][path] = {"get": {"security": [], "responses": responses}}
+    return document
+
+
 @contextmanager
 def promotion_service_from_env(environ: Mapping[str, str] | None = None) -> Iterator[WSGIServer]:
     """Own the listener and sandbox lifecycle, including listener-bind failures."""
     config = PromotionServiceConfig.from_env(environ)
     with build_promotion_sandbox_app_from_env(resolve_bearer=config.resolve_bearer, environ=environ) as app:
-        with make_server(config.host, config.port, app) as server:
+        database_path = RuntimeConfig.from_env(environ).database_path
+        database = SQLiteDatabase(database_path)
+        try:
+            SQLiteExternalActionOperationRepository(database)
+        finally:
+            database.close()
+        service = PromotionServiceWSGIApp(app, database_path=database_path)
+        with make_server(config.host, config.port, service) as server:
             yield server
 
 

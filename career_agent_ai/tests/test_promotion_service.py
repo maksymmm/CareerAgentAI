@@ -94,3 +94,101 @@ def test_bind_failure_closes_sandbox(tmp_path, monkeypatch):
         with promotion_service_from_env(environment(tmp_path)):
             pytest.fail("must not start")
     assert len(closed) == 1
+
+
+@pytest.mark.parametrize("state", ["missing", "empty", "corrupt", "ready"])
+def test_probes_are_read_only_sanitized_and_do_not_require_auth(tmp_path, state):
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "probe.sqlite"
+    if state == "empty":
+        path.touch()
+    elif state == "corrupt":
+        path.write_bytes(b"private corrupt storage detail")
+    elif state == "ready":
+        database = SQLiteDatabase(str(path))
+        SQLiteExternalActionOperationRepository(database).create(operation())
+        database.close()
+    before = path.read_bytes() if path.exists() else None
+    def forbidden(*args):
+        raise AssertionError("probe must not reach workflow")
+    application = PromotionServiceWSGIApp(forbidden, database_path=str(path))
+    assert request(application, path="/healthz", token="")[0][0] == "200 OK"
+    (status, headers), payload = request(application, path="/readyz", token="")
+    assert status == ("200 OK" if state == "ready" else "503 Service Unavailable")
+    assert payload == {"status": "ok" if state == "ready" else "unavailable"}
+    assert ("Cache-Control", "no-store") in headers
+    assert request(application, method="POST", path="/readyz", body={})[0][0] == "405 Method Not Allowed"
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+def test_http_probe_routes_and_openapi(tmp_path):
+    from career_agent_ai.application.runtime.promotion_service import promotion_service_openapi_document
+    with promotion_service_from_env(environment(tmp_path)) as server:
+        for path in ("/healthz", "/readyz"):
+            worker = Thread(target=server.handle_request)
+            worker.start()
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            try:
+                connection.request("GET", path)
+                response = connection.getresponse()
+                assert response.status == 200
+                assert json.loads(response.read()) == {"status": "ok"}
+            finally:
+                connection.close()
+                worker.join(timeout=5)
+    document = promotion_service_openapi_document()
+    assert document["paths"]["/readyz"]["get"]["security"] == []
+    assert "503" in document["paths"]["/readyz"]["get"]["responses"]
+
+
+@pytest.mark.parametrize("missing", ["result_json", "error", "created_at", "updated_at", "all_four"])
+def test_readiness_rejects_partial_workflow_schema_without_mutation(tmp_path, missing):
+    import sqlite3
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "partial.sqlite"
+    columns = ("operation_id", "action_type", "payload_json", "status", "result_json", "error", "created_at", "updated_at")
+    retained = columns[:4] if missing == "all_four" else tuple(column for column in columns if column != missing)
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE external_action_operations (" + ", ".join(column + " TEXT" for column in retained) + ")")
+    before = path.read_bytes()
+    app = PromotionServiceWSGIApp(lambda *args: pytest.fail("probe reached workflow"), database_path=str(path))
+    (status, _), payload = request(app, path="/readyz", token="")
+    assert status == "503 Service Unavailable"
+    assert payload == {"status": "unavailable"}
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("key", ["none", "partial", "composite", "unique", "primary"])
+def test_readiness_requires_single_column_nonpartial_unique_operation_key(tmp_path, key):
+    import sqlite3
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "keys.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE external_action_operations (operation_id TEXT" +
+            (" PRIMARY KEY" if key == "primary" else "") +
+            ", action_type TEXT, payload_json TEXT, status TEXT, result_json TEXT, error TEXT, created_at TEXT, updated_at TEXT)")
+        if key in {"partial", "composite", "unique"}:
+            connection.execute("CREATE UNIQUE INDEX operation_key ON external_action_operations (" +
+                ("operation_id, action_type" if key == "composite" else "operation_id") + ")" +
+                (" WHERE status='prepared'" if key == "partial" else ""))
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    app = PromotionServiceWSGIApp(lambda *args: None, database_path=str(path))
+    assert request(app, path="/readyz")[0][0] == ("200 OK" if key in {"primary", "unique"} else "503 Service Unavailable")
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
+def test_wal_readiness_fails_closed_without_creating_sidecars(tmp_path):
+    from career_agent_ai.application.runtime.promotion_service import PromotionServiceWSGIApp
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "wal.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteExternalActionOperationRepository(database)
+    database.connection.execute("PRAGMA journal_mode=WAL")
+    database.close()
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    app = PromotionServiceWSGIApp(lambda *args: None, database_path=str(path))
+    assert request(app, path="/readyz")[0][0] == "503 Service Unavailable"
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
