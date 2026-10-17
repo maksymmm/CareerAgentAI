@@ -66,6 +66,20 @@ class RuntimePromotionSandboxApp:
         """Authenticate before opening request-local storage and always close it."""
         if self._closed:
             raise RuntimeError("Promotion sandbox runtime is closed")
+        if environ.get("PATH_INFO") == "/sandbox/operator":
+            from career_agent_ai.application.api.operator_sandbox_ui import operator_sandbox_html
+            if environ.get("REQUEST_METHOD", "GET") != "GET":
+                start_response("405 Method Not Allowed", [("Allow", "GET"), ("Cache-Control", "no-store"), ("Content-Length", "0")])
+                return (b"",)
+            body = operator_sandbox_html()
+            start_response("200 OK", [
+                ("Content-Type", "text/html; charset=utf-8"), ("Content-Length", str(len(body))),
+                ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
+                ("Referrer-Policy", "no-referrer"), ("Content-Security-Policy",
+                 "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+                 "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"),
+            ])
+            return (body,)
         operations = _RequestOperations(self._database_path,
             read_only=str(environ.get("PATH_INFO", "")).strip("/").endswith("/status"))
         try:

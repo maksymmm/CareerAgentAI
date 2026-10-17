@@ -390,6 +390,11 @@ must remain disabled. Routing and authentication precede request storage access,
 connections close even on response failures, and runtime close blocks new requests.
 The composition accepts no deployment adapter and exposes no HTTP intent-creation
 route; trusted callers must prepare the exact dry-run intent separately.
+The explicitly enabled operator runtime serves a static client at `/sandbox/operator`.
+It loads status and the exact approval prompt and records approve/decline only;
+it cannot execute or recover operations. The bearer token stays in tab memory,
+input changes invalidate the prompt, and response text is rendered without HTML.
+Reloading clears credentials. This is a local dry-run tool, not a deployed product.
 Run the local operator HTTP service with
 `python -m career_agent_ai.application.runtime.promotion_service`.
 In addition to the sandbox/database flags above, supply
