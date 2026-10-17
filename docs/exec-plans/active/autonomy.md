@@ -619,7 +619,11 @@ only in tab memory, stale-prompt invalidation and no execution/recovery controls
 It is served only by the explicitly gated runtime with restrictive no-store/CSP headers.
 Service OpenAPI documents the public static HTML GET route, no-store response and
 empty 405/Allow: GET contract; a regression prevents this surface becoming undiscoverable.
-Next priority: browser end-to-end approval/restart acceptance for this operator UI.
+Browser acceptance now covers both approve and decline, closes the original service,
+then reopens the same SQLite store: approval permits one no-I/O execution and rejects
+replay; decline denies execution and leaves the operation prepared. UI decisions alone
+never execute. Chromium evidence is required from CI, not local skipped browser tests.
+Next priority: candidate-facing workflow dashboard beyond sandbox approval controls.
 Review hardening applies no-store/byte stability checks to prepared snapshots too.
 The terminal restart baseline is copied from the stopped container before startup;
 its SHA-256 must still match after readiness, catching startup-time state rewrites.
