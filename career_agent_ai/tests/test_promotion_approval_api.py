@@ -66,6 +66,46 @@ def request(application, *, method="GET", token="valid", body=None, path=None, c
     return responses[0], json.loads(response)
 
 
+@pytest.mark.parametrize("status", list(ExternalActionStatus))
+def test_operation_status_snapshot_is_minimal_and_never_mutates(status):
+    value = replace(operation(), status=status, result={"private": "result"}, error="private diagnostic")
+    repository = Operations(value)
+    application = PromotionApprovalWSGIApp(repository,
+        resolve_bearer=lambda token: ReleaseOperator("operator", frozenset({"release:promote:dry-run"})))
+    (response_status, headers), payload = request(application,
+        path="/v1/release/promotions/promote:release-1/status")
+    assert response_status == "200 OK"
+    assert payload == {"schema_version": 1, "operation_id": value.operation_id,
+                       "operation_status": status.value, "execution_mode": "dry-run"}
+    assert ("Cache-Control", "no-store") in headers
+    assert repository.operation is value
+
+
+@pytest.mark.parametrize("token,expected", [("", "401 Unauthorized"), ("wrong", "401 Unauthorized"), ("valid", "403 Forbidden")])
+def test_status_auth_precedes_storage(token, expected):
+    class ForbiddenStorage:
+        def get(self, operation_id):
+            pytest.fail("unauthorized request reached storage")
+    application = PromotionApprovalWSGIApp(ForbiddenStorage(),
+        resolve_bearer=lambda value: ReleaseOperator("operator", frozenset()) if value == "valid" else None)
+    assert request(application, path="/v1/release/promotions/promote:release-1/status", token=token)[0][0] == expected
+
+
+def test_status_method_missing_corrupt_and_openapi():
+    path = "/v1/release/promotions/promote:release-1/status"
+    assert request(app(), method="POST", path=path, body={})[0][0] == "405 Method Not Allowed"
+    assert request(app(), path="/v1/release/promotions/missing/status")[0][0] == "404 Not Found"
+    repository = Operations(replace(operation(), payload={"private": "do not disclose"}))
+    application = PromotionApprovalWSGIApp(repository,
+        resolve_bearer=lambda value: ReleaseOperator("operator", frozenset({"release:promote:dry-run"})))
+    (status, _), payload = request(application, path=path)
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+    route = promotion_approval_openapi_document()["paths"]["/v1/release/promotions/{operation_id}/status"]
+    assert set(route) == {"parameters", "get"}
+    assert route["get"]["security"] == [{"bearerAuth": []}]
+
+
 def test_http_decision_is_durable_idempotent_and_never_executes(tmp_path):
     from career_agent_ai.application.release import PromotionApprovalReceiptService
     from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase

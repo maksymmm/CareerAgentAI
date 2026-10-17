@@ -18,14 +18,16 @@ from .config import RuntimeConfig
 class _RequestOperations:
     """Open storage lazily, after routing and operator authorization succeed."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, read_only: bool = False) -> None:
         self._path = path
+        self._read_only = read_only
         self._database: SQLiteDatabase | None = None
         self._repository: SQLiteExternalActionOperationRepository | None = None
 
     def _store(self) -> SQLiteExternalActionOperationRepository:
         if self._repository is None:
-            self._database = SQLiteDatabase(self._path)
+            self._database = (SQLiteDatabase.open_read_only(self._path) if self._read_only
+                              else SQLiteDatabase(self._path))
             if self._database.is_memory:
                 raise ValueError("Promotion sandbox requires durable storage")
             self._repository = SQLiteExternalActionOperationRepository(self._database)
@@ -64,7 +66,8 @@ class RuntimePromotionSandboxApp:
         """Authenticate before opening request-local storage and always close it."""
         if self._closed:
             raise RuntimeError("Promotion sandbox runtime is closed")
-        operations = _RequestOperations(self._database_path)
+        operations = _RequestOperations(self._database_path,
+            read_only=str(environ.get("PATH_INFO", "")).strip("/").endswith("/status"))
         try:
             application = PromotionApprovalWSGIApp(operations,
                 receipts=PromotionApprovalReceiptService(operations),

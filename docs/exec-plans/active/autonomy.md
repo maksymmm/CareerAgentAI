@@ -604,7 +604,11 @@ receipt claim, inside the adapter, and after durable success. Recovery classifie
 ambiguous claims for reconciliation, preserves recorded success, rejects consumption
 replay and never invokes the recovery process's adapter. This is process-loss evidence,
 not a power-loss/filesystem durability guarantee or a real deployment test.
-The next isolated priority is operator-facing recovery status visibility.
+Operator-facing GET status visibility now exposes a minimal authenticated operation
+snapshot without execution, recovery classification, private payload or errors.
+It is explicitly not approval-receipt state or permission to retry. Regression tests
+cover every lifecycle state, auth-before-storage, method gates and corrupt intent.
+The next isolated priority is HTTP restart coverage for status snapshots.
 Execution evidence remains required from the post-merge integration CI; local
 workflow contract tests alone do not establish container readiness.
 HTTP receipt retries remain idempotent after execution/restart: only an identical

@@ -78,6 +78,34 @@ def test_http_approval_restart_execute_and_recovery(tmp_path):
         assert result["execution_mode"] == "dry-run"
 
 
+def test_http_status_survives_restart_without_mutating_database(tmp_path):
+    env = environment(tmp_path)
+    database = SQLiteDatabase(env["CAREER_AGENT_DB_PATH"])
+    SQLiteExternalActionOperationRepository(database).create(operation())
+    database.close()
+    from pathlib import Path
+    before = Path(env["CAREER_AGENT_DB_PATH"]).read_bytes()
+    for _ in range(2):
+        with promotion_service_from_env(env) as server:
+            status, payload = exchange(server, "GET", "status", env["CAREER_AGENT_PROMOTION_BEARER_TOKEN"])
+            assert status == 200
+            assert payload["operation_status"] == "prepared"
+    assert Path(env["CAREER_AGENT_DB_PATH"]).read_bytes() == before
+
+
+def test_status_runtime_does_not_recreate_missing_storage(tmp_path):
+    from career_agent_ai.application.runtime.promotion_sandbox import RuntimePromotionSandboxApp
+    from career_agent_ai.application.api import ReleaseOperator
+    from career_agent_ai.tests.test_promotion_approval_api import request
+    path = tmp_path / "missing.sqlite"
+    with RuntimePromotionSandboxApp(database_path=str(path), resolve_bearer=lambda _: ReleaseOperator(
+        "operator", frozenset({"release:promote:dry-run"}))) as app:
+        (status, _), payload = request(app, path="/v1/release/promotions/promote:release-1/status")
+    assert status == "500 Internal Server Error"
+    assert payload == {"error": "internal_error"}
+    assert not path.exists()
+
+
 def test_bind_failure_closes_sandbox(tmp_path, monkeypatch):
     from career_agent_ai.application.runtime import promotion_service
     from career_agent_ai.application.runtime.promotion_sandbox import RuntimePromotionSandboxApp
