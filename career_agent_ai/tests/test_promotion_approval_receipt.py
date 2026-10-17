@@ -12,6 +12,87 @@ from career_agent_ai.tests.test_promotion_execution import _plan, _service, DryR
 SCOPES = ("release:promote:dry-run",)
 
 
+@pytest.mark.parametrize("boundary", ["receipt_claim", "adapter_entered", "outcome_saved"])
+def test_abrupt_process_loss_preserves_single_use_approval(tmp_path, boundary):
+    """Kill a real worker without cleanup at each durable execution boundary."""
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+    from career_agent_ai.application.external_actions.external_action_repository import OperationConflictError
+
+    database_path = tmp_path / "crash.sqlite"
+    marker = tmp_path / "adapter-called"
+    script = textwrap.dedent('''
+        import os
+        import sys
+        from pathlib import Path
+        from career_agent_ai.tests.test_promotion_approval_receipt import prepare, SCOPES
+        from career_agent_ai.tests.test_promotion_execution import _service, DryRunPromotionAdapter
+        from career_agent_ai.application.external_actions import ExternalActionStatus
+        from career_agent_ai.application.release import PromotionApprovalReceiptService
+        from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+        from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+
+        path, boundary, marker = sys.argv[1:]
+        database = SQLiteDatabase(path)
+        _, service, submission = prepare(database)
+        receipt = service.record(submission, authenticated_operator_id="operator", granted_scopes=SCOPES)
+
+        class CrashRepository(SQLiteExternalActionOperationRepository):
+            def transition(self, operation_id, expected, status, **kwargs):
+                result = super().transition(operation_id, expected, status, **kwargs)
+                if (boundary == "receipt_claim" and operation_id == receipt.operation_id
+                        and status == ExternalActionStatus.IN_PROGRESS):
+                    os._exit(73)
+                if (boundary == "outcome_saved" and operation_id == "promotion:one"
+                        and status == ExternalActionStatus.SUCCEEDED):
+                    os._exit(73)
+                return result
+
+        class MarkedAdapter(DryRunPromotionAdapter):
+            def promote(self, *args, **kwargs):
+                Path(marker).write_text("called", encoding="ascii")
+                if boundary == "adapter_entered":
+                    os._exit(73)
+                return super().promote(*args, **kwargs)
+
+        repository = CrashRepository(database)
+        service = PromotionApprovalReceiptService(repository)
+        from career_agent_ai.application.external_actions import ExternalActionService
+        from career_agent_ai.application.release.promotion_execution import PromotionExecutionService
+        service._executor = PromotionExecutionService(ExternalActionService(
+            repository, PromotionExecutionService.action_adapter(MarkedAdapter())))
+        service.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+        raise AssertionError("crash boundary was not reached")
+    ''')
+    worker = subprocess.run([sys.executable, "-c", script, str(database_path), boundary, str(marker)],
+                            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=15)
+    assert worker.returncode == 73, worker.stderr
+    assert marker.exists() == (boundary != "receipt_claim")
+    database = SQLiteDatabase(str(database_path))
+    try:
+        repository = SQLiteExternalActionOperationRepository(database)
+        service = PromotionApprovalReceiptService(repository)
+        with pytest.raises(OperationConflictError):
+            service.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+        recovered = service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+        expected = (ExternalActionStatus.SUCCEEDED if boundary == "outcome_saved"
+                    else ExternalActionStatus.RECONCILIATION_REQUIRED)
+        assert recovered.status == expected
+        assert service.recover_claim("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES) == recovered
+        with pytest.raises(OperationConflictError):
+            service.consume("promotion:one", authenticated_operator_id="operator", granted_scopes=SCOPES)
+        assert service._executor._external_actions._adapter._adapter._results == {}
+        assert repository.get("promotion:one").status == {
+            "receipt_claim": ExternalActionStatus.PREPARED,
+            "adapter_entered": ExternalActionStatus.RECONCILIATION_REQUIRED,
+            "outcome_saved": ExternalActionStatus.SUCCEEDED,
+        }[boundary]
+    finally:
+        database.close()
+
+
 def prepare(database, decision="approve"):
     executor, repository = _service(database, DryRunPromotionAdapter())
     with pytest.raises(PermissionError):
