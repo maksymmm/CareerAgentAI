@@ -614,6 +614,9 @@ execute, replay conflict and recovery, no-store and byte-identical storage after
 then restarts again to verify retained terminal status. Embedded Python smoke scripts
 are executed by a regression against the real local HTTP composition; Docker evidence
 still requires reviewed integration CI. Next: verify this expanded release-job smoke.
+Review hardening applies no-store/byte stability checks to prepared snapshots too.
+The terminal restart baseline is copied from the stopped container before startup;
+its SHA-256 must still match after readiness, catching startup-time state rewrites.
 Execution evidence remains required from the post-merge integration CI; local
 workflow contract tests alone do not establish container readiness.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
