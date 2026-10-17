@@ -303,6 +303,64 @@ jobs:
           PY
           test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent/candidate.sqlite)" = "600"
 
+      - name: Smoke isolated operator service container
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          volume=careeragent-operator-ci-data
+          docker volume create "$volume"
+          cleanup() {
+            docker rm --force careeragent-operator-ci >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name careeragent-operator-ci \
+            --network none --no-healthcheck --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --mount type=volume,src="$volume",dst=/var/lib/careeragent \
+            --env CAREER_AGENT_DB_PATH=/var/lib/careeragent/operator.sqlite \
+            --env CAREER_AGENT_PROMOTION_SANDBOX=true \
+            --env CAREER_AGENT_PROMOTION_BEARER_TOKEN="$(printf 's%.0s' {1..32})" \
+            --env CAREER_AGENT_PROMOTION_OPERATOR_ID=operator-ci \
+            --entrypoint /bin/sh careeragentai:candidate \
+            -c 'umask 077; exec python -m career_agent_ai.application.runtime.promotion_service'
+          test "$(docker exec careeragent-operator-ci id -u)" = "10001"
+          docker exec -i careeragent-operator-ci python -I - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for path in ("/healthz", "/readyz"):
+              for attempt in range(30):
+                  try:
+                      with opener.open(f"http://127.0.0.1:8081{path}", timeout=2) as response:
+                          assert response.status == 200
+                          assert json.load(response) == {"status": "ok"}
+                          break
+                  except (OSError, urllib.error.URLError):
+                      if attempt == 29:
+                          raise
+                      time.sleep(1)
+          request = urllib.request.Request("http://127.0.0.1:8081/v1/release/promotions/missing/approval")
+          for token, expected in ((None, 401), ("s" * 32, 404)):
+              request.remove_header("Authorization")
+              if token:
+                  request.add_header("Authorization", f"Bearer {token}")
+              try:
+                  opener.open(request, timeout=2)
+              except urllib.error.HTTPError as error:
+                  assert error.code == expected
+              else:
+                  raise AssertionError("operator authentication boundary was bypassed")
+          PY
+          test "$(docker exec careeragent-operator-ci stat -c %a /var/lib/careeragent)" = "700"
+          test "$(docker exec careeragent-operator-ci stat -c %a /var/lib/careeragent/operator.sqlite)" = "600"
+          docker stop --time 10 careeragent-operator-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
+
       - name: Upload immutable release evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
