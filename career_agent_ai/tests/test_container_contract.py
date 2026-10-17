@@ -216,10 +216,57 @@ def test_ci_smokes_isolated_operator_before_publishing_evidence():
         "docker stop --time 10 careeragent-operator-ci",
         "{{.State.ExitCode}}",
         "trap cleanup EXIT",
+        'operation_id="promote:container-smoke"',
+        '"action_fingerprint": prompt["action_fingerprint"]',
+        "docker start careeragent-operator-ci",
+        '(("execute-dry-run", 200), ("execute-dry-run", 409), ("recover-dry-run", 200))',
+        'json.load(response)["execution_mode"] == "dry-run"',
     ):
         assert required in smoke
     assert "--publish" not in smoke
     assert "--user root" not in smoke
+    assert smoke.index('"decision": "approve"') < smoke.index("docker stop --time 10")
+    assert smoke.index("docker start") < smoke.index('(("execute-dry-run", 200)')
+
+
+def test_operator_container_workflow_scripts_survive_service_restart(tmp_path, monkeypatch):
+    """Execute the actual embedded smoke Python against the local no-I/O runtime."""
+    import textwrap
+    from threading import Thread
+    from career_agent_ai.application.runtime.promotion_service import promotion_service_from_env
+
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    smoke = workflow.split("# Seed only a synthetic no-I/O intent", 1)[1].split(
+        "- name: Upload immutable release evidence", 1
+    )[0]
+    scripts = [textwrap.dedent(part.split("          PY", 1)[0])
+               for part in smoke.split("<<'PY'\n")[1:]]
+    assert len(scripts) == 3
+    environ = {
+        "CAREER_AGENT_DB_PATH": str(tmp_path / "operator.sqlite"),
+        "CAREER_AGENT_PROMOTION_SANDBOX": "true",
+        "CAREER_AGENT_PROMOTION_PORT": "0",
+        "CAREER_AGENT_PROMOTION_OPERATOR_ID": "operator-ci",
+        "CAREER_AGENT_PROMOTION_BEARER_TOKEN": "s" * 32,
+    }
+    for key, value in environ.items():
+        monkeypatch.setenv(key, value)
+    previous_umask = os.umask(0o077)
+    try:
+        exec(compile(scripts[0], "container-seed", "exec"), {})
+        for script in scripts[1:]:
+            with promotion_service_from_env(environ) as server:
+                worker = Thread(target=server.serve_forever)
+                worker.start()
+                try:
+                    exec(compile(script.replace(":8081/", f":{server.server_port}/"),
+                                 "container-http", "exec"), {})
+                finally:
+                    server.shutdown()
+                    worker.join(timeout=5)
+                    assert not worker.is_alive()
+    finally:
+        os.umask(previous_umask)
 
 
 def test_ci_generates_and_verifies_pinned_release_evidence():
@@ -280,7 +327,10 @@ def test_ci_generates_and_verifies_pinned_release_evidence():
     assert 're.compile(r"sha256:[0-9a-f]{64}\\\\Z")' not in release_job
     assert release_job.index("docker push") < release_job.index("candidate-publication-receipt.json")
     assert 'sys.path.insert(0, os.environ["SOURCE_ROOT"])' not in release_job
-    assert "career_agent_ai.application.release" not in release_job
+    # Host evidence validation cannot import checkout code; container smoke may.
+    assert "career_agent_ai.application.release" not in release_job.split(
+        "- name: Smoke isolated operator service container", 1
+    )[0]
     assert "${{ runner.temp }}/candidate-sbom.spdx.json" in release_job
     assert workflow.index("Smoke candidate service container") < workflow.index(
         "Upload immutable release evidence"
