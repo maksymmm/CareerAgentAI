@@ -139,7 +139,8 @@ def test_operator_ui_headers_methods_and_no_storage(tmp_path):
     app.close()
 
 
-def test_operator_ui_browser_prompt_binding_and_approval(tmp_path):
+@pytest.mark.parametrize("decision, execution_status", [("approve", 200), ("decline", 403)])
+def test_operator_ui_browser_prompt_binding_and_approval(tmp_path, decision, execution_status):
     browser_api = pytest.importorskip("playwright.sync_api")
     env = environment(tmp_path)
     database = SQLiteDatabase(env["CAREER_AGENT_DB_PATH"])
@@ -166,7 +167,7 @@ def test_operator_ui_browser_prompt_binding_and_approval(tmp_path):
             page.locator("#operation").fill("promote:release-1")
             page.locator("#load").click()
             browser_api.expect(page.locator("#approve")).to_be_enabled()
-            page.locator("#approve").click()
+            page.locator("#" + decision).click()
             browser_api.expect(page.locator("#result")).to_contain_text("validated")
             assert page.locator("#approve").is_disabled()
             page.locator("#status").click()
@@ -183,6 +184,17 @@ def test_operator_ui_browser_prompt_binding_and_approval(tmp_path):
         assert SQLiteExternalActionOperationRepository(database).get("promote:release-1").status.value == "prepared"
     finally:
         database.close()
+    assert server.socket.fileno() == -1
+    with promotion_service_from_env(env) as restarted:
+        token = env["CAREER_AGENT_PROMOTION_BEARER_TOKEN"]
+        status, result = exchange(restarted, "POST", "execute-dry-run", token, {"schema_version": 1})
+        assert status == execution_status
+        if decision == "approve":
+            assert result["execution_mode"] == "dry-run"
+            assert exchange(restarted, "POST", "execute-dry-run", token, {"schema_version": 1})[0] == 409
+        status, snapshot = exchange(restarted, "GET", "status", token)
+        assert status == 200
+        assert snapshot["operation_status"] == ("succeeded" if decision == "approve" else "prepared")
 
 
 def test_bind_failure_closes_sandbox(tmp_path, monkeypatch):
