@@ -115,6 +115,15 @@ class PromotionServiceWSGIApp:
 def promotion_service_openapi_document() -> dict[str, Any]:
     """Extend the authenticated promotion contract with public GET-only probes."""
     document = promotion_approval_openapi_document()
+    document["paths"]["/sandbox/operator"] = {
+        "get": {"security": [], "responses": {
+            "200": {"description": "Static sandbox-only operator approval client; no embedded credentials or execution controls",
+                    "headers": {"Cache-Control": {"schema": {"type": "string", "const": "no-store"}}},
+                    "content": {"text/html": {"schema": {"type": "string"}}}},
+            "405": {"description": "Only GET is allowed; empty response body",
+                    "headers": {"Allow": {"schema": {"type": "string", "const": "GET"}}}},
+        }},
+    }
     for path in ("/healthz", "/readyz"):
         responses = {"200": {"description": "Service is live" if path == "/healthz" else "Existing storage schema is readable"},
                      "405": {"description": "Only GET is supported"}}
