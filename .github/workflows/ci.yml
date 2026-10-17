@@ -358,6 +358,80 @@ jobs:
           PY
           test "$(docker exec careeragent-operator-ci stat -c %a /var/lib/careeragent)" = "700"
           test "$(docker exec careeragent-operator-ci stat -c %a /var/lib/careeragent/operator.sqlite)" = "600"
+          # Seed only a synthetic no-I/O intent; the HTTP API cannot create intents.
+          docker exec -i careeragent-operator-ci python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from career_agent_ai.application.external_actions import ExternalActionOperation
+          from career_agent_ai.application.release import DryRunPromotionPlan
+          from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+          from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+
+          os.umask(0o077)
+          plan = DryRunPromotionPlan(
+              source_commit="d" * 40,
+              target_reference="registry.example/app@sha256:" + "e" * 64,
+              rollback_reference="registry.example/app@sha256:" + "c" * 64,
+              publication_receipt_sha256="sha256:" + "b" * 64,
+          )
+          database = SQLiteDatabase(os.environ["CAREER_AGENT_DB_PATH"])
+          try:
+              SQLiteExternalActionOperationRepository(database).create(ExternalActionOperation(
+                  operation_id="promote:container-smoke", action_type="release.promote.dry-run",
+                  payload={**json.loads(plan.to_json()), "plan_sha256": "sha256:" +
+                           hashlib.sha256(plan.to_json().encode("ascii")).hexdigest()},
+              ))
+          finally:
+              database.close()
+          PY
+          docker exec -i careeragent-operator-ci python -I - <<'PY'
+          import json
+          import os
+          import urllib.request
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          url = "http://127.0.0.1:8081/v1/release/promotions/promote:container-smoke/approval"
+          headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"],
+                     "Content-Type": "application/json"}
+          with opener.open(urllib.request.Request(url, headers=headers), timeout=5) as response:
+              assert response.status == 200
+              prompt = json.load(response)
+          body = json.dumps({"schema_version": 1, "action_fingerprint": prompt["action_fingerprint"],
+                             "decision": "approve"}).encode()
+          with opener.open(urllib.request.Request(url, data=body, headers=headers), timeout=5) as response:
+              assert response.status == 200
+          PY
+          docker stop --time 10 careeragent-operator-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
+          docker start careeragent-operator-ci
+          docker exec -i careeragent-operator-ci python -I - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for attempt in range(30):
+              try:
+                  with opener.open("http://127.0.0.1:8081/readyz", timeout=2) as response:
+                      assert response.status == 200
+                      break
+              except (OSError, urllib.error.URLError):
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          base = "http://127.0.0.1:8081/v1/release/promotions/promote:container-smoke/"
+          headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"],
+                     "Content-Type": "application/json"}
+          for route, expected in (("execute-dry-run", 200), ("execute-dry-run", 409), ("recover-dry-run", 200)):
+              request = urllib.request.Request(base + route, data=b'{"schema_version":1}', headers=headers)
+              try:
+                  with opener.open(request, timeout=5) as response:
+                      assert response.status == expected
+                      assert json.load(response)["execution_mode"] == "dry-run"
+              except urllib.error.HTTPError as error:
+                  assert error.code == expected == 409
+          PY
           docker stop --time 10 careeragent-operator-ci
           test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
 
