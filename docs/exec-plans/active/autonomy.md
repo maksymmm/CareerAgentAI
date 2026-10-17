@@ -598,7 +598,13 @@ It checks public probes, authentication, database permissions and graceful SIGTE
 The container scenario also seeds a synthetic intent through the repository, records
 prompt-bound approval via HTTP, restarts the same container/volume, and checks dry-run
 execution, replay conflict and safe recovery. No HTTP intent creation or live adapter
-is enabled. The next isolated verification is this expanded scenario's integration CI.
+is enabled. Its integration CI passed on f3891a3.
+Abrupt-process regression now exits a real SQLite worker without cleanup after the
+receipt claim, inside the adapter, and after durable success. Recovery classifies
+ambiguous claims for reconciliation, preserves recorded success, rejects consumption
+replay and never invokes the recovery process's adapter. This is process-loss evidence,
+not a power-loss/filesystem durability guarantee or a real deployment test.
+The next isolated priority is operator-facing recovery status visibility.
 Execution evidence remains required from the post-merge integration CI; local
 workflow contract tests alone do not establish container readiness.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
