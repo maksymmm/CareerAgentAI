@@ -1,0 +1,509 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-cov playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run test suite
+        run: |
+          python -m pytest             --cov=career_agent_ai             --cov-report=term-missing             --cov-fail-under=90
+
+  release-evidence:
+    needs: test
+    # Use ref_name rather than the fully qualified ref so the trusted
+    # integration push is not silently skipped by event/ref normalization.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_name == 'feat/decision-engine-implementation'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: source
+
+      - name: Set up evidence validator
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned evidence validator
+        working-directory: ${{ runner.temp }}
+        run: python -I -m pip install jsonschema==4.25.1
+
+      - name: Build candidate service container
+        run: docker build --tag careeragentai:candidate source
+
+      - name: Record immutable candidate image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          image_id="$(docker image inspect --format '{{.Id}}' careeragentai:candidate)"
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$source_sha" > "$RUNNER_TEMP/source-commit.txt"
+          printf '%s\n' "$image_id" > "$RUNNER_TEMP/candidate-image-digest.txt"
+          printf '{}\n' > "$RUNNER_TEMP/syft.yaml"
+          printf '{}\n' > "$RUNNER_TEMP/grype.yaml"
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: careeragentai:candidate
+          format: spdx-json
+          output-file: ${{ runner.temp }}/candidate-sbom.spdx.json
+          upload-artifact: false
+          config: ${{ runner.temp }}/syft.yaml
+
+      - name: Scan candidate image for fixed critical vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: careeragentai:candidate
+          fail-build: true
+          severity-cutoff: critical
+          only-fixed: true
+          output-format: json
+          output-file: ${{ runner.temp }}/candidate-vulnerabilities.json
+          config: ${{ runner.temp }}/grype.yaml
+
+      - name: Validate and checksum release evidence
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          SOURCE_ROOT: ${{ github.workspace }}/source
+        run: |
+          set -euo pipefail
+          schema="$SOURCE_ROOT/.github/schemas/spdx-2.3.schema.json"
+          printf '%s  %s\n' \
+            '4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212' \
+            "$schema" \
+            | sha256sum --check --strict
+          python -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from jsonschema import Draft201909Validator
+
+          sbom = json.loads(Path("candidate-sbom.spdx.json").read_text(encoding="utf-8"))
+          schema = json.loads(
+              (Path(os.environ["SOURCE_ROOT"]) / ".github/schemas/spdx-2.3.schema.json")
+              .read_text(encoding="utf-8")
+          )
+          Draft201909Validator.check_schema(schema)
+          Draft201909Validator(schema).validate(sbom)
+          assert sbom["spdxVersion"] == "SPDX-2.3"
+          assert sbom["packages"], "SBOM must contain at least one package"
+          report = json.loads(
+              Path("candidate-vulnerabilities.json").read_text(encoding="utf-8")
+          )
+          assert isinstance(report["matches"], list)
+          source = Path("source-commit.txt").read_text(encoding="ascii").strip()
+          assert len(source) == 40 and all(char in "0123456789abcdef" for char in source)
+          digest = Path("candidate-image-digest.txt").read_text(encoding="ascii").strip()
+          assert digest.startswith("sha256:") and len(digest) == 71
+
+          import hashlib
+
+          evidence_names = (
+              "candidate-image-digest.txt",
+              "candidate-sbom.spdx.json",
+              "candidate-vulnerabilities.json",
+              "source-commit.txt",
+          )
+          checksums = {
+              name: "sha256:" + hashlib.sha256(Path(name).read_bytes()).hexdigest()
+              for name in evidence_names
+          }
+          manifest = {
+              "candidate_local_image_id": digest,
+              "evidence_sha256": checksums,
+              "publication_status": "unpublished",
+              "schema_version": 1,
+              "source_commit": source,
+          }
+          Path("candidate-release-manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="ascii",
+          )
+          PY
+          sha256sum \
+            source-commit.txt \
+            candidate-image-digest.txt \
+            candidate-sbom.spdx.json \
+            candidate-vulnerabilities.json \
+            candidate-release-manifest.json
+
+      - name: Publish and verify sandbox registry identity
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          registry_name=careeragent-sandbox-registry
+          repository=localhost:5000/careeragentai/candidate
+          source_sha="$(cat source-commit.txt)"
+          tag="$repository:$source_sha"
+          cleanup() {
+            docker rm --force "$registry_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name "$registry_name" \
+            --publish 127.0.0.1:5000:5000 \
+            registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:5000/v2/ >/dev/null; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          docker tag careeragentai:candidate "$tag"
+          docker push "$tag"
+          registry_reference="$(
+            docker image inspect "$tag" --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | awk -v repository="$repository" 'index($0, repository "@sha256:") == 1 {print}'
+          )"
+          test "$(printf '%s\n' "$registry_reference" | sed '/^$/d' | wc -l)" -eq 1
+          printf '%s\n' "$registry_reference" > candidate-registry-reference.txt
+          docker image rm "$tag" >/dev/null
+          docker pull "$registry_reference"
+          test "$(docker image inspect "$registry_reference" --format '{{index .RepoDigests 0}}')" = \
+            "$registry_reference"
+          REGISTRY_REFERENCE="$registry_reference" python -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          digest = re.compile(r"sha256:[0-9a-f]{64}\Z")
+          source = re.compile(r"[0-9a-f]{40}\Z")
+          reference = os.environ["REGISTRY_REFERENCE"]
+          repository = "localhost:5000/careeragentai/candidate"
+          prefix = repository + "@"
+          assert reference.startswith(prefix) and digest.fullmatch(reference[len(prefix):])
+          manifest_text = Path("candidate-release-manifest.json").read_text(encoding="ascii")
+          manifest = json.loads(manifest_text)
+          assert source.fullmatch(manifest["source_commit"])
+          assert manifest["source_commit"] == Path("source-commit.txt").read_text(
+              encoding="ascii"
+          ).strip()
+          assert manifest["publication_status"] == "unpublished"
+          provenance = {
+              "schema_version": 1,
+              "source_commit": manifest["source_commit"],
+              "subject_reference": reference,
+          }
+          provenance_text = json.dumps(
+              provenance, sort_keys=True, separators=(",", ":")
+          ) + "\n"
+          Path("candidate-provenance.json").write_text(provenance_text, encoding="ascii")
+          receipt = {
+              "environment": "non-production",
+              "promotion_manifest_sha256": "sha256:" + hashlib.sha256(
+                  manifest_text.encode("ascii")
+              ).hexdigest(),
+              "provenance_sha256": "sha256:" + hashlib.sha256(
+                  provenance_text.encode("ascii")
+              ).hexdigest(),
+              "registry_reference": reference,
+              "schema_version": 1,
+              "source_commit": manifest["source_commit"],
+          }
+          Path("candidate-publication-receipt.json").write_text(
+              json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="ascii",
+          )
+          assert receipt["registry_reference"] == reference
+          PY
+          sha256sum \
+            source-commit.txt \
+            candidate-image-digest.txt \
+            candidate-sbom.spdx.json \
+            candidate-vulnerabilities.json \
+            candidate-release-manifest.json \
+            candidate-registry-reference.txt \
+            candidate-provenance.json \
+            candidate-publication-receipt.json \
+            > release-artifacts.sha256
+          sha256sum --check release-artifacts.sha256
+
+      - name: Smoke candidate service container
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          volume=careeragent-candidate-ci-data
+          docker volume create "$volume"
+          cleanup() {
+            docker rm --force careeragent-candidate-ci >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name careeragent-candidate-ci \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --mount type=volume,src="$volume",dst=/var/lib/careeragent \
+            --publish 127.0.0.1:18080:8080 \
+            --env CAREER_AGENT_CANDIDATE_BEARER_TOKEN="$(printf 's%.0s' {1..32})" \
+            --env CAREER_AGENT_CANDIDATE_USER_ID=candidate-ci \
+            careeragentai:candidate
+          test "$(docker exec careeragent-candidate-ci id -u)" = "10001"
+          test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent)" = "700"
+          python -I - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          for path in ("/healthz", "/readyz"):
+              for attempt in range(30):
+                  try:
+                      with urllib.request.urlopen(
+                          f"http://127.0.0.1:18080{path}", timeout=2
+                      ) as response:
+                          assert response.status == 200
+                          assert json.load(response) == {"status": "ok"}
+                          break
+                  except (OSError, urllib.error.URLError):
+                      if attempt == 29:
+                          raise
+                      time.sleep(1)
+          PY
+          test "$(docker exec careeragent-candidate-ci stat -c %a /var/lib/careeragent/candidate.sqlite)" = "600"
+
+      - name: Smoke isolated operator service container
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          volume=careeragent-operator-ci-data
+          docker volume create "$volume"
+          cleanup() {
+            docker rm --force careeragent-operator-ci >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name careeragent-operator-ci \
+            --network none --no-healthcheck --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --mount type=volume,src="$volume",dst=/var/lib/careeragent \
+            --env CAREER_AGENT_DB_PATH=/var/lib/careeragent/operator.sqlite \
+            --env CAREER_AGENT_PROMOTION_SANDBOX=true \
+            --env CAREER_AGENT_PROMOTION_BEARER_TOKEN="$(printf 's%.0s' {1..32})" \
+            --env CAREER_AGENT_PROMOTION_OPERATOR_ID=operator-ci \
+            --entrypoint /bin/sh careeragentai:candidate \
+            -c 'umask 077; exec python -m career_agent_ai.application.runtime.promotion_service'
+          test "$(docker exec careeragent-operator-ci id -u)" = "10001"
+          docker exec -i careeragent-operator-ci python -I - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for path in ("/healthz", "/readyz"):
+              for attempt in range(30):
+                  try:
+                      with opener.open(f"http://127.0.0.1:8081{path}", timeout=2) as response:
+                          assert response.status == 200
+                          assert json.load(response) == {"status": "ok"}
+                          break
+                  except (OSError, urllib.error.URLError):
+                      if attempt == 29:
+                          raise
+                      time.sleep(1)
+          request = urllib.request.Request("http://127.0.0.1:8081/v1/release/promotions/missing/approval")
+          for token, expected in ((None, 401), ("s" * 32, 404)):
+              request.remove_header("Authorization")
+              if token:
+                  request.add_header("Authorization", f"Bearer {token}")
+              try:
+                  opener.open(request, timeout=2)
+              except urllib.error.HTTPError as error:
+                  assert error.code == expected
+              else:
+                  raise AssertionError("operator authentication boundary was bypassed")
+          PY
+          test "$(docker exec careeragent-operator-ci stat -c %a /var/lib/careeragent)" = "700"
+          test "$(docker exec careeragent-operator-ci stat -c %a /var/lib/careeragent/operator.sqlite)" = "600"
+          # Seed only a synthetic no-I/O intent; the HTTP API cannot create intents.
+          docker exec -i careeragent-operator-ci python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from career_agent_ai.application.external_actions import ExternalActionOperation
+          from career_agent_ai.application.release import DryRunPromotionPlan
+          from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+          from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+
+          os.umask(0o077)
+          plan = DryRunPromotionPlan(
+              source_commit="d" * 40,
+              target_reference="registry.example/app@sha256:" + "e" * 64,
+              rollback_reference="registry.example/app@sha256:" + "c" * 64,
+              publication_receipt_sha256="sha256:" + "b" * 64,
+          )
+          database = SQLiteDatabase(os.environ["CAREER_AGENT_DB_PATH"])
+          try:
+              SQLiteExternalActionOperationRepository(database).create(ExternalActionOperation(
+                  operation_id="promote:container-smoke", action_type="release.promote.dry-run",
+                  payload={**json.loads(plan.to_json()), "plan_sha256": "sha256:" +
+                           hashlib.sha256(plan.to_json().encode("ascii")).hexdigest()},
+              ))
+          finally:
+              database.close()
+          PY
+          docker exec -i careeragent-operator-ci python -I - <<'PY'
+          import json
+          import os
+          import urllib.request
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          url = "http://127.0.0.1:8081/v1/release/promotions/promote:container-smoke/approval"
+          headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"],
+                     "Content-Type": "application/json"}
+          with opener.open(urllib.request.Request(url, headers=headers), timeout=5) as response:
+              assert response.status == 200
+              prompt = json.load(response)
+          body = json.dumps({"schema_version": 1, "action_fingerprint": prompt["action_fingerprint"],
+                             "decision": "approve"}).encode()
+          with opener.open(urllib.request.Request(url, data=body, headers=headers), timeout=5) as response:
+              assert response.status == 200
+          PY
+          docker stop --time 10 careeragent-operator-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
+          docker start careeragent-operator-ci
+          docker exec -i careeragent-operator-ci python -I - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for attempt in range(30):
+              try:
+                  with opener.open("http://127.0.0.1:8081/readyz", timeout=2) as response:
+                      assert response.status == 200
+                      break
+              except (OSError, urllib.error.URLError):
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          base = "http://127.0.0.1:8081/v1/release/promotions/promote:container-smoke/"
+          headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"],
+                     "Content-Type": "application/json"}
+          for route, expected in (("execute-dry-run", 200), ("execute-dry-run", 409), ("recover-dry-run", 200)):
+              if route == "execute-dry-run" and expected == 200:
+                  from pathlib import Path
+                  database_path = Path(os.environ["CAREER_AGENT_DB_PATH"])
+                  before = database_path.read_bytes()
+                  with opener.open(urllib.request.Request(base + "status", headers=headers), timeout=5) as response:
+                      assert response.status == 200
+                      assert response.headers["Cache-Control"] == "no-store"
+                      assert json.load(response) == {"schema_version": 1, "operation_id": "promote:container-smoke",
+                                                     "operation_status": "prepared", "execution_mode": "dry-run"}
+                  assert database_path.read_bytes() == before
+              request = urllib.request.Request(base + route, data=b'{"schema_version":1}', headers=headers)
+              try:
+                  with opener.open(request, timeout=5) as response:
+                      assert response.status == expected
+                      assert json.load(response)["execution_mode"] == "dry-run"
+              except urllib.error.HTTPError as error:
+                  assert error.code == expected == 409
+              from pathlib import Path
+              database_path = Path(os.environ["CAREER_AGENT_DB_PATH"])
+              before = database_path.read_bytes()
+              with opener.open(urllib.request.Request(base + "status", headers=headers), timeout=5) as response:
+                  assert response.status == 200
+                  assert response.headers["Cache-Control"] == "no-store"
+                  assert json.load(response) == {"schema_version": 1, "operation_id": "promote:container-smoke",
+                                                 "operation_status": "succeeded", "execution_mode": "dry-run"}
+              assert database_path.read_bytes() == before
+          PY
+          docker stop --time 10 careeragent-operator-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
+          # A second restart must preserve the terminal status, not rerun execution.
+          docker cp careeragent-operator-ci:/var/lib/careeragent/operator.sqlite "$RUNNER_TEMP/operator-before-restart.sqlite"
+          expected_db_sha256="$(sha256sum "$RUNNER_TEMP/operator-before-restart.sqlite" | cut -d ' ' -f 1)"
+          docker start careeragent-operator-ci
+          docker exec -i --env EXPECTED_DB_SHA256="$expected_db_sha256" careeragent-operator-ci python -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for attempt in range(30):
+              try:
+                  with opener.open("http://127.0.0.1:8081/readyz", timeout=2) as response:
+                      assert response.status == 200
+                      break
+              except (OSError, urllib.error.URLError):
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          database_path = Path(os.environ["CAREER_AGENT_DB_PATH"])
+          before = database_path.read_bytes()
+          assert hashlib.sha256(before).hexdigest() == os.environ["EXPECTED_DB_SHA256"]
+          headers = {"Authorization": "Bearer " + os.environ["CAREER_AGENT_PROMOTION_BEARER_TOKEN"]}
+          request = urllib.request.Request(
+              "http://127.0.0.1:8081/v1/release/promotions/promote:container-smoke/status", headers=headers)
+          with opener.open(request, timeout=5) as response:
+              assert response.status == 200
+              assert response.headers["Cache-Control"] == "no-store"
+              assert json.load(response) == {"schema_version": 1, "operation_id": "promote:container-smoke",
+                                             "operation_status": "succeeded", "execution_mode": "dry-run"}
+          assert database_path.read_bytes() == before
+          PY
+          docker stop --time 10 careeragent-operator-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' careeragent-operator-ci)" = "0"
+
+      - name: Upload immutable release evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-release-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/source-commit.txt
+            ${{ runner.temp }}/candidate-image-digest.txt
+            ${{ runner.temp }}/candidate-sbom.spdx.json
+            ${{ runner.temp }}/candidate-vulnerabilities.json
+            ${{ runner.temp }}/candidate-release-manifest.json
+            ${{ runner.temp }}/candidate-registry-reference.txt
+            ${{ runner.temp }}/candidate-provenance.json
+            ${{ runner.temp }}/candidate-publication-receipt.json
+            ${{ runner.temp }}/release-artifacts.sha256
+          if-no-files-found: error
+          retention-days: 30

@@ -75,6 +75,21 @@ def test_create_application_with_status():
     )
 
 
+def test_create_duplicate_returns_clean_conflict_failure():
+    agent, _ = make_agent()
+    payload = {
+        "operation": "create",
+        "application_id": "application-1",
+        "job_id": "job-1",
+    }
+
+    assert agent.execute(make_context(payload)).success
+    conflict = agent.execute(make_context(payload))
+
+    assert not conflict.success
+    assert conflict.messages == ("A job application for this job already exists.",)
+
+
 def test_get_application():
     agent, repository = make_agent()
 
@@ -197,6 +212,44 @@ def test_update_status():
     assert repository.get("application-1").status == (
         JobApplicationStatus.APPLIED
     )
+
+
+def test_update_status_returns_clean_repository_conflict_failure():
+    from career_agent_ai.application.jobs.in_memory_job_application_repository import (
+        InMemoryJobApplicationRepository,
+    )
+    from career_agent_ai.application.jobs.job_application import JobApplication
+    from career_agent_ai.application.jobs.job_application_repository import (
+        ApplicationConflictError,
+    )
+
+    class ConflictingRepository(InMemoryJobApplicationRepository):
+        def update(self, application, *, expected_version):
+            raise ApplicationConflictError("concurrent update")
+
+    repository = ConflictingRepository()
+    repository.add(
+        JobApplication(
+            application_id="application-1",
+            user_id="user-1",
+            job_id="job-1",
+            status=JobApplicationStatus.SAVED,
+        )
+    )
+    agent = JobApplicationAgent(repository=repository)
+
+    result = agent.execute(
+        make_context(
+            {
+                "operation": "update_status",
+                "application_id": "application-1",
+                "status": JobApplicationStatus.APPLIED,
+            }
+        )
+    )
+
+    assert not result.success
+    assert result.messages == ("Job application changed; reload it and try again.",)
 
 
 def test_rejects_unknown_operation():
