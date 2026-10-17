@@ -591,7 +591,12 @@ schemas rather than reporting ready before workflow reads fail.
 Readiness also requires a single-column non-partial unique operation-ID index.
 Immutable schema snapshots avoid sidecar creation; WAL/URI configurations report
 unavailable rather than ignoring live WAL evidence or writing checkpoints.
-The next isolated priority is operator-service container smoke coverage.
+Operator-service container smoke is now defined in the trusted integration release
+job before evidence upload: the same built image runs non-root with no external
+network, a read-only root filesystem, private temporary storage and synthetic auth.
+It checks public probes, authentication, database permissions and graceful SIGTERM.
+Execution evidence remains required from the post-merge integration CI; local
+workflow contract tests alone do not establish container readiness.
 HTTP receipt retries remain idempotent after execution/restart: only an identical
 existing receipt can be returned; changed decisions conflict and no execution or
 receipt lifecycle mutation occurs during recording.
