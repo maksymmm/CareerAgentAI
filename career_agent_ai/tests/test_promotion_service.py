@@ -106,6 +106,18 @@ def test_status_runtime_does_not_recreate_missing_storage(tmp_path):
     assert not path.exists()
 
 
+def test_operator_ui_openapi_matches_static_get_only_contract():
+    from career_agent_ai.application.runtime.promotion_service import promotion_service_openapi_document
+    route = promotion_service_openapi_document()["paths"]["/sandbox/operator"]
+    assert set(route) == {"get"}
+    assert route["get"]["security"] == []
+    responses = route["get"]["responses"]
+    assert responses["200"]["content"]["text/html"]["schema"] == {"type": "string"}
+    assert responses["200"]["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
+    assert responses["405"]["headers"]["Allow"]["schema"]["const"] == "GET"
+    assert "content" not in responses["405"]
+
+
 def test_operator_ui_headers_methods_and_no_storage(tmp_path):
     from career_agent_ai.application.runtime.promotion_sandbox import RuntimePromotionSandboxApp
     app = RuntimePromotionSandboxApp(database_path=str(tmp_path / "missing.sqlite"),
