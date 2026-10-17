@@ -121,7 +121,7 @@ def test_operator_ui_headers_methods_and_no_storage(tmp_path):
         assert forbidden not in body
     responses.clear()
     assert b"".join(app({"PATH_INFO": "/sandbox/operator", "REQUEST_METHOD": "POST"},
-                        lambda status, headers: responses.append(status)))) == b""
+                        lambda status, headers: responses.append(status))) == b""
     assert responses == ["405 Method Not Allowed"]
     assert not (tmp_path / "missing.sqlite").exists()
     app.close()
