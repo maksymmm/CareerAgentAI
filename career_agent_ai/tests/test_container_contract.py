@@ -254,7 +254,11 @@ def test_operator_container_workflow_scripts_survive_service_restart(tmp_path, m
     previous_umask = os.umask(0o077)
     try:
         exec(compile(scripts[0], "container-seed", "exec"), {})
-        for script in scripts[1:]:
+        for index, script in enumerate(scripts[1:], start=1):
+            if index == 3:
+                import hashlib
+                monkeypatch.setenv("EXPECTED_DB_SHA256", hashlib.sha256(
+                    Path(environ["CAREER_AGENT_DB_PATH"]).read_bytes()).hexdigest())
             with promotion_service_from_env(environ) as server:
                 worker = Thread(target=server.serve_forever)
                 worker.start()
@@ -275,8 +279,11 @@ def test_container_status_smoke_covers_terminal_restart_and_read_only_snapshot()
     assert smoke.count("docker start careeragent-operator-ci") == 2
     assert '"operation_status": "prepared"' in smoke
     assert smoke.count('"operation_status": "succeeded"') == 2
-    assert smoke.count("assert database_path.read_bytes() == before") == 2
-    assert smoke.count('response.headers["Cache-Control"] == "no-store"') == 2
+    assert smoke.count("assert database_path.read_bytes() == before") == 3
+    assert smoke.count('response.headers["Cache-Control"] == "no-store"') == 3
+    restart = smoke.split("# A second restart", 1)[1]
+    assert restart.index("docker cp") < restart.index("docker start")
+    assert 'hashlib.sha256(before).hexdigest() == os.environ["EXPECTED_DB_SHA256"]' in restart
 
 
 def test_ci_generates_and_verifies_pinned_release_evidence():
