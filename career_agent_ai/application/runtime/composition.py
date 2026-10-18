@@ -186,6 +186,14 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
 
+    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+        """Read an authenticated owner-only collection using request-local storage."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(database).list_page(user_id=user_id, limit=limit, after=after)
+        finally:
+            database.close()
+
     def start(self, request: CareerLoopRequest, *, run_id: str | None = None):
         """Start one authenticated sandbox run using request-thread storage."""
         database = SQLiteDatabase(self._database_path)

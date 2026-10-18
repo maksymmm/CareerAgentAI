@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import parse_qsl
 from hashlib import sha256, sha512
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping, Protocol
@@ -40,6 +41,7 @@ class CandidateApprovalLoop(Protocol):
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -102,12 +104,13 @@ class CandidateApprovalWSGIApp:
             return self._respond_html(start_response, candidate_sandbox_html())
         parts = path.strip("/").split("/")
         is_start = parts == ["v1", "candidate", "runs"]
+        is_list = parts == ["v1", "candidate", "run-statuses"]
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
             and parts[4] in {"approval", "continue", "status"}
         )
-        if not is_start and not is_existing_run:
+        if not is_start and not is_existing_run and not is_list:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -137,6 +140,29 @@ class CandidateApprovalWSGIApp:
                     {"error": "invalid_request", "message": str(exc)[:500]},
                 )
         try:
+            if is_list:
+                if method != "GET":
+                    return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
+                try:
+                    query = str(environ.get("QUERY_STRING", ""))
+                    if len(query) > 1000:
+                        raise ValueError("query too long")
+                    pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2, errors="strict")
+                    values = dict(pairs)
+                    if len(values) != len(pairs) or set(values) - {"limit", "after"}:
+                        raise ValueError("unknown or duplicate query parameter")
+                    raw_limit = values.get("limit", "25")
+                    if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 3:
+                        raise ValueError("invalid limit")
+                    limit = int(raw_limit)
+                    if not 1 <= limit <= 100:
+                        raise ValueError("invalid limit")
+                    after = values.get("after")
+                    if after is not None and validate_loop_identifier(after, "after") != after:
+                        raise ValueError("invalid cursor")
+                except (TypeError, ValueError):
+                    return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
+                return self._respond(start_response, "200 OK", self._loop.list_run_statuses(user_id=user_id, limit=limit, after=after))
             if is_start:
                 if method != "POST":
                     return self._respond(
@@ -573,6 +599,28 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "description": "Only GET is allowed",
                             "content": content(error_schema),
                         },
+                    },
+                },
+            },
+            "/v1/candidate/run-statuses": {
+                "get": {
+                    "operationId": "listCandidateRunStatuses",
+                    "security": [{"bearerAuth": []}],
+                    "parameters": [
+                        {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+                        {"name": "after", "in": "query", "description": "Exclusive run-ID keyset cursor; never an ownership credential", "schema": {"type": "string", "minLength": 1, "maxLength": 200}},
+                    ],
+                    "responses": {
+                        "200": {"description": "Owner-only minimal status page; unknown/duplicate query parameters rejected",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content({"type": "object", "additionalProperties": False,
+                                "required": ["schema_version", "items", "next_after"], "properties": {
+                                    "schema_version": {"const": 1},
+                                    "items": {"type": "array", "maxItems": 100, "items": {"$ref": "#/paths/~1v1~1candidate~1runs~1{run_id}~1status/get/responses/200/content/application~1json/schema"}},
+                                    "next_after": {"type": ["string", "null"]},
+                                }})},
+                        **common_responses,
+                        "405": {"description": "Only GET is allowed", "headers": {"Allow": {"schema": {"const": "GET"}}}, "content": content(error_schema)},
                     },
                 },
             },

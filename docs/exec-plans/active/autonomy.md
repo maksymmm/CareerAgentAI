@@ -634,6 +634,10 @@ bounded owner-only keyset pages through the existing read-only status projection
 SQL ownership filtering precedes payload parsing; tests cover foreign corrupt data,
 limits, pagination/restart, closed runtime, and byte-identical/missing storage.
 Next: authenticated HTTP collection contract and UI selection of owned runs.
+HTTP collection delivered at GET /v1/candidate/run-statuses with auth-before-storage,
+strict bounded limit/after query parsing, no-store, sanitized backend errors and OpenAPI.
+Regression tests cover real SQLite composition plus invalid/auth/method boundaries.
+Next: UI list pagination and explicit selection with context invalidation.
 Candidate UI auth-context hardening: token edits now clear prompts/results and revoke
 pending start selection. A generation guard rejects late responses even if inputs are
 changed back; browser regression requires a fresh prompt before approval after token edits.

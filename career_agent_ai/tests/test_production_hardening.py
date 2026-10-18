@@ -96,7 +96,11 @@ def test_candidate_owned_run_pages_are_read_only_and_restart_safe(tmp_path):
     database.connection.commit()
     database.close()
     before = path.read_bytes()
-    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "user-1") as runtime:
+        from career_agent_ai.tests.test_candidate_approval_api import request as api_request
+        (status, _), collection = api_request(runtime, path="/v1/candidate/run-statuses", query="limit=2")
+        assert status == "200 OK"
+        assert [item["run_id"] for item in collection["items"]] == ["a", "c"]
         first = runtime.list_run_statuses(user_id="user-1", limit=2)
         assert [item["run_id"] for item in first["items"]] == ["a", "c"]
         assert first["next_after"] == "c"
