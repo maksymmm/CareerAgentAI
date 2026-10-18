@@ -54,6 +54,31 @@ def test_validation_precedes_missing_storage(tmp_path, kwargs):
     assert not path.exists()
 
 
+@pytest.mark.parametrize("states", [[], ["applied"], ["applied", "interview"],
+    ["applied", "interview", "offer"], ["applied", "rejected"], ["withdrawn"]])
+def test_progressed_snapshots_after_restart_do_not_require_private_timeline(tmp_path, states):
+    path = tmp_path / "lifecycle.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    application = JobApplication(application_id="a", user_id="owner", job_id="job",
+                                 status=JobApplicationStatus.SAVED)
+    repository.add(application)
+    for state in states:
+        previous = application.version
+        application = application.transition(JobApplicationStatus(state), note="private")
+        repository.update(application, expected_version=previous)
+    database.connection.execute("UPDATE application_timeline SET metadata_json = 'not-json'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    item = SQLiteCandidateApplications(str(path)).list_page(user_id="owner")["items"][0]
+    assert item["status"] == (states[-1] if states else "saved")
+    assert item["state_version"] == len(states) + 1
+    assert item["updated_at"] == application.updated_at.isoformat()
+    assert "private" not in str(item)
+    assert path.read_bytes() == baseline
+
+
 def test_missing_storage_is_not_created(tmp_path):
     path = tmp_path / "missing.sqlite"
     with pytest.raises(sqlite3.OperationalError):
