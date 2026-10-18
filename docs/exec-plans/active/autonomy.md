@@ -661,6 +661,10 @@ receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
+Tracker UI review P2: returned application IDs/cursors remain opaque; browser trim
+no longer overrides server Python canonical-whitespace rules. Chromium regression
+round-trips a 200-scalar U+FEFF/emoji cursor and renders its application snapshot.
+
 Candidate tracker UI delivered: explicit authenticated page loads, next-page/retry,
 text-only application snapshots and token-generation invalidation, without action
 controls. Chromium restart acceptance reads the persisted applied/version-2 snapshot
