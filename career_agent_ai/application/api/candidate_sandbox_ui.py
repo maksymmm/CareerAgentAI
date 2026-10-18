@@ -68,6 +68,7 @@ _HTML = """<!doctype html>
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
+    let inputContextGeneration = 0;
     const byId = (id) => document.getElementById(id);
     const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
@@ -88,6 +89,7 @@ _HTML = """<!doctype html>
     async function call(path, options = {}) {
       const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
+      const contextGeneration = inputContextGeneration;
       if (!token) throw new Error('Bearer token is required.');
       try {
         const response = await fetch(path, {
@@ -95,6 +97,9 @@ _HTML = """<!doctype html>
           headers: {Authorization: 'Bearer ' + token, ...(options.headers || {})},
         });
         const payload = await response.json();
+        if (contextGeneration !== inputContextGeneration) {
+          throw new Error('Inputs changed; reload the current state.');
+        }
         if (resultRequest === latestResultRequest) show({status: response.status, payload});
         if (!response.ok) {
           const error = new Error(payload.message || payload.error || 'Request failed.');
@@ -125,10 +130,15 @@ _HTML = """<!doctype html>
       });
       if (requestNumber === latestStartRequest) selectRun(payload.run_id);
     }));
-    byId('run-id').addEventListener('input', () => {
+    function invalidateInputContext() {
+      inputContextGeneration += 1;
+      latestResultRequest += 1;
       latestStartRequest += 1;
       invalidateApprovalPrompt();
-    });
+      byId('result').textContent = 'Inputs changed. Reload the current state.';
+    }
+    byId('run-id').addEventListener('input', invalidateInputContext);
+    byId('token').addEventListener('input', invalidateInputContext);
     byId('status').addEventListener('click', () => guarded(() => call(runPath('/status'))));
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');

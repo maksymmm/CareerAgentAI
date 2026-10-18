@@ -302,7 +302,9 @@ The same WSGI service exposes a dependency-free candidate sandbox at
 `GET /sandbox/candidate`. It can start a sandbox run, inspect its status, load the
 current candidate-visible approval prompt, continue recovery, and submit approve or
 decline decisions. The static page contains no credentials or durable state: the
-candidate enters a bearer token that stays only in the tab's memory. Decisions copy
+candidate enters a bearer token that stays only in the tab's memory.
+Changing the token clears the displayed prompt and result; late responses from the
+previous input context cannot repopulate them or select a run. Decisions copy
 the prompt's run ID, state version, and action fingerprint back to the strict API, so
 the interface cannot silently approve a changed or stale action. The page is served
 with `no-store`, anti-sniffing, no-referrer, and restrictive content-security headers.
