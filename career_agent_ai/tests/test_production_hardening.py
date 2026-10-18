@@ -404,6 +404,24 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert "applied" in page.locator("#owned-applications").text_content()
             assert "version 2" in page.locator("#owned-applications").text_content()
             assert page.locator("#owned-applications button").count() == 0
+            from urllib.parse import parse_qs, urlsplit
+            opaque_cursor = "\ufeff" + "😀" * 198 + "\ufeff"
+            seen_pages = []
+            def application_page(route):
+                payload = route.fetch(url=route.request.url.split("?")[0] + "?limit=25").json()
+                query = parse_qs(urlsplit(route.request.url).query)
+                seen_pages.append(query.get("after"))
+                payload["items"][0]["application_id"] = opaque_cursor
+                payload["next_after"] = opaque_cursor if len(seen_pages) == 1 else None
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/applications?*", application_page)
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text("Read-only application snapshots.").wait_for()
+            assert page.locator("#next-applications").is_enabled()
+            page.locator("#next-applications").click()
+            page.locator("#applications-state").get_by_text("Read-only application snapshots.").wait_for()
+            assert seen_pages == [None, [opaque_cursor]]
+            assert page.locator("#next-applications").is_disabled()
             page.locator("#token").fill("changed")
             assert page.locator("#owned-applications li").count() == 0
             assert page.locator("#next-applications").is_disabled()
