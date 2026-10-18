@@ -248,7 +248,9 @@ database, execute work, or parse another owner's snapshots. `next_after` is a ke
 cursor, not an ownership credential. Authenticated `GET /v1/candidate/run-statuses`
 exposes the same read-only page with optional `limit` and `after`; identity comes
 only from bearer authentication. Duplicate/unknown/invalid query parameters fail
-before storage access. UI run discovery remains a follow-up.
+before storage access. The candidate sandbox can load owned pages, advance with
+Next page, and explicitly select a run without executing or approving it. Token
+edits clear the list/cursor; old list responses and selections are generation-bound.
 
 The application tracker persists an immutable aggregate for each candidate/job pair.
 It models validated transitions through `saved`, `applied`, `interview`, `offer`,
