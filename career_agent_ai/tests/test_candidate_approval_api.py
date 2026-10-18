@@ -93,17 +93,62 @@ def test_run_collection_binds_authenticated_owner_and_query():
     assert body == {"schema_version": 1, "items": [], "next_after": None}
 
 
-@pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=true", "limit=2&limit=3", "owner=foreign", "after=", "limit=", "limit=2&after=a&other=b"])
-def test_invalid_collection_query_never_opens_storage(query):
-    (status, _), _ = request(app(object()), path="/v1/candidate/run-statuses", query=query)
+@pytest.mark.parametrize("path", ["/v1/candidate/run-statuses", "/v1/candidate/applications"])
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=true", "limit=2&limit=3", "owner=foreign", "after=", "limit=", "limit=2&after=a&other=b", "after=%20padded", "after=" + "a" * 201])
+def test_invalid_collection_query_never_opens_storage(query, path):
+    (status, _), _ = request(app(object()), path=path, query=query)
     assert status == "400 Bad Request"
 
 
-def test_collection_auth_method_and_backend_error_boundaries():
-    path = "/v1/candidate/run-statuses"
+@pytest.mark.parametrize("path", ["/v1/candidate/run-statuses", "/v1/candidate/applications"])
+def test_collection_auth_method_and_backend_error_boundaries(path):
     assert request(app(object()), path=path, token=None)[0][0] == "401 Unauthorized"
     assert request(app(object()), path=path, method="POST")[0][0] == "405 Method Not Allowed"
     assert request(app(object()), path=path)[1] == {"error": "internal_error"}
+
+
+@pytest.mark.parametrize("cursor,second_id", [("a unicode й", "c"), ("😀" * 200, "😁")])
+def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_path, cursor, second_id):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_job_application_repository import SQLiteJobApplicationRepository
+    from career_agent_ai.application.jobs.job_application import JobApplication
+    from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+    from urllib.parse import urlencode
+    path = tmp_path / "tracker.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    for identifier, owner in [(cursor, "candidate-1"), ("b", "foreign"), (second_id, "candidate-1")]:
+        application = JobApplication(application_id=identifier, user_id=owner,
+            job_id=identifier, status=JobApplicationStatus.SAVED)
+        repository.add(application.transition(JobApplicationStatus.APPLIED, note="private"))
+    database.close()
+    baseline = path.read_bytes()
+    runtime = RuntimeCandidateApp(database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None)
+    route = "/v1/candidate/applications"
+    (status, headers), first = request(runtime, path=route, query="limit=1")
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert first["items"][0]["status"] == "applied"
+    assert first["next_after"] == cursor
+    runtime.close()
+    runtime = RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1")
+    (_, _), second = request(runtime, path=route, query=urlencode({"after": first["next_after"]}))
+    assert [item["application_id"] for item in second["items"]] == [second_id]
+    assert second["next_after"] is None
+    assert "private" not in str(first)
+    assert path.read_bytes() == baseline
+    runtime.close()
+    contract = candidate_approval_openapi_document()["paths"][route]["get"]
+    assert contract["security"] == [{"bearerAuth": []}]
+    schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(first["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
+
+
+@pytest.mark.parametrize("query", ["after=" + "x" * 2501, "after=" + "%F0%9F%98%80" * 201])
+def test_application_query_bounds_remain_fail_closed(query):
+    assert request(app(object()), path="/v1/candidate/applications", query=query)[0][0] == "400 Bad Request"
 
 
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
