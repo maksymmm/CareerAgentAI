@@ -57,6 +57,11 @@ _HTML = """<!doctype html>
       <button id="decline" type="button" disabled>Decline displayed action</button>
     </div>
   </fieldset>
+  <section aria-labelledby="overview-title">
+    <h2 id="overview-title">Run overview</h2>
+    <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
+    <p class="muted">A snapshot never authorizes an action. Inspect the current approval prompt before deciding.</p>
+  </section>
   <h2>Result</h2>
   <pre id="result" aria-live="polite">Ready.</pre>
   <script>
@@ -70,7 +75,8 @@ _HTML = """<!doctype html>
     let latestResultRequest = 0;
     let inputContextGeneration = 0;
     const byId = (id) => document.getElementById(id);
-    const show = (value) => { byId('result').textContent = JSON.stringify(value, null, 2); };
+    const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
+    const show = (value) => { clearOverview(); byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
       approvalPromptGeneration += 1;
@@ -83,12 +89,14 @@ _HTML = """<!doctype html>
       byId('prompt').disabled = decisionInFlight || recoveryInFlight;
     }
     function selectRun(runId) {
+      clearOverview();
       inputContextGeneration += 1;
       latestResultRequest += 1;
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
     }
     async function call(path, options = {}) {
+      clearOverview();
       const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
       const contextGeneration = inputContextGeneration;
@@ -133,6 +141,7 @@ _HTML = """<!doctype html>
       if (requestNumber === latestStartRequest) selectRun(payload.run_id);
     }));
     function invalidateInputContext() {
+      clearOverview();
       inputContextGeneration += 1;
       latestResultRequest += 1;
       latestStartRequest += 1;
@@ -141,7 +150,20 @@ _HTML = """<!doctype html>
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
-    byId('status').addEventListener('click', () => guarded(() => call(runPath('/status'))));
+    byId('status').addEventListener('click', () => guarded(async () => {
+      clearOverview();
+      const runId = byId('run-id').value;
+      const requestNumber = latestResultRequest + 1;
+      const snapshot = await call(runPath('/status'));
+      if (requestNumber !== latestResultRequest) return;
+      if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
+          !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
+          typeof snapshot.phase !== 'string' || typeof snapshot.waiting_for_human !== 'boolean' ||
+          typeof snapshot.terminal !== 'boolean') throw new Error('Invalid status snapshot.');
+      const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
+      byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
+        ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
+    }));
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       if (activePromptLoadGeneration !== null) throw new Error('Wait for the approval prompt to finish loading.');
