@@ -157,6 +157,17 @@ class RuntimeCandidateApp:
         """Prevent new requests and sandbox runs."""
         self._closed = True
 
+    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+        """List trusted caller's run snapshots without creating storage or executing work."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(database).list_page(
+                user_id=user_id, limit=limit, after=after)
+        finally:
+            database.close()
+
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
         if self._closed:

@@ -588,6 +588,21 @@ class SQLiteCandidateRunStatusProjection:
             raise ValueError("Candidate status projection requires durable storage.")
         self._database = database
 
+    def list_page(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+        """Return a bounded owner-only keyset page without parsing foreign snapshots."""
+        owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        cursor = "" if after is None else SQLiteCareerLoopRepository._identifier(after, "after")
+        rows = self._database.connection.execute(
+            "SELECT run_id FROM autonomous_career_loops "
+            "WHERE owner_user_id = ? AND run_id > ? ORDER BY run_id LIMIT ?",
+            (owner, cursor, limit + 1),
+        ).fetchall()
+        items = [self.get(row[0], user_id=owner) for row in rows[:limit]]
+        return {"schema_version": 1, "items": items,
+                "next_after": rows[limit - 1][0] if len(rows) > limit else None}
+
     def get(self, run_id: str, *, user_id: str) -> dict[str, Any]:
         """Return status after checking trusted ownership metadata before JSON parsing."""
         identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")

@@ -241,6 +241,12 @@ The included fake calendar adapter is deterministic, in-memory, and performs no 
 
 ## Application Tracker
 
+The sandbox runtime's programmatic `list_run_statuses(user_id=..., limit=25, after=None)`
+returns owner-filtered, minimal run status pages in stable run-ID order (maximum 100).
+The caller must supply the authenticated identity. Reads never create or migrate the
+database, execute work, or parse another owner's snapshots. `next_after` is a keyset
+cursor, not an ownership credential. HTTP/UI run discovery remains a follow-up.
+
 The application tracker persists an immutable aggregate for each candidate/job pair.
 It models validated transitions through `saved`, `applied`, `interview`, `offer`,
 `rejected`, and `withdrawn`, while retaining a chronologically ordered timeline.
