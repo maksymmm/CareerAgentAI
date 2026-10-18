@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any
+from career_agent_ai.application.jobs.job_application import application_status_version_is_reachable
 
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
@@ -53,7 +54,7 @@ class SQLiteCandidateApplications:
                 if not isinstance(value, str) or len(value) > maximum or value != value.strip():
                     raise ValueError("Non-canonical application snapshot")
             status = JobApplicationStatus(row[4])
-            if type(row[5]) is not int or row[5] < 1:
+            if not application_status_version_is_reachable(status, row[5]):
                 raise ValueError("Invalid snapshot version")
             created_at, updated_at = (datetime.fromisoformat(value) for value in row[6:8])
             if (created_at.utcoffset() is None or updated_at.utcoffset() is None
