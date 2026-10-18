@@ -58,12 +58,14 @@ def request(
     content_type="application/json",
     body=None,
     path="/v1/candidate/runs/run-1/approval",
+    query="",
 ):
     statuses = []
     encoded = b"" if body is None else json.dumps(body).encode()
     environ = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
+        "QUERY_STRING": query,
         "HTTP_AUTHORIZATION": f"{auth_scheme} {token}" if token else "",
         "CONTENT_LENGTH": str(len(encoded)),
         "CONTENT_TYPE": content_type,
@@ -78,6 +80,30 @@ def app(loop):
         loop,
         resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
     )
+
+
+def test_run_collection_binds_authenticated_owner_and_query():
+    class Collection:
+        def list_run_statuses(self, **kwargs):
+            assert kwargs == {"user_id": "candidate-1", "limit": 2, "after": "run-1"}
+            return {"schema_version": 1, "items": [], "next_after": None}
+    (status, headers), body = request(app(Collection()), path="/v1/candidate/run-statuses", query="limit=2&after=run-1")
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == {"schema_version": 1, "items": [], "next_after": None}
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=true", "limit=2&limit=3", "owner=foreign", "after=", "limit=", "limit=2&after=a&other=b"])
+def test_invalid_collection_query_never_opens_storage(query):
+    (status, _), _ = request(app(object()), path="/v1/candidate/run-statuses", query=query)
+    assert status == "400 Bad Request"
+
+
+def test_collection_auth_method_and_backend_error_boundaries():
+    path = "/v1/candidate/run-statuses"
+    assert request(app(object()), path=path, token=None)[0][0] == "401 Unauthorized"
+    assert request(app(object()), path=path, method="POST")[0][0] == "405 Method Not Allowed"
+    assert request(app(object()), path=path)[1] == {"error": "internal_error"}
 
 
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
