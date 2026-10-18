@@ -42,6 +42,8 @@ class CandidateApprovalLoop(Protocol):
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
+
+    def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -104,7 +106,8 @@ class CandidateApprovalWSGIApp:
             return self._respond_html(start_response, candidate_sandbox_html())
         parts = path.strip("/").split("/")
         is_start = parts == ["v1", "candidate", "runs"]
-        is_list = parts == ["v1", "candidate", "run-statuses"]
+        is_applications = parts == ["v1", "candidate", "applications"]
+        is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
@@ -158,11 +161,17 @@ class CandidateApprovalWSGIApp:
                     if not 1 <= limit <= 100:
                         raise ValueError("invalid limit")
                     after = values.get("after")
-                    if after is not None and validate_loop_identifier(after, "after") != after:
-                        raise ValueError("invalid cursor")
+                    if after is not None:
+                        if is_applications:
+                            if not after or len(after) > 200 or after != after.strip():
+                                raise ValueError("invalid cursor")
+                            after.encode("utf-8", errors="strict")
+                        elif validate_loop_identifier(after, "after") != after:
+                            raise ValueError("invalid cursor")
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
-                return self._respond(start_response, "200 OK", self._loop.list_run_statuses(user_id=user_id, limit=limit, after=after))
+                collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
+                return self._respond(start_response, "200 OK", collection(user_id=user_id, limit=limit, after=after))
             if is_start:
                 if method != "POST":
                     return self._respond(
@@ -599,6 +608,40 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "description": "Only GET is allowed",
                             "content": content(error_schema),
                         },
+                    },
+                },
+            },
+            "/v1/candidate/applications": {
+                "get": {
+                    "operationId": "listCandidateApplications",
+                    "security": [{"bearerAuth": []}],
+                    "parameters": [
+                        {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+                        {"name": "after", "in": "query", "description": "Exclusive application-ID cursor, not an ownership credential", "schema": {"type": "string", "minLength": 1, "maxLength": 200}},
+                    ],
+                    "responses": {
+                        "200": {"description": "Read-only owner-only application snapshots; unknown/duplicate query parameters rejected",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content({"type": "object", "additionalProperties": False,
+                                "required": ["schema_version", "items", "next_after"], "properties": {
+                                    "schema_version": {"const": 1},
+                                    "next_after": {"type": ["string", "null"]},
+                                    "items": {"type": "array", "maxItems": 100, "items": {
+                                        "type": "object", "additionalProperties": False,
+                                        "required": ["application_id", "job_id", "company_id", "job_title", "status", "state_version", "created_at", "updated_at"],
+                                        "properties": {
+                                            "application_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                                            "job_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                                            "company_id": {"type": "string", "maxLength": 200},
+                                            "job_title": {"type": "string", "maxLength": 500},
+                                            "status": {"enum": ["saved", "applied", "interview", "offer", "rejected", "withdrawn"]},
+                                            "state_version": {"type": "integer", "minimum": 1},
+                                            "created_at": {"type": "string", "format": "date-time"},
+                                            "updated_at": {"type": "string", "format": "date-time"},
+                                        }}},
+                                }})},
+                        **common_responses,
+                        "405": {"description": "Only GET is allowed", "headers": {"Allow": {"schema": {"const": "GET"}}}, "content": content(error_schema)},
                     },
                 },
             },
