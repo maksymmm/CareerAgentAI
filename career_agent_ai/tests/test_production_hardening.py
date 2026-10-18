@@ -357,6 +357,13 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
     assert status == ExternalActionStatus.SUCCEEDED.value
     assert json.loads(result_json)["provider_submission_id"].startswith("fake:")
 
+    from dataclasses import replace
+    seed_database = SQLiteDatabase(database_path)
+    seed_repository = SQLiteCareerLoopRepository(seed_database)
+    for index in range(26):
+        seed_repository.save(CareerLoopState(run_id=f"a{index:02}",
+            request=replace(request(), user_id="browser-user")))
+    seed_database.close()
     restarted = build_candidate_sandbox_app_from_env(
         resolve_bearer=lambda token: "browser-user" if token == "sandbox-token" else None,
         jobs=jobs,
@@ -375,12 +382,19 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 f"http://127.0.0.1:{restarted_server.server_port}/sandbox/candidate"
             )
             page.locator("#token").fill("sandbox-token")
-            page.locator("#run-id").fill(durable_run_id)
+            page.locator("#list-runs").click()
+            page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
+            assert page.locator("#owned-runs button").count() == 25
+            page.locator("#next-runs").click()
+            page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
+            assert page.locator("#approve").is_disabled()
             page.locator("#status").click()
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert page.locator("#run-id").input_value() == durable_run_id
             page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()
             page.locator("#token").fill("changed")
+            assert page.locator("#owned-runs button").count() == 0
+            assert page.locator("#next-runs").is_disabled()
             assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
             browser.close()
     finally:
