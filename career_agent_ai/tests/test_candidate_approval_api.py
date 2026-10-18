@@ -107,7 +107,8 @@ def test_collection_auth_method_and_backend_error_boundaries(path):
     assert request(app(object()), path=path)[1] == {"error": "internal_error"}
 
 
-def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_path):
+@pytest.mark.parametrize("cursor,second_id", [("a unicode й", "c"), ("😀" * 200, "😁")])
+def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_path, cursor, second_id):
     from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
     from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
     from career_agent_ai.application.storage.sqlite_job_application_repository import SQLiteJobApplicationRepository
@@ -117,7 +118,7 @@ def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_pa
     path = tmp_path / "tracker.sqlite"
     database = SQLiteDatabase(str(path))
     repository = SQLiteJobApplicationRepository(database)
-    for identifier, owner in [("a unicode й", "candidate-1"), ("b", "foreign"), ("c", "candidate-1")]:
+    for identifier, owner in [(cursor, "candidate-1"), ("b", "foreign"), (second_id, "candidate-1")]:
         application = JobApplication(application_id=identifier, user_id=owner,
             job_id=identifier, status=JobApplicationStatus.SAVED)
         repository.add(application.transition(JobApplicationStatus.APPLIED, note="private"))
@@ -130,11 +131,11 @@ def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_pa
     assert status == "200 OK"
     assert ("Cache-Control", "no-store") in headers
     assert first["items"][0]["status"] == "applied"
-    assert first["next_after"] == "a unicode й"
+    assert first["next_after"] == cursor
     runtime.close()
     runtime = RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1")
     (_, _), second = request(runtime, path=route, query=urlencode({"after": first["next_after"]}))
-    assert [item["application_id"] for item in second["items"]] == ["c"]
+    assert [item["application_id"] for item in second["items"]] == [second_id]
     assert second["next_after"] is None
     assert "private" not in str(first)
     assert path.read_bytes() == baseline
@@ -143,6 +144,11 @@ def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_pa
     assert contract["security"] == [{"bearerAuth": []}]
     schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
     assert set(first["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
+
+
+@pytest.mark.parametrize("query", ["after=" + "x" * 2501, "after=" + "%F0%9F%98%80" * 201])
+def test_application_query_bounds_remain_fail_closed(query):
+    assert request(app(object()), path="/v1/candidate/applications", query=query)[0][0] == "400 Bad Request"
 
 
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
