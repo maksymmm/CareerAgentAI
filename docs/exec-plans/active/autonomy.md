@@ -661,6 +661,11 @@ receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
+Candidate tracker UI delivered: explicit authenticated page loads, next-page/retry,
+text-only application snapshots and token-generation invalidation, without action
+controls. Chromium restart acceptance reads the persisted applied/version-2 snapshot
+and verifies token edits remove it. Next: richer candidate detail/history views.
+
 HTTP review P2: application collection raw queries now accommodate 200 four-byte
 Unicode scalars percent-encoded in a cursor (2400 characters plus query overhead).
 Decoded cursor bounds remain 200; restart pagination covers a maximum emoji cursor
