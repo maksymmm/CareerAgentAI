@@ -251,6 +251,8 @@ only from bearer authentication. Duplicate/unknown/invalid query parameters fail
 before storage access. The candidate sandbox can load owned pages, advance with
 Next page, and explicitly select a run without executing or approving it. Token
 edits clear the list/cursor; old list responses and selections are generation-bound.
+Failed next-page requests retain the attempted cursor for explicit retry, without
+restarting pagination or restoring another authentication context.
 
 The application tracker persists an immutable aggregate for each candidate/job pair.
 It models validated transitions through `saved`, `applied`, `interview`, `offer`,
