@@ -661,6 +661,9 @@ receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
+P1 review correction: validate projected scalar fields independently of aggregate
+timeline invariants. Every lifecycle status/version is covered after SQLite restart,
+including malformed private timeline metadata that the projection must never load.
 Candidate tracker dashboard groundwork delivered: bounded read-only owner-filtered
 application pages expose minimal status/job/timestamp fields without loading private
 children or mutating storage. Restart, foreign-corruption isolation, strict bounds
