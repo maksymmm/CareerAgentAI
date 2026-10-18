@@ -157,6 +157,14 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 '{\n  "company": "Sandbox GmbH"\n}'
             )
 
+            page.locator("#token").fill("changed")
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+            assert page.locator("#action-details").text_content() == ""
+            page.locator("#token").fill("valid")
+            assert page.locator("#approve").is_disabled()
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
             page.locator("#approve").click()
             page.locator("#result").get_by_text('"phase": "message_approval"').wait_for()
             browser.close()
@@ -204,6 +212,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
     assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]
     assert "byId('run-id').addEventListener('input'" in html
+    assert "byId('token').addEventListener('input', invalidateInputContext)" in html
+    assert "contextGeneration !== inputContextGeneration" in html
+    assert html.index("contextGeneration !== inputContextGeneration") < html.index("show({status: response.status, payload})")
     assert "approvalPromptGeneration += 1" in html
     assert "invalidateApprovalPrompt();" in html[start_assignment:prompt_handler]
     assert "const promptGeneration = approvalPromptGeneration" in html[prompt_handler:prompt_get]
