@@ -41,6 +41,10 @@ _HTML = """<!doctype html>
   </fieldset>
   <fieldset>
     <legend>Inspect and continue</legend>
+    <button id="list-runs" type="button">Load my runs</button>
+    <ul id="owned-runs" aria-label="My runs"></ul>
+    <p id="list-state" role="status"></p>
+    <button id="next-runs" type="button" disabled>Next page</button>
     <label>Durable run ID <input id="run-id" required></label>
     <div class="actions">
       <button id="status" type="button">Refresh status</button>
@@ -74,10 +78,59 @@ _HTML = """<!doctype html>
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
     let inputContextGeneration = 0;
+    let listGeneration = 0;
+    let nextRunCursor = null;
     const byId = (id) => document.getElementById(id);
     const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
     const show = (value) => { clearOverview(); byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
+    function clearRunList() {
+      listGeneration += 1;
+      nextRunCursor = null;
+      byId('owned-runs').replaceChildren();
+      byId('list-state').textContent = '';
+      byId('next-runs').disabled = true;
+    }
+    async function loadRunList(after = null) {
+      clearRunList();
+      const generation = listGeneration;
+      byId('list-state').textContent = 'Loading…';
+      try {
+        const page = await call('/v1/candidate/run-statuses?limit=25' +
+          (after === null ? '' : '&after=' + encodeURIComponent(after)));
+        if (generation !== listGeneration) return;
+        const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+        if (page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || validId(page.next_after)) ||
+            !page.items.every(item => item && validId(item.run_id) && typeof item.phase === 'string')) {
+          throw new Error('Invalid run page.');
+        }
+        for (const item of page.items) {
+          const row = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = item.run_id + ' — ' + item.phase.replaceAll('_', ' ');
+          button.addEventListener('click', () => {
+            if (generation !== listGeneration) return;
+            latestStartRequest += 1;
+            selectRun(item.run_id);
+            byId('result').textContent = 'Run selected. Refresh status or load its current prompt.';
+          });
+          row.append(button); byId('owned-runs').append(row);
+        }
+        nextRunCursor = page.next_after;
+        byId('next-runs').disabled = nextRunCursor === null;
+        byId('list-state').textContent = page.items.length ? 'Select a run to inspect it.' : 'No runs on this page.';
+      } catch (error) {
+        if (generation === listGeneration) clearRunList();
+        throw error;
+      }
+    }
+    byId('list-runs').addEventListener('click', () => guarded(() => loadRunList()));
+    byId('next-runs').addEventListener('click', () => guarded(() => {
+      if (nextRunCursor !== null) return loadRunList(nextRunCursor);
+    }));
+    byId('token').addEventListener('input', clearRunList);
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
       approvalPromptGeneration += 1;
       approvalPrompt = null;
