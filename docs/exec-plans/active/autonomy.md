@@ -624,6 +624,11 @@ then reopens the same SQLite store: approval permits one no-I/O execution and re
 replay; decline denies execution and leaves the operation prepared. UI decisions alone
 never execute. Chromium evidence is required from CI, not local skipped browser tests.
 Next priority: candidate-facing workflow dashboard beyond sandbox approval controls.
+First dashboard slice: candidate run overview renders authenticated status snapshots
+with decision-needed/in-progress/finished, phase, version and durable ID. Only the
+latest matching response may update it; context changes and other results clear it.
+Chromium acceptance covers waiting and terminal snapshots across runtime restart.
+Next dashboard slice: candidate-owned run discovery/listing, not local browser storage.
 Candidate UI auth-context hardening: token edits now clear prompts/results and revoke
 pending start selection. A generation guard rejects late responses even if inputs are
 changed back; browser regression requires a fresh prompt before approval after token edits.
