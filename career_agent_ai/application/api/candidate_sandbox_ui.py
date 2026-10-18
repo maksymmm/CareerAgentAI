@@ -109,7 +109,9 @@ _HTML = """<!doctype html>
         const page = await call('/v1/candidate/applications?limit=25' +
           (after === null ? '' : '&after=' + encodeURIComponent(after)));
         if (generation !== applicationsGeneration) return;
-        const identifier = value => typeof value === 'string' && value.trim() === value &&
+        // Canonical whitespace is validated by the server (Python strip differs
+        // from JavaScript trim, notably for U+FEFF). Treat returned IDs as opaque.
+        const identifier = value => typeof value === 'string' &&
           Array.from(value).length >= 1 && Array.from(value).length <= 200;
         const statuses = ['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'];
         if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
