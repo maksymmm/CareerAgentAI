@@ -148,7 +148,8 @@ class CandidateApprovalWSGIApp:
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
                 try:
                     query = str(environ.get("QUERY_STRING", ""))
-                    if len(query) > 1000:
+                    # 200 scalars * 4 UTF-8 bytes * 3 escape characters + overhead.
+                    if len(query) > (2500 if is_applications else 1000):
                         raise ValueError("query too long")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2, errors="strict")
                     values = dict(pairs)
