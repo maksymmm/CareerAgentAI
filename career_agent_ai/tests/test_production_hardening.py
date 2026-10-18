@@ -398,7 +398,15 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert page.locator("#run-id").input_value() == durable_run_id
             page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text("Read-only application snapshots.").wait_for()
+            assert page.locator("#owned-applications li").count() == 1
+            assert "applied" in page.locator("#owned-applications").text_content()
+            assert "version 2" in page.locator("#owned-applications").text_content()
+            assert page.locator("#owned-applications button").count() == 0
             page.locator("#token").fill("changed")
+            assert page.locator("#owned-applications li").count() == 0
+            assert page.locator("#next-applications").is_disabled()
             assert page.locator("#owned-runs button").count() == 0
             assert page.locator("#next-runs").is_disabled()
             assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
