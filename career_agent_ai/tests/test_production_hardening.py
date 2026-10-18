@@ -82,6 +82,50 @@ def request() -> CareerLoopRequest:
     )
 
 
+def test_candidate_owned_run_pages_are_read_only_and_restart_safe(tmp_path):
+    from dataclasses import replace
+    from career_agent_ai.application.career.autonomous_loop_models import CareerLoopState
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import SQLiteCareerLoopRepository
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    path = tmp_path / "pages.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    for identifier, owner in (("a", "user-1"), ("b", "foreign"), ("c", "user-1"), ("d", "user-1")):
+        repository.save(CareerLoopState(run_id=identifier, request=replace(request(), user_id=owner)))
+    database.connection.execute("UPDATE autonomous_career_loops SET payload_json = 'not-json' WHERE run_id = 'b'")
+    database.connection.commit()
+    database.close()
+    before = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
+        first = runtime.list_run_statuses(user_id="user-1", limit=2)
+        assert [item["run_id"] for item in first["items"]] == ["a", "c"]
+        assert first["next_after"] == "c"
+        assert set(first["items"][0]) == {"schema_version", "run_id", "state_version", "phase", "waiting_for_human", "terminal"}
+        assert runtime.list_run_statuses(user_id="nobody")["items"] == []
+        for invalid in (True, 0, 101, "2"):
+            with pytest.raises(ValueError):
+                runtime.list_run_statuses(user_id="user-1", limit=invalid)
+    with pytest.raises(RuntimeError):
+        runtime.list_run_statuses(user_id="user-1")
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as restarted:
+        page = restarted.list_run_statuses(user_id="user-1", limit=2, after=first["next_after"])
+        assert [item["run_id"] for item in page["items"]] == ["d"]
+        assert page["next_after"] is None
+        assert restarted.list_run_statuses(user_id="user-1", after="b")["items"][0]["run_id"] == "c"
+        with pytest.raises(ValueError):
+            restarted.list_run_statuses(user_id="foreign")
+    assert path.read_bytes() == before
+
+
+def test_candidate_run_listing_does_not_create_missing_storage(tmp_path):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    path = tmp_path / "missing.sqlite"
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
+        with pytest.raises(Exception):
+            runtime.list_run_statuses(user_id="user-1")
+    assert not path.exists()
+
+
 def test_runtime_config_defaults_are_safe():
     config = RuntimeConfig.from_env({})
 
