@@ -385,6 +385,12 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#list-runs").click()
             page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
             assert page.locator("#owned-runs button").count() == 25
+            page.route("**/v1/candidate/run-statuses?limit=25&after=*",
+                       lambda route: route.fulfill(status=503, json={"error": "unavailable"}))
+            page.locator("#next-runs").click()
+            page.locator("#list-state").get_by_text("Next page failed. Retry Next page.").wait_for()
+            assert page.locator("#next-runs").is_enabled()
+            page.unroute("**/v1/candidate/run-statuses?limit=25&after=*")
             page.locator("#next-runs").click()
             page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
             assert page.locator("#approve").is_disabled()

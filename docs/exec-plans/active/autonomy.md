@@ -638,6 +638,9 @@ HTTP collection delivered at GET /v1/candidate/run-statuses with auth-before-sto
 strict bounded limit/after query parsing, no-store, sanitized backend errors and OpenAPI.
 Regression tests cover real SQLite composition plus invalid/auth/method boundaries.
 Next: UI list pagination and explicit selection with context invalidation.
+Integration review P2 follow-up: failed next-page requests retain the attempted cursor
+for explicit retry; only the current list generation can restore it. Token changes
+still discard every cursor. Chromium acceptance injects a 503 then retries page two.
 Delivered sandbox UI discovery: load owned run pages, next-page cursor, text-only
 selection buttons, token-change clearing and stale-response/selection guards.
 Chromium restart acceptance traverses 27 owned runs and selects the retained terminal
