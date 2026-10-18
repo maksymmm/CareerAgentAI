@@ -214,6 +214,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "byId('run-id').addEventListener('input'" in html
     assert "byId('token').addEventListener('input', invalidateInputContext)" in html
     assert "contextGeneration !== inputContextGeneration" in html
+    selection = html[html.index("function selectRun"):html.index("async function call")]
+    assert "inputContextGeneration += 1" in selection
+    assert "latestResultRequest += 1" in selection
     assert html.index("contextGeneration !== inputContextGeneration") < html.index("show({status: response.status, payload})")
     assert "approvalPromptGeneration += 1" in html
     assert "invalidateApprovalPrompt();" in html[start_assignment:prompt_handler]

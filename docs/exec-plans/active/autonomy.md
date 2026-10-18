@@ -627,6 +627,8 @@ Next priority: candidate-facing workflow dashboard beyond sandbox approval contr
 Candidate UI auth-context hardening: token edits now clear prompts/results and revoke
 pending start selection. A generation guard rejects late responses even if inputs are
 changed back; browser regression requires a fresh prompt before approval after token edits.
+Integration review P2: programmatic run selection advances context/result generations
+too, preventing a pending status for the previous run from rendering under the new ID.
 Review hardening applies no-store/byte stability checks to prepared snapshots too.
 The terminal restart baseline is copied from the stopped container before startup;
 its SHA-256 must still match after readiness, catching startup-time state rewrites.
