@@ -624,6 +624,9 @@ then reopens the same SQLite store: approval permits one no-I/O execution and re
 replay; decline denies execution and leaves the operation prepared. UI decisions alone
 never execute. Chromium evidence is required from CI, not local skipped browser tests.
 Next priority: candidate-facing workflow dashboard beyond sandbox approval controls.
+Candidate UI auth-context hardening: token edits now clear prompts/results and revoke
+pending start selection. A generation guard rejects late responses even if inputs are
+changed back; browser regression requires a fresh prompt before approval after token edits.
 Review hardening applies no-store/byte stability checks to prepared snapshots too.
 The terminal restart baseline is copied from the stopped container before startup;
 its SHA-256 must still match after readiness, catching startup-time state rewrites.
