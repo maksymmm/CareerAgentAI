@@ -86,6 +86,34 @@ def test_missing_storage_is_not_created(tmp_path):
     assert not path.exists()
 
 
+@pytest.mark.parametrize("status", list(JobApplicationStatus))
+def test_domain_supported_initial_statuses_remain_readable(tmp_path, status):
+    path = tmp_path / "initial.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    application = JobApplication(application_id="a", user_id="owner", job_id="job", status=status)
+    repository.add(application)
+    assert repository.get("a") == application
+    database.close()
+    item = SQLiteCandidateApplications(str(path)).list_page(user_id="owner")["items"][0]
+    assert (item["status"], item["state_version"]) == (status.value, 1)
+
+
+@pytest.mark.parametrize("status,version", [("saved", 2), ("applied", 3),
+    ("interview", 4), ("offer", 5), ("rejected", 5), ("withdrawn", 6), ("offer", 1000000)])
+def test_unreachable_status_version_pairs_fail_after_restart(tmp_path, status, version):
+    path = tmp_path / "unreachable.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    repository.add(JobApplication(application_id="a", user_id="owner", job_id="job",
+                                  status=JobApplicationStatus.SAVED))
+    database.connection.execute("UPDATE job_applications SET status = ?, version = ?", (status, version))
+    database.connection.commit()
+    database.close()
+    with pytest.raises(ValueError, match="snapshot is malformed"):
+        SQLiteCandidateApplications(str(path)).list_page(user_id="owner")
+
+
 def test_owner_keyset_index_is_backfilled_and_used_without_sorting(tmp_path):
     path = tmp_path / "indexed.sqlite"
     database = SQLiteDatabase(str(path))
