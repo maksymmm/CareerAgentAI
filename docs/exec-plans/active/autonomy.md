@@ -629,6 +629,11 @@ with decision-needed/in-progress/finished, phase, version and durable ID. Only t
 latest matching response may update it; context changes and other results clear it.
 Chromium acceptance covers waiting and terminal snapshots across runtime restart.
 Next dashboard slice: candidate-owned run discovery/listing, not local browser storage.
+Delivered backend discovery boundary: RuntimeCandidateApp.list_run_statuses reads
+bounded owner-only keyset pages through the existing read-only status projection.
+SQL ownership filtering precedes payload parsing; tests cover foreign corrupt data,
+limits, pagination/restart, closed runtime, and byte-identical/missing storage.
+Next: authenticated HTTP collection contract and UI selection of owned runs.
 Candidate UI auth-context hardening: token edits now clear prompts/results and revoke
 pending start selection. A generation guard rejects late responses even if inputs are
 changed back; browser regression requires a fresh prompt before approval after token edits.
