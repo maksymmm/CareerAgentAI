@@ -3,7 +3,6 @@
 from datetime import datetime
 from typing import Any
 
-from career_agent_ai.application.jobs.job_application import JobApplication
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
@@ -30,7 +29,7 @@ class SQLiteCandidateApplications:
                 "FROM job_applications WHERE user_id = ? AND application_id > ? "
                 "ORDER BY application_id LIMIT ?", (owner, cursor, limit + 1),
             ).fetchall()
-            items = [self._snapshot(row, owner) for row in rows[:limit]]
+            items = [self._snapshot(row) for row in rows[:limit]]
             return {"schema_version": 1, "items": items,
                     "next_after": items[-1]["application_id"] if len(rows) > limit else None}
         finally:
@@ -44,23 +43,25 @@ class SQLiteCandidateApplications:
         return value
 
     @staticmethod
-    def _snapshot(row: tuple[Any, ...], owner: str) -> dict[str, Any]:
+    def _snapshot(row: tuple[Any, ...]) -> dict[str, Any]:
         try:
             if row[8] != 1:
                 raise ValueError("Unsupported application serialization")
-            application = JobApplication(
-                application_id=row[0], user_id=owner, job_id=row[1],
-                company_id=row[2], job_title=row[3], status=JobApplicationStatus(row[4]),
-                version=row[5], created_at=datetime.fromisoformat(row[6]),
-                updated_at=datetime.fromisoformat(row[7]),
-            )
-            if (application.application_id, application.job_id, application.company_id,
-                    application.job_title) != tuple(row[:4]):
-                raise ValueError("Non-canonical application snapshot")
+            SQLiteCandidateApplications._identifier(row[0])
+            SQLiteCandidateApplications._identifier(row[1])
+            for value, maximum in ((row[2], 200), (row[3], 500)):
+                if not isinstance(value, str) or len(value) > maximum or value != value.strip():
+                    raise ValueError("Non-canonical application snapshot")
+            status = JobApplicationStatus(row[4])
+            if type(row[5]) is not int or row[5] < 1:
+                raise ValueError("Invalid snapshot version")
+            created_at, updated_at = (datetime.fromisoformat(value) for value in row[6:8])
+            if (created_at.utcoffset() is None or updated_at.utcoffset() is None
+                    or updated_at < created_at):
+                raise ValueError("Invalid snapshot timestamps")
         except (TypeError, ValueError, AttributeError) as exc:
             raise ValueError("Persisted candidate application snapshot is malformed.") from exc
-        return {"application_id": application.application_id, "job_id": application.job_id,
-                "company_id": application.company_id, "job_title": application.job_title,
-                "status": application.status.value, "state_version": application.version,
-                "created_at": application.created_at.isoformat(),
-                "updated_at": application.updated_at.isoformat()}
+        return {"application_id": row[0], "job_id": row[1],
+                "company_id": row[2], "job_title": row[3],
+                "status": status.value, "state_version": row[5],
+                "created_at": created_at.isoformat(), "updated_at": updated_at.isoformat()}
