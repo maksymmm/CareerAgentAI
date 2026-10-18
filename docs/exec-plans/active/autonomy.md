@@ -661,6 +661,12 @@ receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
+Candidate tracker dashboard groundwork delivered: bounded read-only owner-filtered
+application pages expose minimal status/job/timestamp fields without loading private
+children or mutating storage. Restart, foreign-corruption isolation, strict bounds
+and missing-storage regressions cover the projection. Next: authenticated HTTP/UI
+application tracker views; no real provider actions are enabled.
+
 P1 recovery isolation: CareerOrchestrator resume/continue entry points now require
 the caller's authenticated user_id. Foreign and missing runs fail identically
 before lease acquisition, approval persistence, or execution. Existing recovery
