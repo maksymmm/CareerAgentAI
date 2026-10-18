@@ -83,6 +83,8 @@ _HTML = """<!doctype html>
       byId('prompt').disabled = decisionInFlight || recoveryInFlight;
     }
     function selectRun(runId) {
+      inputContextGeneration += 1;
+      latestResultRequest += 1;
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
     }
