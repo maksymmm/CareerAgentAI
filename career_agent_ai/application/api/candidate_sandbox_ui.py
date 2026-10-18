@@ -122,7 +122,12 @@ _HTML = """<!doctype html>
         byId('next-runs').disabled = nextRunCursor === null;
         byId('list-state').textContent = page.items.length ? 'Select a run to inspect it.' : 'No runs on this page.';
       } catch (error) {
-        if (generation === listGeneration) clearRunList();
+        if (generation === listGeneration) {
+          clearRunList();
+          nextRunCursor = after;
+          byId('next-runs').disabled = after === null;
+          byId('list-state').textContent = after === null ? 'Load my runs to retry.' : 'Next page failed. Retry Next page.';
+        }
         throw error;
       }
     }
