@@ -86,6 +86,38 @@ def test_missing_storage_is_not_created(tmp_path):
     assert not path.exists()
 
 
+def test_owner_keyset_index_is_backfilled_and_used_without_sorting(tmp_path):
+    path = tmp_path / "indexed.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteJobApplicationRepository(database)
+    # Simulate a database initialized by the previous schema version.
+    database.connection.execute("DROP INDEX idx_applications_user_id")
+    database.connection.commit()
+    database.close()
+    database = SQLiteDatabase(str(path))
+    SQLiteJobApplicationRepository(database)
+    SQLiteJobApplicationRepository(database)  # repeated initialization is safe
+    columns = database.connection.execute("PRAGMA index_info(idx_applications_user_id)").fetchall()
+    assert [row[2] for row in columns] == ["user_id", "application_id"]
+    database.close()
+    baseline = path.read_bytes()
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        plan = database.connection.execute(
+            "EXPLAIN QUERY PLAN SELECT application_id, job_id, company_id, job_title, "
+            "status, version, created_at, updated_at, serialization_version "
+            "FROM job_applications WHERE user_id = ? AND application_id > ? "
+            "ORDER BY application_id LIMIT ?", ("owner", "cursor", 26),
+        ).fetchall()
+        details = " ".join(row[3] for row in plan)
+        assert "idx_applications_user_id" in details
+        assert "SEARCH" in details
+        assert "TEMP B-TREE" not in details
+    finally:
+        database.close()
+    assert path.read_bytes() == baseline
+
+
 @pytest.mark.parametrize("column,value", [("version", "bad"), ("created_at", "bad"),
     ("updated_at", "2000-01-01T00:00:00"), ("job_title", " padded"), ("serialization_version", 2)])
 def test_owned_corrupt_snapshots_fail_closed(tmp_path, column, value):
