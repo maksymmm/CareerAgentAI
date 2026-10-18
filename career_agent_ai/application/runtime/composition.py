@@ -195,6 +195,11 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
 
+    def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+        """Read authenticated owner snapshots without building writable repositories."""
+        return SQLiteCandidateApplications(self._database_path).list_page(
+            user_id=user_id, limit=limit, after=after)
+
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
         """Read an authenticated owner-only collection using request-local storage."""
         database = SQLiteDatabase.open_read_only(self._database_path)
