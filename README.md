@@ -304,7 +304,10 @@ current candidate-visible approval prompt, continue recovery, and submit approve
 decline decisions. The static page contains no credentials or durable state: the
 candidate enters a bearer token that stays only in the tab's memory.
 Changing the token clears the displayed prompt and result; late responses from the
-previous input context cannot repopulate them or select a run. Decisions copy
+previous input context cannot repopulate them or select a run.
+The run overview summarizes an authenticated status snapshot as waiting for a decision,
+in progress, or finished, with its phase, version and durable ID. It is cleared on
+context changes or other results and never substitutes for an approval prompt. Decisions copy
 the prompt's run ID, state version, and action fingerprint back to the strict API, so
 the interface cannot silently approve a changed or stale action. The page is served
 with `no-store`, anti-sniffing, no-referrer, and restrictive content-security headers.

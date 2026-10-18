@@ -277,6 +277,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             durable_run_id = page.locator("#run-id").input_value()
             assert durable_run_id.startswith("scoped-v2:")
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("Your decision is needed", exact=False).wait_for()
 
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve job application").wait_for()
@@ -329,6 +331,9 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#status").click()
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert page.locator("#run-id").input_value() == durable_run_id
+            page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()
+            page.locator("#token").fill("changed")
+            assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
             browser.close()
     finally:
         restarted_server.shutdown()

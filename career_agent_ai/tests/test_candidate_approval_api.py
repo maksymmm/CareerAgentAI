@@ -214,6 +214,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "byId('run-id').addEventListener('input'" in html
     assert "byId('token').addEventListener('input', invalidateInputContext)" in html
     assert "contextGeneration !== inputContextGeneration" in html
+    assert 'id="run-overview" role="status"' in html
+    assert "requestNumber !== latestResultRequest" in html
+    assert "snapshot.run_id !== runId" in html
+    assert "Number.isSafeInteger(snapshot.state_version)" in html
+    assert "byId('run-overview').textContent = state" in html
     selection = html[html.index("function selectRun"):html.index("async function call")]
     assert "inputContextGeneration += 1" in selection
     assert "latestResultRequest += 1" in selection
