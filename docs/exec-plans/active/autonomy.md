@@ -667,6 +667,11 @@ including malformed private timeline metadata that the projection must never loa
 P2 review correction: writable application schema initialization backfills the
 owner/application-ID keyset index. An EXPLAIN QUERY PLAN regression requires indexed
 range search without temporary sorting; projection reads remain schema-free.
+Scalar lifecycle validation now rejects unreachable status/version combinations using
+the domain transition graph. All statuses at version one remain valid, matching the
+existing aggregate constructor/repository contract, rather than assuming saved-only
+initialization. Restart regressions cover each supported initial status and impossible
+long histories without reading timeline children.
 Candidate tracker dashboard groundwork delivered: bounded read-only owner-filtered
 application pages expose minimal status/job/timestamp fields without loading private
 children or mutating storage. Restart, foreign-corruption isolation, strict bounds
