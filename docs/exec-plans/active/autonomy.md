@@ -661,6 +661,11 @@ receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
+HTTP review P2: application collection raw queries now accommodate 200 four-byte
+Unicode scalars percent-encoded in a cursor (2400 characters plus query overhead).
+Decoded cursor bounds remain 200; restart pagination covers a maximum emoji cursor
+and oversized raw/decoded queries fail before storage access.
+
 HTTP tracker collection delivered: GET /v1/candidate/applications authenticates before
 query/storage, shares bounded strict pagination parsing and reads request-local owner
 snapshots without writable repositories. OpenAPI describes minimal fields and errors.
