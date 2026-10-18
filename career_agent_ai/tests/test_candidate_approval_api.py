@@ -241,6 +241,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "byId('token').addEventListener('input', invalidateInputContext)" in html
     assert "contextGeneration !== inputContextGeneration" in html
     assert 'id="run-overview" role="status"' in html
+    assert 'id="owned-runs"' in html
+    assert "byId('token').addEventListener('input', clearRunList)" in html
+    assert "generation !== listGeneration" in html
+    assert "button.textContent = item.run_id" in html
     assert "requestNumber !== latestResultRequest" in html
     assert "snapshot.run_id !== runId" in html
     assert "Number.isSafeInteger(snapshot.state_version)" in html
