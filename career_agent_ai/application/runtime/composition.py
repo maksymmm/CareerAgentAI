@@ -57,6 +57,7 @@ from career_agent_ai.application.storage.sqlite_communication_repository import 
     SQLiteCommunicationRepository,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
 from career_agent_ai.application.storage.sqlite_operational_probe import (
     SQLiteOperationalProbe,
 )
@@ -167,6 +168,14 @@ class RuntimeCandidateApp:
                 user_id=user_id, limit=limit, after=after)
         finally:
             database.close()
+
+    def list_applications(self, *, user_id: str, limit: int = 25,
+                          after: str | None = None) -> dict[str, Any]:
+        """Read trusted caller's bounded application snapshots without workflow actions."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return SQLiteCandidateApplications(self._database_path).list_page(
+            user_id=user_id, limit=limit, after=after)
 
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""

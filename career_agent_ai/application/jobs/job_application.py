@@ -33,6 +33,19 @@ _ALLOWED_TRANSITIONS: dict[JobApplicationStatus, frozenset[JobApplicationStatus]
 }
 
 
+def application_status_version_is_reachable(status: JobApplicationStatus, version: int) -> bool:
+    """Check scalar reachability, preserving any-status version-one initial aggregates."""
+    if not isinstance(status, JobApplicationStatus) or type(version) is not int or version < 1:
+        return False
+    # The current lifecycle is acyclic; no history can contain more states than this.
+    if version > len(JobApplicationStatus):
+        return False
+    reachable = set(JobApplicationStatus)
+    for _ in range(version - 1):
+        reachable = {target for source in reachable for target in _ALLOWED_TRANSITIONS[source]}
+    return status in reachable
+
+
 @dataclass(frozen=True)
 class JobApplication:
     """Immutable aggregate for a candidate's application to one job."""

@@ -661,6 +661,23 @@ receipt lifecycle mutation occurs during recording.
 
 ## 11. Candidate-outcome adaptive ranking
 
+P1 review correction: validate projected scalar fields independently of aggregate
+timeline invariants. Every lifecycle status/version is covered after SQLite restart,
+including malformed private timeline metadata that the projection must never load.
+P2 review correction: writable application schema initialization backfills the
+owner/application-ID keyset index. An EXPLAIN QUERY PLAN regression requires indexed
+range search without temporary sorting; projection reads remain schema-free.
+Scalar lifecycle validation now rejects unreachable status/version combinations using
+the domain transition graph. All statuses at version one remain valid, matching the
+existing aggregate constructor/repository contract, rather than assuming saved-only
+initialization. Restart regressions cover each supported initial status and impossible
+long histories without reading timeline children.
+Candidate tracker dashboard groundwork delivered: bounded read-only owner-filtered
+application pages expose minimal status/job/timestamp fields without loading private
+children or mutating storage. Restart, foreign-corruption isolation, strict bounds
+and missing-storage regressions cover the projection. Next: authenticated HTTP/UI
+application tracker views; no real provider actions are enabled.
+
 P1 recovery isolation: CareerOrchestrator resume/continue entry points now require
 the caller's authenticated user_id. Foreign and missing runs fail identically
 before lease acquisition, approval persistence, or execution. Existing recovery
