@@ -247,7 +247,10 @@ open existing SQLite storage read-only, never migrate it, and omit timeline note
 metadata, skills and execution claims. Identity must come from the trusted caller.
 Authenticated `GET /v1/candidate/applications` exposes the same page with `limit`
 and `after`, bearer-derived ownership, strict query validation, no-store and OpenAPI.
-It never executes or updates an application. UI exposure remains a follow-up.
+It never executes or updates an application. The candidate sandbox displays owned
+application pages as text-only job/company/status/version snapshots, with explicit
+next-page/retry controls. Token edits clear the list and stale responses cannot
+restore it. No approval/submission controls exist in this tracker list.
 
 The sandbox runtime's programmatic `list_run_statuses(user_id=..., limit=25, after=None)`
 returns owner-filtered, minimal run status pages in stable run-ID order (maximum 100).

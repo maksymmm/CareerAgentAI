@@ -66,6 +66,14 @@ _HTML = """<!doctype html>
     <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
     <p class="muted">A snapshot never authorizes an action. Inspect the current approval prompt before deciding.</p>
   </section>
+  <section aria-labelledby="applications-title">
+    <h2 id="applications-title">My applications</h2>
+    <button id="list-applications" type="button">Load my applications</button>
+    <ul id="owned-applications" aria-label="My applications"></ul>
+    <p id="applications-state" role="status"></p>
+    <button id="next-applications" type="button" disabled>Next application page</button>
+    <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
+  </section>
   <h2>Result</h2>
   <pre id="result" aria-live="polite">Ready.</pre>
   <script>
@@ -84,6 +92,60 @@ _HTML = """<!doctype html>
     const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
     const show = (value) => { clearOverview(); byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
+    let applicationsGeneration = 0;
+    let nextApplicationCursor = null;
+    function clearApplications() {
+      applicationsGeneration += 1;
+      nextApplicationCursor = null;
+      byId('owned-applications').replaceChildren();
+      byId('applications-state').textContent = '';
+      byId('next-applications').disabled = true;
+    }
+    async function loadApplications(after = null) {
+      clearApplications();
+      const generation = applicationsGeneration;
+      byId('applications-state').textContent = 'Loading…';
+      try {
+        const page = await call('/v1/candidate/applications?limit=25' +
+          (after === null ? '' : '&after=' + encodeURIComponent(after)));
+        if (generation !== applicationsGeneration) return;
+        // Canonical whitespace is validated by the server (Python strip differs
+        // from JavaScript trim, notably for U+FEFF). Treat returned IDs as opaque.
+        const identifier = value => typeof value === 'string' &&
+          Array.from(value).length >= 1 && Array.from(value).length <= 200;
+        const statuses = ['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'];
+        if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || identifier(page.next_after)) || !page.items.every(item =>
+              item && identifier(item.application_id) && identifier(item.job_id) &&
+              typeof item.job_title === 'string' && Array.from(item.job_title).length <= 500 &&
+              typeof item.company_id === 'string' && Array.from(item.company_id).length <= 200 &&
+              statuses.includes(item.status) && Number.isSafeInteger(item.state_version) && item.state_version >= 1)) {
+          throw new Error('Invalid application page.');
+        }
+        for (const item of page.items) {
+          const row = document.createElement('li');
+          row.textContent = (item.job_title || item.job_id) + ' — ' + item.company_id +
+            ' — ' + item.status + ' — version ' + item.state_version + ' — ' + item.application_id;
+          byId('owned-applications').append(row);
+        }
+        nextApplicationCursor = page.next_after;
+        byId('next-applications').disabled = nextApplicationCursor === null;
+        byId('applications-state').textContent = page.items.length ? 'Read-only application snapshots.' : 'No applications on this page.';
+      } catch (error) {
+        if (generation === applicationsGeneration) {
+          clearApplications();
+          nextApplicationCursor = after;
+          byId('next-applications').disabled = after === null;
+          byId('applications-state').textContent = 'Load or retry the application page.';
+        }
+        throw error;
+      }
+    }
+    byId('list-applications').addEventListener('click', () => guarded(() => loadApplications()));
+    byId('next-applications').addEventListener('click', () => guarded(() => {
+      if (nextApplicationCursor !== null) return loadApplications(nextApplicationCursor);
+    }));
+    byId('token').addEventListener('input', clearApplications);
     function clearRunList() {
       listGeneration += 1;
       nextRunCursor = null;
