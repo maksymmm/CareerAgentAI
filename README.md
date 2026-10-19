@@ -234,7 +234,11 @@ read-only owner-only event snapshot with employer/location, lifecycle status, UT
 instants, local dates/times and explicit start/end UTC offsets. Reads never create
 or migrate storage and never load provider/application IDs or calendar action claims.
 Foreign/missing events share one failure before deserialization. Trusted callers
-must supply authenticated identity; candidate HTTP/UI exposure is follow-up work.
+must supply authenticated identity. Authenticated GET
+`/v1/candidate/schedule-event?event_id=...` exposes this read-only snapshot using
+bearer-derived ownership, strict single ASCII event identity, identical foreign/missing
+404, sanitized backend errors, no-store and OpenAPI. No calendar action is enabled;
+candidate event discovery/UI remain follow-up work.
 
 Human-participation career events such as interviews, trial days, phone calls, and video calls are modeled as durable scheduling aggregates. Each event preserves the employer, event type, address or meeting location, UTC-normalized start/end instants, the original IANA timezone used for presentation, lifecycle status, application linkage, and provider identifiers.
 
