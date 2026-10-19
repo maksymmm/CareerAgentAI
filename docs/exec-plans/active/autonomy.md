@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate history UI delivered: explicit Load application history after detail
+selection renders only bounded allowlisted transition fields/version. Empty state,
+retry, malformed payload rejection and detail/page/token invalidation are supported.
+Chromium restart acceptance covers persisted history, private-field/parse-error
+redaction and delayed-response invalidation. Next: verify reviewed integration,
+then candidate-facing interview/scheduling visibility without calendar actions.
+
 HTTP history delivered: GET /v1/candidate/application/history?application_id=...
 reuses detail validation/authentication and reads owner-only bounded lifecycle
 transitions through request-local read-only storage. No private children or action
