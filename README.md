@@ -239,6 +239,8 @@ must supply authenticated identity. Authenticated GET
 bearer-derived ownership, strict single ASCII event identity, identical foreign/missing
 404, sanitized backend errors, no-store and OpenAPI. No calendar action is enabled;
 candidate event discovery/UI remain follow-up work.
+UTC offsets use `±HH:MM`, with `:SS` retained for historical IANA offsets; local
+dates/times and offsets reconstruct the exact UTC instant, including microseconds.
 
 Human-participation career events such as interviews, trial days, phone calls, and video calls are modeled as durable scheduling aggregates. Each event preserves the employer, event type, address or meeting location, UTC-normalized start/end instants, the original IANA timezone used for presentation, lifecycle status, application linkage, and provider identifiers.
 
