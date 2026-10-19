@@ -97,6 +97,7 @@ def test_domain_supported_initial_statuses_remain_readable(tmp_path, status):
     database.close()
     item = SQLiteCandidateApplications(str(path)).list_page(user_id="owner")["items"][0]
     assert (item["status"], item["state_version"]) == (status.value, 1)
+    assert SQLiteCandidateApplications(str(path)).get_history("a", user_id="owner")["items"] == []
 
 
 @pytest.mark.parametrize("status,version", [("saved", 2), ("applied", 3),
@@ -218,4 +219,89 @@ def test_single_snapshot_does_not_create_missing_storage(tmp_path):
     path = tmp_path / "missing.sqlite"
     with pytest.raises(sqlite3.OperationalError):
         SQLiteCandidateApplications(str(path)).get_snapshot("a", user_id="owner")
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("states", [[], ["applied"], ["applied", "interview"],
+    ["applied", "interview", "offer"], ["applied", "rejected"],
+    ["applied", "interview", "offer", "withdrawn"]])
+def test_owned_history_after_restart_omits_private_children(tmp_path, states):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    path = tmp_path / "history.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    application = JobApplication(application_id="😀" * 200, user_id="owner", job_id="job",
+                                 status=JobApplicationStatus.SAVED)
+    repository.add(application)
+    for state in states:
+        old_version = application.version
+        application = application.transition(JobApplicationStatus(state), note="private-note")
+        repository.update(application, expected_version=old_version)
+    repository.add(JobApplication(application_id="foreign", user_id="other", job_id="job",
+                                  status=JobApplicationStatus.SAVED))
+    database.connection.execute("UPDATE application_timeline SET metadata_json = 'private invalid JSON', operation_id = 'private-operation'")
+    database.connection.execute("UPDATE job_applications SET job_skills_json = 'private invalid JSON'")
+    database.connection.execute("UPDATE job_applications SET serialization_version = 999 WHERE user_id = 'other'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    for _ in range(2):
+        runtime = RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None)
+        result = runtime.get_application_history(application.application_id, user_id="owner")
+        assert result["schema_version"] == 1 and result["state_version"] == len(states) + 1
+        assert result["application_id"] == application.application_id
+        assert [item["to_status"] for item in result["items"]] == states
+        for index, item in enumerate(result["items"]):
+            assert set(item) == {"sequence", "from_status", "to_status", "occurred_at"}
+            assert item["sequence"] == index
+            assert item["from_status"] == (["saved"] + states)[index]
+        assert "private" not in str(result)
+        for identifier in ("foreign", "missing", "' OR 1=1 --"):
+            with pytest.raises(KeyError, match="Application not found"):
+                runtime.get_application_history(identifier, user_id="owner")
+        runtime.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            runtime.get_application_history(application.application_id, user_id="owner")
+    assert path.read_bytes() == baseline
+
+
+@pytest.mark.parametrize("mutation", [
+    "DELETE FROM application_timeline",
+    "INSERT INTO application_timeline SELECT event_id || '-extra', application_id, from_status, to_status, occurred_at, operation_id, note, metadata_json, serialization_version, sequence + 1 FROM application_timeline",
+    "UPDATE application_timeline SET sequence = 2",
+    "UPDATE application_timeline SET serialization_version = 9",
+    "UPDATE application_timeline SET from_status = 'offer'",
+    "UPDATE application_timeline SET to_status = 'withdrawn'",
+    "UPDATE application_timeline SET occurred_at = 'bad'",
+    "UPDATE application_timeline SET occurred_at = '2000-01-01T00:00:00+00:00'",
+    "UPDATE application_timeline SET occurred_at = '2999-01-01T00:00:00+00:00'",
+])
+def test_owned_malformed_history_fails_closed_after_restart(tmp_path, mutation):
+    path = tmp_path / "malformed-history.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    repository.add(JobApplication(application_id="a", user_id="owner", job_id="job",
+        status=JobApplicationStatus.SAVED).transition(JobApplicationStatus.APPLIED))
+    database.connection.execute(mutation)
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    with pytest.raises(ValueError, match="history is malformed"):
+        SQLiteCandidateApplications(str(path)).get_history("a", user_id="owner")
+    assert path.read_bytes() == baseline
+
+
+@pytest.mark.parametrize("identifier,owner", [("", "owner"), ("a", ""),
+    ("\ud800", "owner"), ("a", "\udfff"), ("a" * 201, "owner"), (" padded", "owner")])
+def test_history_validates_before_opening_missing_storage(tmp_path, identifier, owner):
+    path = tmp_path / "missing-history.sqlite"
+    with pytest.raises(ValueError):
+        SQLiteCandidateApplications(str(path)).get_history(identifier, user_id=owner)
+    assert not path.exists()
+
+
+def test_history_never_creates_missing_storage(tmp_path):
+    path = tmp_path / "missing-history.sqlite"
+    with pytest.raises(sqlite3.OperationalError):
+        SQLiteCandidateApplications(str(path)).get_history("a", user_id="owner")
     assert not path.exists()
