@@ -1,5 +1,9 @@
 # Autonomous Implementation Plan
 
+HTTP review P2: historical IANA offsets now serialize as ISO-compatible ±HH:MM[:SS]
+and OpenAPI accepts second precision. Restart HTTP regressions cover positive Amsterdam
+and negative Monrovia offsets, optional ends, schema patterns and exact UTC reconstruction.
+
 Scheduling HTTP delivered: authenticated GET /v1/candidate/schedule-event?event_id=...
 reads only the bearer's owned event through request-local read-only storage. Strict
 single-parameter/domain identity validation precedes storage; missing/foreign 404,
