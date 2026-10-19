@@ -1,5 +1,10 @@
 # Autonomous Implementation Plan
 
+Detail UI review P2: disable shared raw-result rendering for detail requests before
+validation/projection. Only allowlisted fields enter the detail pane; detail HTTP
+failures use a generic error instead of backend message text. Chromium regression
+injects extra top-level/nested private fields and requires their absence from the DOM.
+
 Candidate detail UI delivered: explicit View application reads the authenticated
 detail endpoint and renders allowlisted minimal fields/timestamps as text only.
 Selection/page/token generations prevent stale detail resurrection. Failure clears
