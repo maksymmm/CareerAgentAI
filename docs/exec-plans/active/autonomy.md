@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Integration review P2: loaded approval prompts must match the selected run and the
+complete versioned wire schema before storing/rendering or enabling decisions.
+Malformed/misrouted prompts never enter the raw result pane. Chromium exercises
+identity, schema, version, kind, title, details, fingerprint, decision and extra-field
+failures, then verifies a fresh valid prompt can still approve the selected run.
+
 Integration review P2: history UI now checks each status pair against the domain
 lifecycle map, not merely known enum values/adjacent continuity. Chromium rejects
 skipped stages, self transitions and transitions from terminal states before render.
