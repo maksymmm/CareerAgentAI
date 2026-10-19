@@ -245,8 +245,12 @@ The included fake calendar adapter is deterministic, in-memory, and performs no 
 single-application snapshot with the same minimal fields as the collection. The
 trusted caller supplies authenticated identity; foreign and absent IDs raise the
 same `KeyError` before private fields are decoded. Reads open existing storage
-read-only, omit timeline/metadata/claims, and cannot execute work. HTTP detail and
-candidate history views remain follow-up work.
+read-only, omit timeline/metadata/claims, and cannot execute work. Candidate history
+views remain follow-up work. Authenticated
+`GET /v1/candidate/application?application_id=...` exposes this detail snapshot with
+bearer-derived ownership, strict single-parameter validation, no-store and OpenAPI.
+The query preserves opaque Unicode IDs without WSGI path-decoding ambiguity;
+foreign/missing applications share a 404. No update or execution action is exposed.
 
 `RuntimeCandidateApp.list_applications(user_id=..., limit=25, after=None)` exposes
 minimal owner-only application snapshots with bounded ID-keyset pagination. Reads

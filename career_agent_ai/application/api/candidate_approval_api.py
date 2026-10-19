@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import parse_qsl
 from hashlib import sha256, sha512
 from decimal import Decimal, InvalidOperation
@@ -44,6 +45,7 @@ class CandidateApprovalLoop(Protocol):
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
 
     def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
+    def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -107,13 +109,14 @@ class CandidateApprovalWSGIApp:
         parts = path.strip("/").split("/")
         is_start = parts == ["v1", "candidate", "runs"]
         is_applications = parts == ["v1", "candidate", "applications"]
+        is_application = parts == ["v1", "candidate", "application"]
         is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
             and parts[4] in {"approval", "continue", "status"}
         )
-        if not is_start and not is_existing_run and not is_list:
+        if not is_start and not is_existing_run and not is_list and not is_application:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -143,6 +146,23 @@ class CandidateApprovalWSGIApp:
                     {"error": "invalid_request", "message": str(exc)[:500]},
                 )
         try:
+            if is_application:
+                if method != "GET":
+                    return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
+                try:
+                    query = str(environ.get("QUERY_STRING", ""))
+                    if len(query) > 2500 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
+                        raise ValueError("query too long")
+                    pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1, errors="strict")
+                    if len(pairs) != 1 or pairs[0][0] != "application_id":
+                        raise ValueError("application_id is required")
+                    identifier = pairs[0][1]
+                    if not identifier or len(identifier) > 200 or identifier != identifier.strip():
+                        raise ValueError("invalid application_id")
+                    identifier.encode("utf-8", errors="strict")
+                except (TypeError, ValueError):
+                    return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
+                return self._respond(start_response, "200 OK", self._loop.get_application(identifier, user_id=user_id))
             if is_list:
                 if method != "GET":
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
@@ -557,7 +577,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "content": content(error_schema),
         },
     }
-    return {
+    document = {
         "openapi": "3.1.0",
         "info": {"title": "CareerAgentAI Candidate Approval API", "version": "1.0.0"},
         "components": {
@@ -837,3 +857,20 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             },
         },
     }
+    application_schema = document["paths"]["/v1/candidate/applications"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]["items"]
+    document["paths"]["/v1/candidate/application"] = {"get": {
+        "operationId": "getCandidateApplication", "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "application_id", "in": "query", "required": True,
+                        "description": "Opaque application identity; no other or duplicate parameters accepted",
+                        "schema": {"type": "string", "minLength": 1, "maxLength": 200}}],
+        "responses": {
+            "200": {"description": "Read-only owned application snapshot",
+                    "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                    "content": content({"type": "object", "additionalProperties": False,
+                        "required": ["schema_version", "application"],
+                        "properties": {"schema_version": {"const": 1}, "application": application_schema}})},
+            **common_responses,
+            "404": {"description": "Missing or foreign application", "content": content(error_schema)},
+            "405": {"description": "Only GET is allowed", "headers": {"Allow": {"schema": {"const": "GET"}}}, "content": content(error_schema)},
+        }}}
+    return document

@@ -202,6 +202,11 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
 
+    def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read authenticated owner's snapshot without constructing writable storage."""
+        return SQLiteCandidateApplications(self._database_path).get_snapshot(
+            application_id, user_id=user_id)
+
     def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
         """Read authenticated owner snapshots without building writable repositories."""
         return SQLiteCandidateApplications(self._database_path).list_page(

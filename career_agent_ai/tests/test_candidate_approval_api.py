@@ -151,6 +151,65 @@ def test_application_query_bounds_remain_fail_closed(query):
     assert request(app(object()), path="/v1/candidate/applications", query=query)[0][0] == "400 Bad Request"
 
 
+@pytest.mark.parametrize("query", ["", "application_id=", "application_id=%20padded",
+    "application_id=" + "a" * 201, "application_id=x&application_id=y",
+    "application_id=x&user_id=foreign", "user_id=x", "application_id",
+    "application_id=%ED%A0%80", "application_id=" + "x" * 2501,
+    "application_id=%", "application_id=%2", "application_id=%GG",
+    "application_id=valid%20prefix%", "application%_id=a"])
+def test_invalid_application_detail_query_precedes_storage(query):
+    assert request(app(object()), path="/v1/candidate/application", query=query)[0][0] == "400 Bad Request"
+
+
+def test_application_detail_auth_method_and_sanitized_backend_errors():
+    route = "/v1/candidate/application"
+    assert request(app(object()), path=route, token=None)[0][0] == "401 Unauthorized"
+    (status, headers), _ = request(app(object()), path=route, method="POST")
+    assert status == "405 Method Not Allowed" and ("Allow", "GET") in headers
+    class Broken:
+        def get_application(self, application_id, *, user_id):
+            assert (application_id, user_id) == ("a", "candidate-1")
+            raise RuntimeError("private storage information")
+    assert request(app(Broken()), path=route, query="application_id=a")[1] == {"error": "internal_error"}
+
+
+@pytest.mark.parametrize("identifier", ["😀" * 200, "\ufeff/a? +й\ufeff", "%GG%2%"])
+def test_application_http_detail_is_owner_only_read_only_after_restart(tmp_path, identifier):
+    from urllib.parse import urlencode
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_job_application_repository import SQLiteJobApplicationRepository
+    from career_agent_ai.application.jobs.job_application import JobApplication
+    from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+    path = tmp_path / "detail.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    for app_id, owner in [(identifier, "candidate-1"), ("foreign", "other")]:
+        repository.add(JobApplication(application_id=app_id, user_id=owner, job_id=app_id,
+            status=JobApplicationStatus.SAVED).transition(JobApplicationStatus.APPLIED, note="private"))
+    database.connection.execute("UPDATE application_timeline SET metadata_json = 'private invalid JSON'")
+    database.connection.execute("UPDATE job_applications SET serialization_version = 999 WHERE user_id = 'other'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    route = "/v1/candidate/application"
+    for _ in range(2):
+        runtime = RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1")
+        (status, headers), body = request(runtime, path=route, query=urlencode({"application_id": identifier}))
+        assert status == "200 OK" and ("Cache-Control", "no-store") in headers
+        assert body == runtime.get_application(identifier, user_id="candidate-1")
+        assert body["application"]["status"] == "applied" and body["application"]["state_version"] == 2
+        foreign = request(runtime, path=route, query="application_id=foreign")
+        assert foreign == request(runtime, path=route, query="application_id=missing")
+        assert foreign[0][0] == "404 Not Found"
+        runtime.close()
+    assert "private" not in str(body) and path.read_bytes() == baseline
+    contract = candidate_approval_openapi_document()["paths"][route]["get"]
+    assert contract["security"] == [{"bearerAuth": []}]
+    schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(body["application"]) == set(schema["properties"]["application"]["required"])
+
+
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
     statuses = []
     environ = {
