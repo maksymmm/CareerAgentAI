@@ -177,6 +177,13 @@ class RuntimeCandidateApp:
         return SQLiteCandidateApplications(self._database_path).list_page(
             user_id=user_id, limit=limit, after=after)
 
+    def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read an owned application snapshot using the trusted caller's identity."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return SQLiteCandidateApplications(self._database_path).get_snapshot(
+            application_id, user_id=user_id)
+
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
         if self._closed:

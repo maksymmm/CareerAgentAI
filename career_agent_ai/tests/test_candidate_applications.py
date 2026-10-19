@@ -159,3 +159,61 @@ def test_owned_corrupt_snapshots_fail_closed(tmp_path, column, value):
     database.close()
     with pytest.raises(ValueError, match="snapshot is malformed"):
         SQLiteCandidateApplications(str(path)).list_page(user_id="owner")
+    with pytest.raises(ValueError, match="snapshot is malformed"):
+        SQLiteCandidateApplications(str(path)).get_snapshot("a", user_id="owner")
+
+
+def test_single_owned_snapshot_is_restart_safe_and_tenant_hiding(tmp_path):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+
+    path = tmp_path / "detail.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    application = JobApplication(application_id="😀" * 200, user_id="owner", job_id="job",
+                                 status=JobApplicationStatus.SAVED)
+    repository.add(application)
+    application = application.transition(JobApplicationStatus.APPLIED, note="private note")
+    repository.update(application, expected_version=1)
+    repository.add(JobApplication(application_id="foreign", user_id="other", job_id="job",
+                                  status=JobApplicationStatus.SAVED))
+    database.connection.execute("UPDATE application_timeline SET metadata_json = 'private invalid JSON'")
+    database.connection.execute("UPDATE job_applications SET job_skills_json = 'private invalid JSON'")
+    database.connection.execute("UPDATE job_applications SET serialization_version = 999 WHERE user_id = 'other'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    projection = SQLiteCandidateApplications(str(path))
+    expected = {"schema_version": 1, "application": projection.list_page(user_id="owner")["items"][0]}
+    for _ in range(2):
+        runtime = RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None)
+        assert runtime.get_application(application.application_id, user_id="owner") == expected
+        assert expected["application"]["state_version"] == 2
+        errors = []
+        for identifier in ("foreign", "missing", "' OR 1=1 --"):
+            with pytest.raises(KeyError) as error:
+                runtime.get_application(identifier, user_id="owner")
+            errors.append(error.value.args)
+        assert errors == [("Application not found.",)] * 3
+        runtime.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            runtime.get_application(application.application_id, user_id="owner")
+    assert "private" not in str(expected)
+    assert path.read_bytes() == baseline
+
+
+@pytest.mark.parametrize("field,value", [("user_id", ""), ("user_id", " padded"),
+    ("application_id", ""), ("application_id", " padded"), ("application_id", "a" * 201),
+    ("application_id", None), ("user_id", None)])
+def test_single_snapshot_validates_before_opening_missing_storage(tmp_path, field, value):
+    path = tmp_path / "missing.sqlite"
+    arguments = {"application_id": "a", "user_id": "owner", field: value}
+    with pytest.raises(ValueError):
+        SQLiteCandidateApplications(str(path)).get_snapshot(**arguments)
+    assert not path.exists()
+
+
+def test_single_snapshot_does_not_create_missing_storage(tmp_path):
+    path = tmp_path / "missing.sqlite"
+    with pytest.raises(sqlite3.OperationalError):
+        SQLiteCandidateApplications(str(path)).get_snapshot("a", user_id="owner")
+    assert not path.exists()
