@@ -277,10 +277,14 @@ def test_schedule_http_auth_method_and_sanitized_backend_failure(failure):
     assert ("Cache-Control", "no-store") in headers
 
 
-@pytest.mark.parametrize("instant,offset", [("2026-10-25T00:30:00.123456+00:00", "+02:00"),
-                                           ("2026-10-25T01:30:00.123456+00:00", "+01:00")])
+@pytest.mark.parametrize("instant,zone,offset,local_time", [
+    ("2026-10-25T00:30:00.123456+00:00", "Europe/Berlin", "+02:00", "02:30:00.123456"),
+    ("2026-10-25T01:30:00.123456+00:00", "Europe/Berlin", "+01:00", "02:30:00.123456"),
+    ("1900-01-01T00:30:00.123456+00:00", "Europe/Amsterdam", "+00:19:32", "00:49:32.123456"),
+    ("1900-01-01T00:30:00.123456+00:00", "Africa/Monrovia", "-00:43:08", "23:46:52.123456"),
+])
 @pytest.mark.parametrize("with_end", [False, True])
-def test_schedule_http_restart_owner_precision_and_openapi(tmp_path, instant, offset, with_end):
+def test_schedule_http_restart_owner_precision_and_openapi(tmp_path, instant, zone, offset, local_time, with_end):
     from datetime import datetime, timedelta
     from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
     from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
@@ -294,7 +298,7 @@ def test_schedule_http_restart_owner_precision_and_openapi(tmp_path, instant, of
     for event_id, owner in [(identifier, "candidate-1"), ("foreign", "other")]:
         repository.create(ScheduleEvent(event_id=event_id, candidate_id=owner, employer_name="Employer",
             event_type=ScheduleEventType.INTERVIEW, location="Karlsruhe", start_at=start,
-            end_at=start + timedelta(hours=2) if with_end else None, timezone_name="Europe/Berlin"))
+            end_at=start + timedelta(hours=2) if with_end else None, timezone_name=zone))
     database.connection.execute("UPDATE scheduling_events SET provider_event_id=char(1)||event_id, application_id='private/bad'")
     database.connection.execute("UPDATE scheduling_events SET timezone_name='private-corrupt' WHERE candidate_id='other'")
     database.connection.commit()
@@ -306,7 +310,7 @@ def test_schedule_http_restart_owner_precision_and_openapi(tmp_path, instant, of
             (status, headers), body = request(runtime, path=route, query="event_id=" + "a" * 199 + "%2B")
             assert status == "200 OK" and ("Cache-Control", "no-store") in headers
             assert body == runtime.get_schedule_event(identifier, user_id="candidate-1")
-            assert body["event"]["local_start_time"] == "02:30:00.123456"
+            assert body["event"]["local_start_time"] == local_time
             assert body["event"]["utc_offset"] == offset
             assert body["event"]["start_at"] == instant
             assert (body["event"]["end_at"] is not None) == with_end
@@ -320,6 +324,17 @@ def test_schedule_http_restart_owner_precision_and_openapi(tmp_path, instant, of
     schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
     assert set(body) == set(schema["required"])
     assert set(body["event"]) == set(schema["properties"]["event"]["required"])
+    event = body["event"]
+    for prefix, date_key, time_key, offset_key in [
+        ("start_at", "local_date", "local_start_time", "utc_offset"),
+        ("end_at", "local_end_date", "local_end_time", "end_utc_offset"),
+    ]:
+        if event[prefix] is None:
+            assert event[offset_key] is None
+            continue
+        assert re.fullmatch(schema["properties"]["event"]["properties"][offset_key]["pattern"], event[offset_key])
+        local = datetime.fromisoformat(event[date_key] + "T" + event[time_key] + event[offset_key])
+        assert local == datetime.fromisoformat(event[prefix])
 
 
 def test_schedule_http_missing_storage_and_corrupt_owned_event(tmp_path):
