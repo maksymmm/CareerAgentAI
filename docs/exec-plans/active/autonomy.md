@@ -1,5 +1,10 @@
 # Autonomous Implementation Plan
 
+Detail UI review follow-up: all suppressed-raw request failures, including JSON
+parse/network errors, are replaced with a generic error before reaching the shared
+error renderer. Chromium injects malformed JSON with a private sentinel and requires
+only the generic message, no detail and no sentinel anywhere in the DOM.
+
 Detail UI review P2: disable shared raw-result rendering for detail requests before
 validation/projection. Only allowlisted fields enter the detail pane; detail HTTP
 failures use a generic error instead of backend message text. Chromium regression
