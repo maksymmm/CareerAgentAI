@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate detail UI delivered: explicit View application reads the authenticated
+detail endpoint and renders allowlisted minimal fields/timestamps as text only.
+Selection/page/token generations prevent stale detail resurrection. Failure clears
+detail and permits explicit reselection. Chromium restart acceptance covers success,
+retry, malformed identity and token changes. No approval or execution controls added.
+Next: scoped read-only candidate application history projection.
+
 HTTP detail review P2: reject truncated/non-hex raw percent escapes before parsing
 or opening storage. Regression cases cover malformed names/values and mixed valid
 escapes; correctly percent-encoded literal percent IDs still round-trip after restart.
