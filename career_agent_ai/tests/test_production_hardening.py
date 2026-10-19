@@ -428,7 +428,9 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.unroute("**/v1/candidate/application/history?*")
             for payload in ({**history, "application_id": "foreign"},
                             {**history, "items": []}, {**history, "schema_version": 99}):
-                page.route("**/v1/candidate/application/history?*", lambda route, payload=payload: route.fulfill(status=200, json=payload))
+                def malformed_history(route):
+                    route.fulfill(status=200, json=payload)
+                page.route("**/v1/candidate/application/history?*", malformed_history)
                 page.locator("#load-application-history").click()
                 page.locator("#application-history-state").get_by_text("Load history again to retry.").wait_for()
                 assert page.locator("#application-history").text_content() == ""
