@@ -253,6 +253,101 @@ def test_history_http_missing_storage_and_corrupt_owned_events_fail_closed(tmp_p
     assert path.read_bytes() == baseline
 
 
+@pytest.mark.parametrize("query", ["", "event_id=", "event_id=%20padded", "event_id=padded%20",
+    "event_id=" + "a" * 201, "event_id=x&event_id=y", "event_id=x&user_id=other",
+    "application_id=x", "event_id", "event_id=%ED%A0%80", "event_id=" + "x" * 2501,
+    "event_id=%", "event_id=%2", "event_id=%GG", "event%_id=a", "event_id=a%2Fb",
+    "event_id=%00", "event_id=%F0%9F%98%80"])
+def test_schedule_http_invalid_query_precedes_storage(query):
+    assert request(app(object()), path="/v1/candidate/schedule-event", query=query)[0][0] == "400 Bad Request"
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError, TypeError])
+def test_schedule_http_auth_method_and_sanitized_backend_failure(failure):
+    route = "/v1/candidate/schedule-event"
+    assert request(app(object()), path=route, query="event_id=%", token=None)[0][0] == "401 Unauthorized"
+    (status, headers), _ = request(app(object()), path=route, method="POST")
+    assert status == "405 Method Not Allowed" and ("Allow", "GET") in headers
+    class Broken:
+        def get_schedule_event(self, event_id, *, user_id):
+            assert (event_id, user_id) == ("a", "candidate-1")
+            raise failure("private-storage-secret")
+    (status, headers), body = request(app(Broken()), path=route, query="event_id=a")
+    assert status == "500 Internal Server Error" and body == {"error": "internal_error"}
+    assert ("Cache-Control", "no-store") in headers
+
+
+@pytest.mark.parametrize("instant,offset", [("2026-10-25T00:30:00.123456+00:00", "+02:00"),
+                                           ("2026-10-25T01:30:00.123456+00:00", "+01:00")])
+@pytest.mark.parametrize("with_end", [False, True])
+def test_schedule_http_restart_owner_precision_and_openapi(tmp_path, instant, offset, with_end):
+    from datetime import datetime, timedelta
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+    path = tmp_path / "schedule.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteSchedulingRepository(database)
+    start = datetime.fromisoformat(instant)
+    identifier = "a" * 199 + "+"
+    for event_id, owner in [(identifier, "candidate-1"), ("foreign", "other")]:
+        repository.create(ScheduleEvent(event_id=event_id, candidate_id=owner, employer_name="Employer",
+            event_type=ScheduleEventType.INTERVIEW, location="Karlsruhe", start_at=start,
+            end_at=start + timedelta(hours=2) if with_end else None, timezone_name="Europe/Berlin"))
+    database.connection.execute("UPDATE scheduling_events SET provider_event_id=char(1)||event_id, application_id='private/bad'")
+    database.connection.execute("UPDATE scheduling_events SET timezone_name='private-corrupt' WHERE candidate_id='other'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    route = "/v1/candidate/schedule-event"
+    for _ in range(2):
+        with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+            (status, headers), body = request(runtime, path=route, query="event_id=" + "a" * 199 + "%2B")
+            assert status == "200 OK" and ("Cache-Control", "no-store") in headers
+            assert body == runtime.get_schedule_event(identifier, user_id="candidate-1")
+            assert body["event"]["local_start_time"] == "02:30:00.123456"
+            assert body["event"]["utc_offset"] == offset
+            assert body["event"]["start_at"] == instant
+            assert (body["event"]["end_at"] is not None) == with_end
+            foreign = request(runtime, path=route, query="event_id=foreign")
+            assert foreign == request(runtime, path=route, query="event_id=missing")
+            assert foreign[0][0] == "404 Not Found"
+    assert path.read_bytes() == baseline and "private" not in str(body)
+    contract = candidate_approval_openapi_document()["paths"][route]["get"]
+    assert contract["security"] == [{"bearerAuth": []}]
+    assert contract["parameters"][0]["name"] == "event_id"
+    schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(body) == set(schema["required"])
+    assert set(body["event"]) == set(schema["properties"]["event"]["required"])
+
+
+def test_schedule_http_missing_storage_and_corrupt_owned_event(tmp_path):
+    from datetime import datetime, timezone
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+    path = tmp_path / "missing.sqlite"
+    route = "/v1/candidate/schedule-event"
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        assert request(runtime, path=route, query="event_id=a")[1] == {"error": "internal_error"}
+    assert not path.exists()
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database).create(ScheduleEvent(event_id="a", candidate_id="candidate-1",
+        employer_name="Employer", event_type=ScheduleEventType.INTERVIEW, location="Location",
+        start_at=datetime.now(timezone.utc), timezone_name="UTC"))
+    database.connection.execute("UPDATE scheduling_events SET start_epoch_us=0")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        (status, headers), body = request(runtime, path=route, query="event_id=a")
+        assert status == "500 Internal Server Error" and body == {"error": "internal_error"}
+        assert ("Cache-Control", "no-store") in headers
+    assert path.read_bytes() == baseline
+
+
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
     statuses = []
     environ = {
