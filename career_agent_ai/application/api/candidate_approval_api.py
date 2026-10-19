@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import parse_qsl
 from hashlib import sha256, sha512
 from decimal import Decimal, InvalidOperation
@@ -150,7 +151,7 @@ class CandidateApprovalWSGIApp:
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
                 try:
                     query = str(environ.get("QUERY_STRING", ""))
-                    if len(query) > 2500:
+                    if len(query) > 2500 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("query too long")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1, errors="strict")
                     if len(pairs) != 1 or pairs[0][0] != "application_id":
