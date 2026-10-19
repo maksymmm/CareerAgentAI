@@ -410,10 +410,22 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert detail["status"] == "applied" and detail["state_version"] == 2
             assert set(detail) == {"application_id", "job_id", "job_title", "company_id",
                                    "status", "state_version", "created_at", "updated_at"}
-            page.route("**/v1/candidate/application?*", lambda route: route.fulfill(status=503, json={"error": "internal_error"}))
+            def expanded_detail(route):
+                payload = route.fetch().json()
+                payload["private_top_level"] = "private-top-secret"
+                payload["application"]["private_metadata"] = "private-nested-secret"
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/application?*", expanded_detail)
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
+            assert "private-top-secret" not in page.locator("body").text_content()
+            assert "private-nested-secret" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/application?*")
+            page.route("**/v1/candidate/application?*", lambda route: route.fulfill(status=503, json={"error": "internal_error", "message": "private-error-secret"}))
             page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Select the application again to retry.").wait_for()
             assert page.locator("#application-detail").text_content() == ""
+            assert "private-error-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/application?*")
             page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
