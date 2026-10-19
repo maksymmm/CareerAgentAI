@@ -421,8 +421,22 @@ _HTML = """<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       try {
-        const loadedPrompt = await call('/v1/candidate/runs/' + encodeURIComponent(promptRunId) + '/approval');
+        const loadedPrompt = await call('/v1/candidate/runs/' + encodeURIComponent(promptRunId) + '/approval', {}, false);
         if (promptGeneration !== approvalPromptGeneration || promptRunId !== byId('run-id').value) return;
+        const fields = ['schema_version', 'run_id', 'state_version', 'action_kind', 'title',
+          'details', 'action_fingerprint', 'allowed_decisions'];
+        if (!loadedPrompt || typeof loadedPrompt !== 'object' || Array.isArray(loadedPrompt) ||
+            Object.keys(loadedPrompt).length !== fields.length || !fields.every(key => Object.hasOwn(loadedPrompt, key)) ||
+            loadedPrompt.schema_version !== 1 || loadedPrompt.run_id !== promptRunId ||
+            !Number.isSafeInteger(loadedPrompt.state_version) || loadedPrompt.state_version < 0 ||
+            !['approve_application', 'approve_message', 'approve_interview'].includes(loadedPrompt.action_kind) ||
+            typeof loadedPrompt.title !== 'string' || !loadedPrompt.title.trim() ||
+            !loadedPrompt.details || typeof loadedPrompt.details !== 'object' || Array.isArray(loadedPrompt.details) ||
+            typeof loadedPrompt.action_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(loadedPrompt.action_fingerprint) ||
+            !Array.isArray(loadedPrompt.allowed_decisions) || loadedPrompt.allowed_decisions.length !== 2 ||
+            !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {
+          throw new Error('Invalid approval prompt. Load it again.');
+        }
         approvalPrompt = loadedPrompt;
         byId('action-title').textContent = loadedPrompt.title;
         byId('action-details').textContent = JSON.stringify(loadedPrompt.details, null, 2);
