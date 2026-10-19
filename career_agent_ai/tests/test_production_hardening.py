@@ -432,18 +432,18 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 window.fetch = async (...args) => {
                     const response = await original(...args);
                     if (String(args[0]).includes('/v1/candidate/application?')) {
-                        window.detailWaiting = true;
+                        document.body.dataset.detailWaiting = 'yes';
                         await new Promise(resolve => { window.releaseDetail = resolve; });
-                        window.detailReleased = true;
+                        document.body.dataset.detailReleased = 'yes';
                     }
                     return response;
                 };
             }""")
             page.locator("#owned-applications button").click()
-            page.wait_for_function("window.detailWaiting === true")
+            page.locator('body[data-detail-waiting="yes"]').wait_for()
             page.locator("#token").fill("changed")
             page.evaluate("window.releaseDetail()")
-            page.wait_for_function("window.detailReleased === true")
+            page.locator('body[data-detail-released="yes"]').wait_for()
             page.locator("#token").fill("sandbox-token")
             assert page.locator("#application-detail").text_content() == ""
             assert page.locator("#application-detail-state").text_content() == ""
