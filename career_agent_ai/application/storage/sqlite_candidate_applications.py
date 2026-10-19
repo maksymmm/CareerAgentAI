@@ -2,7 +2,9 @@
 
 from datetime import datetime
 from typing import Any
-from career_agent_ai.application.jobs.job_application import application_status_version_is_reachable
+from career_agent_ai.application.jobs.job_application import (
+    ApplicationTimelineEvent, JobApplication, application_status_version_is_reachable,
+)
 
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
@@ -31,6 +33,60 @@ class SQLiteCandidateApplications:
             return {"schema_version": 1, "application": self._snapshot(row)}
         finally:
             database.close()
+
+    def get_history(self, application_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read bounded owned lifecycle transitions, never notes, metadata or operation IDs."""
+        owner = self._identifier(user_id)
+        identifier = self._identifier(application_id)
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            # Pin ownership, aggregate version and children to one SQLite snapshot.
+            database.connection.execute("BEGIN")
+            row = database.connection.execute(
+                "SELECT application_id, job_id, company_id, job_title, status, "
+                "version, created_at, updated_at, serialization_version "
+                "FROM job_applications WHERE user_id = ? AND application_id = ?",
+                (owner, identifier),
+            ).fetchone()
+            if row is None:
+                raise KeyError("Application not found.")
+            snapshot = self._snapshot(row)
+            rows = database.connection.execute(
+                "SELECT sequence, from_status, to_status, occurred_at, serialization_version "
+                "FROM application_timeline WHERE application_id = ? ORDER BY sequence LIMIT ?",
+                (identifier, len(JobApplicationStatus) + 1),
+            ).fetchall()
+            items = self._history_items(snapshot, rows, owner)
+            return {"schema_version": 1, "application_id": identifier,
+                    "state_version": snapshot["state_version"], "items": items}
+        finally:
+            database.close()
+
+    @staticmethod
+    def _history_items(snapshot: dict[str, Any], rows: list[tuple[Any, ...]],
+                       owner: str) -> list[dict[str, Any]]:
+        try:
+            if len(rows) != snapshot["state_version"] - 1:
+                raise ValueError("History length mismatch")
+            events = []
+            for sequence, row in enumerate(rows):
+                if type(row[0]) is not int or row[0] != sequence or row[4] != 1:
+                    raise ValueError("History sequence or serialization mismatch")
+                events.append(ApplicationTimelineEvent(
+                    event_id=str(sequence), from_status=JobApplicationStatus(row[1]),
+                    to_status=JobApplicationStatus(row[2]),
+                    occurred_at=datetime.fromisoformat(row[3])))
+            # Reuse domain continuity/chronology/version invariants without private children.
+            JobApplication(application_id=snapshot["application_id"], user_id=owner,
+                job_id=snapshot["job_id"], status=JobApplicationStatus(snapshot["status"]),
+                version=snapshot["state_version"], timeline=tuple(events),
+                created_at=datetime.fromisoformat(snapshot["created_at"]),
+                updated_at=datetime.fromisoformat(snapshot["updated_at"]))
+            return [{"sequence": index, "from_status": event.from_status.value,
+                     "to_status": event.to_status.value, "occurred_at": event.occurred_at.isoformat()}
+                    for index, event in enumerate(events)]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Persisted candidate application history is malformed.") from exc
 
     def list_page(self, *, user_id: str, limit: int = 25,
                   after: str | None = None) -> dict[str, Any]:

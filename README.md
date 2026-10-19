@@ -241,6 +241,14 @@ The included fake calendar adapter is deterministic, in-memory, and performs no 
 
 ## Application Tracker
 
+`RuntimeCandidateApp.get_application_history(application_id, user_id=...)` returns
+only ordered lifecycle transitions (sequence/from/to/time), the application ID and
+state version. Ownership is checked before reading children, and the read-only
+transaction pins aggregate and events to the same snapshot. Domain lifecycle bounds
+cap the query; malformed sequence/continuity/chronology/version data fails closed.
+Notes, metadata, event/operation IDs and claims are never loaded or exposed. HTTP/UI
+history remains follow-up work; trusted callers supply authenticated identity.
+
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The
 trusted caller supplies authenticated identity; foreign and absent IDs raise the
