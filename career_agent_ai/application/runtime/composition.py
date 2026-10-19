@@ -216,6 +216,10 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
 
+    def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read authenticated owner's event without writable storage or calendar I/O."""
+        return SQLiteCandidateSchedule(self._database_path).get_snapshot(event_id, user_id=user_id)
+
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's history through request-local read-only storage."""
         return SQLiteCandidateApplications(self._database_path).get_history(

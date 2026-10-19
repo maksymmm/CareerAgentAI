@@ -1,5 +1,16 @@
 # Autonomous Implementation Plan
 
+HTTP review P2: historical IANA offsets now serialize as ISO-compatible ±HH:MM[:SS]
+and OpenAPI accepts second precision. Restart HTTP regressions cover positive Amsterdam
+and negative Monrovia offsets, optional ends, schema patterns and exact UTC reconstruction.
+
+Scheduling HTTP delivered: authenticated GET /v1/candidate/schedule-event?event_id=...
+reads only the bearer's owned event through request-local read-only storage. Strict
+single-parameter/domain identity validation precedes storage; missing/foreign 404,
+sanitized failures, no-store and OpenAPI are covered. Restart/DST/microsecond/private
+isolation, malformed query, missing-store and corrupt-owned-event regressions added.
+Next: bounded owned event discovery and read-only candidate UI, without calendar actions.
+
 Integration P2: HumanScheduleView preserves nonzero microseconds in local start/end
 time strings, matching exact persisted UTC timestamps. Whole-second strings remain
 unchanged. Restart/DST-fold regressions now cover both precision levels and optional ends.
