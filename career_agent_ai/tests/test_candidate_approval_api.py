@@ -154,7 +154,9 @@ def test_application_query_bounds_remain_fail_closed(query):
 @pytest.mark.parametrize("query", ["", "application_id=", "application_id=%20padded",
     "application_id=" + "a" * 201, "application_id=x&application_id=y",
     "application_id=x&user_id=foreign", "user_id=x", "application_id",
-    "application_id=%ED%A0%80", "application_id=" + "x" * 2501])
+    "application_id=%ED%A0%80", "application_id=" + "x" * 2501,
+    "application_id=%", "application_id=%2", "application_id=%GG",
+    "application_id=valid%20prefix%", "application%_id=a"])
 def test_invalid_application_detail_query_precedes_storage(query):
     assert request(app(object()), path="/v1/candidate/application", query=query)[0][0] == "400 Bad Request"
 
@@ -171,7 +173,7 @@ def test_application_detail_auth_method_and_sanitized_backend_errors():
     assert request(app(Broken()), path=route, query="application_id=a")[1] == {"error": "internal_error"}
 
 
-@pytest.mark.parametrize("identifier", ["😀" * 200, "\ufeff/a? +й\ufeff"])
+@pytest.mark.parametrize("identifier", ["😀" * 200, "\ufeff/a? +й\ufeff", "%GG%2%"])
 def test_application_http_detail_is_owner_only_read_only_after_restart(tmp_path, identifier):
     from urllib.parse import urlencode
     from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
