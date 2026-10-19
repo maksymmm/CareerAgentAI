@@ -1,11 +1,17 @@
 # Autonomous Implementation Plan
 
+HTTP history delivered: GET /v1/candidate/application/history?application_id=...
+reuses detail validation/authentication and reads owner-only bounded lifecycle
+transitions through request-local read-only storage. No private children or action
+controls exposed. OpenAPI/no-store, restart/Unicode/foreign isolation, invalid-query,
+auth/method/backend-failure regressions cover the boundary. Next: read-only history UI.
+
 Candidate history groundwork: read-only owner-only runtime history exposes bounded
 sequence/from/to/time transitions and state version, not notes/metadata/operation IDs.
 One transaction pins owner/snapshot/events; domain validation checks continuity,
 chronology, sequence, serialization and version before returning anything. Restart,
 private-corruption isolation, malformed-owned-history and no-create tests cover it.
-Next: authenticated HTTP history endpoint, then read-only candidate history UI.
+HTTP endpoint delivered above; next: read-only candidate history UI.
 
 Detail UI review follow-up: all suppressed-raw request failures, including JSON
 parse/network errors, are replaced with a generic error before reaching the shared

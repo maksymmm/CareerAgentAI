@@ -157,12 +157,13 @@ def test_application_query_bounds_remain_fail_closed(query):
     "application_id=%ED%A0%80", "application_id=" + "x" * 2501,
     "application_id=%", "application_id=%2", "application_id=%GG",
     "application_id=valid%20prefix%", "application%_id=a"])
-def test_invalid_application_detail_query_precedes_storage(query):
-    assert request(app(object()), path="/v1/candidate/application", query=query)[0][0] == "400 Bad Request"
+@pytest.mark.parametrize("route", ["/v1/candidate/application", "/v1/candidate/application/history"])
+def test_invalid_application_detail_query_precedes_storage(query, route):
+    assert request(app(object()), path=route, query=query)[0][0] == "400 Bad Request"
 
 
-def test_application_detail_auth_method_and_sanitized_backend_errors():
-    route = "/v1/candidate/application"
+@pytest.mark.parametrize("route", ["/v1/candidate/application", "/v1/candidate/application/history"])
+def test_application_detail_auth_method_and_sanitized_backend_errors(route):
     assert request(app(object()), path=route, token=None)[0][0] == "401 Unauthorized"
     (status, headers), _ = request(app(object()), path=route, method="POST")
     assert status == "405 Method Not Allowed" and ("Allow", "GET") in headers
@@ -170,11 +171,13 @@ def test_application_detail_auth_method_and_sanitized_backend_errors():
         def get_application(self, application_id, *, user_id):
             assert (application_id, user_id) == ("a", "candidate-1")
             raise RuntimeError("private storage information")
+        get_application_history = get_application
     assert request(app(Broken()), path=route, query="application_id=a")[1] == {"error": "internal_error"}
 
 
 @pytest.mark.parametrize("identifier", ["😀" * 200, "\ufeff/a? +й\ufeff", "%GG%2%"])
-def test_application_http_detail_is_owner_only_read_only_after_restart(tmp_path, identifier):
+@pytest.mark.parametrize("history", [False, True])
+def test_application_http_detail_is_owner_only_read_only_after_restart(tmp_path, identifier, history):
     from urllib.parse import urlencode
     from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
     from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
@@ -192,13 +195,19 @@ def test_application_http_detail_is_owner_only_read_only_after_restart(tmp_path,
     database.connection.commit()
     database.close()
     baseline = path.read_bytes()
-    route = "/v1/candidate/application"
+    route = "/v1/candidate/application" + ("/history" if history else "")
     for _ in range(2):
         runtime = RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1")
         (status, headers), body = request(runtime, path=route, query=urlencode({"application_id": identifier}))
         assert status == "200 OK" and ("Cache-Control", "no-store") in headers
-        assert body == runtime.get_application(identifier, user_id="candidate-1")
-        assert body["application"]["status"] == "applied" and body["application"]["state_version"] == 2
+        projection = runtime.get_application_history if history else runtime.get_application
+        assert body == projection(identifier, user_id="candidate-1")
+        if history:
+            assert body["state_version"] == 2 and len(body["items"]) == 1
+            assert body["items"][0]["from_status"] == "saved"
+            assert body["items"][0]["to_status"] == "applied"
+        else:
+            assert body["application"]["status"] == "applied" and body["application"]["state_version"] == 2
         foreign = request(runtime, path=route, query="application_id=foreign")
         assert foreign == request(runtime, path=route, query="application_id=missing")
         assert foreign[0][0] == "404 Not Found"
@@ -207,7 +216,41 @@ def test_application_http_detail_is_owner_only_read_only_after_restart(tmp_path,
     contract = candidate_approval_openapi_document()["paths"][route]["get"]
     assert contract["security"] == [{"bearerAuth": []}]
     schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
-    assert set(body["application"]) == set(schema["properties"]["application"]["required"])
+    if history:
+        assert set(body) == set(schema["required"])
+        assert set(body["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
+    else:
+        assert set(body["application"]) == set(schema["properties"]["application"]["required"])
+
+
+def test_history_http_missing_storage_and_corrupt_owned_events_fail_closed(tmp_path):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_job_application_repository import SQLiteJobApplicationRepository
+    from career_agent_ai.application.jobs.job_application import JobApplication
+    from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+    path = tmp_path / "history.sqlite"
+    route = "/v1/candidate/application/history"
+    runtime = RuntimeCandidateApp(database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None)
+    assert request(runtime, path=route, token=None, query="application_id=a")[0][0] == "401 Unauthorized"
+    assert not path.exists()
+    assert request(runtime, path=route, query="application_id=a")[1] == {"error": "internal_error"}
+    assert not path.exists()
+    runtime.close()
+    database = SQLiteDatabase(str(path))
+    SQLiteJobApplicationRepository(database).add(JobApplication(application_id="a",
+        user_id="candidate-1", job_id="job", status=JobApplicationStatus.SAVED
+    ).transition(JobApplicationStatus.APPLIED, note="private"))
+    database.connection.execute("UPDATE application_timeline SET occurred_at = 'private malformed timestamp'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        (status, headers), body = request(runtime, path=route, query="application_id=a")
+        assert status == "500 Internal Server Error" and body == {"error": "internal_error"}
+        assert ("Cache-Control", "no-store") in headers
+    assert path.read_bytes() == baseline
 
 
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
