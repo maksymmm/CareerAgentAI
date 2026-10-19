@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Schedule discovery groundwork delivered: RuntimeCandidateApp.list_schedule_events
+returns bounded ID-keyset pages using owner-filtered read-only SQL and the existing
+exact-time detail projection. Writable scheduling startup backfills owner/ID index;
+reads never migrate/create storage or load private fields/claims. Restart, pagination,
+isolation, input limits, corrupt owned data, missing storage and query-plan regressions.
+Next: authenticated HTTP collection, then read-only candidate event discovery/detail UI.
+
 HTTP review P2: historical IANA offsets now serialize as ISO-compatible ±HH:MM[:SS]
 and OpenAPI accepts second precision. Restart HTTP regressions cover positive Amsterdam
 and negative Monrovia offsets, optional ends, schema patterns and exact UTC reconstruction.
