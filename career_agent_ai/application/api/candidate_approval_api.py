@@ -46,6 +46,7 @@ class CandidateApprovalLoop(Protocol):
 
     def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -109,7 +110,8 @@ class CandidateApprovalWSGIApp:
         parts = path.strip("/").split("/")
         is_start = parts == ["v1", "candidate", "runs"]
         is_applications = parts == ["v1", "candidate", "applications"]
-        is_application = parts == ["v1", "candidate", "application"]
+        is_history = parts == ["v1", "candidate", "application", "history"]
+        is_application = parts == ["v1", "candidate", "application"] or is_history
         is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications
         is_existing_run = (
             len(parts) == 5
@@ -162,7 +164,8 @@ class CandidateApprovalWSGIApp:
                     identifier.encode("utf-8", errors="strict")
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
-                return self._respond(start_response, "200 OK", self._loop.get_application(identifier, user_id=user_id))
+                projection = self._loop.get_application_history if is_history else self._loop.get_application
+                return self._respond(start_response, "200 OK", projection(identifier, user_id=user_id))
             if is_list:
                 if method != "GET":
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
@@ -873,4 +876,22 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "404": {"description": "Missing or foreign application", "content": content(error_schema)},
             "405": {"description": "Only GET is allowed", "headers": {"Allow": {"schema": {"const": "GET"}}}, "content": content(error_schema)},
         }}}
+    detail = document["paths"]["/v1/candidate/application"]["get"]
+    statuses = {"type": "string", "enum": ["saved", "applied", "interview", "offer", "rejected", "withdrawn"]}
+    document["paths"]["/v1/candidate/application/history"] = {"get": {
+        **detail, "operationId": "getCandidateApplicationHistory",
+        "responses": {**detail["responses"], "200": {
+            "description": "Bounded read-only owned lifecycle history; no notes or private metadata",
+            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+            "content": content({"type": "object", "additionalProperties": False,
+                "required": ["schema_version", "application_id", "state_version", "items"],
+                "properties": {"schema_version": {"const": 1},
+                    "application_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "state_version": {"type": "integer", "minimum": 1},
+                    "items": {"type": "array", "maxItems": 4, "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["sequence", "from_status", "to_status", "occurred_at"],
+                        "properties": {"sequence": {"type": "integer", "minimum": 0},
+                            "from_status": statuses, "to_status": statuses,
+                            "occurred_at": {"type": "string", "format": "date-time"}}}}}})}}}}
     return document
