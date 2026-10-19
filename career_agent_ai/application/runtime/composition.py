@@ -198,6 +198,14 @@ class RuntimeCandidateApp:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         return SQLiteCandidateSchedule(self._database_path).get_snapshot(event_id, user_id=user_id)
 
+    def list_schedule_events(self, *, user_id: str, limit: int = 25,
+                             after: str | None = None) -> dict[str, Any]:
+        """Read trusted caller's owned event pages without writes or calendar actions."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return SQLiteCandidateSchedule(self._database_path).list_page(
+            user_id=user_id, limit=limit, after=after)
+
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
         if self._closed:
