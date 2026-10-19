@@ -108,7 +108,7 @@ _HTML = """<!doctype html>
       const generation = applicationDetailGeneration;
       byId('application-detail-state').textContent = 'Loading application…';
       try {
-        const detail = await call('/v1/candidate/application?application_id=' + encodeURIComponent(applicationId));
+        const detail = await call('/v1/candidate/application?application_id=' + encodeURIComponent(applicationId), {}, false);
         if (generation !== applicationDetailGeneration) return;
         const item = detail && detail.application;
         if (detail.schema_version !== 1 || !item || item.application_id !== applicationId ||
@@ -262,7 +262,7 @@ _HTML = """<!doctype html>
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
     }
-    async function call(path, options = {}) {
+    async function call(path, options = {}, renderRaw = true) {
       clearOverview();
       const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
@@ -277,9 +277,9 @@ _HTML = """<!doctype html>
         if (contextGeneration !== inputContextGeneration) {
           throw new Error('Inputs changed; reload the current state.');
         }
-        if (resultRequest === latestResultRequest) show({status: response.status, payload});
+        if (renderRaw && resultRequest === latestResultRequest) show({status: response.status, payload});
         if (!response.ok) {
-          const error = new Error(payload.message || payload.error || 'Request failed.');
+          const error = new Error(renderRaw ? (payload.message || payload.error || 'Request failed.') : 'Application detail request failed.');
           error.status = response.status;
           error.code = payload.error;
           throw error;
