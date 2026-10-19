@@ -1,5 +1,9 @@
 # Autonomous Implementation Plan
 
+Prompt-binding CI follow-up: legacy browser fake now emits schema_version,
+action_kind and allowed_decisions so the existing successful approval scenario
+exercises the full contract alongside malformed-prompt rejection.
+
 Integration review P2: loaded approval prompts must match the selected run and the
 complete versioned wire schema before storing/rendering or enabling decisions.
 Malformed/misrouted prompts never enter the raw result pane. Chromium exercises
