@@ -229,6 +229,14 @@ credential configuration is included.
 
 ## Scheduling and Interview Coordination
 
+`RuntimeCandidateApp.list_schedule_events(user_id=..., limit=25, after=None)` reads
+bounded owner-only event snapshots in stable event-ID order (maximum 100), using
+the same minimal exact-time projection as detail. `next_after` is the last returned
+ID when more rows exist, not an ownership credential. Reads never initialize schema,
+load provider/application IDs or action claims, or execute calendar actions. Writable
+repository startup installs/backfills the owner/ID keyset index. HTTP collection and
+candidate discovery UI remain follow-up work.
+
 `RuntimeCandidateApp.get_schedule_event(event_id, user_id=...)` returns a versioned
 read-only owner-only event snapshot with employer/location, lifecycle status, UTC
 instants, local dates/times and explicit start/end UTC offsets. Reads never create

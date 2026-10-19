@@ -449,6 +449,10 @@ class SQLiteSchedulingRepository:
                ON scheduling_events(candidate_id, start_epoch_us, event_id)"""
         )
         connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_scheduling_candidate_event
+               ON scheduling_events(candidate_id, event_id)"""
+        )
+        connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_scheduling_candidate_status
                ON scheduling_events(candidate_id, status)"""
         )
