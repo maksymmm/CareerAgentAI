@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Scheduling visibility groundwork: RuntimeCandidateApp.get_schedule_event reads
+one owned event using SQL ownership filtering and existing read-only storage.
+Reuses domain scalar validation and HumanScheduleView for exact UTC/local dates,
+times and both offsets across DST. Provider/application IDs and action claims are
+not loaded. Restart, foreign-corruption isolation, missing-storage, malformed-owned
+fields/indexes, input and closed-runtime tests cover it. Next: authenticated HTTP
+event contract, then candidate UI discovery/detail without calendar actions.
+
 Prompt-binding CI follow-up: legacy browser fake now emits schema_version,
 action_kind and allowed_decisions so the existing successful approval scenario
 exercises the full contract alongside malformed-prompt rejection.

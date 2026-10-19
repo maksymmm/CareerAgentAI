@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 
@@ -190,6 +191,12 @@ class RuntimeCandidateApp:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         return SQLiteCandidateApplications(self._database_path).get_history(
             application_id, user_id=user_id)
+
+    def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read trusted caller's event details without calendar I/O or writes."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return SQLiteCandidateSchedule(self._database_path).get_snapshot(event_id, user_id=user_id)
 
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
