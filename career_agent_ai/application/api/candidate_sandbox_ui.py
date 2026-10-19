@@ -158,11 +158,14 @@ _HTML = """<!doctype html>
         const history = await call('/v1/candidate/application/history?application_id=' + encodeURIComponent(applicationId), {}, false);
         if (generation !== applicationHistoryGeneration) return;
         const statuses = ['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'];
+        const transitions = {saved: ['applied', 'withdrawn'], applied: ['interview', 'rejected', 'withdrawn'],
+          interview: ['offer', 'rejected', 'withdrawn'], offer: ['withdrawn'], rejected: [], withdrawn: []};
         if (!history || history.schema_version !== 1 || history.application_id !== applicationId ||
             !Number.isSafeInteger(history.state_version) || history.state_version < 1 ||
             !Array.isArray(history.items) || history.items.length > 4 ||
             history.items.length !== history.state_version - 1 || !history.items.every((item, index) =>
               item && item.sequence === index && statuses.includes(item.from_status) && statuses.includes(item.to_status) &&
+              transitions[item.from_status].includes(item.to_status) &&
               typeof item.occurred_at === 'string' && item.occurred_at.length <= 64 && Number.isFinite(Date.parse(item.occurred_at)) &&
               (index === 0 || (item.from_status === history.items[index - 1].to_status &&
                 Date.parse(item.occurred_at) >= Date.parse(history.items[index - 1].occurred_at))))) {

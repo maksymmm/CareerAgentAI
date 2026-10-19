@@ -427,7 +427,10 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert "private-history-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/application/history?*")
             for payload in ({**history, "application_id": "foreign"},
-                            {**history, "items": []}, {**history, "schema_version": 99}):
+                            {**history, "items": []}, {**history, "schema_version": 99},
+                            *({**history, "items": [{**history["items"][0], "from_status": source, "to_status": target}]}
+                              for source, target in [("saved", "offer"), ("applied", "applied"),
+                                                     ("rejected", "interview"), ("withdrawn", "saved")])):
                 def malformed_history(route):
                     route.fulfill(status=200, json=payload)
                 page.route("**/v1/candidate/application/history?*", malformed_history)
