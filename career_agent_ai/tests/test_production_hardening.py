@@ -427,6 +427,14 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#application-detail").text_content() == ""
             assert "private-error-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/application?*")
+            page.route("**/v1/candidate/application?*", lambda route: route.fulfill(
+                status=200, content_type="application/json", body="private-malformed-json-secret"))
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Select the application again to retry.").wait_for()
+            page.locator("#result").get_by_text("Application detail request failed.", exact=False).wait_for()
+            assert "private-malformed-json-secret" not in page.locator("body").text_content()
+            assert page.locator("#application-detail").text_content() == ""
+            page.unroute("**/v1/candidate/application?*")
             page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
             def malformed_detail(route):
