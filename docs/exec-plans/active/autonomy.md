@@ -1,5 +1,9 @@
 # Autonomous Implementation Plan
 
+Integration P2: HumanScheduleView preserves nonzero microseconds in local start/end
+time strings, matching exact persisted UTC timestamps. Whole-second strings remain
+unchanged. Restart/DST-fold regressions now cover both precision levels and optional ends.
+
 Scheduling visibility groundwork: RuntimeCandidateApp.get_schedule_event reads
 one owned event using SQL ownership filtering and existing read-only storage.
 Reuses domain scalar validation and HumanScheduleView for exact UTC/local dates,

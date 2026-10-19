@@ -264,11 +264,11 @@ class HumanScheduleView:
             event_type=event.event_type,
             location=event.location,
             local_date=local_start.date().isoformat(),
-            local_start_time=local_start.time().isoformat(timespec="seconds"),
+            local_start_time=local_start.time().isoformat(),
             local_end_time=(
                 None
                 if local_end is None
-                else local_end.time().isoformat(timespec="seconds")
+                else local_end.time().isoformat()
             ),
             local_end_date=None if local_end is None else local_end.date().isoformat(),
             timezone_name=event.timezone_name,

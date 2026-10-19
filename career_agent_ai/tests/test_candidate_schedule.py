@@ -13,11 +13,12 @@ from career_agent_ai.application.storage.sqlite_scheduling_repository import SQL
 @pytest.mark.parametrize("instant,offset", [("2026-10-25T00:30:00+00:00", "+02:00"),
                                            ("2026-10-25T01:30:00+00:00", "+01:00")])
 @pytest.mark.parametrize("with_end", [False, True])
-def test_owned_schedule_snapshot_after_restart_is_private_and_read_only(tmp_path, instant, offset, with_end):
+@pytest.mark.parametrize("microseconds", [0, 123456])
+def test_owned_schedule_snapshot_after_restart_is_private_and_read_only(tmp_path, instant, offset, with_end, microseconds):
     path = tmp_path / "events.sqlite"
     database = SQLiteDatabase(str(path))
     repository = SQLiteSchedulingRepository(database)
-    start = datetime.fromisoformat(instant)
+    start = datetime.fromisoformat(instant).replace(microsecond=microseconds)
     for identifier, owner in [("owned", "candidate"), ("foreign", "other")]:
         repository.create(ScheduleEvent(event_id=identifier, candidate_id=owner,
             employer_name="Employer", event_type=ScheduleEventType.INTERVIEW,
@@ -33,7 +34,12 @@ def test_owned_schedule_snapshot_after_restart_is_private_and_read_only(tmp_path
             result = runtime.get_schedule_event("owned", user_id="candidate")
             event = result["event"]
             assert result["schema_version"] == 1 and event["state_version"] == 1
-            assert event["local_date"] == "2026-10-25" and event["local_start_time"] == "02:30:00"
+            fraction = ".123456" if microseconds else ""
+            assert event["local_date"] == "2026-10-25" and event["local_start_time"] == "02:30:00" + fraction
+            if with_end:
+                assert event["local_end_time"].endswith("00" + fraction)
+                assert datetime.fromisoformat(event["end_at"]).microsecond == microseconds
+            assert datetime.fromisoformat(event["start_at"]).microsecond == microseconds
             assert event["utc_offset"] == offset and event["timezone_name"] == "Europe/Berlin"
             assert (event["end_at"] is not None) == with_end
             assert "private" not in str(result) and "candidate_id" not in event
