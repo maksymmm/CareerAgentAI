@@ -14,6 +14,24 @@ class SQLiteCandidateApplications:
     def __init__(self, database_path: str) -> None:
         self._database_path = database_path
 
+    def get_snapshot(self, application_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read one owned snapshot; foreign and absent identities are indistinguishable."""
+        owner = self._identifier(user_id)
+        identifier = self._identifier(application_id)
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            row = database.connection.execute(
+                "SELECT application_id, job_id, company_id, job_title, status, "
+                "version, created_at, updated_at, serialization_version "
+                "FROM job_applications WHERE user_id = ? AND application_id = ?",
+                (owner, identifier),
+            ).fetchone()
+            if row is None:
+                raise KeyError("Application not found.")
+            return {"schema_version": 1, "application": self._snapshot(row)}
+        finally:
+            database.close()
+
     def list_page(self, *, user_id: str, limit: int = 25,
                   after: str | None = None) -> dict[str, Any]:
         """Return ID-ordered snapshots without children, claims, writes or execution."""
