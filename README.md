@@ -250,7 +250,10 @@ Notes, metadata, event/operation IDs and claims are never loaded or exposed.
 Authenticated `GET /v1/candidate/application/history?application_id=...` exposes this
 history with the detail endpoint's strict query, bearer ownership, identical
 foreign/missing 404, sanitized errors, no-store and OpenAPI contract. Reads cannot
-execute work or create storage. Candidate history UI remains follow-up work.
+execute work or create storage. After selecting an application, Load application
+history displays allowlisted transitions/version as text only. Empty history and
+explicit retry are supported; detail/page/token changes invalidate pending history.
+Raw history responses and backend error text never enter the result pane.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

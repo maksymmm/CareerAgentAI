@@ -410,6 +410,58 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert detail["status"] == "applied" and detail["state_version"] == 2
             assert set(detail) == {"application_id", "job_id", "job_title", "company_id",
                                    "status", "state_version", "created_at", "updated_at"}
+            page.locator("#load-application-history").click()
+            page.locator("#application-history-state").get_by_text("Read-only application history.").wait_for()
+            history = json.loads(page.locator("#application-history").text_content())
+            assert history["application_id"] == detail["application_id"] and history["state_version"] == 2
+            assert len(history["items"]) == 1 and history["items"][0]["to_status"] == "applied"
+            assert set(history["items"][0]) == {"sequence", "from_status", "to_status", "occurred_at"}
+            def expanded_history(route):
+                payload = route.fetch().json()
+                payload["private"] = "private-history-secret"
+                payload["items"][0]["note"] = "private-history-secret"
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/application/history?*", expanded_history)
+            page.locator("#load-application-history").click()
+            page.locator("#application-history-state").get_by_text("Read-only application history.").wait_for()
+            assert "private-history-secret" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/application/history?*")
+            for payload in ({**history, "application_id": "foreign"},
+                            {**history, "items": []}, {**history, "schema_version": 99}):
+                def malformed_history(route):
+                    route.fulfill(status=200, json=payload)
+                page.route("**/v1/candidate/application/history?*", malformed_history)
+                page.locator("#load-application-history").click()
+                page.locator("#application-history-state").get_by_text("Load history again to retry.").wait_for()
+                assert page.locator("#application-history").text_content() == ""
+                page.unroute("**/v1/candidate/application/history?*")
+            page.route("**/v1/candidate/application/history?*", lambda route: route.fulfill(status=200, content_type="application/json", body="private-history-json-secret"))
+            page.locator("#load-application-history").click()
+            page.locator("#application-history-state").get_by_text("Load history again to retry.").wait_for()
+            assert "private-history-json-secret" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/application/history?*")
+            page.locator("#load-application-history").click()
+            page.locator("#application-history-state").get_by_text("Read-only application history.").wait_for()
+            page.evaluate("""() => {
+                window.originalHistoryFetch = window.fetch;
+                window.fetch = async (...args) => {
+                    const response = await window.originalHistoryFetch(...args);
+                    if (String(args[0]).includes('/application/history?')) {
+                        document.body.dataset.historyWaiting = 'yes';
+                        await new Promise(resolve => { window.releaseHistory = resolve; });
+                        document.body.dataset.historyReleased = 'yes';
+                    }
+                    return response;
+                };
+            }""")
+            page.locator("#load-application-history").click()
+            page.locator('body[data-history-waiting="yes"]').wait_for()
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
+            page.evaluate("window.releaseHistory(); window.fetch = window.originalHistoryFetch")
+            page.locator('body[data-history-released="yes"]').wait_for()
+            assert page.locator("#application-history").text_content() == ""
+            assert page.locator("#application-history-state").text_content() == ""
             def expanded_detail(route):
                 payload = route.fetch().json()
                 payload["private_top_level"] = "private-top-secret"
@@ -467,6 +519,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#token").fill("sandbox-token")
             assert page.locator("#application-detail").text_content() == ""
             assert page.locator("#application-detail-state").text_content() == ""
+            assert page.locator("#application-history").text_content() == ""
+            assert page.locator("#load-application-history").is_disabled()
             from urllib.parse import parse_qs, urlsplit
             opaque_cursor = "\ufeff" + "😀" * 198 + "\ufeff"
             seen_pages = []

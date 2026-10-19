@@ -75,6 +75,9 @@ _HTML = """<!doctype html>
     <h3>Application detail</h3>
     <p id="application-detail-state" role="status"></p>
     <pre id="application-detail"></pre>
+    <button id="load-application-history" type="button" disabled>Load application history</button>
+    <p id="application-history-state" role="status"></p>
+    <pre id="application-history"></pre>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
   <h2>Result</h2>
@@ -98,7 +101,17 @@ _HTML = """<!doctype html>
     let applicationsGeneration = 0;
     let nextApplicationCursor = null;
     let applicationDetailGeneration = 0;
+    let selectedApplicationId = null;
+    let applicationHistoryGeneration = 0;
+    function clearApplicationHistory() {
+      applicationHistoryGeneration += 1;
+      byId('application-history').textContent = '';
+      byId('application-history-state').textContent = '';
+    }
     function clearApplicationDetail() {
+      clearApplicationHistory();
+      selectedApplicationId = null;
+      byId('load-application-history').disabled = true;
       applicationDetailGeneration += 1;
       byId('application-detail').textContent = '';
       byId('application-detail-state').textContent = '';
@@ -125,6 +138,8 @@ _HTML = """<!doctype html>
         for (const key of ['application_id', 'job_id', 'job_title', 'company_id', 'status', 'state_version', 'created_at', 'updated_at']) snapshot[key] = item[key];
         byId('application-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('application-detail-state').textContent = 'Read-only application detail.';
+        selectedApplicationId = applicationId;
+        byId('load-application-history').disabled = false;
       } catch (error) {
         if (generation === applicationDetailGeneration) {
           clearApplicationDetail();
@@ -133,6 +148,40 @@ _HTML = """<!doctype html>
         throw error;
       }
     }
+    async function loadApplicationHistory() {
+      const applicationId = selectedApplicationId;
+      if (applicationId === null) return;
+      clearApplicationHistory();
+      const generation = applicationHistoryGeneration;
+      byId('application-history-state').textContent = 'Loading history…';
+      try {
+        const history = await call('/v1/candidate/application/history?application_id=' + encodeURIComponent(applicationId), {}, false);
+        if (generation !== applicationHistoryGeneration) return;
+        const statuses = ['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'];
+        if (!history || history.schema_version !== 1 || history.application_id !== applicationId ||
+            !Number.isSafeInteger(history.state_version) || history.state_version < 1 ||
+            !Array.isArray(history.items) || history.items.length > 4 ||
+            history.items.length !== history.state_version - 1 || !history.items.every((item, index) =>
+              item && item.sequence === index && statuses.includes(item.from_status) && statuses.includes(item.to_status) &&
+              typeof item.occurred_at === 'string' && item.occurred_at.length <= 64 && Number.isFinite(Date.parse(item.occurred_at)) &&
+              (index === 0 || (item.from_status === history.items[index - 1].to_status &&
+                Date.parse(item.occurred_at) >= Date.parse(history.items[index - 1].occurred_at))))) {
+          throw new Error('Invalid application history.');
+        }
+        const snapshot = {schema_version: 1, application_id: applicationId, state_version: history.state_version,
+          items: history.items.map(item => ({sequence: item.sequence, from_status: item.from_status,
+            to_status: item.to_status, occurred_at: item.occurred_at}))};
+        byId('application-history').textContent = JSON.stringify(snapshot, null, 2);
+        byId('application-history-state').textContent = history.items.length ? 'Read-only application history.' : 'No status transitions yet.';
+      } catch (error) {
+        if (generation === applicationHistoryGeneration) {
+          clearApplicationHistory();
+          byId('application-history-state').textContent = 'Load history again to retry.';
+        }
+        throw error;
+      }
+    }
+    byId('load-application-history').addEventListener('click', () => guarded(loadApplicationHistory));
     function clearApplications() {
       clearApplicationDetail();
       applicationsGeneration += 1;
