@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate detail groundwork: programmatic `get_application` returns one versioned,
+minimal owner-only snapshot through existing read-only storage. Foreign and missing
+IDs share an identical failure, even with corrupt foreign rows. Restart, private
+child omission, validation-before-storage and closed-runtime regressions cover it.
+Next: authenticated HTTP detail and explicitly scoped candidate history views.
+
 This document is the prioritized execution queue for CareerAgentAI. Codex should take the highest-priority unfinished item that is not blocked and deliver it as one coherent, verified unit.
 
 ### Release scope clarification
