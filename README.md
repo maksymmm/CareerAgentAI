@@ -246,8 +246,11 @@ only ordered lifecycle transitions (sequence/from/to/time), the application ID a
 state version. Ownership is checked before reading children, and the read-only
 transaction pins aggregate and events to the same snapshot. Domain lifecycle bounds
 cap the query; malformed sequence/continuity/chronology/version data fails closed.
-Notes, metadata, event/operation IDs and claims are never loaded or exposed. HTTP/UI
-history remains follow-up work; trusted callers supply authenticated identity.
+Notes, metadata, event/operation IDs and claims are never loaded or exposed.
+Authenticated `GET /v1/candidate/application/history?application_id=...` exposes this
+history with the detail endpoint's strict query, bearer ownership, identical
+foreign/missing 404, sanitized errors, no-store and OpenAPI contract. Reads cannot
+execute work or create storage. Candidate history UI remains follow-up work.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The
