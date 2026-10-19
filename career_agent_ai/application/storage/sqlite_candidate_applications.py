@@ -59,6 +59,10 @@ class SQLiteCandidateApplications:
         if (not isinstance(value, str) or not value.strip() or len(value) > 200
                 or value != value.strip()):
             raise ValueError("identifier must be a canonical non-empty string of at most 200 characters")
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise ValueError("identifier must contain only Unicode scalar values") from exc
         return value
 
     @staticmethod

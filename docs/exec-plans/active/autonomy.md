@@ -1,5 +1,10 @@
 # Autonomous Implementation Plan
 
+Integration review P2: application projection identifiers reject unpaired Unicode
+surrogates before opening storage or binding SQL. Regression coverage checks both
+surrogate ranges for application and authenticated owner identities against a missing
+database; valid maximum-length emoji IDs remain supported.
+
 Candidate detail groundwork: programmatic `get_application` returns one versioned,
 minimal owner-only snapshot through existing read-only storage. Foreign and missing
 IDs share an identical failure, even with corrupt foreign rows. Restart, private

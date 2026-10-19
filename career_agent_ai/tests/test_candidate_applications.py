@@ -203,7 +203,9 @@ def test_single_owned_snapshot_is_restart_safe_and_tenant_hiding(tmp_path):
 
 @pytest.mark.parametrize("field,value", [("user_id", ""), ("user_id", " padded"),
     ("application_id", ""), ("application_id", " padded"), ("application_id", "a" * 201),
-    ("application_id", None), ("user_id", None)])
+    ("application_id", None), ("user_id", None),
+    ("application_id", "\ud800"), ("application_id", "\udfff"),
+    ("user_id", "\ud800"), ("user_id", "\udfff")])
 def test_single_snapshot_validates_before_opening_missing_storage(tmp_path, field, value):
     path = tmp_path / "missing.sqlite"
     arguments = {"application_id": "a", "user_id": "owner", field: value}
