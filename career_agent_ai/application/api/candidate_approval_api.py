@@ -23,6 +23,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     validate_loop_identifier,
 )
 from .candidate_sandbox_ui import candidate_sandbox_html
+from career_agent_ai.application.scheduling.models import validate_schedule_identifier
 
 
 _STRICT_START_TEXT_PATTERN = (
@@ -47,6 +48,7 @@ class CandidateApprovalLoop(Protocol):
     def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -112,13 +114,14 @@ class CandidateApprovalWSGIApp:
         is_applications = parts == ["v1", "candidate", "applications"]
         is_history = parts == ["v1", "candidate", "application", "history"]
         is_application = parts == ["v1", "candidate", "application"] or is_history
+        is_schedule = parts == ["v1", "candidate", "schedule-event"]
         is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
             and parts[4] in {"approval", "continue", "status"}
         )
-        if not is_start and not is_existing_run and not is_list and not is_application:
+        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -148,7 +151,7 @@ class CandidateApprovalWSGIApp:
                     {"error": "invalid_request", "message": str(exc)[:500]},
                 )
         try:
-            if is_application:
+            if is_application or is_schedule:
                 if method != "GET":
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
                 try:
@@ -156,15 +159,21 @@ class CandidateApprovalWSGIApp:
                     if len(query) > 2500 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("query too long")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1, errors="strict")
-                    if len(pairs) != 1 or pairs[0][0] != "application_id":
-                        raise ValueError("application_id is required")
+                    parameter = "event_id" if is_schedule else "application_id"
+                    if len(pairs) != 1 or pairs[0][0] != parameter:
+                        raise ValueError("identity is required")
                     identifier = pairs[0][1]
                     if not identifier or len(identifier) > 200 or identifier != identifier.strip():
                         raise ValueError("invalid application_id")
                     identifier.encode("utf-8", errors="strict")
+                    if is_schedule and validate_schedule_identifier(identifier, "event_id") != identifier:
+                        raise ValueError("invalid event_id")
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
-                projection = self._loop.get_application_history if is_history else self._loop.get_application
+                if is_schedule:
+                    projection = self._loop.get_schedule_event
+                else:
+                    projection = self._loop.get_application_history if is_history else self._loop.get_application
                 return self._respond(start_response, "200 OK", projection(identifier, user_id=user_id))
             if is_list:
                 if method != "GET":
@@ -894,4 +903,35 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         "properties": {"sequence": {"type": "integer", "minimum": 0},
                             "from_status": statuses, "to_status": statuses,
                             "occurred_at": {"type": "string", "format": "date-time"}}}}}})}}}}
+    event_properties = {
+        "event_id": {"type": "string", "minLength": 1, "maxLength": 200,
+                     "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"},
+        "employer_name": {"type": "string"}, "location": {"type": "string"},
+        "event_type": {"type": "string", "enum": ["interview", "trial_day", "phone_call", "video_call", "other"]},
+        "status": {"type": "string", "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"]},
+        "state_version": {"type": "integer", "minimum": 1},
+        "start_at": {"type": "string", "format": "date-time"},
+        "end_at": {"type": ["string", "null"], "format": "date-time"},
+        "local_date": {"type": "string", "format": "date"},
+        "local_end_date": {"type": ["string", "null"], "format": "date"},
+        "local_start_time": {"type": "string", "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$"},
+        "local_end_time": {"type": ["string", "null"], "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$"},
+        "timezone_name": {"type": "string"},
+        "utc_offset": {"type": "string", "pattern": r"^[+-]\d{2}:\d{2}$"},
+        "end_utc_offset": {"type": ["string", "null"], "pattern": r"^[+-]\d{2}:\d{2}$"},
+    }
+    document["paths"]["/v1/candidate/schedule-event"] = {"get": {
+        "operationId": "getCandidateScheduleEvent", "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "event_id", "in": "query", "required": True,
+                        "description": "Exact event identity; no duplicate or other parameters accepted",
+                        "schema": event_properties["event_id"]}],
+        "responses": {**detail["responses"],
+            "404": {"description": "Missing or foreign event", "content": content(error_schema)},
+            "200": {"description": "Read-only owned event with exact UTC and local times; no calendar actions",
+                "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                "content": content({"type": "object", "additionalProperties": False,
+                    "required": ["schema_version", "event"], "properties": {
+                        "schema_version": {"const": 1}, "event": {"type": "object",
+                            "additionalProperties": False, "required": list(event_properties),
+                            "properties": event_properties}}})}}}}
     return document
