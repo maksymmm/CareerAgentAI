@@ -917,8 +917,8 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "local_start_time": {"type": "string", "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$"},
         "local_end_time": {"type": ["string", "null"], "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$"},
         "timezone_name": {"type": "string"},
-        "utc_offset": {"type": "string", "pattern": r"^[+-]\d{2}:\d{2}$"},
-        "end_utc_offset": {"type": ["string", "null"], "pattern": r"^[+-]\d{2}:\d{2}$"},
+        "utc_offset": {"type": "string", "pattern": r"^[+-]\d{2}:\d{2}(:\d{2})?$"},
+        "end_utc_offset": {"type": ["string", "null"], "pattern": r"^[+-]\d{2}:\d{2}(:\d{2})?$"},
     }
     document["paths"]["/v1/candidate/schedule-event"] = {"get": {
         "operationId": "getCandidateScheduleEvent", "security": [{"bearerAuth": []}],
