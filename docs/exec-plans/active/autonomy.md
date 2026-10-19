@@ -1,5 +1,22 @@
 # Autonomous Implementation Plan
 
+Detail UI review follow-up: all suppressed-raw request failures, including JSON
+parse/network errors, are replaced with a generic error before reaching the shared
+error renderer. Chromium injects malformed JSON with a private sentinel and requires
+only the generic message, no detail and no sentinel anywhere in the DOM.
+
+Detail UI review P2: disable shared raw-result rendering for detail requests before
+validation/projection. Only allowlisted fields enter the detail pane; detail HTTP
+failures use a generic error instead of backend message text. Chromium regression
+injects extra top-level/nested private fields and requires their absence from the DOM.
+
+Candidate detail UI delivered: explicit View application reads the authenticated
+detail endpoint and renders allowlisted minimal fields/timestamps as text only.
+Selection/page/token generations prevent stale detail resurrection. Failure clears
+detail and permits explicit reselection. Chromium restart acceptance covers success,
+retry, malformed identity and token changes. No approval or execution controls added.
+Next: scoped read-only candidate application history projection.
+
 HTTP detail review P2: reject truncated/non-hex raw percent escapes before parsing
 or opening storage. Regression cases cover malformed names/values and mixed valid
 escapes; correctly percent-encoded literal percent IDs still round-trip after restart.

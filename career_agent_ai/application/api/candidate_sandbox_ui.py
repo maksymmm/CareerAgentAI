@@ -72,6 +72,9 @@ _HTML = """<!doctype html>
     <ul id="owned-applications" aria-label="My applications"></ul>
     <p id="applications-state" role="status"></p>
     <button id="next-applications" type="button" disabled>Next application page</button>
+    <h3>Application detail</h3>
+    <p id="application-detail-state" role="status"></p>
+    <pre id="application-detail"></pre>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
   <h2>Result</h2>
@@ -94,7 +97,44 @@ _HTML = """<!doctype html>
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
     let applicationsGeneration = 0;
     let nextApplicationCursor = null;
+    let applicationDetailGeneration = 0;
+    function clearApplicationDetail() {
+      applicationDetailGeneration += 1;
+      byId('application-detail').textContent = '';
+      byId('application-detail-state').textContent = '';
+    }
+    async function loadApplicationDetail(applicationId) {
+      clearApplicationDetail();
+      const generation = applicationDetailGeneration;
+      byId('application-detail-state').textContent = 'Loading application…';
+      try {
+        const detail = await call('/v1/candidate/application?application_id=' + encodeURIComponent(applicationId), {}, false);
+        if (generation !== applicationDetailGeneration) return;
+        const item = detail && detail.application;
+        if (detail.schema_version !== 1 || !item || item.application_id !== applicationId ||
+            typeof item.job_id !== 'string' || !item.job_id || Array.from(item.job_id).length > 200 ||
+            typeof item.job_title !== 'string' || Array.from(item.job_title).length > 500 ||
+            typeof item.company_id !== 'string' || Array.from(item.company_id).length > 200 ||
+            !['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'].includes(item.status) ||
+            !Number.isSafeInteger(item.state_version) || item.state_version < 1 ||
+            !['created_at', 'updated_at'].every(key => typeof item[key] === 'string' &&
+              item[key].length <= 64 && Number.isFinite(Date.parse(item[key])))) {
+          throw new Error('Invalid application detail.');
+        }
+        const snapshot = {};
+        for (const key of ['application_id', 'job_id', 'job_title', 'company_id', 'status', 'state_version', 'created_at', 'updated_at']) snapshot[key] = item[key];
+        byId('application-detail').textContent = JSON.stringify(snapshot, null, 2);
+        byId('application-detail-state').textContent = 'Read-only application detail.';
+      } catch (error) {
+        if (generation === applicationDetailGeneration) {
+          clearApplicationDetail();
+          byId('application-detail-state').textContent = 'Select the application again to retry.';
+        }
+        throw error;
+      }
+    }
     function clearApplications() {
+      clearApplicationDetail();
       applicationsGeneration += 1;
       nextApplicationCursor = null;
       byId('owned-applications').replaceChildren();
@@ -126,6 +166,13 @@ _HTML = """<!doctype html>
           const row = document.createElement('li');
           row.textContent = (item.job_title || item.job_id) + ' — ' + item.company_id +
             ' — ' + item.status + ' — version ' + item.state_version + ' — ' + item.application_id;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'View application';
+          button.addEventListener('click', () => {
+            if (generation === applicationsGeneration) guarded(() => loadApplicationDetail(item.application_id));
+          });
+          row.append(button);
           byId('owned-applications').append(row);
         }
         nextApplicationCursor = page.next_after;
@@ -215,7 +262,7 @@ _HTML = """<!doctype html>
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
     }
-    async function call(path, options = {}) {
+    async function call(path, options = {}, renderRaw = true) {
       clearOverview();
       const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
@@ -230,15 +277,16 @@ _HTML = """<!doctype html>
         if (contextGeneration !== inputContextGeneration) {
           throw new Error('Inputs changed; reload the current state.');
         }
-        if (resultRequest === latestResultRequest) show({status: response.status, payload});
+        if (renderRaw && resultRequest === latestResultRequest) show({status: response.status, payload});
         if (!response.ok) {
-          const error = new Error(payload.message || payload.error || 'Request failed.');
+          const error = new Error(renderRaw ? (payload.message || payload.error || 'Request failed.') : 'Application detail request failed.');
           error.status = response.status;
           error.code = payload.error;
           throw error;
         }
         return payload;
       } catch (error) {
+        if (!renderRaw) error = new Error('Application detail request failed.');
         error.resultRequest = resultRequest;
         throw error;
       }

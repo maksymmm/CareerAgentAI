@@ -261,7 +261,10 @@ and `after`, bearer-derived ownership, strict query validation, no-store and Ope
 It never executes or updates an application. The candidate sandbox displays owned
 application pages as text-only job/company/status/version snapshots, with explicit
 next-page/retry controls. Token edits clear the list and stale responses cannot
-restore it. No approval/submission controls exist in this tracker list.
+restore it. View application loads an owner-authenticated detail snapshot with
+timestamps, rendered as text-only allowlisted fields. New selections/page loads/token
+edits invalidate older detail responses; failures permit explicit reselection/retry.
+No approval/submission controls exist in this tracker list or detail view.
 
 The sandbox runtime's programmatic `list_run_statuses(user_id=..., limit=25, after=None)`
 returns owner-filtered, minimal run status pages in stable run-ID order (maximum 100).
