@@ -1,5 +1,9 @@
 # Autonomous Implementation Plan
 
+Integration review P2: history UI now checks each status pair against the domain
+lifecycle map, not merely known enum values/adjacent continuity. Chromium rejects
+skipped stages, self transitions and transitions from terminal states before render.
+
 Candidate history UI delivered: explicit Load application history after detail
 selection renders only bounded allowlisted transition fields/version. Empty state,
 retry, malformed payload rejection and detail/page/token invalidation are supported.
