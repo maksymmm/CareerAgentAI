@@ -286,6 +286,7 @@ _HTML = """<!doctype html>
         }
         return payload;
       } catch (error) {
+        if (!renderRaw) error = new Error('Application detail request failed.');
         error.resultRequest = resultRequest;
         throw error;
       }
