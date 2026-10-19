@@ -229,6 +229,13 @@ credential configuration is included.
 
 ## Scheduling and Interview Coordination
 
+`RuntimeCandidateApp.get_schedule_event(event_id, user_id=...)` returns a versioned
+read-only owner-only event snapshot with employer/location, lifecycle status, UTC
+instants, local dates/times and explicit start/end UTC offsets. Reads never create
+or migrate storage and never load provider/application IDs or calendar action claims.
+Foreign/missing events share one failure before deserialization. Trusted callers
+must supply authenticated identity; candidate HTTP/UI exposure is follow-up work.
+
 Human-participation career events such as interviews, trial days, phone calls, and video calls are modeled as durable scheduling aggregates. Each event preserves the employer, event type, address or meeting location, UTC-normalized start/end instants, the original IANA timezone used for presentation, lifecycle status, application linkage, and provider identifiers.
 
 The scheduling service exposes an exact human-facing projection with employer, location, local date, local start/end time, timezone, and UTC offset so DST transitions remain unambiguous. SQLite persistence uses integer epoch-microseconds for deterministic ordering without losing timestamp precision, validates persisted state on reload, and prevents duplicate provider-event identities.
