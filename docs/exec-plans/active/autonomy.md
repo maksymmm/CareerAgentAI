@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+HTTP application detail delivered: GET /v1/candidate/application?application_id=...
+authenticates before strict query validation/storage and returns the minimal owned
+snapshot. Duplicate/unknown/empty/padded/oversized/invalid-Unicode queries fail closed;
+foreign/missing rows share 404. Restart tests cover max emoji and opaque reserved
+characters, corrupt foreign/private records and byte-identical storage. OpenAPI and
+no-store match the contract. Next: candidate detail UI and scoped history projection.
+
 Integration review P2: application projection identifiers reject unpaired Unicode
 surrogates before opening storage or binding SQL. Regression coverage checks both
 surrogate ranges for application and authenticated owner identities against a missing
