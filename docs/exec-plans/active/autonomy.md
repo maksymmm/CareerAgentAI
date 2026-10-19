@@ -1,5 +1,9 @@
 # Autonomous Implementation Plan
 
+HTTP detail review P2: reject truncated/non-hex raw percent escapes before parsing
+or opening storage. Regression cases cover malformed names/values and mixed valid
+escapes; correctly percent-encoded literal percent IDs still round-trip after restart.
+
 HTTP application detail delivered: GET /v1/candidate/application?application_id=...
 authenticates before strict query validation/storage and returns the minimal owned
 snapshot. Duplicate/unknown/empty/padded/oversized/invalid-Unicode queries fail closed;
