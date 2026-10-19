@@ -403,7 +403,50 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#owned-applications li").count() == 1
             assert "applied" in page.locator("#owned-applications").text_content()
             assert "version 2" in page.locator("#owned-applications").text_content()
-            assert page.locator("#owned-applications button").count() == 0
+            assert page.locator("#owned-applications button").count() == 1
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
+            detail = json.loads(page.locator("#application-detail").text_content())
+            assert detail["status"] == "applied" and detail["state_version"] == 2
+            assert set(detail) == {"application_id", "job_id", "job_title", "company_id",
+                                   "status", "state_version", "created_at", "updated_at"}
+            page.route("**/v1/candidate/application?*", lambda route: route.fulfill(status=503, json={"error": "internal_error"}))
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Select the application again to retry.").wait_for()
+            assert page.locator("#application-detail").text_content() == ""
+            page.unroute("**/v1/candidate/application?*")
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
+            def malformed_detail(route):
+                payload = route.fetch().json()
+                payload["application"]["application_id"] = "wrong-identity"
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/application?*", malformed_detail)
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Select the application again to retry.").wait_for()
+            assert page.locator("#application-detail").text_content() == ""
+            page.unroute("**/v1/candidate/application?*")
+            # Delay detail in the browser while changing authentication context.
+            page.evaluate("""() => {
+                const original = window.fetch;
+                window.fetch = async (...args) => {
+                    const response = await original(...args);
+                    if (String(args[0]).includes('/v1/candidate/application?')) {
+                        window.detailWaiting = true;
+                        await new Promise(resolve => { window.releaseDetail = resolve; });
+                        window.detailReleased = true;
+                    }
+                    return response;
+                };
+            }""")
+            page.locator("#owned-applications button").click()
+            page.wait_for_function("window.detailWaiting === true")
+            page.locator("#token").fill("changed")
+            page.evaluate("window.releaseDetail()")
+            page.wait_for_function("window.detailReleased === true")
+            page.locator("#token").fill("sandbox-token")
+            assert page.locator("#application-detail").text_content() == ""
+            assert page.locator("#application-detail-state").text_content() == ""
             from urllib.parse import parse_qs, urlsplit
             opaque_cursor = "\ufeff" + "😀" * 198 + "\ufeff"
             seen_pages = []
