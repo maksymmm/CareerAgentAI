@@ -328,6 +328,24 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#status").click()
             page.locator("#run-overview").get_by_text("Your decision is needed", exact=False).wait_for()
 
+            for replacement in ({"run_id": "other-owned-run"}, {"schema_version": 9},
+                                {"state_version": True}, {"state_version": -1},
+                                {"action_kind": "reconcile_application_submission"}, {"title": ""},
+                                {"details": []}, {"action_fingerprint": "invalid"},
+                                {"allowed_decisions": ["approve", "approve"]}, {"extra": "private-prompt-secret"}):
+                def malformed_prompt(route):
+                    payload = route.fetch().json()
+                    payload.update(replacement)
+                    route.fulfill(status=200, json=payload)
+                page.route("**/v1/candidate/runs/*/approval", malformed_prompt)
+                page.locator("#prompt").click()
+                page.locator("#action-title").get_by_text("Approval prompt unavailable. Load it again.").wait_for()
+                assert page.locator("#approve").is_disabled() and page.locator("#decline").is_disabled()
+                assert page.locator("#action-details").text_content() == ""
+                assert "other-owned-run" not in page.locator("body").text_content()
+                assert "private-prompt-secret" not in page.locator("body").text_content()
+                assert page.locator("#run-id").input_value() == durable_run_id
+                page.unroute("**/v1/candidate/runs/*/approval")
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve job application").wait_for()
             page.locator("#approve").click()

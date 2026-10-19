@@ -287,8 +287,11 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert (run_id, user_id) == (self.run_id, "candidate-1")
             return SimpleNamespace(
                 to_dict=lambda: {
+                    "schema_version": 1,
                     "run_id": run_id,
                     "state_version": 3,
+                    "action_kind": "approve_application",
+                    "allowed_decisions": ["approve", "decline"],
                     "action_fingerprint": "0" * 64,
                     "title": "Approve application",
                     "details": {"company": "Sandbox GmbH"},
