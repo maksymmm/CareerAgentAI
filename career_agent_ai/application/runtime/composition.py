@@ -209,6 +209,11 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
 
+    def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]:
+        """Read authenticated owner's history through request-local read-only storage."""
+        return SQLiteCandidateApplications(self._database_path).get_history(
+            application_id, user_id=user_id)
+
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's snapshot without constructing writable storage."""
         return SQLiteCandidateApplications(self._database_path).get_snapshot(
