@@ -272,11 +272,17 @@ class HumanScheduleView:
             ),
             local_end_date=None if local_end is None else local_end.date().isoformat(),
             timezone_name=event.timezone_name,
-            utc_offset=local_start.strftime("%z")[:3] + ":" + local_start.strftime("%z")[3:],
+            utc_offset=_format_utc_offset(local_start),
             end_utc_offset=(
                 None
                 if local_end is None
-                else local_end.strftime("%z")[:3] + ":" + local_end.strftime("%z")[3:]
+                else _format_utc_offset(local_end)
             ),
             status=event.status,
         )
+
+
+def _format_utc_offset(value: datetime) -> str:
+    """Preserve IANA second-resolution offsets in ISO-compatible notation."""
+    raw = value.strftime("%z")
+    return raw[0] + ":".join(raw[index:index + 2] for index in range(1, len(raw), 2))
