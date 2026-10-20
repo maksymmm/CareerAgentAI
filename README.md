@@ -399,6 +399,9 @@ decline decisions. The static page contains no credentials or durable state: the
 candidate enters a bearer token that stays only in the tab's memory.
 Changing the token clears the displayed prompt and result; late responses from the
 previous input context cannot repopulate them or select a run.
+Run and application collections render only validated list fields, never raw API
+payloads or JSON parsing errors. Empty pages clear prior rows and disable pagination;
+explicit reloads recover after malformed responses without exposing private extras.
 The run overview summarizes an authenticated status snapshot as waiting for a decision,
 in progress, or finished, with its phase, version and durable ID. It is cleared on
 context changes or other results and never substitutes for an approval prompt. Decisions copy
