@@ -8,7 +8,7 @@ def candidate_sandbox_html() -> bytes:
     return _HTML.encode("utf-8")
 
 
-_HTML = """<!doctype html>
+_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -80,6 +80,17 @@ _HTML = """<!doctype html>
     <pre id="application-history"></pre>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
+  <section aria-labelledby="schedule-title">
+    <h2 id="schedule-title">My interviews and events</h2>
+    <button id="list-events" type="button">Load my events</button>
+    <ul id="owned-events" aria-label="My events"></ul>
+    <p id="events-state" role="status"></p>
+    <button id="next-events" type="button" disabled>Next event page</button>
+    <h3>Event detail</h3>
+    <p id="event-detail-state" role="status"></p>
+    <pre id="event-detail"></pre>
+    <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
+  </section>
   <h2>Result</h2>
   <pre id="result" aria-live="polite">Ready.</pre>
   <script>
@@ -95,6 +106,97 @@ _HTML = """<!doctype html>
     let listGeneration = 0;
     let nextRunCursor = null;
     const byId = (id) => document.getElementById(id);
+    let eventsGeneration = 0;
+    let eventDetailGeneration = 0;
+    let nextEventCursor = null;
+    const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+    const eventFields = ['event_id', 'employer_name', 'event_type', 'location', 'status', 'state_version',
+      'start_at', 'end_at', 'local_date', 'local_start_time', 'local_end_date', 'local_end_time',
+      'timezone_name', 'utc_offset', 'end_utc_offset'];
+    function eventSnapshot(item) {
+      const text = (value, max) => typeof value === 'string' && value.length > 0 && Array.from(value).length <= max;
+      const date = value => text(value, 10) && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const time = value => text(value, 15) && /^\d{2}:\d{2}:\d{2}(\.\d{6})?$/.test(value);
+      const offset = value => text(value, 9) && /^[+-]\d{2}:\d{2}(:\d{2})?$/.test(value);
+      const instant = value => text(value, 40) && Number.isFinite(Date.parse(value));
+      if (!item || !eventId(item.event_id) || !text(item.employer_name, 500) || !text(item.location, 2000) ||
+          !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(item.event_type) ||
+          !['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(item.status) ||
+          !Number.isSafeInteger(item.state_version) || item.state_version < 1 || !instant(item.start_at) ||
+          !date(item.local_date) || !time(item.local_start_time) || !text(item.timezone_name, 200) || !offset(item.utc_offset) ||
+          !(item.end_at === null ? [item.local_end_date, item.local_end_time, item.end_utc_offset].every(value => value === null) :
+            instant(item.end_at) &&
+            date(item.local_end_date) && time(item.local_end_time) && offset(item.end_utc_offset))) {
+        throw new Error('Invalid event snapshot.');
+      }
+      return Object.fromEntries(eventFields.map(key => [key, item[key]]));
+    }
+    function clearEventDetail() {
+      eventDetailGeneration += 1;
+      byId('event-detail').textContent = '';
+      byId('event-detail-state').textContent = '';
+    }
+    function clearEvents() {
+      clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
+      byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
+      byId('next-events').disabled = true;
+    }
+    async function loadEventDetail(identifier) {
+      clearEventDetail();
+      const generation = eventDetailGeneration;
+      byId('event-detail-state').textContent = 'Loading event…';
+      try {
+        const detail = await call('/v1/candidate/schedule-event?event_id=' + encodeURIComponent(identifier), {}, false);
+        if (generation !== eventDetailGeneration) return;
+        if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
+        byId('event-detail').textContent = JSON.stringify(eventSnapshot(detail.event), null, 2);
+        byId('event-detail-state').textContent = 'Read-only event detail.';
+      } catch (error) {
+        if (generation === eventDetailGeneration) {
+          clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
+        }
+        throw error;
+      }
+    }
+    async function loadEvents(after = null) {
+      clearEvents();
+      const generation = eventsGeneration;
+      byId('events-state').textContent = 'Loading events…';
+      try {
+        const page = await call('/v1/candidate/schedule-events?limit=25' +
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+        if (generation !== eventsGeneration) return;
+        if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || eventId(page.next_after))) throw new Error('Invalid event page.');
+        const items = page.items.map(eventSnapshot);
+        if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : (after || ''))) ||
+            (page.next_after !== null && (items.length !== 25 || page.next_after !== items.at(-1).event_id))) throw new Error('Invalid event cursor.');
+        for (const item of items) {
+          const row = document.createElement('li');
+          row.textContent = item.employer_name + ' — ' + item.event_type + ' — ' + item.status + ' — ' +
+            item.local_date + ' ' + item.local_start_time + ' ' + item.utc_offset + ' (' + item.timezone_name + ')';
+          const button = document.createElement('button');
+          button.type = 'button'; button.textContent = 'View event';
+          button.addEventListener('click', () => {
+            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id));
+          });
+          row.append(button); byId('owned-events').append(row);
+        }
+        nextEventCursor = page.next_after; byId('next-events').disabled = nextEventCursor === null;
+        byId('events-state').textContent = items.length ? 'Read-only event snapshots.' : 'No events on this page.';
+      } catch (error) {
+        if (generation === eventsGeneration) {
+          clearEvents(); nextEventCursor = after; byId('next-events').disabled = after === null;
+          byId('events-state').textContent = 'Load or retry the event page.';
+        }
+        throw error;
+      }
+    }
+    byId('list-events').addEventListener('click', () => guarded(() => loadEvents()));
+    byId('next-events').addEventListener('click', () => guarded(() => {
+      if (nextEventCursor !== null) return loadEvents(nextEventCursor);
+    }));
+    byId('token').addEventListener('input', clearEvents);
     const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
     const show = (value) => { clearOverview(); byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
