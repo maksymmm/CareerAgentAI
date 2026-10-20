@@ -31,6 +31,8 @@ _HTML = r"""<!doctype html>
   <h1>Candidate sandbox</h1>
   <p class="muted">No real application, message, or calendar action is sent. The bearer token stays in this tab's memory.</p>
   <label>Bearer token <input id="token" type="password" autocomplete="off" required></label>
+  <button id="clear-session" type="button">Clear this tab's session</button>
+  <p class="muted">Clears credentials, profile and displayed data locally. It does not revoke a token or cancel work already accepted by the server.</p>
   <fieldset>
     <legend>Start a sandbox run</legend>
     <label>Run ID <input id="start-run-id" value="candidate-demo-1" required></label>
@@ -520,6 +522,11 @@ _HTML = r"""<!doctype html>
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
+    byId('clear-session').addEventListener('click', () => {
+      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id']) byId(id).value = '';
+      clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
+      byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
+    });
     byId('status').addEventListener('click', () => guarded(async () => {
       clearOverview();
       const runId = byId('run-id').value;

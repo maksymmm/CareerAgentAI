@@ -1,5 +1,14 @@
 # Autonomous Implementation Plan
 
+Candidate session clearing delivered: explicit local clear removes credentials,
+profile/start/run inputs and displayed run/application/event snapshots, invalidates
+pending reads/starts and approval prompts, and performs no HTTP request. Chromium
+clears while event detail is delayed, verifies empty credentials/inputs/panes and
+disabled decisions, then confirms the late response cannot restore private state.
+This does not revoke server credentials or cancel previously accepted work.
+Next: verify fresh review/integration once Codex review capacity is available;
+continue candidate dashboard usability and bounded empty-state acceptance.
+
 Schedule UI review P2 timezone: Intl IANA-zone formatting must agree with local
 date/time at both exact UTC instants after tuple/offset validation. Unknown zones,
 fixed-offset labels and browser/server timezone-data mismatches fail closed. Negative
