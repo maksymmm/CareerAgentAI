@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Schedule UI review P2 timezone: Intl IANA-zone formatting must agree with local
+date/time at both exact UTC instants after tuple/offset validation. Unknown zones,
+fixed-offset labels and browser/server timezone-data mismatches fail closed. Negative
+epoch flooring preserves historical seconds. Chromium rejects contradictory/unknown
+zone labels and retains DST-fold, leap-day and Monrovia second-offset acceptance.
+Browser timezone database disagreement is an explicit documented display limitation.
+
 Schedule UI review P2 consistency: local date/time/offset tuples must reconstruct
 their exact UTC instants; a present end must follow start. Whole-second UTC arithmetic
 plus BigInt microseconds avoids Date.parse rounding, retains year 1–99 and historical
