@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate narrow-screen layout: bounded fieldsets, wrapping snapshot/ID text and
+single-column actions below 32rem. Chromium covers 320/390 px and desktop with 2000
+unbroken snapshot characters and a 200-character run button; no page/pane horizontal
+overflow or content truncation is accepted. API/action behavior is unchanged.
+Next: exact-head CI/review, then continue dashboard accessibility and usable summaries.
+
 Candidate dashboard navigation: six native fragment links in a named navigation
 landmark, focusable destinations, visible keyboard focus and a return-to-top link.
 Chromium checks every destination and keyboard activation, no HTTP requests, unchanged
