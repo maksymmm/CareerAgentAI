@@ -160,6 +160,23 @@ _HTML = r"""<!doctype html>
             epoch(item.local_end_date, item.local_end_time, item.end_utc_offset) !== instantEpoch(item.end_at)))) {
         throw new Error('Inconsistent event timestamps.');
       }
+      // Browser and server timezone databases may differ historically. Fail closed
+      // on disagreement instead of displaying an unverified zone label.
+      if (/^[+-]/.test(item.timezone_name)) throw new Error('Invalid event timezone.');
+      const zone = new Intl.DateTimeFormat('en-GB-u-ca-iso8601-nu-latn', {
+        timeZone: item.timezone_name, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
+      const zoneMatches = (micros, localDate, localTime) => {
+        const remainder = ((micros % 1000000n) + 1000000n) % 1000000n;
+        const wholeSecond = new Date(Number((micros - remainder) / 1000n));
+        const parts = Object.fromEntries(zone.formatToParts(wholeSecond).map(part => [part.type, part.value]));
+        return [parts.year.padStart(4, '0'), parts.month, parts.day].join('-') === localDate &&
+          [parts.hour, parts.minute, parts.second].join(':') === localTime.split('.')[0];
+      };
+      if (!zoneMatches(start, item.local_date, item.local_start_time) ||
+          (item.end_at !== null && !zoneMatches(instantEpoch(item.end_at), item.local_end_date, item.local_end_time))) {
+        throw new Error('Event timezone data does not match this browser.');
+      }
       return Object.fromEntries(eventFields.map(key => [key, item[key]]));
     }
     function clearEventDetail() {
