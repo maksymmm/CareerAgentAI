@@ -16,13 +16,15 @@ _HTML = r"""<!doctype html>
   <title>CareerAgentAI candidate sandbox</title>
   <style>
     :root { color-scheme: light dark; font: 16px/1.45 system-ui, sans-serif; }
-    body { margin: auto; max-width: 58rem; padding: 2rem 1rem 5rem; }
-    fieldset { border: 1px solid #8888; border-radius: .6rem; margin: 1rem 0; padding: 1rem; }
+    body { box-sizing: border-box; width: 100%; margin: auto; max-width: 58rem; padding: 2rem 1rem 5rem; overflow-wrap: anywhere; }
+    fieldset { min-width: 0; border: 1px solid #8888; border-radius: .6rem; margin: 1rem 0; padding: 1rem; }
+    pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
     label { display: block; margin: .7rem 0; }
     input, textarea, button { box-sizing: border-box; font: inherit; padding: .55rem; width: 100%; }
     textarea { min-height: 7rem; }
     button { cursor: pointer; margin-top: .45rem; }
-    .actions { display: grid; gap: .6rem; grid-template-columns: repeat(2, 1fr); }
+    .actions { display: grid; gap: .6rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    @media (max-width: 32rem) { .actions { grid-template-columns: 1fr; } }
     .muted { opacity: .75; }
     nav { display: flex; flex-wrap: wrap; gap: .6rem 1rem; margin: 1rem 0; }
     :focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
