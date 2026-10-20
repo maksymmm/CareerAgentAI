@@ -564,6 +564,44 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#list-runs").click()
             page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
             assert page.locator("#owned-runs button").count() == 25
+            # Collections must never render raw payloads, even before validation.
+            for resource, button, state, rows, next_button, ready, empty, retry in (
+                ("run-statuses", "list-runs", "list-state", "owned-runs", "next-runs",
+                 "Select a run to inspect it.", "No runs on this page.", "Load my runs to retry."),
+                ("applications", "list-applications", "applications-state", "owned-applications",
+                 "next-applications", "Read-only application snapshots.",
+                 "No applications on this page.", "Load or retry the application page."),
+            ):
+                pattern = f"**/v1/candidate/{resource}?*"
+
+                def private_collection(route):
+                    payload = route.fetch().json()
+                    payload["private_extra"] = "private-collection-top-secret"
+                    payload["items"][0]["private_extra"] = "private-collection-item-secret"
+                    route.fulfill(status=200, json=payload)
+
+                page.route(pattern, private_collection)
+                page.locator(f"#{button}").click()
+                page.locator(f"#{state}").get_by_text(ready, exact=True).wait_for()
+                assert "private-collection-" not in page.locator("body").text_content()
+                page.unroute(pattern)
+                page.route(pattern, lambda route: route.fulfill(
+                    status=200, content_type="application/json", body="private-invalid-json-secret"))
+                page.locator(f"#{button}").click()
+                page.locator(f"#{state}").get_by_text(retry, exact=True).wait_for()
+                assert page.locator(f"#{rows} li").count() == 0
+                assert "private-invalid-json-secret" not in page.locator("body").text_content()
+                page.unroute(pattern)
+                page.route(pattern, lambda route: route.fulfill(
+                    status=200, json={"schema_version": 1, "items": [], "next_after": None}))
+                page.locator(f"#{button}").click()
+                page.locator(f"#{state}").get_by_text(empty, exact=True).wait_for()
+                assert page.locator(f"#{rows} li").count() == 0
+                assert page.locator(f"#{next_button}").is_disabled()
+                page.unroute(pattern)
+                page.locator(f"#{button}").click()
+                page.locator(f"#{state}").get_by_text(ready, exact=True).wait_for()
+                assert page.locator(f"#{rows} li").count() > 0
             page.route("**/v1/candidate/run-statuses?limit=25&after=*",
                        lambda route: route.fulfill(status=503, json={"error": "unavailable"}))
             page.locator("#next-runs").click()
