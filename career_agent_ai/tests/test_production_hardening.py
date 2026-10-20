@@ -13,7 +13,7 @@ from wsgiref.simple_server import WSGIRequestHandler, make_server
 import pytest
 import career_agent_ai.application.runtime.candidate_service as candidate_service
 import career_agent_ai.application.runtime.composition as runtime_composition
-
+from career_agent_ai.application.api.candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.api import (
     OperationalApiService,
     OperationalWSGIApp,
@@ -72,6 +72,36 @@ from career_agent_ai.application.storage.sqlite_operational_probe import (
 
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
 PROFILE = "Experienced logistics professional."
+
+
+def test_candidate_dashboard_narrow_layout_preserves_long_text():
+    """Long snapshots and IDs remain readable without horizontal page scrolling."""
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    long_text = json.dumps({"snapshot": "x" * 2000}, indent=2)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(candidate_sandbox_html().decode("utf-8"))
+        page.evaluate("""text => {
+            document.querySelectorAll('pre').forEach(node => node.textContent = text);
+            const row = document.createElement('li');
+            const button = document.createElement('button');
+            button.textContent = 'r'.repeat(200);
+            row.append(button); document.getElementById('owned-runs').append(row);
+        }""", long_text)
+        for width in (320, 390, 1280):
+            page.set_viewport_size({"width": width, "height": 800})
+            assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+            for pane in page.locator("pre").all():
+                assert pane.text_content() == long_text
+                assert pane.evaluate("node => node.scrollWidth <= node.clientWidth")
+            for button in page.locator("button").all():
+                bounds = button.bounding_box()
+                assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= width
+            columns = page.locator(".actions").first.evaluate(
+                "node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
+            assert columns == (1 if width < 512 else 2)
+        browser.close()
 
 
 def request() -> CareerLoopRequest:
