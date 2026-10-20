@@ -363,6 +363,98 @@ def test_schedule_http_missing_storage_and_corrupt_owned_event(tmp_path):
     assert path.read_bytes() == baseline
 
 
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=true", "limit=1.0", "limit=-1",
+    "limit=1&limit=2", "after=a&after=b", "user_id=foreign", "after=", "limit=",
+    "limit=1&after=a&extra=b", "after=%20padded", "after=padded%20", "after=" + "a" * 201,
+    "after=a%2Fb", "after=%ED%A0%80", "after=%", "after=%2", "after=%GG",
+    "after%GG=a", "limit=%31%", "after=" + "a" * 1001])
+def test_schedule_collection_invalid_query_before_storage(query):
+    assert request(app(object()), path="/v1/candidate/schedule-events", query=query)[0][0] == "400 Bad Request"
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError, TypeError])
+def test_schedule_collection_auth_method_and_backend_boundaries(failure):
+    route = "/v1/candidate/schedule-events"
+    assert request(app(object()), path=route, query="after=%", token=None)[0][0] == "401 Unauthorized"
+    (status, headers), _ = request(app(object()), path=route, method="POST")
+    assert status == "405 Method Not Allowed" and ("Allow", "GET") in headers
+    class Broken:
+        def list_schedule_events(self, **kwargs):
+            assert kwargs == {"user_id": "candidate-1", "limit": 2, "after": "a"}
+            raise failure("private-storage-secret")
+    (status, headers), body = request(app(Broken()), path=route, query="limit=2&after=a")
+    assert status == "500 Internal Server Error" and body == {"error": "internal_error"}
+    assert ("Cache-Control", "no-store") in headers
+
+
+def test_schedule_http_collection_restart_owner_pagination_and_contract(tmp_path):
+    from datetime import datetime, timezone
+    from urllib.parse import urlencode
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+    path = tmp_path / "events.sqlite"
+    route = "/v1/candidate/schedule-events"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteSchedulingRepository(database)
+    cursor = "a" * 199 + "+"
+    for identifier, owner in [(cursor, "candidate-1"), ("b", "other"), ("c", "candidate-1")]:
+        repository.create(ScheduleEvent(event_id=identifier, candidate_id=owner, employer_name="Employer",
+            event_type=ScheduleEventType.INTERVIEW, location="Karlsruhe",
+            start_at=datetime(2026, 10, 25, 0, 30, 0, 123456, tzinfo=timezone.utc), timezone_name="Europe/Berlin"))
+    database.connection.execute("UPDATE scheduling_events SET timezone_name='private-corrupt' WHERE candidate_id='other'")
+    database.connection.execute("UPDATE scheduling_events SET provider_event_id=char(1)||event_id, application_id='private/bad'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        (status, headers), first = request(runtime, path=route, query="limit=1")
+        assert status == "200 OK" and ("Cache-Control", "no-store") in headers
+        assert first["next_after"] == cursor and first["items"][0]["event_id"] == cursor
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        (status, headers), second = request(runtime, path=route, query=urlencode({"after": first["next_after"], "limit": 100}))
+        assert status == "200 OK" and ("Cache-Control", "no-store") in headers
+        assert second == runtime.list_schedule_events(user_id="candidate-1", after=cursor, limit=100)
+        assert [item["event_id"] for item in second["items"]] == ["c"] and second["next_after"] is None
+        assert second["items"][0]["local_start_time"] == "02:30:00.123456"
+        assert request(runtime, path=route, query="after=c")[1]["items"] == []
+        assert len(request(runtime, path=route)[1]["items"]) == 2
+    assert path.read_bytes() == baseline and "private" not in str(first) + str(second)
+    operation = candidate_approval_openapi_document()["paths"][route]["get"]
+    assert operation["security"] == [{"bearerAuth": []}]
+    assert {parameter["name"] for parameter in operation["parameters"]} == {"limit", "after"}
+    schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(first) == set(schema["required"])
+    assert set(first["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
+
+
+def test_schedule_http_collection_missing_storage_and_corrupt_owned_row(tmp_path):
+    from datetime import datetime, timezone
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+    path = tmp_path / "missing.sqlite"
+    route = "/v1/candidate/schedule-events"
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        assert request(runtime, path=route)[1] == {"error": "internal_error"}
+    assert not path.exists()
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database).create(ScheduleEvent(event_id="a", candidate_id="candidate-1",
+        employer_name="Employer", event_type=ScheduleEventType.INTERVIEW, location="Location",
+        start_at=datetime.now(timezone.utc), timezone_name="UTC"))
+    database.connection.execute("UPDATE scheduling_events SET start_epoch_us=0")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1") as runtime:
+        (status, headers), body = request(runtime, path=route)
+        assert status == "500 Internal Server Error" and body == {"error": "internal_error"}
+        assert ("Cache-Control", "no-store") in headers
+    assert path.read_bytes() == baseline
+
+
 def raw_request(app, *, method="GET", path="/sandbox/candidate"):
     statuses = []
     environ = {
