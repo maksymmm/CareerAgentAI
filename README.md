@@ -397,6 +397,9 @@ The same WSGI service exposes a dependency-free candidate sandbox at
 current candidate-visible approval prompt, continue recovery, and submit approve or
 decline decisions. The static page contains no credentials or durable state: the
 candidate enters a bearer token that stays only in the tab's memory.
+An accessible dashboard navigation landmark links to start, inspection, pending
+decision, overview, applications and interviews. Native fragment links move keyboard
+focus without API requests or credential/state changes; a return link reaches the top.
 Changing the token clears the displayed prompt and result; late responses from the
 previous input context cannot repopulate them or select a run.
 Run and application collections render only validated list fields, never raw API
