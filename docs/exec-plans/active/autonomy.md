@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Collection privacy and empty-state hardening: run/application page requests suppress
+raw result rendering before validation. Chromium regressions inject top-level and
+nested private extras, malformed JSON, and empty pages; assert no private text enters
+the DOM, rows clear, pagination disables, and explicit reload recovers real data.
+Next: obtain exact-head CI and Codex review; continue bounded dashboard usability.
+
 Candidate session clearing delivered: explicit local clear removes credentials,
 profile/start/run inputs and displayed run/application/event snapshots, invalidates
 pending reads/starts and approval prompts, and performs no HTTP request. Chromium
