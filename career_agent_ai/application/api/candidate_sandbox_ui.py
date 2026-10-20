@@ -129,6 +129,21 @@ _HTML = r"""<!doctype html>
         const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-]\d{2}:\d{2}(?::\d{2})?)$/.exec(value);
         return !!match && match[0] === value && date(match[1]) && time(match[2]) && offset(match[3]);
       };
+      const epoch = (day, clock, zoneOffset) => {
+        // Date supplies exact whole seconds only; BigInt retains every microsecond.
+        const [year, month, dayOfMonth] = day.split('-').map(Number);
+        const [wholeTime, fraction = '000000'] = clock.split('.');
+        const utc = new Date(0);
+        utc.setUTCFullYear(year, month - 1, dayOfMonth);
+        utc.setUTCHours(...wholeTime.split(':').map(Number), 0);
+        const [hours, minutes, seconds = 0] = zoneOffset.slice(1).split(':').map(Number);
+        const offsetSeconds = (hours * 3600 + minutes * 60 + seconds) * (zoneOffset[0] === '-' ? -1 : 1);
+        return BigInt(utc.getTime()) * 1000n + BigInt(fraction) - BigInt(offsetSeconds) * 1000000n;
+      };
+      const instantEpoch = value => {
+        const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-].+)$/.exec(value);
+        return epoch(match[1], match[2], match[3]);
+      };
       if (!item || !eventId(item.event_id) || !text(item.employer_name, 500) || !text(item.location, 2000) ||
           !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(item.event_type) ||
           !['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(item.status) ||
@@ -138,6 +153,12 @@ _HTML = r"""<!doctype html>
             instant(item.end_at) &&
             date(item.local_end_date) && time(item.local_end_time) && offset(item.end_utc_offset))) {
         throw new Error('Invalid event snapshot.');
+      }
+      const start = instantEpoch(item.start_at);
+      if (epoch(item.local_date, item.local_start_time, item.utc_offset) !== start ||
+          (item.end_at !== null && (instantEpoch(item.end_at) <= start ||
+            epoch(item.local_end_date, item.local_end_time, item.end_utc_offset) !== instantEpoch(item.end_at)))) {
+        throw new Error('Inconsistent event timestamps.');
       }
       return Object.fromEntries(eventFields.map(key => [key, item[key]]));
     }
