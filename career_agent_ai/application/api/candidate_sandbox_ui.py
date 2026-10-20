@@ -238,13 +238,13 @@ _HTML = r"""<!doctype html>
         const items = page.items.map(eventSnapshot);
         if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : (after || ''))) ||
             (page.next_after !== null && (items.length !== 25 || page.next_after !== items.at(-1).event_id))) throw new Error('Invalid event cursor.');
-        for (const item of items) {
+        for (const [index, item] of items.entries()) {
           const row = document.createElement('li');
           row.textContent = item.employer_name + ' — ' + item.event_type + ' — ' + item.status + ' — ' +
             item.local_date + ' ' + item.local_start_time + ' ' + item.utc_offset + ' (' + item.timezone_name + ')';
           const button = document.createElement('button');
           button.type = 'button'; button.textContent = 'View event';
-          button.setAttribute('aria-label', 'View event ' + item.event_id);
+          button.setAttribute('aria-label', 'View event ' + (index + 1) + ': ' + item.event_id);
           button.addEventListener('click', () => {
             if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id));
           });
@@ -385,14 +385,16 @@ _HTML = r"""<!doctype html>
               statuses.includes(item.status) && Number.isSafeInteger(item.state_version) && item.state_version >= 1)) {
           throw new Error('Invalid application page.');
         }
-        for (const item of page.items) {
+        for (const [index, item] of page.items.entries()) {
           const row = document.createElement('li');
           row.textContent = (item.job_title || item.job_id) + ' — ' + item.company_id +
             ' — ' + item.status + ' — version ' + item.state_version + ' — ' + item.application_id;
           const button = document.createElement('button');
           button.type = 'button';
           button.textContent = 'View application';
-          button.setAttribute('aria-label', 'View application ' + item.application_id);
+          // The ordinal remains unique even when an accessibility tree folds
+          // distinct whitespace sequences inside otherwise-valid opaque IDs.
+          button.setAttribute('aria-label', 'View application ' + (index + 1) + ': ' + item.application_id);
           button.addEventListener('click', () => {
             if (generation === applicationsGeneration) guarded(() => loadApplicationDetail(item.application_id));
           });

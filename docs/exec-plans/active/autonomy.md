@@ -1,9 +1,10 @@
 # Autonomous Implementation Plan
 
 Candidate contextual action labels: repeated application and event view buttons keep
-their concise visible labels while accessible names include the validated, already
-visible record ID. Chromium verifies distinct first/final-page names and exact binding
-to the opened application without adding private response fields to the DOM.
+their concise visible labels while accessible names include a page ordinal plus the
+validated, already visible record ID. The ordinal preserves uniqueness after assistive-
+technology whitespace folding. Chromium verifies whitespace-colliding IDs, distinct
+first/final-page names, and exact binding without adding private fields to the DOM.
 Next: exact-head CI/review, then continue dashboard accessibility and usable summaries.
 
 Candidate collection summaries: run, application and event status regions report

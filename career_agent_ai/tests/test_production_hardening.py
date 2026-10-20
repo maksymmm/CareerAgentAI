@@ -349,10 +349,10 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             ).wait_for()
             assert page.locator("#owned-events button").count() == 25
             assert page.get_by_role(
-                "button", name="View event event-000", exact=True
+                "button", name="View event 1: event-000", exact=True
             ).count() == 1
             assert page.get_by_role(
-                "button", name="View event event-024", exact=True
+                "button", name="View event 25: event-024", exact=True
             ).count() == 1
             assert page.locator("#owned-events b").count() == 0
             page.route("**/v1/candidate/schedule-events?*after=*", lambda route: route.fulfill(status=503, json={"message": "private-page-secret"}))
@@ -367,10 +367,10 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             ).wait_for()
             assert page.locator("#owned-events button").count() == 2
             assert page.get_by_role(
-                "button", name="View event event-025", exact=True
+                "button", name="View event 1: event-025", exact=True
             ).count() == 1
             assert page.get_by_role(
-                "button", name="View event event-026", exact=True
+                "button", name="View event 2: event-026", exact=True
             ).count() == 1
             assert page.locator("#next-events").is_disabled()
             page.locator("#owned-events button").first.click()
@@ -746,8 +746,34 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
             detail = json.loads(page.locator("#application-detail").text_content())
             assert application_button.get_attribute("aria-label") == (
-                f"View application {detail['application_id']}"
+                f"View application 1: {detail['application_id']}"
             )
+            page.route(
+                "**/v1/candidate/applications?*",
+                lambda route: route.fulfill(status=200, json={
+                    "schema_version": 1,
+                    "items": [
+                        {"application_id": "candidate  one", "job_id": "job-1",
+                         "job_title": "First", "company_id": "company",
+                         "status": "saved", "state_version": 1},
+                        {"application_id": "candidate one", "job_id": "job-2",
+                         "job_title": "Second", "company_id": "company",
+                         "status": "saved", "state_version": 1},
+                    ],
+                    "next_after": None,
+                }),
+            )
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "2 applications on this page. End of list. Read-only snapshots.", exact=True
+            ).wait_for()
+            assert page.get_by_role(
+                "button", name="View application 1: candidate one", exact=True
+            ).count() == 1
+            assert page.get_by_role(
+                "button", name="View application 2: candidate one", exact=True
+            ).count() == 1
+            page.unroute("**/v1/candidate/applications?*")
             assert detail["status"] == "applied" and detail["state_version"] == 2
             assert set(detail) == {"application_id", "job_id", "job_title", "company_id",
                                    "status", "state_version", "created_at", "updated_at"}

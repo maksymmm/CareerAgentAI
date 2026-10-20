@@ -411,7 +411,8 @@ explicit reloads recover after malformed responses without exposing private extr
 Run, application and event live-status summaries report the exact number of rows on
 the current page and whether another page is available, without claiming a total.
 Application and event view buttons keep concise visible text while their accessible
-names include the validated record ID, so repeated controls remain distinguishable.
+names include a page ordinal and the validated record ID. The ordinal keeps repeated
+controls distinguishable even if assistive technology folds whitespace inside opaque IDs.
 Run pages require strictly ascending unique IDs beyond the requested cursor. A next
 cursor must equal the last ID of a full page; malformed or replayed pages clear rows
 and retain only the attempted cursor for explicit retry.
