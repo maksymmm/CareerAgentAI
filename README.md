@@ -234,6 +234,9 @@ next-page/retry and View event detail, and renders allowlisted text-only snapsho
 including exact UTC/local times and both offsets. Page loads/token edits invalidate
 pending details; token edits clear all schedule state. Malformed responses and raw
 backend errors never enter the result pane. No calendar action controls are added.
+The browser verifies the IANA zone's local date/time at both UTC instants. Unknown
+zones or browser/server timezone-database disagreement fail closed with a retry hint;
+historical dates unsupported by the browser are not displayed as verified schedules.
 
 Authenticated `GET /v1/candidate/schedule-events?limit=25&after=...` exposes owned
 ID-keyset pages with strict bounded query validation, bearer-derived ownership,
