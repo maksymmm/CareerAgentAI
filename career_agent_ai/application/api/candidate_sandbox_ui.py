@@ -115,10 +115,20 @@ _HTML = r"""<!doctype html>
       'timezone_name', 'utc_offset', 'end_utc_offset'];
     function eventSnapshot(item) {
       const text = (value, max) => typeof value === 'string' && value.length > 0 && Array.from(value).length <= max;
-      const date = value => text(value, 10) && /^\d{4}-\d{2}-\d{2}$/.test(value);
-      const time = value => text(value, 15) && /^\d{2}:\d{2}:\d{2}(\.\d{6})?$/.test(value);
-      const offset = value => text(value, 9) && /^[+-]\d{2}:\d{2}(:\d{2})?$/.test(value);
-      const instant = value => text(value, 40) && Number.isFinite(Date.parse(value));
+      const date = value => {
+        if (!text(value, 10) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+        const [year, month, day] = value.split('-').map(Number);
+        const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+        const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1];
+      };
+      const time = value => text(value, 15) && [8, 15].includes(value.length) && /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{6})?$/.test(value);
+      const offset = value => text(value, 9) && [6, 9].includes(value.length) && /^[+-](?:[01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
+      const instant = value => {
+        if (!text(value, 40)) return false;
+        const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-]\d{2}:\d{2}(?::\d{2})?)$/.exec(value);
+        return !!match && match[0] === value && date(match[1]) && time(match[2]) && offset(match[3]);
+      };
       if (!item || !eventId(item.event_id) || !text(item.employer_name, 500) || !text(item.location, 2000) ||
           !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(item.event_type) ||
           !['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(item.status) ||
