@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Schedule UI review P2 consistency: local date/time/offset tuples must reconstruct
+their exact UTC instants; a present end must follow start. Whole-second UTC arithmetic
+plus BigInt microseconds avoids Date.parse rounding, retains year 1–99 and historical
+offset seconds. Chromium rejects mismatched local tuples and equal/earlier microsecond
+ends while accepting a one-microsecond interval and historical offsets.
+
 Schedule UI review P2: Gregorian dates (including leap-century rules), clock fields,
 and UTC offsets now validate semantic ranges. Instants require exact timezone-bearing
 date/time with optional six-digit microseconds, not permissive Date.parse normalization.
