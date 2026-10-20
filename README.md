@@ -229,6 +229,11 @@ credential configuration is included.
 
 ## Scheduling and Interview Coordination
 
+The candidate sandbox offers Clear this tab's session: it removes the bearer token,
+profile/start inputs and all loaded run/application/event data, invalidates pending
+reads/starts and disables approval prompts without making a network request. This is
+local clearing, not server-side token revocation or cancellation of accepted work.
+
 Candidate sandbox My interviews and events loads owned event pages, supports
 next-page/retry and View event detail, and renders allowlisted text-only snapshots
 including exact UTC/local times and both offsets. Page loads/token edits invalidate
