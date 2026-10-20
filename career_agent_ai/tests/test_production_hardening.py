@@ -279,6 +279,120 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         app.start(request())
 
 
+def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    path = tmp_path / "browser-events.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteSchedulingRepository(database)
+    for index in range(28):
+        repository.create(ScheduleEvent(event_id=f"event-{index:03}", candidate_id="owner" if index < 27 else "other",
+            employer_name="<b>Employer</b>", event_type=ScheduleEventType.INTERVIEW, location="Karlsruhe",
+            start_at=datetime(2026, 10, 25, 0, 30, 0, 123456, tzinfo=timezone.utc),
+            end_at=datetime(2026, 10, 25, 2, 30, 0, 123456, tzinfo=timezone.utc), timezone_name="Europe/Berlin"))
+    database.connection.execute("UPDATE scheduling_events SET provider_event_id='private-provider-'||event_id, application_id='private-app'")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    app = runtime_composition.RuntimeCandidateApp(database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "owner" if token == "sandbox-token" else None)
+    app.close()
+    app = runtime_composition.RuntimeCandidateApp(database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "owner" if token == "sandbox-token" else None)
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+    server = make_server("127.0.0.1", 0, app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("sandbox-token")
+            page.locator("#list-events").click()
+            page.locator("#events-state").get_by_text("Read-only event snapshots.").wait_for()
+            assert page.locator("#owned-events button").count() == 25
+            assert page.locator("#owned-events b").count() == 0
+            page.route("**/v1/candidate/schedule-events?*after=*", lambda route: route.fulfill(status=503, json={"message": "private-page-secret"}))
+            page.locator("#next-events").click()
+            page.locator("#events-state").get_by_text("Load or retry the event page.").wait_for()
+            assert page.locator("#next-events").is_enabled()
+            assert "private-page-secret" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/schedule-events?*after=*")
+            page.locator("#next-events").click()
+            page.locator("#events-state").get_by_text("Read-only event snapshots.").wait_for()
+            assert page.locator("#owned-events button").count() == 2
+            assert page.locator("#next-events").is_disabled()
+            page.locator("#owned-events button").first.click()
+            page.locator("#event-detail-state").get_by_text("Read-only event detail.").wait_for()
+            detail = json.loads(page.locator("#event-detail").text_content())
+            assert detail["event_id"] == "event-025" and detail["local_start_time"] == "02:30:00.123456"
+            assert detail["utc_offset"] == "+02:00" and detail["end_utc_offset"] == "+01:00"
+            assert "private" not in page.locator("body").text_content()
+            def expanded_detail(route):
+                payload = route.fetch().json()
+                payload["private"] = "private-top-secret"
+                payload["event"]["private"] = "private-nested-secret"
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/schedule-event?*", expanded_detail)
+            page.locator("#owned-events button").first.click()
+            page.locator("#event-detail-state").get_by_text("Read-only event detail.").wait_for()
+            assert "private" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/schedule-event?*")
+            for replacement in ({"event_id": "wrong"}, {"state_version": True}, {"status": "invalid"}, {"utc_offset": "bad"}):
+                def malformed_detail(route):
+                    payload = route.fetch().json()
+                    payload["event"].update(replacement)
+                    route.fulfill(status=200, json=payload)
+                page.route("**/v1/candidate/schedule-event?*", malformed_detail)
+                page.locator("#owned-events button").first.click()
+                page.locator("#event-detail-state").get_by_text("Select the event again to retry.").wait_for()
+                assert page.locator("#event-detail").text_content() == ""
+                page.unroute("**/v1/candidate/schedule-event?*")
+            page.route("**/v1/candidate/schedule-event?*", lambda route: route.fulfill(status=200, content_type="application/json", body="private-malformed-secret"))
+            page.locator("#owned-events button").first.click()
+            page.locator("#event-detail-state").get_by_text("Select the event again to retry.").wait_for()
+            assert "private-malformed-secret" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/schedule-event?*")
+            page.evaluate("""() => {
+              window.originalEventFetch = window.fetch;
+              window.fetch = async (...args) => {
+                const response = await window.originalEventFetch(...args);
+                if (String(args[0]).includes('/schedule-event?')) {
+                  document.body.dataset.eventWaiting = 'yes';
+                  await new Promise(resolve => { window.releaseEvent = resolve; });
+                  document.body.dataset.eventReleased = 'yes';
+                }
+                return response;
+              };
+            }""")
+            page.locator("#owned-events button").first.click()
+            page.locator('body[data-event-waiting="yes"]').wait_for()
+            page.locator("#token").fill("changed")
+            page.evaluate("window.releaseEvent(); window.fetch = window.originalEventFetch")
+            page.locator('body[data-event-released="yes"]').wait_for()
+            assert page.locator("#event-detail").text_content() == ""
+            assert page.locator("#owned-events li").count() == 0
+            assert page.locator("#next-events").is_disabled()
+            page.locator("#token").fill("sandbox-token")
+            page.route("**/v1/candidate/schedule-events?*", lambda route: route.fulfill(status=200, json={"schema_version": 99, "items": [], "next_after": None, "private": "private-page-payload"}))
+            page.locator("#list-events").click()
+            page.locator("#events-state").get_by_text("Load or retry the event page.").wait_for()
+            assert "private-page-payload" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/schedule-events?*")
+            page.locator("#list-events").click()
+            page.locator("#events-state").get_by_text("Read-only event snapshots.").wait_for()
+            assert page.locator("#approve").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2); app.close()
+    assert path.read_bytes() == baseline
+
+
 def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     database_path = str(tmp_path / "browser-candidate.sqlite")
