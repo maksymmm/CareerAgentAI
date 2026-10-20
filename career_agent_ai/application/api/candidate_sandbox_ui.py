@@ -8,7 +8,7 @@ def candidate_sandbox_html() -> bytes:
     return _HTML.encode("utf-8")
 
 
-_HTML = """<!doctype html>
+_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -80,6 +80,17 @@ _HTML = """<!doctype html>
     <pre id="application-history"></pre>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
+  <section aria-labelledby="schedule-title">
+    <h2 id="schedule-title">My interviews and events</h2>
+    <button id="list-events" type="button">Load my events</button>
+    <ul id="owned-events" aria-label="My events"></ul>
+    <p id="events-state" role="status"></p>
+    <button id="next-events" type="button" disabled>Next event page</button>
+    <h3>Event detail</h3>
+    <p id="event-detail-state" role="status"></p>
+    <pre id="event-detail"></pre>
+    <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
+  </section>
   <h2>Result</h2>
   <pre id="result" aria-live="polite">Ready.</pre>
   <script>
@@ -95,6 +106,145 @@ _HTML = """<!doctype html>
     let listGeneration = 0;
     let nextRunCursor = null;
     const byId = (id) => document.getElementById(id);
+    let eventsGeneration = 0;
+    let eventDetailGeneration = 0;
+    let nextEventCursor = null;
+    const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+    const eventFields = ['event_id', 'employer_name', 'event_type', 'location', 'status', 'state_version',
+      'start_at', 'end_at', 'local_date', 'local_start_time', 'local_end_date', 'local_end_time',
+      'timezone_name', 'utc_offset', 'end_utc_offset'];
+    function eventSnapshot(item) {
+      const text = (value, max) => typeof value === 'string' && value.length > 0 && Array.from(value).length <= max;
+      const date = value => {
+        if (!text(value, 10) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+        const [year, month, day] = value.split('-').map(Number);
+        const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+        const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1];
+      };
+      const time = value => text(value, 15) && [8, 15].includes(value.length) && /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{6})?$/.test(value);
+      const offset = value => text(value, 9) && [6, 9].includes(value.length) && /^[+-](?:[01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
+      const instant = value => {
+        if (!text(value, 40)) return false;
+        const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-]\d{2}:\d{2}(?::\d{2})?)$/.exec(value);
+        return !!match && match[0] === value && date(match[1]) && time(match[2]) && offset(match[3]);
+      };
+      const epoch = (day, clock, zoneOffset) => {
+        // Date supplies exact whole seconds only; BigInt retains every microsecond.
+        const [year, month, dayOfMonth] = day.split('-').map(Number);
+        const [wholeTime, fraction = '000000'] = clock.split('.');
+        const utc = new Date(0);
+        utc.setUTCFullYear(year, month - 1, dayOfMonth);
+        utc.setUTCHours(...wholeTime.split(':').map(Number), 0);
+        const [hours, minutes, seconds = 0] = zoneOffset.slice(1).split(':').map(Number);
+        const offsetSeconds = (hours * 3600 + minutes * 60 + seconds) * (zoneOffset[0] === '-' ? -1 : 1);
+        return BigInt(utc.getTime()) * 1000n + BigInt(fraction) - BigInt(offsetSeconds) * 1000000n;
+      };
+      const instantEpoch = value => {
+        const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-].+)$/.exec(value);
+        return epoch(match[1], match[2], match[3]);
+      };
+      if (!item || !eventId(item.event_id) || !text(item.employer_name, 500) || !text(item.location, 2000) ||
+          !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(item.event_type) ||
+          !['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(item.status) ||
+          !Number.isSafeInteger(item.state_version) || item.state_version < 1 || !instant(item.start_at) ||
+          !date(item.local_date) || !time(item.local_start_time) || !text(item.timezone_name, 200) || !offset(item.utc_offset) ||
+          !(item.end_at === null ? [item.local_end_date, item.local_end_time, item.end_utc_offset].every(value => value === null) :
+            instant(item.end_at) &&
+            date(item.local_end_date) && time(item.local_end_time) && offset(item.end_utc_offset))) {
+        throw new Error('Invalid event snapshot.');
+      }
+      const start = instantEpoch(item.start_at);
+      if (epoch(item.local_date, item.local_start_time, item.utc_offset) !== start ||
+          (item.end_at !== null && (instantEpoch(item.end_at) <= start ||
+            epoch(item.local_end_date, item.local_end_time, item.end_utc_offset) !== instantEpoch(item.end_at)))) {
+        throw new Error('Inconsistent event timestamps.');
+      }
+      // Browser and server timezone databases may differ historically. Fail closed
+      // on disagreement instead of displaying an unverified zone label.
+      if (/^[+-]/.test(item.timezone_name)) throw new Error('Invalid event timezone.');
+      const zone = new Intl.DateTimeFormat('en-GB-u-ca-iso8601-nu-latn', {
+        timeZone: item.timezone_name, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
+      const zoneMatches = (micros, localDate, localTime) => {
+        const remainder = ((micros % 1000000n) + 1000000n) % 1000000n;
+        const wholeSecond = new Date(Number((micros - remainder) / 1000n));
+        const parts = Object.fromEntries(zone.formatToParts(wholeSecond).map(part => [part.type, part.value]));
+        return [parts.year.padStart(4, '0'), parts.month, parts.day].join('-') === localDate &&
+          [parts.hour, parts.minute, parts.second].join(':') === localTime.split('.')[0];
+      };
+      if (!zoneMatches(start, item.local_date, item.local_start_time) ||
+          (item.end_at !== null && !zoneMatches(instantEpoch(item.end_at), item.local_end_date, item.local_end_time))) {
+        throw new Error('Event timezone data does not match this browser.');
+      }
+      return Object.fromEntries(eventFields.map(key => [key, item[key]]));
+    }
+    function clearEventDetail() {
+      eventDetailGeneration += 1;
+      byId('event-detail').textContent = '';
+      byId('event-detail-state').textContent = '';
+    }
+    function clearEvents() {
+      clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
+      byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
+      byId('next-events').disabled = true;
+    }
+    async function loadEventDetail(identifier) {
+      clearEventDetail();
+      const generation = eventDetailGeneration;
+      byId('event-detail-state').textContent = 'Loading event…';
+      try {
+        const detail = await call('/v1/candidate/schedule-event?event_id=' + encodeURIComponent(identifier), {}, false);
+        if (generation !== eventDetailGeneration) return;
+        if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
+        byId('event-detail').textContent = JSON.stringify(eventSnapshot(detail.event), null, 2);
+        byId('event-detail-state').textContent = 'Read-only event detail.';
+      } catch (error) {
+        if (generation === eventDetailGeneration) {
+          clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
+        }
+        throw error;
+      }
+    }
+    async function loadEvents(after = null) {
+      clearEvents();
+      const generation = eventsGeneration;
+      byId('events-state').textContent = 'Loading events…';
+      try {
+        const page = await call('/v1/candidate/schedule-events?limit=25' +
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+        if (generation !== eventsGeneration) return;
+        if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || eventId(page.next_after))) throw new Error('Invalid event page.');
+        const items = page.items.map(eventSnapshot);
+        if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : (after || ''))) ||
+            (page.next_after !== null && (items.length !== 25 || page.next_after !== items.at(-1).event_id))) throw new Error('Invalid event cursor.');
+        for (const item of items) {
+          const row = document.createElement('li');
+          row.textContent = item.employer_name + ' — ' + item.event_type + ' — ' + item.status + ' — ' +
+            item.local_date + ' ' + item.local_start_time + ' ' + item.utc_offset + ' (' + item.timezone_name + ')';
+          const button = document.createElement('button');
+          button.type = 'button'; button.textContent = 'View event';
+          button.addEventListener('click', () => {
+            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id));
+          });
+          row.append(button); byId('owned-events').append(row);
+        }
+        nextEventCursor = page.next_after; byId('next-events').disabled = nextEventCursor === null;
+        byId('events-state').textContent = items.length ? 'Read-only event snapshots.' : 'No events on this page.';
+      } catch (error) {
+        if (generation === eventsGeneration) {
+          clearEvents(); nextEventCursor = after; byId('next-events').disabled = after === null;
+          byId('events-state').textContent = 'Load or retry the event page.';
+        }
+        throw error;
+      }
+    }
+    byId('list-events').addEventListener('click', () => guarded(() => loadEvents()));
+    byId('next-events').addEventListener('click', () => guarded(() => {
+      if (nextEventCursor !== null) return loadEvents(nextEventCursor);
+    }));
+    byId('token').addEventListener('input', clearEvents);
     const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
     const show = (value) => { clearOverview(); byId('result').textContent = JSON.stringify(value, null, 2); };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;

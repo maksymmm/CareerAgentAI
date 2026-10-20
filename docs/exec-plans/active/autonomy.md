@@ -1,5 +1,32 @@
 # Autonomous Implementation Plan
 
+Schedule UI review P2 timezone: Intl IANA-zone formatting must agree with local
+date/time at both exact UTC instants after tuple/offset validation. Unknown zones,
+fixed-offset labels and browser/server timezone-data mismatches fail closed. Negative
+epoch flooring preserves historical seconds. Chromium rejects contradictory/unknown
+zone labels and retains DST-fold, leap-day and Monrovia second-offset acceptance.
+Browser timezone database disagreement is an explicit documented display limitation.
+
+Schedule UI review P2 consistency: local date/time/offset tuples must reconstruct
+their exact UTC instants; a present end must follow start. Whole-second UTC arithmetic
+plus BigInt microseconds avoids Date.parse rounding, retains year 1–99 and historical
+offset seconds. Chromium rejects mismatched local tuples and equal/earlier microsecond
+ends while accepting a one-microsecond interval and historical offsets.
+
+Schedule UI review P2: Gregorian dates (including leap-century rules), clock fields,
+and UTC offsets now validate semantic ranges. Instants require exact timezone-bearing
+date/time with optional six-digit microseconds, not permissive Date.parse normalization.
+Chromium rejects impossible local/UTC/end values, date-only/naive/millisecond inputs,
+and accepts leap-day and historical second-resolution offset snapshots.
+
+Schedule UI delivered: owned event pages and explicit details render allowlisted
+text-only fields/UTC/local times and both offsets; next-page retry, malformed response
+rejection and token/page/selection invalidation prevent stale/private rendering.
+Chromium restart acceptance covers persisted DST-fold details, pagination retry,
+private extras/errors/parse failures, identity/version/status/offset rejection and
+delayed detail invalidation after token edits. No calendar actions enabled.
+Next: verify reviewed integration, then candidate dashboard usability/empty-state refinement.
+
 Schedule HTTP collection delivered: GET /v1/candidate/schedule-events authenticates
 before strict bounded limit/after parsing and request-local read-only owner queries.
 Malformed escapes, duplicate/unknown/invalid inputs fail before storage; errors are
