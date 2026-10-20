@@ -349,7 +349,13 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
                                 {"local_end_time": "12:60:00"}, {"utc_offset": "+99:99:99"},
                                 {"end_utc_offset": "-00:00:60"}, {"start_at": "2026-10-25"},
                                 {"start_at": "2026-02-30T00:00:00+00:00"}, {"end_at": "2026-10-25T12:00:00"},
-                                {"start_at": "2026-10-25T00:00:00.123+00:00"}):
+                                {"start_at": "2026-10-25T00:00:00.123+00:00"},
+                                {"local_start_time": "03:30:00.123456"}, {"utc_offset": "+01:00"},
+                                {"local_date": "2026-10-26"}, {"local_end_time": "04:30:00.123457"},
+                                {"end_at": "2026-10-25T00:30:00.123456+00:00", "local_end_date": "2026-10-25",
+                                 "local_end_time": "02:30:00.123456", "end_utc_offset": "+02:00"},
+                                {"end_at": "2026-10-25T00:30:00.123455+00:00", "local_end_date": "2026-10-25",
+                                 "local_end_time": "02:30:00.123455", "end_utc_offset": "+02:00"}):
                 def malformed_detail(route):
                     payload = route.fetch().json()
                     payload["event"].update(replacement)
@@ -366,6 +372,9 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
                     payload["event"].update(start_at=date + "T00:30:00.123456+00:00", local_date=date,
                         local_start_time=local_time, timezone_name=zone, utc_offset=offset,
                         end_at=None, local_end_date=None, local_end_time=None, end_utc_offset=None)
+                    if date == "2000-02-29":
+                        payload["event"].update(end_at=date + "T00:30:00.123457+00:00", local_end_date=date,
+                            local_end_time="00:30:00.123457", end_utc_offset="+00:00")
                     route.fulfill(status=200, json=payload)
                 page.route("**/v1/candidate/schedule-event?*", valid_precision_detail)
                 page.locator("#owned-events button").first.click()
