@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate dashboard navigation: six native fragment links in a named navigation
+landmark, focusable destinations, visible keyboard focus and a return-to-top link.
+Chromium checks every destination and keyboard activation, no HTTP requests, unchanged
+token and disabled decisions. Links encode only fixed section IDs, never private data.
+Next: exact-head CI/review, then continue dashboard usability and accessibility.
+
 Run-list pagination hardening: reject duplicate/reversed IDs, items at or before
 the requested cursor, and non-terminal cursors not matching a full page's last ID.
 Chromium covers five malformed first pages plus replayed page one during page-two
