@@ -49,6 +49,7 @@ class CandidateApprovalLoop(Protocol):
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -115,7 +116,8 @@ class CandidateApprovalWSGIApp:
         is_history = parts == ["v1", "candidate", "application", "history"]
         is_application = parts == ["v1", "candidate", "application"] or is_history
         is_schedule = parts == ["v1", "candidate", "schedule-event"]
-        is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications
+        is_schedule_list = parts == ["v1", "candidate", "schedule-events"]
+        is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications or is_schedule_list
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
@@ -183,6 +185,8 @@ class CandidateApprovalWSGIApp:
                     # 200 scalars * 4 UTF-8 bytes * 3 escape characters + overhead.
                     if len(query) > (2500 if is_applications else 1000):
                         raise ValueError("query too long")
+                    if is_schedule_list and re.search(r"%(?![0-9A-Fa-f]{2})", query):
+                        raise ValueError("invalid escape")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2, errors="strict")
                     values = dict(pairs)
                     if len(values) != len(pairs) or set(values) - {"limit", "after"}:
@@ -199,11 +203,17 @@ class CandidateApprovalWSGIApp:
                             if not after or len(after) > 200 or after != after.strip():
                                 raise ValueError("invalid cursor")
                             after.encode("utf-8", errors="strict")
+                        elif is_schedule_list:
+                            if validate_schedule_identifier(after, "after") != after:
+                                raise ValueError("invalid cursor")
                         elif validate_loop_identifier(after, "after") != after:
                             raise ValueError("invalid cursor")
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
-                collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
+                if is_schedule_list:
+                    collection = self._loop.list_schedule_events
+                else:
+                    collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
                 return self._respond(start_response, "200 OK", collection(user_id=user_id, limit=limit, after=after))
             if is_start:
                 if method != "POST":
@@ -934,4 +944,22 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         "schema_version": {"const": 1}, "event": {"type": "object",
                             "additionalProperties": False, "required": list(event_properties),
                             "properties": event_properties}}})}}}}
+    schedule_detail = document["paths"]["/v1/candidate/schedule-event"]["get"]
+    document["paths"]["/v1/candidate/schedule-events"] = {"get": {
+        "operationId": "listCandidateScheduleEvents", "security": [{"bearerAuth": []}],
+        "parameters": [
+            {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+            {"name": "after", "in": "query", "description": "Exclusive event-ID cursor, not an ownership credential",
+             "schema": event_properties["event_id"]}],
+        "responses": {**common_responses,
+            "405": schedule_detail["responses"]["405"],
+            "200": {"description": "Bounded read-only owned events in event-ID order; no calendar actions",
+                "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                "content": content({"type": "object", "additionalProperties": False,
+                    "required": ["schema_version", "items", "next_after"], "properties": {
+                        "schema_version": {"const": 1},
+                        "items": {"type": "array", "maxItems": 100, "items": {
+                            "type": "object", "additionalProperties": False,
+                            "required": list(event_properties), "properties": event_properties}},
+                        "next_after": {**event_properties["event_id"], "type": ["string", "null"]}}})}}}}
     return document

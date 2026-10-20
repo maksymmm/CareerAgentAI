@@ -229,6 +229,13 @@ credential configuration is included.
 
 ## Scheduling and Interview Coordination
 
+Authenticated `GET /v1/candidate/schedule-events?limit=25&after=...` exposes owned
+ID-keyset pages with strict bounded query validation, bearer-derived ownership,
+no-store, sanitized errors and OpenAPI. It uses existing read-only storage, cannot
+create a database or execute work, and never loads private calendar identifiers.
+The collection's `after` is a range cursor, not an ownership credential. Read-only
+candidate UI discovery/detail is the next delivery unit.
+
 `RuntimeCandidateApp.list_schedule_events(user_id=..., limit=25, after=None)` reads
 bounded owner-only event snapshots in stable event-ID order (maximum 100), using
 the same minimal exact-time projection as detail. `next_after` is the last returned

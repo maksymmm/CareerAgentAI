@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Schedule HTTP collection delivered: GET /v1/candidate/schedule-events authenticates
+before strict bounded limit/after parsing and request-local read-only owner queries.
+Malformed escapes, duplicate/unknown/invalid inputs fail before storage; errors are
+sanitized and no-store/OpenAPI match the minimal exact-time projection. Restart,
+max-ID pagination/private isolation, missing storage and corrupt-owned tests added.
+Next: read-only candidate event discovery/detail UI without calendar actions.
+
 Schedule discovery groundwork delivered: RuntimeCandidateApp.list_schedule_events
 returns bounded ID-keyset pages using owner-filtered read-only SQL and the existing
 exact-time detail projection. Writable scheduling startup backfills owner/ID index;
