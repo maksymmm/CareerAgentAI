@@ -122,6 +122,9 @@ _HTML = r"""<!doctype html>
     let listGeneration = 0;
     let nextRunCursor = null;
     const byId = (id) => document.getElementById(id);
+    const pageSummary = (count, singular, plural, hasMore, instruction = '') =>
+      count + ' ' + (count === 1 ? singular : plural) + ' on this page. ' +
+      (hasMore ? 'More available.' : 'End of list.') + (instruction ? ' ' + instruction : '');
     let eventsGeneration = 0;
     let eventDetailGeneration = 0;
     let nextEventCursor = null;
@@ -247,7 +250,8 @@ _HTML = r"""<!doctype html>
           row.append(button); byId('owned-events').append(row);
         }
         nextEventCursor = page.next_after; byId('next-events').disabled = nextEventCursor === null;
-        byId('events-state').textContent = items.length ? 'Read-only event snapshots.' : 'No events on this page.';
+        byId('events-state').textContent = pageSummary(
+          items.length, 'event', 'events', nextEventCursor !== null, 'Read-only snapshots.');
       } catch (error) {
         if (generation === eventsGeneration) {
           clearEvents(); nextEventCursor = after; byId('next-events').disabled = after === null;
@@ -395,7 +399,9 @@ _HTML = r"""<!doctype html>
         }
         nextApplicationCursor = page.next_after;
         byId('next-applications').disabled = nextApplicationCursor === null;
-        byId('applications-state').textContent = page.items.length ? 'Read-only application snapshots.' : 'No applications on this page.';
+        byId('applications-state').textContent = pageSummary(
+          page.items.length, 'application', 'applications', nextApplicationCursor !== null,
+          'Read-only snapshots.');
       } catch (error) {
         if (generation === applicationsGeneration) {
           clearApplications();
@@ -453,7 +459,9 @@ _HTML = r"""<!doctype html>
         }
         nextRunCursor = page.next_after;
         byId('next-runs').disabled = nextRunCursor === null;
-        byId('list-state').textContent = page.items.length ? 'Select a run to inspect it.' : 'No runs on this page.';
+        byId('list-state').textContent = pageSummary(
+          page.items.length, 'run', 'runs', nextRunCursor !== null,
+          page.items.length ? 'Select a run to inspect.' : '');
       } catch (error) {
         if (generation === listGeneration) {
           clearRunList();
