@@ -351,6 +351,8 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
                                 {"start_at": "2026-02-30T00:00:00+00:00"}, {"end_at": "2026-10-25T12:00:00"},
                                 {"start_at": "2026-10-25T00:00:00.123+00:00"},
                                 {"local_start_time": "03:30:00.123456"}, {"utc_offset": "+01:00"},
+                                {"timezone_name": "UTC"}, {"timezone_name": "Unknown/Zone"},
+                                {"timezone_name": "+02:00"},
                                 {"local_date": "2026-10-26"}, {"local_end_time": "04:30:00.123457"},
                                 {"end_at": "2026-10-25T00:30:00.123456+00:00", "local_end_date": "2026-10-25",
                                  "local_end_time": "02:30:00.123456", "end_utc_offset": "+02:00"},
@@ -365,11 +367,12 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
                 page.locator("#event-detail-state").get_by_text("Select the event again to retry.").wait_for()
                 assert page.locator("#event-detail").text_content() == ""
                 page.unroute("**/v1/candidate/schedule-event?*")
-            for date, zone, offset, local_time in [("2000-02-29", "UTC", "+00:00", "00:30:00.123456"),
-                                                  ("1900-01-01", "Europe/Amsterdam", "+00:19:32", "00:49:32.123456")]:
+            for date, zone, offset, local_day, local_time in [
+                ("2000-02-29", "UTC", "+00:00", "2000-02-29", "00:30:00.123456"),
+                ("1900-01-01", "Africa/Monrovia", "-00:43:08", "1899-12-31", "23:46:52.123456")]:
                 def valid_precision_detail(route):
                     payload = route.fetch().json()
-                    payload["event"].update(start_at=date + "T00:30:00.123456+00:00", local_date=date,
+                    payload["event"].update(start_at=date + "T00:30:00.123456+00:00", local_date=local_day,
                         local_start_time=local_time, timezone_name=zone, utc_offset=offset,
                         end_at=None, local_end_date=None, local_end_time=None, end_utc_offset=None)
                     if date == "2000-02-29":
