@@ -561,6 +561,28 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 f"http://127.0.0.1:{restarted_server.server_port}/sandbox/candidate"
             )
             page.locator("#token").fill("sandbox-token")
+            navigation_requests = []
+            record_navigation_request = lambda request: navigation_requests.append(request.url)
+            page.on("request", record_navigation_request)
+            navigation = page.get_by_role("navigation", name="Candidate dashboard")
+            targets = ("start-panel", "inspect-panel", "decision-panel", "overview-title",
+                       "applications-title", "schedule-title")
+            assert navigation.get_by_role("link").count() == len(targets)
+            for target in targets:
+                navigation.locator(f'a[href="#{target}"]').click()
+                assert page.evaluate("document.activeElement.id") == target
+                assert page.url.endswith(f"#{target}")
+            first_link = navigation.get_by_role("link", name="Start run", exact=True)
+            first_link.focus()
+            first_link.press("Enter")
+            assert page.evaluate("document.activeElement.id") == "start-panel"
+            page.get_by_role("link", name="Back to dashboard navigation").click()
+            assert page.evaluate("document.activeElement.id") == "candidate-top"
+            assert navigation_requests == []
+            page.remove_listener("request", record_navigation_request)
+            assert page.locator("#token").input_value() == "sandbox-token"
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
             page.locator("#list-runs").click()
             page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
             assert page.locator("#owned-runs button").count() == 25
