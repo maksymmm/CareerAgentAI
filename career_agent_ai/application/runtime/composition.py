@@ -228,6 +228,12 @@ class _RequestCandidateLoop:
         """Read authenticated owner's event without writable storage or calendar I/O."""
         return SQLiteCandidateSchedule(self._database_path).get_snapshot(event_id, user_id=user_id)
 
+    def list_schedule_events(self, *, user_id: str, limit: int = 25,
+                             after: str | None = None) -> dict[str, Any]:
+        """Read authenticated event pages using request-local read-only storage."""
+        return SQLiteCandidateSchedule(self._database_path).list_page(
+            user_id=user_id, limit=limit, after=after)
+
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's history through request-local read-only storage."""
         return SQLiteCandidateApplications(self._database_path).get_history(
