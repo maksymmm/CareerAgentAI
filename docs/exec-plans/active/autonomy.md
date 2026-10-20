@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Schedule UI review P2: Gregorian dates (including leap-century rules), clock fields,
+and UTC offsets now validate semantic ranges. Instants require exact timezone-bearing
+date/time with optional six-digit microseconds, not permissive Date.parse normalization.
+Chromium rejects impossible local/UTC/end values, date-only/naive/millisecond inputs,
+and accepts leap-day and historical second-resolution offset snapshots.
+
 Schedule UI delivered: owned event pages and explicit details render allowlisted
 text-only fields/UTC/local times and both offsets; next-page retry, malformed response
 rejection and token/page/selection invalidation prevent stale/private rendering.
