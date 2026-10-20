@@ -410,6 +410,8 @@ payloads or JSON parsing errors. Empty pages clear prior rows and disable pagina
 explicit reloads recover after malformed responses without exposing private extras.
 Run, application and event live-status summaries report the exact number of rows on
 the current page and whether another page is available, without claiming a total.
+Application and event view buttons keep concise visible text while their accessible
+names include the validated record ID, so repeated controls remain distinguishable.
 Run pages require strictly ascending unique IDs beyond the requested cursor. A next
 cursor must equal the last ID of a full page; malformed or replayed pages clear rows
 and retain only the attempted cursor for explicit retry.
