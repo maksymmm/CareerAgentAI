@@ -602,6 +602,40 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 page.locator(f"#{button}").click()
                 page.locator(f"#{state}").get_by_text(ready, exact=True).wait_for()
                 assert page.locator(f"#{rows} li").count() > 0
+            first_run_page = page.request.get(
+                f"http://127.0.0.1:{restarted_server.server_port}/v1/candidate/run-statuses?limit=25",
+                headers={"Authorization": "Bearer sandbox-token"},
+            ).json()
+            for corruption in ("duplicate", "reverse", "wrong-cursor", "short", "empty"):
+                malformed = json.loads(json.dumps(first_run_page))
+                if corruption == "duplicate":
+                    malformed["items"][1]["run_id"] = malformed["items"][0]["run_id"]
+                elif corruption == "reverse":
+                    malformed["items"].reverse()
+                elif corruption == "wrong-cursor":
+                    malformed["next_after"] = malformed["items"][0]["run_id"]
+                else:
+                    malformed["items"] = malformed["items"][:1] if corruption == "short" else []
+
+                def malformed_run_page(route):
+                    route.fulfill(status=200, json=malformed)
+
+                page.route("**/v1/candidate/run-statuses?*", malformed_run_page)
+                page.locator("#list-runs").click()
+                page.locator("#list-state").get_by_text("Load my runs to retry.").wait_for()
+                assert page.locator("#owned-runs li").count() == 0
+                assert page.locator("#next-runs").is_disabled()
+                page.unroute("**/v1/candidate/run-statuses?*")
+            page.locator("#list-runs").click()
+            page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
+            # A replayed first page must fail after the cursor, retaining page-two retry.
+            page.route("**/v1/candidate/run-statuses?limit=25&after=*",
+                       lambda route: route.fulfill(status=200, json=first_run_page))
+            page.locator("#next-runs").click()
+            page.locator("#list-state").get_by_text("Next page failed. Retry Next page.").wait_for()
+            assert page.locator("#owned-runs li").count() == 0
+            assert page.locator("#next-runs").is_enabled()
+            page.unroute("**/v1/candidate/run-statuses?limit=25&after=*")
             page.route("**/v1/candidate/run-statuses?limit=25&after=*",
                        lambda route: route.fulfill(status=503, json={"error": "unavailable"}))
             page.locator("#next-runs").click()

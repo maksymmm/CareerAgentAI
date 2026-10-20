@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Run-list pagination hardening: reject duplicate/reversed IDs, items at or before
+the requested cursor, and non-terminal cursors not matching a full page's last ID.
+Chromium covers five malformed first pages plus replayed page one during page-two
+loading; invalid pages expose no rows and preserve explicit next-page retry.
+Next: exact-head CI/review, then improve bounded dashboard navigation.
+
 Collection privacy and empty-state hardening: run/application page requests suppress
 raw result rendering before validation. Chromium regressions inject top-level and
 nested private extras, malformed JSON, and empty pages; assert no private text enters

@@ -418,6 +418,12 @@ _HTML = r"""<!doctype html>
             !page.items.every(item => item && validId(item.run_id) && typeof item.phase === 'string')) {
           throw new Error('Invalid run page.');
         }
+        if (!page.items.every((item, index) => item.run_id >
+              (index ? page.items[index - 1].run_id : (after || ''))) ||
+            (page.next_after !== null && (page.items.length !== 25 ||
+              page.next_after !== page.items.at(-1).run_id))) {
+          throw new Error('Invalid run cursor.');
+        }
         for (const item of page.items) {
           const row = document.createElement('li');
           const button = document.createElement('button');
