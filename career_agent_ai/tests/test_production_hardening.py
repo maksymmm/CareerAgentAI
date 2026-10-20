@@ -344,7 +344,9 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
             page.locator("#token").fill("sandbox-token")
             page.locator("#list-events").click()
-            page.locator("#events-state").get_by_text("Read-only event snapshots.").wait_for()
+            page.locator("#events-state").get_by_text(
+                "25 events on this page. More available. Read-only snapshots.", exact=True
+            ).wait_for()
             assert page.locator("#owned-events button").count() == 25
             assert page.locator("#owned-events b").count() == 0
             page.route("**/v1/candidate/schedule-events?*after=*", lambda route: route.fulfill(status=503, json={"message": "private-page-secret"}))
@@ -354,7 +356,9 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             assert "private-page-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/schedule-events?*after=*")
             page.locator("#next-events").click()
-            page.locator("#events-state").get_by_text("Read-only event snapshots.").wait_for()
+            page.locator("#events-state").get_by_text(
+                "2 events on this page. End of list. Read-only snapshots.", exact=True
+            ).wait_for()
             assert page.locator("#owned-events button").count() == 2
             assert page.locator("#next-events").is_disabled()
             page.locator("#owned-events button").first.click()
@@ -462,7 +466,9 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             assert "private-page-payload" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/schedule-events?*")
             page.locator("#list-events").click()
-            page.locator("#events-state").get_by_text("Read-only event snapshots.").wait_for()
+            page.locator("#events-state").get_by_text(
+                "25 events on this page. More available. Read-only snapshots.", exact=True
+            ).wait_for()
             assert page.locator("#approve").is_disabled()
             browser.close()
     finally:
@@ -614,15 +620,21 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#approve").is_disabled()
             assert page.locator("#decline").is_disabled()
             page.locator("#list-runs").click()
-            page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
+            page.locator("#list-state").get_by_text(
+                "25 runs on this page. More available. Select a run to inspect.",
+                exact=True,
+            ).wait_for()
             assert page.locator("#owned-runs button").count() == 25
             # Collections must never render raw payloads, even before validation.
             for resource, button, state, rows, next_button, ready, empty, retry in (
                 ("run-statuses", "list-runs", "list-state", "owned-runs", "next-runs",
-                 "Select a run to inspect it.", "No runs on this page.", "Load my runs to retry."),
+                 "25 runs on this page. More available. Select a run to inspect.",
+                 "0 runs on this page. End of list.", "Load my runs to retry."),
                 ("applications", "list-applications", "applications-state", "owned-applications",
-                 "next-applications", "Read-only application snapshots.",
-                 "No applications on this page.", "Load or retry the application page."),
+                 "next-applications",
+                 "1 application on this page. End of list. Read-only snapshots.",
+                 "0 applications on this page. End of list. Read-only snapshots.",
+                 "Load or retry the application page."),
             ):
                 pattern = f"**/v1/candidate/{resource}?*"
 
@@ -679,7 +691,10 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 assert page.locator("#next-runs").is_disabled()
                 page.unroute("**/v1/candidate/run-statuses?*")
             page.locator("#list-runs").click()
-            page.locator("#list-state").get_by_text("Select a run to inspect it.").wait_for()
+            page.locator("#list-state").get_by_text(
+                "25 runs on this page. More available. Select a run to inspect.",
+                exact=True,
+            ).wait_for()
             # A replayed first page must fail after the cursor, retaining page-two retry.
             page.route("**/v1/candidate/run-statuses?limit=25&after=*",
                        lambda route: route.fulfill(status=200, json=first_run_page))
@@ -702,7 +717,10 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#run-id").input_value() == durable_run_id
             page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()
             page.locator("#list-applications").click()
-            page.locator("#applications-state").get_by_text("Read-only application snapshots.").wait_for()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. End of list. Read-only snapshots.",
+                exact=True,
+            ).wait_for()
             assert page.locator("#owned-applications li").count() == 1
             assert "applied" in page.locator("#owned-applications").text_content()
             assert "version 2" in page.locator("#owned-applications").text_content()
@@ -839,10 +857,16 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/applications?*", application_page)
             page.locator("#list-applications").click()
-            page.locator("#applications-state").get_by_text("Read-only application snapshots.").wait_for()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. More available. Read-only snapshots.",
+                exact=True,
+            ).wait_for()
             assert page.locator("#next-applications").is_enabled()
             page.locator("#next-applications").click()
-            page.locator("#applications-state").get_by_text("Read-only application snapshots.").wait_for()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. End of list. Read-only snapshots.",
+                exact=True,
+            ).wait_for()
             assert seen_pages == [None, [opaque_cursor]]
             assert page.locator("#next-applications").is_disabled()
             page.locator("#token").fill("changed")

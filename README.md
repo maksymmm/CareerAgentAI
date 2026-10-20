@@ -408,6 +408,8 @@ previous input context cannot repopulate them or select a run.
 Run and application collections render only validated list fields, never raw API
 payloads or JSON parsing errors. Empty pages clear prior rows and disable pagination;
 explicit reloads recover after malformed responses without exposing private extras.
+Run, application and event live-status summaries report the exact number of rows on
+the current page and whether another page is available, without claiming a total.
 Run pages require strictly ascending unique IDs beyond the requested cursor. A next
 cursor must equal the last ID of a full page; malformed or replayed pages clear rows
 and retain only the attempted cursor for explicit retry.

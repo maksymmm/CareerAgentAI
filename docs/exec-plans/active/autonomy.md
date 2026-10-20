@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate collection summaries: run, application and event status regions report
+the exact current-page count plus whether another page is available. Singular,
+plural, empty, first-page and final-page states are covered by Chromium without
+exposing raw response data or implying a collection-wide total.
+Next: exact-head CI/review, then continue dashboard accessibility and usable summaries.
+
 Candidate narrow-screen layout: bounded fieldsets, wrapping snapshot/ID text and
 single-column actions below 32rem. Chromium covers 320/390 px and desktop with 2000
 unbroken snapshot characters and a 200-character run button; no page/pane horizontal
