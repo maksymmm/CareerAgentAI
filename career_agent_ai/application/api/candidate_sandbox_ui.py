@@ -24,16 +24,27 @@ _HTML = r"""<!doctype html>
     button { cursor: pointer; margin-top: .45rem; }
     .actions { display: grid; gap: .6rem; grid-template-columns: repeat(2, 1fr); }
     .muted { opacity: .75; }
+    nav { display: flex; flex-wrap: wrap; gap: .6rem 1rem; margin: 1rem 0; }
+    :focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
+    [tabindex="-1"] { scroll-margin-top: 1rem; }
     #result { border-radius: .6rem; min-height: 5rem; overflow: auto; padding: 1rem; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h1>Candidate sandbox</h1>
+  <h1 id="candidate-top" tabindex="-1">Candidate sandbox</h1>
   <p class="muted">No real application, message, or calendar action is sent. The bearer token stays in this tab's memory.</p>
+  <nav aria-label="Candidate dashboard">
+    <a href="#start-panel">Start run</a>
+    <a href="#inspect-panel">Inspect runs</a>
+    <a href="#decision-panel">Pending decision</a>
+    <a href="#overview-title">Run overview</a>
+    <a href="#applications-title">My applications</a>
+    <a href="#schedule-title">Interviews and events</a>
+  </nav>
   <label>Bearer token <input id="token" type="password" autocomplete="off" required></label>
   <button id="clear-session" type="button">Clear this tab's session</button>
   <p class="muted">Clears credentials, profile and displayed data locally. It does not revoke a token or cancel work already accepted by the server.</p>
-  <fieldset>
+  <fieldset id="start-panel" tabindex="-1">
     <legend>Start a sandbox run</legend>
     <label>Run ID <input id="start-run-id" value="candidate-demo-1" required></label>
     <label>Job keywords <input id="keyword" required></label>
@@ -41,7 +52,7 @@ _HTML = r"""<!doctype html>
     <label>Candidate profile <textarea id="profile" required></textarea></label>
     <button id="start" type="button">Start run</button>
   </fieldset>
-  <fieldset>
+  <fieldset id="inspect-panel" tabindex="-1">
     <legend>Inspect and continue</legend>
     <button id="list-runs" type="button">Load my runs</button>
     <ul id="owned-runs" aria-label="My runs"></ul>
@@ -54,7 +65,7 @@ _HTML = r"""<!doctype html>
       <button id="continue" type="button">Continue recovery</button>
     </div>
   </fieldset>
-  <fieldset>
+  <fieldset id="decision-panel" tabindex="-1">
     <legend>Pending candidate decision</legend>
     <p id="action-title">Load a prompt before deciding.</p>
     <pre id="action-details"></pre>
@@ -64,12 +75,12 @@ _HTML = r"""<!doctype html>
     </div>
   </fieldset>
   <section aria-labelledby="overview-title">
-    <h2 id="overview-title">Run overview</h2>
+    <h2 id="overview-title" tabindex="-1">Run overview</h2>
     <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
     <p class="muted">A snapshot never authorizes an action. Inspect the current approval prompt before deciding.</p>
   </section>
   <section aria-labelledby="applications-title">
-    <h2 id="applications-title">My applications</h2>
+    <h2 id="applications-title" tabindex="-1">My applications</h2>
     <button id="list-applications" type="button">Load my applications</button>
     <ul id="owned-applications" aria-label="My applications"></ul>
     <p id="applications-state" role="status"></p>
@@ -83,7 +94,7 @@ _HTML = r"""<!doctype html>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
   <section aria-labelledby="schedule-title">
-    <h2 id="schedule-title">My interviews and events</h2>
+    <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
     <button id="list-events" type="button">Load my events</button>
     <ul id="owned-events" aria-label="My events"></ul>
     <p id="events-state" role="status"></p>
@@ -95,6 +106,7 @@ _HTML = r"""<!doctype html>
   </section>
   <h2>Result</h2>
   <pre id="result" aria-live="polite">Ready.</pre>
+  <a href="#candidate-top">Back to dashboard navigation</a>
   <script>
     'use strict';
     let approvalPrompt = null;
