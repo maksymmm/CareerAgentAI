@@ -400,6 +400,9 @@ candidate enters a bearer token that stays only in the tab's memory.
 An accessible dashboard navigation landmark links to start, inspection, pending
 decision, overview, applications and interviews. Native fragment links move keyboard
 focus without API requests or credential/state changes; a return link reaches the top.
+The candidate dashboard wraps long IDs and snapshot text without truncation and stacks
+action buttons on narrow screens. Chromium checks 320/390 px and desktop layouts for
+horizontal overflow while retaining the exact displayed snapshot content.
 Changing the token clears the displayed prompt and result; late responses from the
 previous input context cannot repopulate them or select a run.
 Run and application collections render only validated list fields, never raw API
