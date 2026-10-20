@@ -774,6 +774,14 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 "button", name="View application 2: candidate one", exact=True
             ).count() == 1
             page.unroute("**/v1/candidate/applications?*")
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. End of list. Read-only snapshots.", exact=True
+            ).wait_for()
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text(
+                "Read-only application detail."
+            ).wait_for()
             assert detail["status"] == "applied" and detail["state_version"] == 2
             assert set(detail) == {"application_id", "job_id", "job_title", "company_id",
                                    "status", "state_version", "created_at", "updated_at"}
