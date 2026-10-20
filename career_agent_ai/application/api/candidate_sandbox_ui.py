@@ -244,6 +244,7 @@ _HTML = r"""<!doctype html>
             item.local_date + ' ' + item.local_start_time + ' ' + item.utc_offset + ' (' + item.timezone_name + ')';
           const button = document.createElement('button');
           button.type = 'button'; button.textContent = 'View event';
+          button.setAttribute('aria-label', 'View event ' + item.event_id);
           button.addEventListener('click', () => {
             if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id));
           });
@@ -391,6 +392,7 @@ _HTML = r"""<!doctype html>
           const button = document.createElement('button');
           button.type = 'button';
           button.textContent = 'View application';
+          button.setAttribute('aria-label', 'View application ' + item.application_id);
           button.addEventListener('click', () => {
             if (generation === applicationsGeneration) guarded(() => loadApplicationDetail(item.application_id));
           });
