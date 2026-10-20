@@ -403,12 +403,28 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             }""")
             page.locator("#owned-events button").first.click()
             page.locator('body[data-event-waiting="yes"]').wait_for()
-            page.locator("#token").fill("changed")
+            page.locator("#profile").fill("private-profile-secret")
+            page.locator("#keyword").fill("private-keyword")
+            page.locator("#location").fill("private-location")
+            page.locator("#start-run-id").fill("private-start")
+            requests = []
+            page.on("request", lambda request: requests.append(request.url))
+            page.locator("#clear-session").click()
+            page.locator("#result").get_by_text("Session cleared from this tab.", exact=False).wait_for()
+            assert requests == []
+            for field in ("token", "profile", "keyword", "location", "run-id", "start-run-id"):
+                assert page.locator("#" + field).input_value() == ""
+            assert page.locator("#approve").is_disabled() and page.locator("#decline").is_disabled()
+            assert page.locator("#owned-runs li").count() == 0
+            assert page.locator("#owned-applications li").count() == 0
+            assert page.locator("#application-detail").text_content() == ""
+            assert page.locator("#application-history").text_content() == ""
             page.evaluate("window.releaseEvent(); window.fetch = window.originalEventFetch")
             page.locator('body[data-event-released="yes"]').wait_for()
             assert page.locator("#event-detail").text_content() == ""
             assert page.locator("#owned-events li").count() == 0
             assert page.locator("#next-events").is_disabled()
+            assert "private-profile-secret" not in page.locator("body").text_content()
             page.locator("#token").fill("sandbox-token")
             page.route("**/v1/candidate/schedule-events?*", lambda route: route.fulfill(status=200, json={"schema_version": 99, "items": [], "next_after": None, "private": "private-page-payload"}))
             page.locator("#list-events").click()
