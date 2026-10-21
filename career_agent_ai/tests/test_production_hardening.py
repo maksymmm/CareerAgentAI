@@ -393,6 +393,9 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             page.route("**/v1/candidate/schedule-events?*after=*", lambda route: route.fulfill(status=503, json={"message": "private-page-secret"}))
             page.locator("#next-events").click()
             page.locator("#events-state").get_by_text("Load or retry the event page.").wait_for()
+            page.locator("#result").get_by_text(
+                "Schedule events request failed.", exact=False
+            ).wait_for()
             assert page.locator("#next-events").is_enabled()
             assert "private-page-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/schedule-events?*after=*")
@@ -732,15 +735,16 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             ).wait_for()
             assert page.locator("#owned-runs button").count() == 25
             # Collections must never render raw payloads, even before validation.
-            for resource, button, state, rows, next_button, ready, empty, retry in (
+            for resource, button, state, rows, next_button, ready, empty, retry, error in (
                 ("run-statuses", "list-runs", "list-state", "owned-runs", "next-runs",
                  "25 runs on this page. More available. Select a run to inspect.",
-                 "0 runs on this page. End of list.", "Load my runs to retry."),
+                 "0 runs on this page. End of list.", "Load my runs to retry.",
+                 "Run statuses request failed."),
                 ("applications", "list-applications", "applications-state", "owned-applications",
                  "next-applications",
                  "1 application on this page. End of list. Read-only snapshots.",
                  "0 applications on this page. End of list. Read-only snapshots.",
-                 "Load or retry the application page."),
+                 "Load or retry the application page.", "Applications request failed."),
             ):
                 pattern = f"**/v1/candidate/{resource}?*"
 
@@ -759,6 +763,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                     status=200, content_type="application/json", body="private-invalid-json-secret"))
                 page.locator(f"#{button}").click()
                 page.locator(f"#{state}").get_by_text(retry, exact=True).wait_for()
+                page.locator("#result").get_by_text(error, exact=False).wait_for()
                 assert page.locator(f"#{rows} li").count() == 0
                 assert "private-invalid-json-secret" not in page.locator("body").text_content()
                 page.unroute(pattern)
