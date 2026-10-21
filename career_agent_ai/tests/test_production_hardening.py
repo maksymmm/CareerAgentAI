@@ -124,6 +124,21 @@ def test_candidate_dashboard_read_only_output_regions_are_named():
             assert f'aria-labelledby="{title_id}" aria-busy="false"' in html
 
 
+def test_candidate_dashboard_collection_regions_expose_initial_loading_state():
+    """Owned collections are named and start outside an async update."""
+    html = candidate_sandbox_html().decode("utf-8")
+
+    for region_id, label in (
+        ("owned-runs", "My runs"),
+        ("owned-applications", "My applications"),
+        ("owned-events", "My events"),
+    ):
+        assert (
+            f'id="{region_id}" aria-label="{label}" aria-busy="false"'
+            in html
+        )
+
+
 def request() -> CareerLoopRequest:
     return CareerLoopRequest(
         user_id="user-1",
@@ -660,6 +675,32 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#token").input_value() == "sandbox-token"
             assert page.locator("#approve").is_disabled()
             assert page.locator("#decline").is_disabled()
+            for resource, button, region, marker in (
+                ("run-statuses", "list-runs", "owned-runs", "runs"),
+                ("applications", "list-applications", "owned-applications", "applications"),
+                ("schedule-events", "list-events", "owned-events", "events"),
+            ):
+                page.evaluate("""({resource, marker}) => {
+                  window.collectionOriginalFetch = window.fetch;
+                  window.fetch = async (...args) => {
+                    const response = await window.collectionOriginalFetch(...args);
+                    if (String(args[0]).includes('/' + resource + '?')) {
+                      document.body.dataset[marker + 'Waiting'] = 'yes';
+                      await new Promise(resolve => { window.collectionRelease = resolve; });
+                      document.body.dataset[marker + 'Released'] = 'yes';
+                    }
+                    return response;
+                  };
+                }""", {"resource": resource, "marker": marker})
+                page.locator(f"#{button}").click()
+                page.locator(f'body[data-{marker}-waiting="yes"]').wait_for()
+                assert page.locator(f"#{region}").get_attribute("aria-busy") == "true"
+                page.locator("#token").fill("changed-token")
+                page.evaluate("window.collectionRelease(); window.fetch = window.collectionOriginalFetch")
+                page.locator(f'body[data-{marker}-released="yes"]').wait_for()
+                assert page.locator(f"#{region}").get_attribute("aria-busy") == "false"
+                assert page.locator(f"#{region} li").count() == 0
+                page.locator("#token").fill("sandbox-token")
             page.locator("#list-runs").click()
             page.locator("#list-state").get_by_text(
                 "25 runs on this page. More available. Select a run to inspect.",

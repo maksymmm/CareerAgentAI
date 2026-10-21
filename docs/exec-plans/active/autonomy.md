@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate collection loading state: owned run, application and event lists expose
+`aria-busy` only while their current authenticated page request is active. Success,
+failure, token/session invalidation and stale responses restore the idle state without
+rendering superseded data. Chromium covers all three delayed collection requests.
+Next: exact-head CI/review, then continue bounded dashboard usability.
+
 Candidate keyboard bypass: the first focusable control is an initially off-screen
 skip link that becomes visible on focus and moves focus directly to the dashboard
 content. Chromium verifies keyboard activation, visible focus, the exact fragment,
