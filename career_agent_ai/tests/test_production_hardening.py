@@ -104,6 +104,24 @@ def test_candidate_dashboard_narrow_layout_preserves_long_text():
         browser.close()
 
 
+def test_candidate_dashboard_read_only_output_regions_are_named():
+    """Every read-only detail pane exposes its surrounding context to AT."""
+    html = candidate_sandbox_html().decode("utf-8")
+
+    for region_id, title_id, title in (
+        ("application-detail", "application-detail-title", "Application detail"),
+        ("application-history", "application-history-title", "Application history"),
+        ("event-detail", "event-detail-title", "Event detail"),
+        ("result", "result-title", "Result"),
+    ):
+        assert f'id="{title_id}"' in html
+        assert f'>{title}</' in html
+        assert (
+            f'id="{region_id}" role="region" aria-labelledby="{title_id}"'
+            in html
+        )
+
+
 def request() -> CareerLoopRequest:
     return CareerLoopRequest(
         user_id="user-1",
