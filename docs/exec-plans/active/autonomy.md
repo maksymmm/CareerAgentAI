@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate detail request deduplication: application/event detail triggers and the
+application-history control are disabled for their current read-only request. Repeated
+activation cannot start a second request; success and failure restore retry controls,
+while selection, authentication and session invalidation retire stale work safely.
+Delayed-response Chromium coverage proves the single-request contract for all three.
+Next: exact-head CI/review, then continue bounded dashboard usability.
+
 Candidate collection request deduplication: run, application and event reload controls
 are disabled during their current authenticated page request, preventing repeated
 activation from starting redundant concurrent reads. Completion, failure and context
