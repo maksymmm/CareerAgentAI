@@ -400,6 +400,8 @@ candidate enters a bearer token that stays only in the tab's memory.
 An accessible dashboard navigation landmark links to start, inspection, pending
 decision, overview, applications and interviews. Native fragment links move keyboard
 focus without API requests or credential/state changes; a return link reaches the top.
+The first keyboard focus exposes a skip link that bypasses the heading and navigation
+and moves focus directly to the interactive dashboard content.
 The candidate dashboard wraps long IDs and snapshot text without truncation and stacks
 action buttons on narrow screens. Chromium checks 320/390 px and desktop layouts for
 horizontal overflow while retaining the exact displayed snapshot content.

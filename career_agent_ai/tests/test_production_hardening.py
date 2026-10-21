@@ -608,10 +608,17 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.goto(
                 f"http://127.0.0.1:{restarted_server.server_port}/sandbox/candidate"
             )
-            page.locator("#token").fill("sandbox-token")
             navigation_requests = []
             record_navigation_request = lambda request: navigation_requests.append(request.url)
             page.on("request", record_navigation_request)
+            page.keyboard.press("Tab")
+            skip_link = page.get_by_role("link", name="Skip to dashboard content", exact=True)
+            assert page.evaluate("document.activeElement === document.querySelector('.skip-link')")
+            assert skip_link.bounding_box()["y"] >= 0
+            page.keyboard.press("Enter")
+            assert page.evaluate("document.activeElement.id") == "dashboard-content"
+            assert page.url.endswith("#dashboard-content")
+            page.locator("#token").fill("sandbox-token")
             navigation = page.get_by_role("navigation", name="Candidate dashboard")
             targets = ("start-panel", "inspect-panel", "decision-panel", "overview-title",
                        "applications-title", "schedule-title")

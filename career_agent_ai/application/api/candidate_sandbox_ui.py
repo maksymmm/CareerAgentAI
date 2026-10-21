@@ -27,12 +27,15 @@ _HTML = r"""<!doctype html>
     @media (max-width: 32rem) { .actions { grid-template-columns: 1fr; } }
     .muted { opacity: .75; }
     nav { display: flex; flex-wrap: wrap; gap: .6rem 1rem; margin: 1rem 0; }
+    .skip-link { left: 1rem; position: absolute; top: -5rem; }
+    .skip-link:focus { top: 1rem; }
     :focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
     [tabindex="-1"] { scroll-margin-top: 1rem; }
     #result { border-radius: .6rem; min-height: 5rem; overflow: auto; padding: 1rem; white-space: pre-wrap; }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#dashboard-content">Skip to dashboard content</a>
   <h1 id="candidate-top" tabindex="-1">Candidate sandbox</h1>
   <p class="muted">No real application, message, or calendar action is sent. The bearer token stays in this tab's memory.</p>
   <nav aria-label="Candidate dashboard">
@@ -43,6 +46,7 @@ _HTML = r"""<!doctype html>
     <a href="#applications-title">My applications</a>
     <a href="#schedule-title">Interviews and events</a>
   </nav>
+  <main id="dashboard-content" tabindex="-1">
   <label>Bearer token <input id="token" type="password" autocomplete="off" required></label>
   <button id="clear-session" type="button">Clear this tab's session</button>
   <p class="muted">Clears credentials, profile and displayed data locally. It does not revoke a token or cancel work already accepted by the server.</p>
@@ -109,6 +113,7 @@ _HTML = r"""<!doctype html>
   <h2>Result</h2>
   <pre id="result" aria-live="polite">Ready.</pre>
   <a href="#candidate-top">Back to dashboard navigation</a>
+  </main>
   <script>
     'use strict';
     let approvalPrompt = null;

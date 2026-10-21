@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate keyboard bypass: the first focusable control is an initially off-screen
+skip link that becomes visible on focus and moves focus directly to the dashboard
+content. Chromium verifies keyboard activation, visible focus, the exact fragment,
+and no HTTP request before normal navigation and workflow acceptance continue.
+Next: exact-head CI/review, then continue bounded dashboard usability.
+
 Candidate contextual action labels: repeated application and event view buttons keep
 their concise visible labels while accessible names include a page ordinal plus the
 validated, already visible record ID. The ordinal preserves uniqueness after assistive-
