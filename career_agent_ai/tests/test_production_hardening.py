@@ -687,7 +687,9 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                     if (String(args[0]).includes('/' + resource + '?')) {
                       document.body.dataset[marker + 'Waiting'] = 'yes';
                       await new Promise(resolve => { window.collectionRelease = resolve; });
-                      document.body.dataset[marker + 'Released'] = 'yes';
+                      // The timer runs only after fetch, response parsing and the
+                      // collection loader's promise continuations have drained.
+                      setTimeout(() => { document.body.dataset[marker + 'Completed'] = 'yes'; }, 0);
                     }
                     return response;
                   };
@@ -697,7 +699,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 assert page.locator(f"#{region}").get_attribute("aria-busy") == "true"
                 page.locator("#token").fill("changed-token")
                 page.evaluate("window.collectionRelease(); window.fetch = window.collectionOriginalFetch")
-                page.locator(f'body[data-{marker}-released="yes"]').wait_for()
+                page.locator(f'body[data-{marker}-completed="yes"]').wait_for()
                 assert page.locator(f"#{region}").get_attribute("aria-busy") == "false"
                 assert page.locator(f"#{region} li").count() == 0
                 page.locator("#token").fill("sandbox-token")
