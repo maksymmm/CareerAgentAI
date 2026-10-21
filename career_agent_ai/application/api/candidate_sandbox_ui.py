@@ -256,7 +256,8 @@ _HTML = r"""<!doctype html>
       byId('events-state').textContent = 'Loading events…';
       try {
         const page = await call('/v1/candidate/schedule-events?limit=25' +
-          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Schedule events request failed.');
         if (generation !== eventsGeneration) return;
         if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
             !(page.next_after === null || eventId(page.next_after))) throw new Error('Invalid event page.');
@@ -428,7 +429,8 @@ _HTML = r"""<!doctype html>
       byId('applications-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/applications?limit=25' +
-          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Applications request failed.');
         if (generation !== applicationsGeneration) return;
         // Canonical whitespace is validated by the server (Python strip differs
         // from JavaScript trim, notably for U+FEFF). Treat returned IDs as opaque.
@@ -501,7 +503,8 @@ _HTML = r"""<!doctype html>
       byId('list-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/run-statuses?limit=25' +
-          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Run statuses request failed.');
         if (generation !== listGeneration) return;
         const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
         if (page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
