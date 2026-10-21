@@ -134,6 +134,7 @@ _HTML = r"""<!doctype html>
       (hasMore ? 'More available.' : 'End of list.') + (instruction ? ' ' + instruction : '');
     let eventsGeneration = 0;
     let eventDetailGeneration = 0;
+    let eventDetailTrigger = null;
     let nextEventCursor = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
     const eventFields = ['event_id', 'employer_name', 'event_type', 'location', 'status', 'state_version',
@@ -206,6 +207,8 @@ _HTML = r"""<!doctype html>
       return Object.fromEntries(eventFields.map(key => [key, item[key]]));
     }
     function clearEventDetail() {
+      if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
+      eventDetailTrigger = null;
       eventDetailGeneration += 1;
       byId('event-detail').setAttribute('aria-busy', 'false');
       byId('event-detail').textContent = '';
@@ -218,9 +221,11 @@ _HTML = r"""<!doctype html>
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
       byId('next-events').disabled = true;
     }
-    async function loadEventDetail(identifier) {
+    async function loadEventDetail(identifier, trigger) {
       clearEventDetail();
       const generation = eventDetailGeneration;
+      eventDetailTrigger = trigger;
+      trigger.disabled = true;
       byId('event-detail').setAttribute('aria-busy', 'true');
       byId('event-detail-state').textContent = 'Loading event…';
       try {
@@ -235,7 +240,11 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
-        if (generation === eventDetailGeneration) byId('event-detail').setAttribute('aria-busy', 'false');
+        if (generation === eventDetailGeneration) {
+          if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
+          eventDetailTrigger = null;
+          byId('event-detail').setAttribute('aria-busy', 'false');
+        }
       }
     }
     async function loadEvents(after = null) {
@@ -261,7 +270,7 @@ _HTML = r"""<!doctype html>
           button.type = 'button'; button.textContent = 'View event';
           button.setAttribute('aria-label', 'View event ' + (index + 1) + ': ' + item.event_id);
           button.addEventListener('click', () => {
-            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id));
+            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id, button));
           });
           row.append(button); byId('owned-events').append(row);
         }
@@ -292,6 +301,7 @@ _HTML = r"""<!doctype html>
     let applicationsGeneration = 0;
     let nextApplicationCursor = null;
     let applicationDetailGeneration = 0;
+    let applicationDetailTrigger = null;
     let selectedApplicationId = null;
     let applicationHistoryGeneration = 0;
     function clearApplicationHistory() {
@@ -301,6 +311,8 @@ _HTML = r"""<!doctype html>
       byId('application-history-state').textContent = '';
     }
     function clearApplicationDetail() {
+      if (applicationDetailTrigger && applicationDetailTrigger.isConnected) applicationDetailTrigger.disabled = false;
+      applicationDetailTrigger = null;
       clearApplicationHistory();
       selectedApplicationId = null;
       byId('load-application-history').disabled = true;
@@ -309,9 +321,11 @@ _HTML = r"""<!doctype html>
       byId('application-detail').textContent = '';
       byId('application-detail-state').textContent = '';
     }
-    async function loadApplicationDetail(applicationId) {
+    async function loadApplicationDetail(applicationId, trigger) {
       clearApplicationDetail();
       const generation = applicationDetailGeneration;
+      applicationDetailTrigger = trigger;
+      trigger.disabled = true;
       byId('application-detail').setAttribute('aria-busy', 'true');
       byId('application-detail-state').textContent = 'Loading application…';
       try {
@@ -341,7 +355,11 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
-        if (generation === applicationDetailGeneration) byId('application-detail').setAttribute('aria-busy', 'false');
+        if (generation === applicationDetailGeneration) {
+          if (applicationDetailTrigger && applicationDetailTrigger.isConnected) applicationDetailTrigger.disabled = false;
+          applicationDetailTrigger = null;
+          byId('application-detail').setAttribute('aria-busy', 'false');
+        }
       }
     }
     async function loadApplicationHistory() {
@@ -349,6 +367,7 @@ _HTML = r"""<!doctype html>
       if (applicationId === null) return;
       clearApplicationHistory();
       const generation = applicationHistoryGeneration;
+      byId('load-application-history').disabled = true;
       byId('application-history').setAttribute('aria-busy', 'true');
       byId('application-history-state').textContent = 'Loading history…';
       try {
@@ -376,11 +395,15 @@ _HTML = r"""<!doctype html>
       } catch (error) {
         if (generation === applicationHistoryGeneration) {
           clearApplicationHistory();
+          byId('load-application-history').disabled = false;
           byId('application-history-state').textContent = 'Load history again to retry.';
         }
         throw error;
       } finally {
-        if (generation === applicationHistoryGeneration) byId('application-history').setAttribute('aria-busy', 'false');
+        if (generation === applicationHistoryGeneration) {
+          byId('load-application-history').disabled = false;
+          byId('application-history').setAttribute('aria-busy', 'false');
+        }
       }
     }
     byId('load-application-history').addEventListener('click', () => guarded(loadApplicationHistory));
@@ -428,7 +451,7 @@ _HTML = r"""<!doctype html>
           // distinct whitespace sequences inside otherwise-valid opaque IDs.
           button.setAttribute('aria-label', 'View application ' + (index + 1) + ': ' + item.application_id);
           button.addEventListener('click', () => {
-            if (generation === applicationsGeneration) guarded(() => loadApplicationDetail(item.application_id));
+            if (generation === applicationsGeneration) guarded(() => loadApplicationDetail(item.application_id, button));
           });
           row.append(button);
           byId('owned-applications').append(row);

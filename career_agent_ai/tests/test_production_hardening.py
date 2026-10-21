@@ -475,6 +475,8 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
               window.fetch = async (...args) => {
                 const response = await window.originalEventFetch(...args);
                 if (String(args[0]).includes('/schedule-event?')) {
+                  document.body.dataset.eventDetailRequests = String(
+                    Number(document.body.dataset.eventDetailRequests || 0) + 1);
                   document.body.dataset.eventWaiting = 'yes';
                   await new Promise(resolve => { window.releaseEvent = resolve; });
                   document.body.dataset.eventReleased = 'yes';
@@ -484,7 +486,10 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             }""")
             page.locator("#owned-events button").first.click()
             page.locator('body[data-event-waiting="yes"]').wait_for()
+            assert page.locator("#owned-events button").first.is_disabled()
             assert page.locator("#event-detail").get_attribute("aria-busy") == "true"
+            page.evaluate("document.querySelector('#owned-events button').click()")
+            assert page.locator("body").get_attribute("data-event-detail-requests") == "1"
             page.locator("#profile").fill("private-profile-secret")
             page.locator("#keyword").fill("private-keyword")
             page.locator("#location").fill("private-location")
@@ -906,6 +911,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 window.fetch = async (...args) => {
                     const response = await window.originalHistoryFetch(...args);
                     if (String(args[0]).includes('/application/history?')) {
+                        document.body.dataset.historyRequests = String(
+                            Number(document.body.dataset.historyRequests || 0) + 1);
                         document.body.dataset.historyWaiting = 'yes';
                         await new Promise(resolve => { window.releaseHistory = resolve; });
                         document.body.dataset.historyReleased = 'yes';
@@ -915,7 +922,10 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             }""")
             page.locator("#load-application-history").click()
             page.locator('body[data-history-waiting="yes"]').wait_for()
+            assert page.locator("#load-application-history").is_disabled()
             assert page.locator("#application-history").get_attribute("aria-busy") == "true"
+            page.evaluate("document.getElementById('load-application-history').click()")
+            assert page.locator("body").get_attribute("data-history-requests") == "1"
             page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
             page.evaluate("window.releaseHistory(); window.fetch = window.originalHistoryFetch")
@@ -965,6 +975,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 window.fetch = async (...args) => {
                     const response = await original(...args);
                     if (String(args[0]).includes('/v1/candidate/application?')) {
+                        document.body.dataset.detailRequests = String(
+                            Number(document.body.dataset.detailRequests || 0) + 1);
                         document.body.dataset.detailWaiting = 'yes';
                         await new Promise(resolve => { window.releaseDetail = resolve; });
                         document.body.dataset.detailReleased = 'yes';
@@ -974,7 +986,10 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             }""")
             page.locator("#owned-applications button").click()
             page.locator('body[data-detail-waiting="yes"]').wait_for()
+            assert page.locator("#owned-applications button").is_disabled()
             assert page.locator("#application-detail").get_attribute("aria-busy") == "true"
+            page.evaluate("document.querySelector('#owned-applications button').click()")
+            assert page.locator("body").get_attribute("data-detail-requests") == "1"
             page.locator("#token").fill("changed")
             page.evaluate("window.releaseDetail()")
             page.locator('body[data-detail-released="yes"]').wait_for()
