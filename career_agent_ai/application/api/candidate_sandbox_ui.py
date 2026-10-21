@@ -62,7 +62,7 @@ _HTML = r"""<!doctype html>
   <fieldset id="inspect-panel" tabindex="-1">
     <legend>Inspect and continue</legend>
     <button id="list-runs" type="button">Load my runs</button>
-    <ul id="owned-runs" aria-label="My runs"></ul>
+    <ul id="owned-runs" aria-label="My runs" aria-busy="false"></ul>
     <p id="list-state" role="status"></p>
     <button id="next-runs" type="button" disabled>Next page</button>
     <label>Durable run ID <input id="run-id" required></label>
@@ -89,7 +89,7 @@ _HTML = r"""<!doctype html>
   <section aria-labelledby="applications-title">
     <h2 id="applications-title" tabindex="-1">My applications</h2>
     <button id="list-applications" type="button">Load my applications</button>
-    <ul id="owned-applications" aria-label="My applications"></ul>
+    <ul id="owned-applications" aria-label="My applications" aria-busy="false"></ul>
     <p id="applications-state" role="status"></p>
     <button id="next-applications" type="button" disabled>Next application page</button>
     <h3 id="application-detail-title">Application detail</h3>
@@ -104,7 +104,7 @@ _HTML = r"""<!doctype html>
   <section aria-labelledby="schedule-title">
     <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
     <button id="list-events" type="button">Load my events</button>
-    <ul id="owned-events" aria-label="My events"></ul>
+    <ul id="owned-events" aria-label="My events" aria-busy="false"></ul>
     <p id="events-state" role="status"></p>
     <button id="next-events" type="button" disabled>Next event page</button>
     <h3 id="event-detail-title">Event detail</h3>
@@ -213,6 +213,7 @@ _HTML = r"""<!doctype html>
     }
     function clearEvents() {
       clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
+      byId('owned-events').setAttribute('aria-busy', 'false');
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
       byId('next-events').disabled = true;
     }
@@ -239,6 +240,7 @@ _HTML = r"""<!doctype html>
     async function loadEvents(after = null) {
       clearEvents();
       const generation = eventsGeneration;
+      byId('owned-events').setAttribute('aria-busy', 'true');
       byId('events-state').textContent = 'Loading events…';
       try {
         const page = await call('/v1/candidate/schedule-events?limit=25' +
@@ -270,6 +272,8 @@ _HTML = r"""<!doctype html>
           byId('events-state').textContent = 'Load or retry the event page.';
         }
         throw error;
+      } finally {
+        if (generation === eventsGeneration) byId('owned-events').setAttribute('aria-busy', 'false');
       }
     }
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents()));
@@ -379,6 +383,7 @@ _HTML = r"""<!doctype html>
       clearApplicationDetail();
       applicationsGeneration += 1;
       nextApplicationCursor = null;
+      byId('owned-applications').setAttribute('aria-busy', 'false');
       byId('owned-applications').replaceChildren();
       byId('applications-state').textContent = '';
       byId('next-applications').disabled = true;
@@ -386,6 +391,7 @@ _HTML = r"""<!doctype html>
     async function loadApplications(after = null) {
       clearApplications();
       const generation = applicationsGeneration;
+      byId('owned-applications').setAttribute('aria-busy', 'true');
       byId('applications-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/applications?limit=25' +
@@ -433,6 +439,8 @@ _HTML = r"""<!doctype html>
           byId('applications-state').textContent = 'Load or retry the application page.';
         }
         throw error;
+      } finally {
+        if (generation === applicationsGeneration) byId('owned-applications').setAttribute('aria-busy', 'false');
       }
     }
     byId('list-applications').addEventListener('click', () => guarded(() => loadApplications()));
@@ -443,6 +451,7 @@ _HTML = r"""<!doctype html>
     function clearRunList() {
       listGeneration += 1;
       nextRunCursor = null;
+      byId('owned-runs').setAttribute('aria-busy', 'false');
       byId('owned-runs').replaceChildren();
       byId('list-state').textContent = '';
       byId('next-runs').disabled = true;
@@ -450,6 +459,7 @@ _HTML = r"""<!doctype html>
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
+      byId('owned-runs').setAttribute('aria-busy', 'true');
       byId('list-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/run-statuses?limit=25' +
@@ -493,6 +503,8 @@ _HTML = r"""<!doctype html>
           byId('list-state').textContent = after === null ? 'Load my runs to retry.' : 'Next page failed. Retry Next page.';
         }
         throw error;
+      } finally {
+        if (generation === listGeneration) byId('owned-runs').setAttribute('aria-busy', 'false');
       }
     }
     byId('list-runs').addEventListener('click', () => guarded(() => loadRunList()));
