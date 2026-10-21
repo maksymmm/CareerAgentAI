@@ -213,6 +213,7 @@ _HTML = r"""<!doctype html>
     }
     function clearEvents() {
       clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
+      byId('list-events').disabled = false;
       byId('owned-events').setAttribute('aria-busy', 'false');
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
       byId('next-events').disabled = true;
@@ -240,6 +241,7 @@ _HTML = r"""<!doctype html>
     async function loadEvents(after = null) {
       clearEvents();
       const generation = eventsGeneration;
+      byId('list-events').disabled = true;
       byId('owned-events').setAttribute('aria-busy', 'true');
       byId('events-state').textContent = 'Loading events…';
       try {
@@ -273,7 +275,10 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
-        if (generation === eventsGeneration) byId('owned-events').setAttribute('aria-busy', 'false');
+        if (generation === eventsGeneration) {
+          byId('list-events').disabled = false;
+          byId('owned-events').setAttribute('aria-busy', 'false');
+        }
       }
     }
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents()));
@@ -383,6 +388,7 @@ _HTML = r"""<!doctype html>
       clearApplicationDetail();
       applicationsGeneration += 1;
       nextApplicationCursor = null;
+      byId('list-applications').disabled = false;
       byId('owned-applications').setAttribute('aria-busy', 'false');
       byId('owned-applications').replaceChildren();
       byId('applications-state').textContent = '';
@@ -391,6 +397,7 @@ _HTML = r"""<!doctype html>
     async function loadApplications(after = null) {
       clearApplications();
       const generation = applicationsGeneration;
+      byId('list-applications').disabled = true;
       byId('owned-applications').setAttribute('aria-busy', 'true');
       byId('applications-state').textContent = 'Loading…';
       try {
@@ -440,7 +447,10 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
-        if (generation === applicationsGeneration) byId('owned-applications').setAttribute('aria-busy', 'false');
+        if (generation === applicationsGeneration) {
+          byId('list-applications').disabled = false;
+          byId('owned-applications').setAttribute('aria-busy', 'false');
+        }
       }
     }
     byId('list-applications').addEventListener('click', () => guarded(() => loadApplications()));
@@ -451,6 +461,7 @@ _HTML = r"""<!doctype html>
     function clearRunList() {
       listGeneration += 1;
       nextRunCursor = null;
+      byId('list-runs').disabled = false;
       byId('owned-runs').setAttribute('aria-busy', 'false');
       byId('owned-runs').replaceChildren();
       byId('list-state').textContent = '';
@@ -459,6 +470,7 @@ _HTML = r"""<!doctype html>
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
+      byId('list-runs').disabled = true;
       byId('owned-runs').setAttribute('aria-busy', 'true');
       byId('list-state').textContent = 'Loading…';
       try {
@@ -504,7 +516,10 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
-        if (generation === listGeneration) byId('owned-runs').setAttribute('aria-busy', 'false');
+        if (generation === listGeneration) {
+          byId('list-runs').disabled = false;
+          byId('owned-runs').setAttribute('aria-busy', 'false');
+        }
       }
     }
     byId('list-runs').addEventListener('click', () => guarded(() => loadRunList()));

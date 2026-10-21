@@ -685,6 +685,9 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                   window.fetch = async (...args) => {
                     const response = await window.collectionOriginalFetch(...args);
                     if (String(args[0]).includes('/' + resource + '?')) {
+                      document.body.dataset[marker + 'Requests'] = String(
+                        Number(document.body.dataset[marker + 'Requests'] || 0) + 1
+                      );
                       document.body.dataset[marker + 'Waiting'] = 'yes';
                       await new Promise(resolve => { window.collectionRelease = resolve; });
                       // The timer runs only after fetch, response parsing and the
@@ -696,10 +699,16 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 }""", {"resource": resource, "marker": marker})
                 page.locator(f"#{button}").click()
                 page.locator(f'body[data-{marker}-waiting="yes"]').wait_for()
+                assert page.locator(f"#{button}").is_disabled()
                 assert page.locator(f"#{region}").get_attribute("aria-busy") == "true"
+                page.evaluate("button => document.getElementById(button).click()", button)
+                assert page.locator("body").get_attribute(
+                    f"data-{marker}-requests"
+                ) == "1"
                 page.locator("#token").fill("changed-token")
                 page.evaluate("window.collectionRelease(); window.fetch = window.collectionOriginalFetch")
                 page.locator(f'body[data-{marker}-completed="yes"]').wait_for()
+                assert page.locator(f"#{button}").is_enabled()
                 assert page.locator(f"#{region}").get_attribute("aria-busy") == "false"
                 assert page.locator(f"#{region} li").count() == 0
                 page.locator("#token").fill("sandbox-token")

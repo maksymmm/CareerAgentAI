@@ -414,7 +414,9 @@ Run, application and event live-status summaries report the exact number of rows
 the current page and whether another page is available, without claiming a total.
 Those three owned collection regions expose their current asynchronous update through
 `aria-busy`; success, failure and authentication/session invalidation always restore
-the idle state and stale responses cannot repopulate the collection.
+the idle state and stale responses cannot repopulate the collection. Their reload
+controls are disabled for the current request so repeated activation cannot create
+redundant concurrent reads, and are restored on completion or context invalidation.
 Application and event view buttons keep concise visible text while their accessible
 names include a page ordinal and the validated record ID. The ordinal keeps repeated
 controls distinguishable even if assistive technology folds whitespace inside opaque IDs.

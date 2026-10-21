@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate collection request deduplication: run, application and event reload controls
+are disabled during their current authenticated page request, preventing repeated
+activation from starting redundant concurrent reads. Completion, failure and context
+invalidation restore the controls; delayed-response Chromium coverage verifies all
+three collections together with their `aria-busy` state.
+Next: exact-head CI/review, then continue bounded dashboard usability.
+
 Candidate collection loading state: owned run, application and event lists expose
 `aria-busy` only while their current authenticated page request is active. Success,
 failure, token/session invalidation and stale responses restore the idle state without
