@@ -468,6 +468,7 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             page.route("**/v1/candidate/schedule-event?*", lambda route: route.fulfill(status=200, content_type="application/json", body="private-malformed-secret"))
             page.locator("#owned-events button").first.click()
             page.locator("#event-detail-state").get_by_text("Select the event again to retry.").wait_for()
+            page.locator("#result").get_by_text("Event detail request failed.", exact=False).wait_for()
             assert "private-malformed-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/schedule-event?*")
             page.evaluate("""() => {
@@ -597,6 +598,13 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 assert "private-prompt-secret" not in page.locator("body").text_content()
                 assert page.locator("#run-id").input_value() == durable_run_id
                 page.unroute("**/v1/candidate/runs/*/approval")
+            page.route("**/v1/candidate/runs/*/approval", lambda route: route.fulfill(
+                status=200, content_type="application/json", body="private-prompt-json-secret"))
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approval prompt unavailable. Load it again.").wait_for()
+            page.locator("#result").get_by_text("Approval prompt request failed.", exact=False).wait_for()
+            assert "private-prompt-json-secret" not in page.locator("body").text_content()
+            page.unroute("**/v1/candidate/runs/*/approval")
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve job application").wait_for()
             page.locator("#approve").click()
@@ -902,6 +910,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.route("**/v1/candidate/application/history?*", lambda route: route.fulfill(status=200, content_type="application/json", body="private-history-json-secret"))
             page.locator("#load-application-history").click()
             page.locator("#application-history-state").get_by_text("Load history again to retry.").wait_for()
+            page.locator("#result").get_by_text("Application history request failed.", exact=False).wait_for()
             assert "private-history-json-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/application/history?*")
             page.locator("#load-application-history").click()
