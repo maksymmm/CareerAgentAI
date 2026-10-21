@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Contextual private-request errors: application detail, application history, event
+detail and approval-prompt failures now expose distinct operation-specific generic
+messages. Backend and malformed-JSON payloads remain suppressed. Chromium regressions
+verify accurate recovery guidance without leaking private response text.
+Next: exact-head CI/review, then continue bounded dashboard usability.
+
 Candidate detail request deduplication: application/event detail triggers and the
 application-history control are disabled for their current read-only request. Repeated
 activation cannot start a second request; success and failure restore retry controls,
