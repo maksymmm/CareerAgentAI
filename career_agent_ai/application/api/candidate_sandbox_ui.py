@@ -573,9 +573,9 @@ _HTML = r"""<!doctype html>
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
     }
-    async function call(path, options = {}, privateError = null) {
+    async function call(path, options = {}, safeError = null) {
       clearOverview();
-      const renderRaw = privateError === null;
+      const renderRaw = safeError === null;
       const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
       const contextGeneration = inputContextGeneration;
@@ -591,14 +591,14 @@ _HTML = r"""<!doctype html>
         }
         if (renderRaw && resultRequest === latestResultRequest) show({status: response.status, payload});
         if (!response.ok) {
-          const error = new Error(renderRaw ? (payload.message || payload.error || 'Request failed.') : privateError);
+          const error = new Error(renderRaw ? (payload.message || payload.error || 'Request failed.') : safeError);
           error.status = response.status;
           error.code = payload.error;
           throw error;
         }
         return payload;
       } catch (error) {
-        if (!renderRaw) error = new Error(privateError);
+        if (!renderRaw) error = new Error(safeError);
         error.resultRequest = resultRequest;
         throw error;
       }
