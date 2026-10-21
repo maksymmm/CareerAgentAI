@@ -26,6 +26,7 @@ _HTML = r"""<!doctype html>
     .actions { display: grid; gap: .6rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     @media (max-width: 32rem) { .actions { grid-template-columns: 1fr; } }
     .muted { opacity: .75; }
+    .visually-hidden { height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
     nav { display: flex; flex-wrap: wrap; gap: .6rem 1rem; margin: 1rem 0; }
     .skip-link { left: 1rem; position: absolute; top: -5rem; }
     .skip-link:focus { top: 1rem; }
@@ -91,12 +92,13 @@ _HTML = r"""<!doctype html>
     <ul id="owned-applications" aria-label="My applications"></ul>
     <p id="applications-state" role="status"></p>
     <button id="next-applications" type="button" disabled>Next application page</button>
-    <h3>Application detail</h3>
+    <h3 id="application-detail-title">Application detail</h3>
     <p id="application-detail-state" role="status"></p>
-    <pre id="application-detail"></pre>
+    <pre id="application-detail" role="region" aria-labelledby="application-detail-title"></pre>
     <button id="load-application-history" type="button" disabled>Load application history</button>
     <p id="application-history-state" role="status"></p>
-    <pre id="application-history"></pre>
+    <h3 id="application-history-title" class="visually-hidden">Application history</h3>
+    <pre id="application-history" role="region" aria-labelledby="application-history-title"></pre>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
   <section aria-labelledby="schedule-title">
@@ -105,13 +107,13 @@ _HTML = r"""<!doctype html>
     <ul id="owned-events" aria-label="My events"></ul>
     <p id="events-state" role="status"></p>
     <button id="next-events" type="button" disabled>Next event page</button>
-    <h3>Event detail</h3>
+    <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
-    <pre id="event-detail"></pre>
+    <pre id="event-detail" role="region" aria-labelledby="event-detail-title"></pre>
     <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
   </section>
-  <h2>Result</h2>
-  <pre id="result" aria-live="polite">Ready.</pre>
+  <h2 id="result-title">Result</h2>
+  <pre id="result" role="region" aria-labelledby="result-title" aria-live="polite">Ready.</pre>
   <a href="#candidate-top">Back to dashboard navigation</a>
   </main>
   <script>
