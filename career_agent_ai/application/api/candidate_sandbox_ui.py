@@ -94,11 +94,11 @@ _HTML = r"""<!doctype html>
     <button id="next-applications" type="button" disabled>Next application page</button>
     <h3 id="application-detail-title">Application detail</h3>
     <p id="application-detail-state" role="status"></p>
-    <pre id="application-detail" role="region" aria-labelledby="application-detail-title"></pre>
+    <pre id="application-detail" role="region" aria-labelledby="application-detail-title" aria-busy="false"></pre>
     <button id="load-application-history" type="button" disabled>Load application history</button>
     <p id="application-history-state" role="status"></p>
     <h3 id="application-history-title" class="visually-hidden">Application history</h3>
-    <pre id="application-history" role="region" aria-labelledby="application-history-title"></pre>
+    <pre id="application-history" role="region" aria-labelledby="application-history-title" aria-busy="false"></pre>
     <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
   </section>
   <section aria-labelledby="schedule-title">
@@ -109,7 +109,7 @@ _HTML = r"""<!doctype html>
     <button id="next-events" type="button" disabled>Next event page</button>
     <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
-    <pre id="event-detail" role="region" aria-labelledby="event-detail-title"></pre>
+    <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
     <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
   </section>
   <h2 id="result-title">Result</h2>
@@ -207,6 +207,7 @@ _HTML = r"""<!doctype html>
     }
     function clearEventDetail() {
       eventDetailGeneration += 1;
+      byId('event-detail').setAttribute('aria-busy', 'false');
       byId('event-detail').textContent = '';
       byId('event-detail-state').textContent = '';
     }
@@ -218,6 +219,7 @@ _HTML = r"""<!doctype html>
     async function loadEventDetail(identifier) {
       clearEventDetail();
       const generation = eventDetailGeneration;
+      byId('event-detail').setAttribute('aria-busy', 'true');
       byId('event-detail-state').textContent = 'Loading event…';
       try {
         const detail = await call('/v1/candidate/schedule-event?event_id=' + encodeURIComponent(identifier), {}, false);
@@ -230,6 +232,8 @@ _HTML = r"""<!doctype html>
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
         }
         throw error;
+      } finally {
+        if (generation === eventDetailGeneration) byId('event-detail').setAttribute('aria-busy', 'false');
       }
     }
     async function loadEvents(after = null) {
@@ -283,6 +287,7 @@ _HTML = r"""<!doctype html>
     let applicationHistoryGeneration = 0;
     function clearApplicationHistory() {
       applicationHistoryGeneration += 1;
+      byId('application-history').setAttribute('aria-busy', 'false');
       byId('application-history').textContent = '';
       byId('application-history-state').textContent = '';
     }
@@ -291,12 +296,14 @@ _HTML = r"""<!doctype html>
       selectedApplicationId = null;
       byId('load-application-history').disabled = true;
       applicationDetailGeneration += 1;
+      byId('application-detail').setAttribute('aria-busy', 'false');
       byId('application-detail').textContent = '';
       byId('application-detail-state').textContent = '';
     }
     async function loadApplicationDetail(applicationId) {
       clearApplicationDetail();
       const generation = applicationDetailGeneration;
+      byId('application-detail').setAttribute('aria-busy', 'true');
       byId('application-detail-state').textContent = 'Loading application…';
       try {
         const detail = await call('/v1/candidate/application?application_id=' + encodeURIComponent(applicationId), {}, false);
@@ -324,6 +331,8 @@ _HTML = r"""<!doctype html>
           byId('application-detail-state').textContent = 'Select the application again to retry.';
         }
         throw error;
+      } finally {
+        if (generation === applicationDetailGeneration) byId('application-detail').setAttribute('aria-busy', 'false');
       }
     }
     async function loadApplicationHistory() {
@@ -331,6 +340,7 @@ _HTML = r"""<!doctype html>
       if (applicationId === null) return;
       clearApplicationHistory();
       const generation = applicationHistoryGeneration;
+      byId('application-history').setAttribute('aria-busy', 'true');
       byId('application-history-state').textContent = 'Loading history…';
       try {
         const history = await call('/v1/candidate/application/history?application_id=' + encodeURIComponent(applicationId), {}, false);
@@ -360,6 +370,8 @@ _HTML = r"""<!doctype html>
           byId('application-history-state').textContent = 'Load history again to retry.';
         }
         throw error;
+      } finally {
+        if (generation === applicationHistoryGeneration) byId('application-history').setAttribute('aria-busy', 'false');
       }
     }
     byId('load-application-history').addEventListener('click', () => guarded(loadApplicationHistory));

@@ -120,6 +120,8 @@ def test_candidate_dashboard_read_only_output_regions_are_named():
             f'id="{region_id}" role="region" aria-labelledby="{title_id}"'
             in html
         )
+        if region_id != "result":
+            assert f'aria-labelledby="{title_id}" aria-busy="false"' in html
 
 
 def request() -> CareerLoopRequest:
@@ -467,6 +469,7 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             }""")
             page.locator("#owned-events button").first.click()
             page.locator('body[data-event-waiting="yes"]').wait_for()
+            assert page.locator("#event-detail").get_attribute("aria-busy") == "true"
             page.locator("#profile").fill("private-profile-secret")
             page.locator("#keyword").fill("private-keyword")
             page.locator("#location").fill("private-location")
@@ -486,6 +489,7 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             page.evaluate("window.releaseEvent(); window.fetch = window.originalEventFetch")
             page.locator('body[data-event-released="yes"]').wait_for()
             assert page.locator("#event-detail").text_content() == ""
+            assert page.locator("#event-detail").get_attribute("aria-busy") == "false"
             assert page.locator("#owned-events li").count() == 0
             assert page.locator("#next-events").is_disabled()
             assert "private-profile-secret" not in page.locator("body").text_content()
@@ -859,12 +863,14 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             }""")
             page.locator("#load-application-history").click()
             page.locator('body[data-history-waiting="yes"]').wait_for()
+            assert page.locator("#application-history").get_attribute("aria-busy") == "true"
             page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
             page.evaluate("window.releaseHistory(); window.fetch = window.originalHistoryFetch")
             page.locator('body[data-history-released="yes"]').wait_for()
             assert page.locator("#application-history").text_content() == ""
             assert page.locator("#application-history-state").text_content() == ""
+            assert page.locator("#application-history").get_attribute("aria-busy") == "false"
             def expanded_detail(route):
                 payload = route.fetch().json()
                 payload["private_top_level"] = "private-top-secret"
@@ -916,12 +922,14 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             }""")
             page.locator("#owned-applications button").click()
             page.locator('body[data-detail-waiting="yes"]').wait_for()
+            assert page.locator("#application-detail").get_attribute("aria-busy") == "true"
             page.locator("#token").fill("changed")
             page.evaluate("window.releaseDetail()")
             page.locator('body[data-detail-released="yes"]').wait_for()
             page.locator("#token").fill("sandbox-token")
             assert page.locator("#application-detail").text_content() == ""
             assert page.locator("#application-detail-state").text_content() == ""
+            assert page.locator("#application-detail").get_attribute("aria-busy") == "false"
             assert page.locator("#application-history").text_content() == ""
             assert page.locator("#load-application-history").is_disabled()
             from urllib.parse import parse_qs, urlsplit
