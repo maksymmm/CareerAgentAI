@@ -613,7 +613,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.on("request", record_navigation_request)
             page.keyboard.press("Tab")
             skip_link = page.get_by_role("link", name="Skip to dashboard content", exact=True)
-            assert skip_link.is_focused()
+            assert page.evaluate("document.activeElement === document.querySelector('.skip-link')")
             assert skip_link.bounding_box()["y"] >= 0
             page.keyboard.press("Enter")
             assert page.evaluate("document.activeElement.id") == "dashboard-content"
