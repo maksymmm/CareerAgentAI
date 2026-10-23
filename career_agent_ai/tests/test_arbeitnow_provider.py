@@ -234,6 +234,68 @@ def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({}, "invalid page data"),
+        ({"data": {}}, "invalid page data"),
+        ({"data": [], "links": []}, "invalid pagination links"),
+        ({"data": [], "links": {"next": True}}, "invalid next-page state"),
+        ({"data": [], "links": {"next": "  "}}, "invalid next-page state"),
+    ],
+)
+def test_invalid_page_envelope_fails_closed(monkeypatch, payload, message):
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        ArbeitnowProvider().search("")
+
+
+def test_invalid_second_page_returns_no_partial_results_and_retry_starts_over(
+    monkeypatch,
+):
+    first_page = {
+        "data": [
+            {
+                "slug": "warehouse-operator-example-1",
+                "company_name": "Example",
+                "title": "Warehouse Operator",
+                "location": "Karlsruhe",
+                "description": "Warehouse operations",
+            }
+        ],
+        "links": {"next": "page-two"},
+    }
+    payloads = [
+        first_page,
+        {"data": [], "links": {"next": False}},
+        {"data": [], "links": {"next": None}},
+    ]
+    calls = []
+
+    def fetch(request, timeout):
+        calls.append(request.full_url)
+        return FakeResponse(payloads.pop(0))
+
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        fetch,
+    )
+    provider = ArbeitnowProvider(max_pages=3)
+
+    with pytest.raises(RuntimeError, match="invalid next-page state"):
+        provider.search("")
+
+    assert len(calls) == 2
+    assert calls[0].endswith("page=1")
+    assert calls[1].endswith("page=2")
+    assert provider.search("") == ()
+    assert calls[-1].endswith("page=1")
+
+
+@pytest.mark.parametrize(
     "response_url",
     [
         "http://www.arbeitnow.com/api/job-board-api?page=1",
