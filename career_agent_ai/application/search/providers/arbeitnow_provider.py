@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from html import unescape
 from typing import Any
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from career_agent_ai.application.jobs.company import Company
 from career_agent_ai.application.jobs.employment_type import EmploymentType
@@ -16,6 +16,54 @@ from career_agent_ai.application.jobs.job_source import JobSource
 from career_agent_ai.application.jobs.location import Location
 from career_agent_ai.application.jobs.salary import Salary
 from career_agent_ai.application.search.job_provider import JobProvider
+
+
+def _validate_arbeitnow_url(response_url: object) -> None:
+    """Reject any URL outside the exact Arbeitnow API origin and path."""
+    if not isinstance(response_url, str):
+        raise RuntimeError("Arbeitnow response URL is invalid")
+
+    expected = urlsplit(ArbeitnowProvider.BASE_URL)
+    actual = urlsplit(response_url)
+    trusted_authorities = {
+        expected.netloc,
+        f"{expected.netloc}:443",
+    }
+    trusted_paths = {
+        expected.path,
+        f"{expected.path}/",
+    }
+    if (
+        actual.scheme != "https"
+        or actual.netloc not in trusted_authorities
+        or actual.path not in trusted_paths
+        or actual.fragment
+    ):
+        raise RuntimeError("Arbeitnow response URL is not trusted")
+
+
+class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
+    """Validate a redirect destination before urllib sends the next request."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request | None:
+        _validate_arbeitnow_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def urlopen(request: Request, *, timeout: float) -> Any:
+    """Open one Arbeitnow request with fail-closed redirect validation."""
+    return build_opener(_TrustedArbeitnowRedirectHandler()).open(
+        request,
+        timeout=timeout,
+    )
 
 
 class ArbeitnowProvider(JobProvider):
@@ -305,26 +353,7 @@ class ArbeitnowProvider(JobProvider):
         return payload
 
     def _validate_response_url(self, response_url: object) -> None:
-        if not isinstance(response_url, str):
-            raise RuntimeError("Arbeitnow response URL is invalid")
-
-        expected = urlsplit(self.BASE_URL)
-        actual = urlsplit(response_url)
-        trusted_authorities = {
-            expected.netloc,
-            f"{expected.netloc}:443",
-        }
-        trusted_paths = {
-            expected.path,
-            f"{expected.path}/",
-        }
-        if (
-            actual.scheme != "https"
-            or actual.netloc not in trusted_authorities
-            or actual.path not in trusted_paths
-            or actual.fragment
-        ):
-            raise RuntimeError("Arbeitnow response URL is not trusted")
+        _validate_arbeitnow_url(response_url)
 
     def _to_job(
         self,
