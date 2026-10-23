@@ -420,6 +420,8 @@ redundant concurrent reads, and are restored on completion or context invalidati
 Application and event detail controls, together with application-history loading,
 apply the same single-request rule. Failure restores an explicit retry control, while
 selection, authentication and session invalidation safely retire stale requests.
+Private read-only failures use operation-specific generic messages for application
+details, history, event details and approval prompts without rendering server payloads.
 Application and event view buttons keep concise visible text while their accessible
 names include a page ordinal and the validated record ID. The ordinal keeps repeated
 controls distinguishable even if assistive technology folds whitespace inside opaque IDs.

@@ -229,7 +229,8 @@ _HTML = r"""<!doctype html>
       byId('event-detail').setAttribute('aria-busy', 'true');
       byId('event-detail-state').textContent = 'Loading event…';
       try {
-        const detail = await call('/v1/candidate/schedule-event?event_id=' + encodeURIComponent(identifier), {}, false);
+        const detail = await call('/v1/candidate/schedule-event?event_id=' + encodeURIComponent(identifier), {},
+          'Event detail request failed.');
         if (generation !== eventDetailGeneration) return;
         if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
         byId('event-detail').textContent = JSON.stringify(eventSnapshot(detail.event), null, 2);
@@ -255,7 +256,8 @@ _HTML = r"""<!doctype html>
       byId('events-state').textContent = 'Loading events…';
       try {
         const page = await call('/v1/candidate/schedule-events?limit=25' +
-          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Schedule events request failed.');
         if (generation !== eventsGeneration) return;
         if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
             !(page.next_after === null || eventId(page.next_after))) throw new Error('Invalid event page.');
@@ -329,7 +331,8 @@ _HTML = r"""<!doctype html>
       byId('application-detail').setAttribute('aria-busy', 'true');
       byId('application-detail-state').textContent = 'Loading application…';
       try {
-        const detail = await call('/v1/candidate/application?application_id=' + encodeURIComponent(applicationId), {}, false);
+        const detail = await call('/v1/candidate/application?application_id=' + encodeURIComponent(applicationId), {},
+          'Application detail request failed.');
         if (generation !== applicationDetailGeneration) return;
         const item = detail && detail.application;
         if (detail.schema_version !== 1 || !item || item.application_id !== applicationId ||
@@ -371,7 +374,8 @@ _HTML = r"""<!doctype html>
       byId('application-history').setAttribute('aria-busy', 'true');
       byId('application-history-state').textContent = 'Loading history…';
       try {
-        const history = await call('/v1/candidate/application/history?application_id=' + encodeURIComponent(applicationId), {}, false);
+        const history = await call('/v1/candidate/application/history?application_id=' + encodeURIComponent(applicationId), {},
+          'Application history request failed.');
         if (generation !== applicationHistoryGeneration) return;
         const statuses = ['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'];
         const transitions = {saved: ['applied', 'withdrawn'], applied: ['interview', 'rejected', 'withdrawn'],
@@ -425,7 +429,8 @@ _HTML = r"""<!doctype html>
       byId('applications-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/applications?limit=25' +
-          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Applications request failed.');
         if (generation !== applicationsGeneration) return;
         // Canonical whitespace is validated by the server (Python strip differs
         // from JavaScript trim, notably for U+FEFF). Treat returned IDs as opaque.
@@ -498,7 +503,8 @@ _HTML = r"""<!doctype html>
       byId('list-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/run-statuses?limit=25' +
-          (after === null ? '' : '&after=' + encodeURIComponent(after)), {}, false);
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Run statuses request failed.');
         if (generation !== listGeneration) return;
         const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
         if (page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
@@ -567,8 +573,9 @@ _HTML = r"""<!doctype html>
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
     }
-    async function call(path, options = {}, renderRaw = true) {
+    async function call(path, options = {}, safeError = null) {
       clearOverview();
+      const renderRaw = safeError === null;
       const resultRequest = ++latestResultRequest;
       const token = byId('token').value;
       const contextGeneration = inputContextGeneration;
@@ -584,14 +591,14 @@ _HTML = r"""<!doctype html>
         }
         if (renderRaw && resultRequest === latestResultRequest) show({status: response.status, payload});
         if (!response.ok) {
-          const error = new Error(renderRaw ? (payload.message || payload.error || 'Request failed.') : 'Application detail request failed.');
+          const error = new Error(renderRaw ? (payload.message || payload.error || 'Request failed.') : safeError);
           error.status = response.status;
           error.code = payload.error;
           throw error;
         }
         return payload;
       } catch (error) {
-        if (!renderRaw) error = new Error('Application detail request failed.');
+        if (!renderRaw) error = new Error(safeError);
         error.resultRequest = resultRequest;
         throw error;
       }
@@ -679,7 +686,8 @@ _HTML = r"""<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       try {
-        const loadedPrompt = await call('/v1/candidate/runs/' + encodeURIComponent(promptRunId) + '/approval', {}, false);
+        const loadedPrompt = await call('/v1/candidate/runs/' + encodeURIComponent(promptRunId) + '/approval', {},
+          'Approval prompt request failed.');
         if (promptGeneration !== approvalPromptGeneration || promptRunId !== byId('run-id').value) return;
         const fields = ['schema_version', 'run_id', 'state_version', 'action_kind', 'title',
           'details', 'action_fingerprint', 'allowed_decisions'];
