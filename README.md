@@ -95,7 +95,9 @@ The implementation is deterministic and provider-independent so an LLM/ML planne
 
 ## Job Search
 
-The active Arbeitnow adapter bounds each response to 2,000,000 bytes by default
+The active Arbeitnow adapter validates its timeout as a finite positive number and
+its pagination/response-size limits as positive integers before any request. It
+bounds each response to 2,000,000 bytes by default
 (`max_response_bytes` accepts a positive integer). It reads at most one extra byte
 to detect overflow before UTF-8/JSON decoding, closes the response on rejection,
 and aborts the search rather than returning partial pages. A deliberate retry

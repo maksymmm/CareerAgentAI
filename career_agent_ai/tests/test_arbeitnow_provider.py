@@ -177,6 +177,49 @@ def test_arbeitnow_provider_empty_page(
     assert result == ()
 
 
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        0,
+        -1,
+        True,
+        False,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        10**1000,
+        -(10**1000),
+        "20",
+        None,
+    ],
+)
+def test_timeout_requires_finite_positive_number(timeout):
+    with pytest.raises(ValueError, match="timeout must be a finite positive number"):
+        ArbeitnowProvider(timeout=timeout)
+
+
+@pytest.mark.parametrize("max_pages", [0, -1, True, False, 1.5, "3", None])
+def test_page_limit_requires_positive_integer(max_pages):
+    with pytest.raises(ValueError, match="max_pages must be a positive integer"):
+        ArbeitnowProvider(max_pages=max_pages)
+
+
+def test_integer_timeout_is_normalized_before_transport(monkeypatch):
+    observed_timeouts = []
+
+    def fetch(request, timeout):
+        observed_timeouts.append(timeout)
+        return FakeResponse({"data": []})
+
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        fetch,
+    )
+
+    assert ArbeitnowProvider(timeout=2, max_pages=1).search("") == ()
+    assert observed_timeouts == [2.0]
+
+
 @pytest.mark.parametrize("limit", [0, -1, True, 1.5, "100", None])
 def test_response_limit_requires_positive_integer(limit):
     with pytest.raises(ValueError, match="max_response_bytes"):

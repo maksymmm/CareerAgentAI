@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow configuration contract: timeout must be a finite positive numeric value,
+while page and response limits must be positive integers. Booleans, NaN/infinity,
+strings and missing values now fail deterministically during construction instead of
+reaching transport or pagination with ambiguous runtime errors. Sandbox tests cover
+every rejected category and integer-timeout normalization before transport.
+Next: verify full CI and Codex review; continue provider sandbox failure coverage.
+
 Arbeitnow page-envelope failure atomicity: every decoded page requires list-valued
 data and a valid optional links/next contract. A malformed first or later page aborts
 the whole search instead of returning a plausible but incomplete prefix. Sandbox

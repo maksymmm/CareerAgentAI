@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 from datetime import UTC, datetime
@@ -194,22 +195,24 @@ class ArbeitnowProvider(JobProvider):
         max_pages: int = 3,
         max_response_bytes: int = 2_000_000,
     ) -> None:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError("timeout must be a finite positive number")
+        try:
+            normalized_timeout = float(timeout)
+        except OverflowError as exc:
+            raise ValueError("timeout must be a finite positive number") from exc
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
+
+        if type(max_pages) is not int or max_pages < 1:
+            raise ValueError("max_pages must be a positive integer")
+
         if type(max_response_bytes) is not int or max_response_bytes < 1:
             raise ValueError("max_response_bytes must be a positive integer")
 
-        self._max_response_bytes = max_response_bytes
-        if timeout <= 0:
-            raise ValueError(
-                "timeout must be greater than 0"
-            )
-
-        if max_pages < 1:
-            raise ValueError(
-                "max_pages must be greater than or equal to 1"
-            )
-
-        self._timeout = timeout
+        self._timeout = normalized_timeout
         self._max_pages = max_pages
+        self._max_response_bytes = max_response_bytes
 
     def search(
         self,
