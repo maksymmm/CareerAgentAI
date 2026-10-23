@@ -2,10 +2,12 @@ import json
 from io import BytesIO
 
 import pytest
+from urllib.request import HTTPRedirectHandler, Request
 
 from career_agent_ai.application.jobs.job_source import JobSource
 from career_agent_ai.application.search.providers.arbeitnow_provider import (
     ArbeitnowProvider,
+    _TrustedArbeitnowRedirectHandler,
 )
 
 
@@ -293,3 +295,69 @@ def test_trusted_final_response_url_is_accepted(monkeypatch, response_url):
 
     assert ArbeitnowProvider().search("") == ()
     assert response.closed
+
+
+@pytest.mark.parametrize(
+    "redirect_url",
+    [
+        "http://www.arbeitnow.com/api/job-board-api?page=1",
+        "https://evil.example/api/job-board-api?page=1",
+        "https://www.arbeitnow.com.evil.example/api/job-board-api?page=1",
+        "https://user@www.arbeitnow.com/api/job-board-api?page=1",
+        "https://www.arbeitnow.com:444/api/job-board-api?page=1",
+        "https://www.arbeitnow.com/other?page=1",
+        "https://www.arbeitnow.com/api/job-board-api?page=1#fragment",
+    ],
+)
+def test_untrusted_redirect_is_rejected_before_following(monkeypatch, redirect_url):
+    followed = []
+
+    def record_follow(self, req, fp, code, msg, headers, newurl):
+        followed.append(newurl)
+        return req
+
+    monkeypatch.setattr(HTTPRedirectHandler, "redirect_request", record_follow)
+    handler = _TrustedArbeitnowRedirectHandler()
+
+    with pytest.raises(RuntimeError, match="response URL is not trusted"):
+        handler.redirect_request(
+            Request(ArbeitnowProvider.BASE_URL),
+            None,
+            302,
+            "Found",
+            {},
+            redirect_url,
+        )
+
+    assert followed == []
+
+
+@pytest.mark.parametrize(
+    "redirect_url",
+    [
+        "https://www.arbeitnow.com/api/job-board-api?page=2",
+        "https://www.arbeitnow.com:443/api/job-board-api/?page=2",
+    ],
+)
+def test_trusted_redirect_is_followed(monkeypatch, redirect_url):
+    followed = []
+    expected_request = Request(redirect_url)
+
+    def record_follow(self, req, fp, code, msg, headers, newurl):
+        followed.append(newurl)
+        return expected_request
+
+    monkeypatch.setattr(HTTPRedirectHandler, "redirect_request", record_follow)
+    handler = _TrustedArbeitnowRedirectHandler()
+
+    result = handler.redirect_request(
+        Request(ArbeitnowProvider.BASE_URL),
+        None,
+        302,
+        "Found",
+        {},
+        redirect_url,
+    )
+
+    assert result is expected_request
+    assert followed == [redirect_url]
