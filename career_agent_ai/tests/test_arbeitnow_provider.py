@@ -179,7 +179,19 @@ def test_arbeitnow_provider_empty_page(
 
 @pytest.mark.parametrize(
     "timeout",
-    [0, -1, True, False, float("nan"), float("inf"), -float("inf"), "20", None],
+    [
+        0,
+        -1,
+        True,
+        False,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        10**1000,
+        -(10**1000),
+        "20",
+        None,
+    ],
 )
 def test_timeout_requires_finite_positive_number(timeout):
     with pytest.raises(ValueError, match="timeout must be a finite positive number"):

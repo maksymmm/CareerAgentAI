@@ -195,12 +195,13 @@ class ArbeitnowProvider(JobProvider):
         max_pages: int = 3,
         max_response_bytes: int = 2_000_000,
     ) -> None:
-        if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout)
-            or timeout <= 0
-        ):
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError("timeout must be a finite positive number")
+        try:
+            normalized_timeout = float(timeout)
+        except OverflowError as exc:
+            raise ValueError("timeout must be a finite positive number") from exc
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
             raise ValueError("timeout must be a finite positive number")
 
         if type(max_pages) is not int or max_pages < 1:
@@ -209,7 +210,7 @@ class ArbeitnowProvider(JobProvider):
         if type(max_response_bytes) is not int or max_response_bytes < 1:
             raise ValueError("max_response_bytes must be a positive integer")
 
-        self._timeout = float(timeout)
+        self._timeout = normalized_timeout
         self._max_pages = max_pages
         self._max_response_bytes = max_response_bytes
 
