@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from html import unescape
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from career_agent_ai.application.jobs.company import Company
@@ -268,6 +268,9 @@ class ArbeitnowProvider(JobProvider):
                         f"Arbeitnow API returned HTTP {status}"
                     )
 
+                response_url = getattr(response, "geturl", lambda: url)()
+                self._validate_response_url(response_url)
+
                 raw_body = response.read(self._max_response_bytes + 1)
                 if len(raw_body) > self._max_response_bytes:
                     raise RuntimeError("Arbeitnow response exceeds byte limit")
@@ -300,6 +303,28 @@ class ArbeitnowProvider(JobProvider):
             )
 
         return payload
+
+    def _validate_response_url(self, response_url: object) -> None:
+        if not isinstance(response_url, str):
+            raise RuntimeError("Arbeitnow response URL is invalid")
+
+        expected = urlsplit(self.BASE_URL)
+        actual = urlsplit(response_url)
+        trusted_authorities = {
+            expected.netloc,
+            f"{expected.netloc}:443",
+        }
+        trusted_paths = {
+            expected.path,
+            f"{expected.path}/",
+        }
+        if (
+            actual.scheme != "https"
+            or actual.netloc not in trusted_authorities
+            or actual.path not in trusted_paths
+            or actual.fragment
+        ):
+            raise RuntimeError("Arbeitnow response URL is not trusted")
 
     def _to_job(
         self,

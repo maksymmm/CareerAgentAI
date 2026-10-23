@@ -229,3 +229,67 @@ def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
     responses.append(BytesIO(b'{"data": []}'))
     assert provider.search("") == ()
     assert calls[-1].endswith("page=1")
+
+
+@pytest.mark.parametrize(
+    "response_url",
+    [
+        "http://www.arbeitnow.com/api/job-board-api?page=1",
+        "https://evil.example/api/job-board-api?page=1",
+        "https://www.arbeitnow.com.evil.example/api/job-board-api?page=1",
+        "https://www.arbeitnow.com/other?page=1",
+        "https://user@www.arbeitnow.com/api/job-board-api?page=1",
+        "https://www.arbeitnow.com:/api/job-board-api?page=1",
+        "https://www.arbeitnow.com:0443/api/job-board-api?page=1",
+        "https://www.arbeitnow.com:444/api/job-board-api?page=1",
+        "https://www.arbeitnow.com/api/job-board-api//?page=1",
+        "https://www.arbeitnow.com/api/job-board-api////?page=1",
+        "https://www.arbeitnow.com/api/job-board-api?page=1#fragment",
+    ],
+)
+def test_untrusted_final_response_url_is_rejected_before_read(
+    monkeypatch, response_url
+):
+    class RedirectedResponse(BytesIO):
+        status = 200
+
+        def geturl(self):
+            return response_url
+
+        def read(self, size=-1):
+            pytest.fail("untrusted redirect body was read")
+
+    response = RedirectedResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="response URL is not trusted"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+@pytest.mark.parametrize(
+    "response_url",
+    [
+        "https://www.arbeitnow.com/api/job-board-api?page=1",
+        "https://www.arbeitnow.com:443/api/job-board-api/?page=1",
+    ],
+)
+def test_trusted_final_response_url_is_accepted(monkeypatch, response_url):
+    class TrustedResponse(BytesIO):
+        status = 200
+
+        def geturl(self):
+            return response_url
+
+    response = TrustedResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed

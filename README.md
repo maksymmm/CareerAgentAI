@@ -100,6 +100,10 @@ The active Arbeitnow adapter bounds each response to 2,000,000 bytes by default
 to detect overflow before UTF-8/JSON decoding, closes the response on rejection,
 and aborts the search rather than returning partial pages. A deliberate retry
 starts from page one. This bounds response bytes, not total decoded-object memory.
+After redirects, the adapter also verifies that the final response remains on the
+expected Arbeitnow HTTPS endpoint (omitted port or literal `:443`, at most one trailing
+slash, no credentials or fragment) before reading its body; cross-host, downgraded,
+alternate-path and ambiguous authority/path spellings fail closed.
 
 The job-search layer provides:
 
