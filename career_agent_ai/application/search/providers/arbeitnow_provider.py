@@ -228,16 +228,7 @@ class ArbeitnowProvider(JobProvider):
                 page=page,
             )
 
-            page_jobs = payload.get(
-                "data",
-                [],
-            )
-
-            if not isinstance(
-                page_jobs,
-                list,
-            ):
-                break
+            page_jobs, has_next = self._validate_page_envelope(payload)
 
             for item in page_jobs:
                 if not isinstance(
@@ -260,18 +251,32 @@ class ArbeitnowProvider(JobProvider):
 
                 jobs.append(job)
 
-            links = payload.get("links")
-
-            if not isinstance(
-                links,
-                dict,
-            ):
-                break
-
-            if not links.get("next"):
+            if not has_next:
                 break
 
         return tuple(jobs)
+
+    @staticmethod
+    def _validate_page_envelope(
+        payload: dict[str, Any],
+    ) -> tuple[list[Any], bool]:
+        """Validate pagination fields before accepting any page results."""
+        page_jobs = payload.get("data")
+        if not isinstance(page_jobs, list):
+            raise RuntimeError("Arbeitnow API returned invalid page data")
+
+        links = payload.get("links")
+        if links is None:
+            return page_jobs, False
+        if not isinstance(links, dict):
+            raise RuntimeError("Arbeitnow API returned invalid pagination links")
+
+        next_page = links.get("next")
+        if next_page is None:
+            return page_jobs, False
+        if not isinstance(next_page, str) or not next_page.strip():
+            raise RuntimeError("Arbeitnow API returned invalid next-page state")
+        return page_jobs, True
 
     def _fetch_page(
         self,

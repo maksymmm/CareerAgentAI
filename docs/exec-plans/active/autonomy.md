@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow page-envelope failure atomicity: every decoded page requires list-valued
+data and a valid optional links/next contract. A malformed first or later page aborts
+the whole search instead of returning a plausible but incomplete prefix. Sandbox
+tests cover invalid data, links and next types plus explicit retry from page one.
+Next: verify full CI and Codex review; continue provider sandbox failure coverage.
+
 Arbeitnow redirect trust: the active discovery adapter validates every redirect
 destination before urllib follows it, then validates the final URL again before
 reading the response. Scheme downgrades, foreign or deceptive hosts, credentials,
