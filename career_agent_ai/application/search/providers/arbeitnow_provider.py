@@ -144,7 +144,12 @@ class ArbeitnowProvider(JobProvider):
         *,
         timeout: float = 20.0,
         max_pages: int = 3,
+        max_response_bytes: int = 2_000_000,
     ) -> None:
+        if type(max_response_bytes) is not int or max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be a positive integer")
+
+        self._max_response_bytes = max_response_bytes
         if timeout <= 0:
             raise ValueError(
                 "timeout must be greater than 0"
@@ -263,7 +268,9 @@ class ArbeitnowProvider(JobProvider):
                         f"Arbeitnow API returned HTTP {status}"
                     )
 
-                raw_body = response.read()
+                raw_body = response.read(self._max_response_bytes + 1)
+                if len(raw_body) > self._max_response_bytes:
+                    raise RuntimeError("Arbeitnow response exceeds byte limit")
 
         except Exception as exc:
             raise RuntimeError(
