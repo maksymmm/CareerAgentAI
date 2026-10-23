@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow response bounding: the active job-discovery adapter now limits every
+HTTP page before decoding (2,000,000 bytes by default, positive integer override).
+Overflow closes the response and aborts pagination without returning partial results.
+Sandbox transport tests cover the exact UTF-8 byte boundary, oversized bodies before
+JSON parsing, a later-page failure and explicit retry from page one.
+Next: verify full CI and Codex review; continue provider sandbox failure coverage.
+
 Contextual private-request errors: application detail, application history, event
 detail and approval-prompt failures now expose distinct operation-specific generic
 messages. Backend and malformed-JSON payloads remain suppressed. Chromium regressions
