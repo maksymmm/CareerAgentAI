@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow redirect trust: the active discovery adapter now validates the final URL
+after automatic HTTP redirects and rejects scheme downgrades, foreign or deceptive
+hosts, credentials, non-default ports, alternate paths and fragments before reading
+the response body. Exact authority/path spelling also rejects empty or zero-padded
+ports and repeated trailing slashes. Sandbox tests cover trusted HTTPS variants and
+fail-closed cases without making external requests.
+
 Arbeitnow response bounding: the active job-discovery adapter now limits every
 HTTP page before decoding (2,000,000 bytes by default, positive integer override).
 Overflow closes the response and aborts pagination without returning partial results.
