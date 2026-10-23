@@ -110,7 +110,9 @@ ambiguous authority/path spellings fail closed without a follow-up request.
 Each decoded page must also contain a list-valued `data` field and a valid optional
 pagination envelope. Malformed data, links or next-page state abort the entire search
 instead of silently returning an incomplete prefix; an explicit retry starts again at
-page one.
+page one. Every transport response must provide an integer HTTP status in the protocol
+range and a byte body; malformed adapter responses fail deterministically and close
+before decoding.
 
 The job-search layer provides:
 

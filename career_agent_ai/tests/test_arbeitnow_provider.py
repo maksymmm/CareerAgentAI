@@ -226,6 +226,53 @@ def test_response_limit_requires_positive_integer(limit):
         ArbeitnowProvider(max_response_bytes=limit)
 
 
+@pytest.mark.parametrize("status", [None, True, 200.0, "200", 99, 600])
+def test_invalid_http_status_is_rejected_before_body_read(monkeypatch, status):
+    class InvalidStatusResponse(BytesIO):
+        def read(self, size=-1):
+            pytest.fail("body was read for an invalid HTTP status")
+
+    response = InvalidStatusResponse(b'{"data": []}')
+    response.status = status
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid HTTP status"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+@pytest.mark.parametrize("body", [None, '{"data": []}', bytearray(b'{"data": []}')])
+def test_non_bytes_response_body_is_rejected(monkeypatch, body):
+    class InvalidBodyResponse:
+        status = 200
+        closed = False
+
+        def read(self, size=-1):
+            return body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.closed = True
+            return False
+
+    response = InvalidBodyResponse()
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid body"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
 @pytest.mark.parametrize("oversized", [False, True])
 def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
     body = json.dumps({"data": [], "label": "é"}, ensure_ascii=False).encode()
