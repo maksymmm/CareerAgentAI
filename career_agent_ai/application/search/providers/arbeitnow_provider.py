@@ -319,7 +319,12 @@ class ArbeitnowProvider(JobProvider):
                     200,
                 )
 
-                if status < 200 or status >= 300:
+                if type(status) is not int or not 100 <= status <= 599:
+                    raise RuntimeError(
+                        "Arbeitnow API returned an invalid HTTP status"
+                    )
+
+                if not 200 <= status < 300:
                     raise RuntimeError(
                         f"Arbeitnow API returned HTTP {status}"
                     )
@@ -328,6 +333,8 @@ class ArbeitnowProvider(JobProvider):
                 self._validate_response_url(response_url)
 
                 raw_body = response.read(self._max_response_bytes + 1)
+                if not isinstance(raw_body, bytes):
+                    raise RuntimeError("Arbeitnow API returned an invalid body")
                 if len(raw_body) > self._max_response_bytes:
                     raise RuntimeError("Arbeitnow response exceeds byte limit")
 

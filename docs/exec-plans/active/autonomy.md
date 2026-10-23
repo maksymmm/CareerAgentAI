@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow transport contract: each sandbox response must expose an exact integer HTTP
+status in the protocol range and return bytes from its bounded read. Boolean, string,
+float, missing/out-of-range statuses and non-byte bodies now fail with deterministic
+provider errors before decode or partial result acceptance. Responses close on every
+rejection. Next: verify full CI and Codex review; continue provider failure coverage.
+
 Arbeitnow configuration contract: timeout must be a finite positive numeric value,
 while page and response limits must be positive integers. Booleans, NaN/infinity,
 strings and missing values now fail deterministically during construction instead of
