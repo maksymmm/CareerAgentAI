@@ -45,6 +45,46 @@ def test_owned_pages_survive_restart_without_loading_private_children(tmp_path):
         SQLiteCandidateApplications(str(path)).list_page(user_id="foreign")
 
 
+def test_status_filter_is_owner_scoped_paged_and_restart_safe(tmp_path):
+    path = tmp_path / "status-filter.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    for identifier, owner, status in [
+        ("a", "owner", JobApplicationStatus.APPLIED),
+        ("b", "owner", JobApplicationStatus.SAVED),
+        ("c", "other", JobApplicationStatus.APPLIED),
+        ("d", "owner", JobApplicationStatus.APPLIED),
+        ("e", "owner", JobApplicationStatus.APPLIED),
+    ]:
+        repository.add(JobApplication(
+            application_id=identifier, user_id=owner, job_id=identifier,
+            status=status,
+        ))
+    database.close()
+    baseline = path.read_bytes()
+    projection = SQLiteCandidateApplications(str(path))
+    first = projection.list_page(
+        user_id="owner", limit=2, status=JobApplicationStatus.APPLIED
+    )
+    assert [item["application_id"] for item in first["items"]] == ["a", "d"]
+    assert first["next_after"] == "d"
+    second = projection.list_page(
+        user_id="owner", limit=2, after="d", status=JobApplicationStatus.APPLIED
+    )
+    assert [item["application_id"] for item in second["items"]] == ["e"]
+    assert second["next_after"] is None
+    assert path.read_bytes() == baseline
+
+
+def test_status_filter_validation_precedes_missing_storage(tmp_path):
+    path = tmp_path / "missing.sqlite"
+    with pytest.raises(ValueError, match="supported application status"):
+        SQLiteCandidateApplications(str(path)).list_page(
+            user_id="owner", status="applied"  # type: ignore[arg-type]
+        )
+    assert not path.exists()
+
+
 @pytest.mark.parametrize("kwargs", [{"limit": True}, {"limit": 0}, {"limit": 101}, {"limit": 1.5},
     {"after": ""}, {"after": " padded"}, {"after": "a" * 201}, {"user_id": ""}])
 def test_validation_precedes_missing_storage(tmp_path, kwargs):
@@ -145,6 +185,26 @@ def test_owner_keyset_index_is_backfilled_and_used_without_sorting(tmp_path):
     finally:
         database.close()
     assert path.read_bytes() == baseline
+
+
+def test_status_keyset_index_is_backfilled_and_used_without_sorting(tmp_path):
+    path = tmp_path / "status-indexed.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteJobApplicationRepository(database)
+    columns = database.connection.execute(
+        "PRAGMA index_info(idx_applications_user_status_id)"
+    ).fetchall()
+    assert [row[2] for row in columns] == ["user_id", "status", "application_id"]
+    plan = database.connection.execute(
+        "EXPLAIN QUERY PLAN SELECT application_id, job_id, company_id, job_title, "
+        "status, version, created_at, updated_at, serialization_version "
+        "FROM job_applications WHERE user_id = ? AND application_id > ? AND status = ? "
+        "ORDER BY application_id LIMIT ?", ("owner", "cursor", "applied", 26),
+    ).fetchall()
+    details = " ".join(row[3] for row in plan)
+    assert "idx_applications_user_status_id" in details
+    assert "TEMP B-TREE" not in details
+    database.close()
 
 
 @pytest.mark.parametrize("column,value", [("version", "bad"), ("created_at", "bad"),

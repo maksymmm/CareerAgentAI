@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate application status filtering: the authenticated tracker API and runtime
+accept an optional domain-validated lifecycle status, filter inside the owner-scoped
+read-only SQL query, and preserve ID-keyset pagination through a dedicated composite
+index. The sandbox selector carries the filter across pages and clears stale pages on
+change. Storage, HTTP, OpenAPI, restart, pagination and Chromium regressions cover the
+contract without enabling application actions.
+Next: verify exact-head CI and Codex review; continue candidate workflow readiness.
+
 Arbeitnow declared-size guard: validate every `Content-Length` occurrence as strict
 ASCII digits, reject conflicting duplicates, and reject declared oversized responses
 before reading their body. The existing
