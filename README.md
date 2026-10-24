@@ -112,7 +112,8 @@ pagination envelope. Malformed data, links or next-page state abort the entire s
 instead of silently returning an incomplete prefix; an explicit retry starts again at
 page one. Every transport response must provide an integer HTTP status in the protocol
 range and a byte body; malformed adapter responses fail deterministically and close
-before decoding.
+before decoding. JSON decoding is strict: duplicate object members, non-finite numeric
+constants and excessive nesting are rejected rather than interpreted ambiguously.
 
 The job-search layer provides:
 

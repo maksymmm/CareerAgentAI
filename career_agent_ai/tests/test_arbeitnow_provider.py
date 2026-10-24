@@ -273,6 +273,42 @@ def test_non_bytes_response_body_is_rejected(monkeypatch, body):
     assert response.closed
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"data": [], "data": [{"title": "ambiguous"}]}',
+        b'{"data": [], "links": {"next": null, "next": "page-two"}}',
+        b'{"data": [], "score": NaN}',
+        b'{"data": [], "score": Infinity}',
+        b'{"data": [], "score": -Infinity}',
+        (b'{"data":' + (b"[" * 101) + b"0" + (b"]" * 101) + b"}"),
+    ],
+)
+def test_non_strict_json_is_rejected(monkeypatch, body):
+    response = BytesIO(body)
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid JSON"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+def test_json_depth_validation_ignores_quoted_brackets(monkeypatch):
+    body = json.dumps({"data": [], "label": "[" * 101}).encode()
+    response = BytesIO(body)
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
 @pytest.mark.parametrize("oversized", [False, True])
 def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
     body = json.dumps({"data": [], "label": "é"}, ensure_ascii=False).encode()

@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow strict JSON contract: decoded pages reject duplicate object members,
+non-standard NaN/infinity constants and excessive nesting instead of accepting
+ambiguous or Python-specific payloads. All failures surface as the same deterministic
+invalid-JSON provider error and close the response before any page is accepted.
+Next: verify full CI and Codex review; continue provider failure coverage.
+
 Arbeitnow transport contract: each sandbox response must expose an exact integer HTTP
 status in the protocol range and return bytes from its bounded read. Boolean, string,
 float, missing/out-of-range statuses and non-byte bodies now fail with deterministic

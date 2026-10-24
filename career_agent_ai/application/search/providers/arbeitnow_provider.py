@@ -19,6 +19,45 @@ from career_agent_ai.application.jobs.salary import Salary
 from career_agent_ai.application.search.job_provider import JobProvider
 
 
+def _reject_nonfinite_json_constant(value: str) -> None:
+    """Reject non-standard numeric constants accepted by Python's JSON decoder."""
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting ambiguous duplicate member names."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member: {key}")
+        result[key] = value
+    return result
+
+
+def _validate_json_depth(value: str, *, maximum: int = 100) -> None:
+    """Reject excessive JSON container nesting without counting quoted brackets."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > maximum:
+                raise ValueError("JSON nesting exceeds limit")
+        elif character in "]}":
+            depth -= 1
+
+
 def _validate_arbeitnow_url(response_url: object) -> None:
     """Reject any URL outside the exact Arbeitnow API origin and path."""
     if not isinstance(response_url, str):
@@ -345,12 +384,17 @@ class ArbeitnowProvider(JobProvider):
             ) from exc
 
         try:
+            decoded_body = raw_body.decode("utf-8")
+            _validate_json_depth(decoded_body)
             payload = json.loads(
-                raw_body.decode("utf-8")
+                decoded_body,
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_unique_json_object,
             )
         except (
             UnicodeDecodeError,
-            json.JSONDecodeError,
+            ValueError,
+            RecursionError,
         ) as exc:
             raise RuntimeError(
                 "Arbeitnow API returned invalid JSON"
