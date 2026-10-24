@@ -860,6 +860,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 "1 application on this page. End of list. Read-only snapshots.",
                 exact=True,
             ).wait_for()
+            page.locator("#application-status").select_option("")
             page.route(
                 "**/v1/candidate/applications?*",
                 lambda route: route.fulfill(status=200, json={
