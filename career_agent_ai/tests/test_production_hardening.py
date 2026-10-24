@@ -220,6 +220,17 @@ def test_candidate_run_phase_projection_is_backfilled_and_indexed(tmp_path):
     assert database.connection.execute(
         "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
     ).fetchone()[0] == CareerLoopPhase.SEARCH.value
+    # Simulate interruption after ALTER TABLE committed but before backfill.
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET phase = NULL WHERE run_id = 'legacy'"
+    )
+    database.connection.commit()
+    database.close()
+    database = SQLiteDatabase(str(path))
+    SQLiteCareerLoopRepository(database)
+    assert database.connection.execute(
+        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
+    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
     columns = database.connection.execute(
         "PRAGMA index_info(idx_autonomous_loop_owner_phase)"
     ).fetchall()
@@ -233,6 +244,31 @@ def test_candidate_run_phase_projection_is_backfilled_and_indexed(tmp_path):
     assert "idx_autonomous_loop_owner_phase" in details
     assert "TEMP B-TREE" not in details
     database.close()
+
+
+def test_candidate_filtered_run_page_reads_each_snapshot_in_one_query(tmp_path):
+    from career_agent_ai.application.career.autonomous_loop_models import CareerLoopState
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+        SQLiteCareerLoopRepository,
+    )
+    path = tmp_path / "run-phase-snapshot.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    repository.save(CareerLoopState(run_id="run-1", request=request()))
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    statements = []
+    database.connection.set_trace_callback(statements.append)
+    page = SQLiteCandidateRunStatusProjection(database).list_page(
+        user_id="user-1", phase=CareerLoopPhase.SEARCH)
+    database.connection.set_trace_callback(None)
+    database.close()
+    assert [item["run_id"] for item in page["items"]] == ["run-1"]
+    reads = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+    assert len(reads) == 1
+    assert "payload_json" in reads[0]
 
 
 def test_candidate_run_listing_does_not_create_missing_storage(tmp_path):

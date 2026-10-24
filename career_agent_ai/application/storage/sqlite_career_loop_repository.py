@@ -333,14 +333,18 @@ class SQLiteCareerLoopRepository:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops ADD COLUMN phase TEXT"
             )
-            self._database.connection.execute(
-                """
-                UPDATE autonomous_career_loops
-                SET phase = json_extract(payload_json, '$.phase')
-                WHERE json_valid(payload_json)
-                  AND json_type(payload_json, '$.phase') = 'text'
-                """
-            )
+        # This backfill is intentionally independent of column creation. If a
+        # process stops after ALTER TABLE has committed but before initialization
+        # finishes, the next startup resumes every still-unprojected valid row.
+        self._database.connection.execute(
+            """
+            UPDATE autonomous_career_loops
+            SET phase = json_extract(payload_json, '$.phase')
+            WHERE phase IS NULL
+              AND json_valid(payload_json)
+              AND json_type(payload_json, '$.phase') = 'text'
+            """
+        )
         if "execution_claim_owner" not in columns:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops "
@@ -621,18 +625,22 @@ class SQLiteCandidateRunStatusProjection:
             raise TypeError("phase must be a CareerLoopPhase or None")
         if phase is None:
             rows = self._database.connection.execute(
-                "SELECT run_id FROM autonomous_career_loops "
+                "SELECT run_id, owner_user_id, payload_json, version "
+                "FROM autonomous_career_loops "
                 "WHERE owner_user_id = ? AND run_id > ? ORDER BY run_id LIMIT ?",
                 (owner, cursor, limit + 1),
             ).fetchall()
         else:
             rows = self._database.connection.execute(
-                "SELECT run_id FROM autonomous_career_loops "
+                "SELECT run_id, owner_user_id, payload_json, version "
+                "FROM autonomous_career_loops "
                 "WHERE owner_user_id = ? AND phase = ? AND run_id > ? "
                 "ORDER BY run_id LIMIT ?",
                 (owner, phase.value, cursor, limit + 1),
             ).fetchall()
-        items = [self.get(row[0], user_id=owner) for row in rows[:limit]]
+        # The filter projection and serialized state are read by one SELECT so a
+        # concurrent optimistic transition cannot move the run between two reads.
+        items = [self._status_from_row(row[0], row[1:], owner=owner) for row in rows[:limit]]
         if phase is not None and any(item["phase"] != phase.value for item in items):
             raise ValueError("Persisted autonomous-loop phase projection is malformed.")
         return {"schema_version": 1, "items": items,
@@ -651,6 +659,13 @@ class SQLiteCandidateRunStatusProjection:
             (identifier,),
         ).fetchone()
         if row is None or row[0] != owner:
+            raise KeyError("Unknown autonomous career loop for this user.")
+        return self._status_from_row(identifier, row, owner=owner)
+
+    @staticmethod
+    def _status_from_row(identifier: str, row: tuple[Any, ...], *, owner: str) -> dict[str, Any]:
+        """Validate one owner-filtered storage row into the public projection."""
+        if row[0] != owner:
             raise KeyError("Unknown autonomous career loop for this user.")
         try:
             payload = json.loads(row[1])
