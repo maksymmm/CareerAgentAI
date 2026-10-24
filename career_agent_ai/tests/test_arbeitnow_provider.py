@@ -276,6 +276,7 @@ def test_missing_http_status_is_rejected_before_body_read(monkeypatch):
         (("text/html",), "response is not JSON"),
         (("application/json; charset=iso-8859-1",), "response is not JSON"),
         (("application/json; boundary=value",), "response is not JSON"),
+        (("application/json; charset=\"utf-8",), "response is not JSON"),
         (
             ("application/json; charset=utf-8; charset=utf-8",),
             "response is not JSON",
@@ -318,11 +319,31 @@ def test_unsafe_content_type_is_rejected_before_body_read(
 
 @pytest.mark.parametrize(
     "content_type",
-    ["application/json", " Application/JSON ; charset=UTF-8 "],
+    [
+        "application/json",
+        " Application/JSON ; charset=UTF-8 ",
+        'application/json; charset="utf-8"',
+        'application/json; charset="UTF-8"',
+    ],
 )
 def test_json_content_type_is_accepted(monkeypatch, content_type):
     response = byte_response(b'{"data": []}')
     response.headers = {"Content-Type": content_type}
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
+def test_equivalent_quoted_content_type_duplicates_are_accepted(monkeypatch):
+    headers = Message()
+    headers["Content-Type"] = "application/json; charset=utf-8"
+    headers["Content-Type"] = 'application/json; charset="UTF-8"'
+    response = byte_response(b'{"data": []}')
+    response.headers = headers
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,

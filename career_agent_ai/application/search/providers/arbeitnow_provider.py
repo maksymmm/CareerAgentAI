@@ -127,19 +127,26 @@ def _validate_content_type(response: Any) -> None:
     if not values:
         return
 
-    declarations: set[tuple[str, tuple[str, ...]]] = set()
+    declarations: set[tuple[str, str | None]] = set()
     for value in values:
         if not isinstance(value, str) or not value.isascii():
             raise RuntimeError("Arbeitnow Content-Type is invalid")
         segments = tuple(segment.strip().lower() for segment in value.split(";"))
         media_type, parameters = segments[0], segments[1:]
-        if (
-            media_type != "application/json"
-            or len(parameters) > 1
-            or any(parameter != "charset=utf-8" for parameter in parameters)
-        ):
+        charset: str | None = None
+        if len(parameters) == 1:
+            name, separator, parameter_value = parameters[0].partition("=")
+            parameter_value = parameter_value.strip()
+            if (
+                separator != "="
+                or name.strip() != "charset"
+                or parameter_value not in {"utf-8", '"utf-8"'}
+            ):
+                raise RuntimeError("Arbeitnow response is not JSON")
+            charset = "utf-8"
+        if media_type != "application/json" or len(parameters) > 1:
             raise RuntimeError("Arbeitnow response is not JSON")
-        declarations.add((media_type, parameters))
+        declarations.add((media_type, charset))
     if len(declarations) != 1:
         raise RuntimeError("Arbeitnow Content-Type values conflict")
 
