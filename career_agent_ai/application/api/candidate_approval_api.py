@@ -44,7 +44,8 @@ class CandidateApprovalLoop(Protocol):
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
-    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
+    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
+                          phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
 
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
@@ -192,10 +193,11 @@ class CandidateApprovalWSGIApp:
                     if is_schedule_list and re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("invalid escape")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True,
-                                      max_num_fields=3 if (is_applications or is_schedule_list) else 2,
+                                      max_num_fields=3,
                                       errors="strict")
                     values = dict(pairs)
-                    allowed = {"limit", "after", "status"} if (is_applications or is_schedule_list) else {"limit", "after"}
+                    allowed = ({"limit", "after", "status"} if (is_applications or is_schedule_list)
+                               else {"limit", "after", "phase"})
                     if len(values) != len(pairs) or set(values) - allowed:
                         raise ValueError("unknown or duplicate query parameter")
                     raw_limit = values.get("limit", "25")
@@ -220,6 +222,9 @@ class CandidateApprovalWSGIApp:
                         status = JobApplicationStatus(values["status"])
                     elif is_schedule_list and "status" in values:
                         status = ScheduleStatus(values["status"])
+                    phase = None
+                    if not is_applications and not is_schedule_list and "phase" in values:
+                        phase = CareerLoopPhase(values["phase"])
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
                 if is_schedule_list:
@@ -229,6 +234,8 @@ class CandidateApprovalWSGIApp:
                 arguments = {"user_id": user_id, "limit": limit, "after": after}
                 if is_applications or (is_schedule_list and status is not None):
                     arguments["status"] = status
+                elif not is_schedule_list and phase is not None:
+                    arguments["phase"] = phase
                 return self._respond(start_response, "200 OK", collection(**arguments))
             if is_start:
                 if method != "POST":
@@ -711,6 +718,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                     "parameters": [
                         {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
                         {"name": "after", "in": "query", "description": "Exclusive run-ID keyset cursor; never an ownership credential", "schema": {"type": "string", "minLength": 1, "maxLength": 200}},
+                        {"name": "phase", "in": "query", "description": "Optional exact lifecycle phase filter retained across keyset pages", "schema": {"type": "string", "enum": [phase.value for phase in CareerLoopPhase]}},
                     ],
                     "responses": {
                         "200": {"description": "Owner-only minimal status page; unknown/duplicate query parameters rejected",

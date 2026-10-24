@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate run phase filtering: writable loop storage maintains a migrated phase
+projection and owner/phase/run-ID index on every optimistic save. The authenticated
+runtime and HTTP collection accept only `CareerLoopPhase` values and preserve run-ID
+keyset pagination. The sandbox selector carries the phase across pages, clears stale
+rows on change, and rejects responses outside the selected phase. Restart, ownership,
+migration, query-plan, API and Chromium regressions cover the read-only contract.
+Next: exact-head CI and Codex review, then continue candidate workflow readiness.
+
 Candidate schedule status filtering: the authenticated schedule collection and
 runtime accept an optional domain-validated lifecycle status, apply it inside the
 owner-scoped SQL query, and preserve event-ID keyset pagination. A composite

@@ -24,6 +24,7 @@ from career_agent_ai.application.career import (
     FakeApplicationSubmissionAdapter,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
+    CareerLoopPhase,
     CareerLoopRequest,
     CareerLoopResult,
     validate_loop_identifier,
@@ -161,14 +162,15 @@ class RuntimeCandidateApp:
         """Prevent new requests and sandbox runs."""
         self._closed = True
 
-    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
+                          phase: CareerLoopPhase | None = None) -> dict[str, Any]:
         """List trusted caller's run snapshots without creating storage or executing work."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteCandidateRunStatusProjection(database).list_page(
-                user_id=user_id, limit=limit, after=after)
+                user_id=user_id, limit=limit, after=after, phase=phase)
         finally:
             database.close()
 
@@ -256,11 +258,13 @@ class _RequestCandidateLoop:
         return SQLiteCandidateApplications(self._database_path).list_page(
             user_id=user_id, limit=limit, after=after, status=status)
 
-    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+    def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
+                          phase: CareerLoopPhase | None = None) -> dict[str, Any]:
         """Read an authenticated owner-only collection using request-local storage."""
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
-            return SQLiteCandidateRunStatusProjection(database).list_page(user_id=user_id, limit=limit, after=after)
+            return SQLiteCandidateRunStatusProjection(database).list_page(
+                user_id=user_id, limit=limit, after=after, phase=phase)
         finally:
             database.close()
 

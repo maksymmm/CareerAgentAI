@@ -61,6 +61,19 @@ _HTML = r"""<!doctype html>
   </fieldset>
   <fieldset id="inspect-panel" tabindex="-1">
     <legend>Inspect and continue</legend>
+    <label for="run-phase">Phase</label>
+    <select id="run-phase">
+      <option value="">All phases</option>
+      <option value="search">Search</option><option value="decision">Decision</option>
+      <option value="resume">Resume</option><option value="application_prepare">Application prepare</option>
+      <option value="application_approval">Application approval</option><option value="application_submit">Application submit</option>
+      <option value="application_reconciliation">Application reconciliation</option><option value="message_prepare">Message prepare</option>
+      <option value="message_approval">Message approval</option><option value="message_send">Message send</option>
+      <option value="message_reconciliation">Message reconciliation</option><option value="track">Track</option>
+      <option value="interview_coordination">Interview coordination</option><option value="interview_approval">Interview approval</option>
+      <option value="interview_accept">Interview accept</option><option value="interview_reconciliation">Interview reconciliation</option>
+      <option value="complete">Complete</option><option value="failed">Failed</option>
+    </select>
     <button id="list-runs" type="button">Load my runs</button>
     <ul id="owned-runs" aria-label="My runs" aria-busy="false"></ul>
     <p id="list-state" role="status"></p>
@@ -524,18 +537,25 @@ _HTML = r"""<!doctype html>
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
+      const selectedPhase = byId('run-phase').value;
       byId('list-runs').disabled = true;
       byId('owned-runs').setAttribute('aria-busy', 'true');
       byId('list-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/run-statuses?limit=25' +
+          (selectedPhase === '' ? '' : '&phase=' + encodeURIComponent(selectedPhase)) +
           (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
           'Run statuses request failed.');
         if (generation !== listGeneration) return;
         const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+        const phases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
+          'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
+          'message_send', 'message_reconciliation', 'track', 'interview_coordination',
+          'interview_approval', 'interview_accept', 'interview_reconciliation', 'complete', 'failed'];
         if (page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
             !(page.next_after === null || validId(page.next_after)) ||
-            !page.items.every(item => item && validId(item.run_id) && typeof item.phase === 'string')) {
+            !page.items.every(item => item && validId(item.run_id) && phases.includes(item.phase) &&
+              (selectedPhase === '' || item.phase === selectedPhase))) {
           throw new Error('Invalid run page.');
         }
         if (!page.items.every((item, index) => item.run_id >
@@ -581,6 +601,7 @@ _HTML = r"""<!doctype html>
     byId('next-runs').addEventListener('click', () => guarded(() => {
       if (nextRunCursor !== null) return loadRunList(nextRunCursor);
     }));
+    byId('run-phase').addEventListener('change', clearRunList);
     byId('token').addEventListener('input', clearRunList);
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
       approvalPromptGeneration += 1;
@@ -657,7 +678,7 @@ _HTML = r"""<!doctype html>
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
     byId('clear-session').addEventListener('click', () => {
-      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'application-status', 'event-status']) byId(id).value = '';
+      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'run-phase', 'application-status', 'event-status']) byId(id).value = '';
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });
