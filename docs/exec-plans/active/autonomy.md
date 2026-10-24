@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow explicit-status contract: sandbox transports must provide an exact integer
+HTTP status; a missing attribute no longer defaults to a successful 200 response.
+Regression coverage proves rejection before body reads and gives every byte-stream
+fixture an explicit status.
+Next: verify exact-head CI and Codex review; continue provider failure coverage.
+
 Arbeitnow strict JSON contract: decoded pages reject duplicate object members,
 non-standard NaN/infinity constants and excessive nesting instead of accepting
 ambiguous or Python-specific payloads. All failures surface as the same deterministic
