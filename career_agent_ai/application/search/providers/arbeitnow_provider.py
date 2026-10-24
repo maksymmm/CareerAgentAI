@@ -82,6 +82,34 @@ def _validate_arbeitnow_url(response_url: object) -> None:
         raise RuntimeError("Arbeitnow response URL is not trusted")
 
 
+def _validate_content_length(response: Any, *, maximum: int) -> None:
+    """Reject an invalid or oversized declared body before reading it."""
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Length") or []
+        else:
+            value = headers.get("Content-Length")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    if not values:
+        return
+    declared_lengths: set[int] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+            raise RuntimeError("Arbeitnow Content-Length is invalid")
+        declared = int(value)
+        if declared > maximum:
+            raise RuntimeError("Arbeitnow response exceeds byte limit")
+        declared_lengths.add(declared)
+    if len(declared_lengths) != 1:
+        raise RuntimeError("Arbeitnow Content-Length values conflict")
+
+
 class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
     """Validate a redirect destination before urllib sends the next request."""
 
@@ -370,6 +398,11 @@ class ArbeitnowProvider(JobProvider):
 
                 response_url = getattr(response, "geturl", lambda: url)()
                 self._validate_response_url(response_url)
+
+                _validate_content_length(
+                    response,
+                    maximum=self._max_response_bytes,
+                )
 
                 raw_body = response.read(self._max_response_bytes + 1)
                 if not isinstance(raw_body, bytes):
