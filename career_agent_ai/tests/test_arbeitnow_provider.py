@@ -1,5 +1,6 @@
 import json
 from io import BytesIO
+from email.message import Message
 
 import pytest
 from urllib.request import HTTPRedirectHandler, Request
@@ -35,6 +36,13 @@ class FakeResponse:
         traceback,
     ):
         return False
+
+
+def byte_response(body: bytes) -> BytesIO:
+    """Build a byte-stream transport fixture with an explicit valid status."""
+    response = BytesIO(body)
+    response.status = 200
+    return response
 
 
 def test_arbeitnow_provider_converts_job(
@@ -245,6 +253,23 @@ def test_invalid_http_status_is_rejected_before_body_read(monkeypatch, status):
     assert response.closed
 
 
+def test_missing_http_status_is_rejected_before_body_read(monkeypatch):
+    class MissingStatusResponse(BytesIO):
+        def read(self, size=-1):
+            pytest.fail("body was read without an HTTP status")
+
+    response = MissingStatusResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid HTTP status"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
 @pytest.mark.parametrize("body", [None, '{"data": []}', bytearray(b'{"data": []}')])
 def test_non_bytes_response_body_is_rejected(monkeypatch, body):
     class InvalidBodyResponse:
@@ -285,7 +310,7 @@ def test_non_bytes_response_body_is_rejected(monkeypatch, body):
     ],
 )
 def test_non_strict_json_is_rejected(monkeypatch, body):
-    response = BytesIO(body)
+    response = byte_response(body)
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,
@@ -299,7 +324,7 @@ def test_non_strict_json_is_rejected(monkeypatch, body):
 
 def test_json_depth_validation_ignores_quoted_brackets(monkeypatch):
     body = json.dumps({"data": [], "label": "[" * 101}).encode()
-    response = BytesIO(body)
+    response = byte_response(body)
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,
@@ -313,7 +338,7 @@ def test_json_depth_validation_ignores_quoted_brackets(monkeypatch):
 def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
     body = json.dumps({"data": [], "label": "é"}, ensure_ascii=False).encode()
     limit = len(body)
-    response = BytesIO(body + (b" " if oversized else b""))
+    response = byte_response(body + (b" " if oversized else b""))
     reads = []
     original_read = response.read
 
@@ -339,7 +364,7 @@ def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
 
 def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
     first = json.dumps({"data": [], "links": {"next": "page-two"}}).encode()
-    responses = [BytesIO(first), BytesIO(b"x" * 1000)]
+    responses = [byte_response(first), byte_response(b"x" * 1000)]
     calls = []
 
     def fetch(request, timeout):
@@ -354,7 +379,7 @@ def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
         provider.search("")
     assert len(calls) == 2
     assert all(response.closed for response in responses)
-    responses.append(BytesIO(b'{"data": []}'))
+    responses.append(byte_response(b'{"data": []}'))
     assert provider.search("") == ()
     assert calls[-1].endswith("page=1")
 
@@ -476,6 +501,123 @@ def test_trusted_final_response_url_is_accepted(monkeypatch, response_url):
             return response_url
 
     response = TrustedResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
+@pytest.mark.parametrize(
+    "content_length",
+    ["-1", "+1", " 1", "1 ", "1.0", "１２", "not-a-number", 1, True],
+)
+def test_invalid_content_length_is_rejected_before_read(
+    monkeypatch, content_length
+):
+    class InvalidLengthResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": content_length}
+
+        def read(self, size=-1):
+            pytest.fail("body with invalid Content-Length was read")
+
+    response = InvalidLengthResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="Content-Length is invalid"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+def test_oversized_content_length_is_rejected_before_read(monkeypatch):
+    class OversizedResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": "11"}
+
+        def read(self, size=-1):
+            pytest.fail("declared oversized body was read")
+
+    response = OversizedResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="response exceeds byte limit"):
+        ArbeitnowProvider(max_response_bytes=10).search("")
+
+    assert response.closed
+
+
+def test_valid_content_length_allows_body_read(monkeypatch):
+    body = b'{"data": []}'
+
+    class SizedResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": str(len(body))}
+
+    response = SizedResponse(body)
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
+@pytest.mark.parametrize(
+    ("lengths", "error"),
+    [
+        (("12", "99999999"), "response exceeds byte limit"),
+        (("12", "13"), "Content-Length values conflict"),
+        (("12", "invalid"), "Content-Length is invalid"),
+    ],
+)
+def test_all_content_length_occurrences_are_validated_before_read(
+    monkeypatch, lengths, error
+):
+    headers = Message()
+    for value in lengths:
+        headers["Content-Length"] = value
+
+    class DuplicateLengthResponse(BytesIO):
+        status = 200
+
+        def read(self, size=-1):
+            pytest.fail("body with unsafe duplicate Content-Length was read")
+
+    response = DuplicateLengthResponse(b'{"data": []}')
+    response.headers = headers
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match=error):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+def test_identical_content_length_occurrences_are_accepted(monkeypatch):
+    body = b'{"data": []}'
+    headers = Message()
+    headers["Content-Length"] = str(len(body))
+    headers["Content-Length"] = str(len(body))
+
+    class DuplicateLengthResponse(BytesIO):
+        status = 200
+
+    response = DuplicateLengthResponse(body)
+    response.headers = headers
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,

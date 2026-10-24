@@ -8,6 +8,20 @@ change. Storage, HTTP, OpenAPI, restart, pagination and Chromium regressions cov
 contract without enabling application actions.
 Next: verify exact-head CI and Codex review; continue candidate workflow readiness.
 
+Arbeitnow declared-size guard: validate every `Content-Length` occurrence as strict
+ASCII digits, reject conflicting duplicates, and reject declared oversized responses
+before reading their body. The existing
+bounded read remains authoritative when the header is absent or understates the body.
+Sandbox regressions prove invalid/oversized bodies are never read and valid declared
+sizes remain compatible.
+Next: verify exact-head CI and Codex review; continue provider failure coverage.
+
+Arbeitnow explicit-status contract: sandbox transports must provide an exact integer
+HTTP status; a missing attribute no longer defaults to a successful 200 response.
+Regression coverage proves rejection before body reads and gives every byte-stream
+fixture an explicit status.
+Next: verify exact-head CI and Codex review; continue provider failure coverage.
+
 Arbeitnow strict JSON contract: decoded pages reject duplicate object members,
 non-standard NaN/infinity constants and excessive nesting instead of accepting
 ambiguous or Python-specific payloads. All failures surface as the same deterministic
