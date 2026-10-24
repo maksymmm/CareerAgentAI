@@ -276,6 +276,10 @@ def test_missing_http_status_is_rejected_before_body_read(monkeypatch):
         (("text/html",), "response is not JSON"),
         (("application/json; charset=iso-8859-1",), "response is not JSON"),
         (("application/json; boundary=value",), "response is not JSON"),
+        (
+            ("application/json; charset=utf-8; charset=utf-8",),
+            "response is not JSON",
+        ),
         (("application/json", "text/html"), "response is not JSON"),
         (
             ("application/json", "application/json; charset=utf-8"),

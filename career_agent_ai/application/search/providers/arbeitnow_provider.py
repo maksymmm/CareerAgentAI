@@ -133,8 +133,10 @@ def _validate_content_type(response: Any) -> None:
             raise RuntimeError("Arbeitnow Content-Type is invalid")
         segments = tuple(segment.strip().lower() for segment in value.split(";"))
         media_type, parameters = segments[0], segments[1:]
-        if media_type != "application/json" or any(
-            parameter != "charset=utf-8" for parameter in parameters
+        if (
+            media_type != "application/json"
+            or len(parameters) > 1
+            or any(parameter != "charset=utf-8" for parameter in parameters)
         ):
             raise RuntimeError("Arbeitnow response is not JSON")
         declarations.add((media_type, parameters))
