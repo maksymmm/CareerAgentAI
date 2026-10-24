@@ -1,5 +1,6 @@
 import json
 from io import BytesIO
+from email.message import Message
 
 import pytest
 from urllib.request import HTTPRedirectHandler, Request
@@ -563,6 +564,60 @@ def test_valid_content_length_allows_body_read(monkeypatch):
         headers = {"Content-Length": str(len(body))}
 
     response = SizedResponse(body)
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
+@pytest.mark.parametrize(
+    ("lengths", "error"),
+    [
+        (("12", "99999999"), "response exceeds byte limit"),
+        (("12", "13"), "Content-Length values conflict"),
+        (("12", "invalid"), "Content-Length is invalid"),
+    ],
+)
+def test_all_content_length_occurrences_are_validated_before_read(
+    monkeypatch, lengths, error
+):
+    headers = Message()
+    for value in lengths:
+        headers["Content-Length"] = value
+
+    class DuplicateLengthResponse(BytesIO):
+        status = 200
+
+        def read(self, size=-1):
+            pytest.fail("body with unsafe duplicate Content-Length was read")
+
+    response = DuplicateLengthResponse(b'{"data": []}')
+    response.headers = headers
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match=error):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+def test_identical_content_length_occurrences_are_accepted(monkeypatch):
+    body = b'{"data": []}'
+    headers = Message()
+    headers["Content-Length"] = str(len(body))
+    headers["Content-Length"] = str(len(body))
+
+    class DuplicateLengthResponse(BytesIO):
+        status = 200
+
+    response = DuplicateLengthResponse(body)
+    response.headers = headers
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,

@@ -1,7 +1,8 @@
 # Autonomous Implementation Plan
 
-Arbeitnow declared-size guard: validate an optional `Content-Length` as strict ASCII
-digits and reject declared oversized responses before reading their body. The existing
+Arbeitnow declared-size guard: validate every `Content-Length` occurrence as strict
+ASCII digits, reject conflicting duplicates, and reject declared oversized responses
+before reading their body. The existing
 bounded read remains authoritative when the header is absent or understates the body.
 Sandbox regressions prove invalid/oversized bodies are never read and valid declared
 sizes remain compatible.

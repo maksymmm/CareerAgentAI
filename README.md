@@ -113,8 +113,9 @@ instead of silently returning an incomplete prefix; an explicit retry starts aga
 page one. Every transport response must provide an integer HTTP status in the protocol
 range and a byte body; malformed adapter responses fail deterministically and close
 before decoding; a missing status is never treated as an implicit success. An optional
-`Content-Length` must contain only ASCII digits and cannot exceed the configured byte
-limit; oversized declarations are rejected before the body is read, while the bounded
+Every `Content-Length` occurrence must contain only ASCII digits, agree with any
+duplicate, and remain within the configured byte limit; unsafe declarations are
+rejected before the body is read, while the bounded
 read remains authoritative when the header is absent or understates the body. JSON decoding is strict: duplicate object members, non-finite numeric
 constants and excessive nesting are rejected rather than interpreted ambiguously.
 

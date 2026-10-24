@@ -88,16 +88,26 @@ def _validate_content_length(response: Any, *, maximum: int) -> None:
     if headers is None:
         return
     try:
-        value = headers.get("Content-Length")
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Length") or []
+        else:
+            value = headers.get("Content-Length")
+            values = [] if value is None else [value]
     except Exception as exc:
         raise RuntimeError("Arbeitnow response headers are invalid") from exc
-    if value is None:
+    if not values:
         return
-    if not isinstance(value, str) or not value.isascii() or not value.isdigit():
-        raise RuntimeError("Arbeitnow Content-Length is invalid")
-    declared = int(value)
-    if declared > maximum:
-        raise RuntimeError("Arbeitnow response exceeds byte limit")
+    declared_lengths: set[int] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+            raise RuntimeError("Arbeitnow Content-Length is invalid")
+        declared = int(value)
+        if declared > maximum:
+            raise RuntimeError("Arbeitnow response exceeds byte limit")
+        declared_lengths.add(declared)
+    if len(declared_lengths) != 1:
+        raise RuntimeError("Arbeitnow Content-Length values conflict")
 
 
 class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
