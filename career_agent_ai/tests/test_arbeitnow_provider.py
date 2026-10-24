@@ -510,6 +510,69 @@ def test_trusted_final_response_url_is_accepted(monkeypatch, response_url):
 
 
 @pytest.mark.parametrize(
+    "content_length",
+    ["-1", "+1", " 1", "1 ", "1.0", "１２", "not-a-number", 1, True],
+)
+def test_invalid_content_length_is_rejected_before_read(
+    monkeypatch, content_length
+):
+    class InvalidLengthResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": content_length}
+
+        def read(self, size=-1):
+            pytest.fail("body with invalid Content-Length was read")
+
+    response = InvalidLengthResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="Content-Length is invalid"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+def test_oversized_content_length_is_rejected_before_read(monkeypatch):
+    class OversizedResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": "11"}
+
+        def read(self, size=-1):
+            pytest.fail("declared oversized body was read")
+
+    response = OversizedResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="response exceeds byte limit"):
+        ArbeitnowProvider(max_response_bytes=10).search("")
+
+    assert response.closed
+
+
+def test_valid_content_length_allows_body_read(monkeypatch):
+    body = b'{"data": []}'
+
+    class SizedResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": str(len(body))}
+
+    response = SizedResponse(body)
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
+@pytest.mark.parametrize(
     "redirect_url",
     [
         "http://www.arbeitnow.com/api/job-board-api?page=1",

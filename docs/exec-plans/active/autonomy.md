@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow declared-size guard: validate an optional `Content-Length` as strict ASCII
+digits and reject declared oversized responses before reading their body. The existing
+bounded read remains authoritative when the header is absent or understates the body.
+Sandbox regressions prove invalid/oversized bodies are never read and valid declared
+sizes remain compatible.
+Next: verify exact-head CI and Codex review; continue provider failure coverage.
+
 Arbeitnow explicit-status contract: sandbox transports must provide an exact integer
 HTTP status; a missing attribute no longer defaults to a successful 200 response.
 Regression coverage proves rejection before body reads and gives every byte-stream
