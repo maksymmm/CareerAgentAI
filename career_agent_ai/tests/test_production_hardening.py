@@ -215,6 +215,36 @@ def test_candidate_run_phase_projection_is_backfilled_and_indexed(tmp_path):
     database.connection.commit()
     database.close()
 
+    database = SQLiteDatabase(str(path))
+    SQLiteCareerLoopRepository(database)
+    assert database.connection.execute(
+        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
+    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
+    # Simulate interruption after ALTER TABLE committed but before backfill.
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET phase = NULL WHERE run_id = 'legacy'"
+    )
+    database.connection.commit()
+    database.close()
+    database = SQLiteDatabase(str(path))
+    SQLiteCareerLoopRepository(database)
+    assert database.connection.execute(
+        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
+    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
+    columns = database.connection.execute(
+        "PRAGMA index_info(idx_autonomous_loop_owner_phase)"
+    ).fetchall()
+    assert [row[2] for row in columns] == ["owner_user_id", "phase", "run_id"]
+    plan = database.connection.execute(
+        "EXPLAIN QUERY PLAN SELECT run_id FROM autonomous_career_loops "
+        "WHERE owner_user_id = ? AND phase = ? AND run_id > ? ORDER BY run_id LIMIT ?",
+        ("owner", "search", "cursor", 26),
+    ).fetchall()
+    details = " ".join(row[3] for row in plan)
+    assert "idx_autonomous_loop_owner_phase" in details
+    assert "TEMP B-TREE" not in details
+    database.close()
+
 
 def test_candidate_run_owner_projection_resumes_after_interrupted_backfill(tmp_path):
     """Startup repairs a durable owner column left NULL by an interrupted migration."""
@@ -253,36 +283,6 @@ def test_candidate_run_owner_projection_resumes_after_interrupted_backfill(tmp_p
     previous_version = loaded.version
     repository.save(loaded)
     assert repository.get(state.run_id).version == previous_version + 1
-    database.close()
-
-    database = SQLiteDatabase(str(path))
-    SQLiteCareerLoopRepository(database)
-    assert database.connection.execute(
-        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
-    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
-    # Simulate interruption after ALTER TABLE committed but before backfill.
-    database.connection.execute(
-        "UPDATE autonomous_career_loops SET phase = NULL WHERE run_id = 'legacy'"
-    )
-    database.connection.commit()
-    database.close()
-    database = SQLiteDatabase(str(path))
-    SQLiteCareerLoopRepository(database)
-    assert database.connection.execute(
-        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
-    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
-    columns = database.connection.execute(
-        "PRAGMA index_info(idx_autonomous_loop_owner_phase)"
-    ).fetchall()
-    assert [row[2] for row in columns] == ["owner_user_id", "phase", "run_id"]
-    plan = database.connection.execute(
-        "EXPLAIN QUERY PLAN SELECT run_id FROM autonomous_career_loops "
-        "WHERE owner_user_id = ? AND phase = ? AND run_id > ? ORDER BY run_id LIMIT ?",
-        ("owner", "search", "cursor", 26),
-    ).fetchall()
-    details = " ".join(row[3] for row in plan)
-    assert "idx_autonomous_loop_owner_phase" in details
-    assert "TEMP B-TREE" not in details
     database.close()
 
 
