@@ -355,7 +355,7 @@ class ArbeitnowProvider(JobProvider):
                 status = getattr(
                     response,
                     "status",
-                    200,
+                    None,
                 )
 
                 if type(status) is not int or not 100 <= status <= 599:

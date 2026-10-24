@@ -37,6 +37,13 @@ class FakeResponse:
         return False
 
 
+def byte_response(body: bytes) -> BytesIO:
+    """Build a byte-stream transport fixture with an explicit valid status."""
+    response = BytesIO(body)
+    response.status = 200
+    return response
+
+
 def test_arbeitnow_provider_converts_job(
     monkeypatch,
 ):
@@ -245,6 +252,23 @@ def test_invalid_http_status_is_rejected_before_body_read(monkeypatch, status):
     assert response.closed
 
 
+def test_missing_http_status_is_rejected_before_body_read(monkeypatch):
+    class MissingStatusResponse(BytesIO):
+        def read(self, size=-1):
+            pytest.fail("body was read without an HTTP status")
+
+    response = MissingStatusResponse(b'{"data": []}')
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid HTTP status"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
 @pytest.mark.parametrize("body", [None, '{"data": []}', bytearray(b'{"data": []}')])
 def test_non_bytes_response_body_is_rejected(monkeypatch, body):
     class InvalidBodyResponse:
@@ -285,7 +309,7 @@ def test_non_bytes_response_body_is_rejected(monkeypatch, body):
     ],
 )
 def test_non_strict_json_is_rejected(monkeypatch, body):
-    response = BytesIO(body)
+    response = byte_response(body)
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,
@@ -299,7 +323,7 @@ def test_non_strict_json_is_rejected(monkeypatch, body):
 
 def test_json_depth_validation_ignores_quoted_brackets(monkeypatch):
     body = json.dumps({"data": [], "label": "[" * 101}).encode()
-    response = BytesIO(body)
+    response = byte_response(body)
     monkeypatch.setattr(
         "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
         lambda request, timeout: response,
@@ -313,7 +337,7 @@ def test_json_depth_validation_ignores_quoted_brackets(monkeypatch):
 def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
     body = json.dumps({"data": [], "label": "é"}, ensure_ascii=False).encode()
     limit = len(body)
-    response = BytesIO(body + (b" " if oversized else b""))
+    response = byte_response(body + (b" " if oversized else b""))
     reads = []
     original_read = response.read
 
@@ -339,7 +363,7 @@ def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
 
 def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
     first = json.dumps({"data": [], "links": {"next": "page-two"}}).encode()
-    responses = [BytesIO(first), BytesIO(b"x" * 1000)]
+    responses = [byte_response(first), byte_response(b"x" * 1000)]
     calls = []
 
     def fetch(request, timeout):
@@ -354,7 +378,7 @@ def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
         provider.search("")
     assert len(calls) == 2
     assert all(response.closed for response in responses)
-    responses.append(BytesIO(b'{"data": []}'))
+    responses.append(byte_response(b'{"data": []}'))
     assert provider.search("") == ()
     assert calls[-1].endswith("page=1")
 
