@@ -274,6 +274,11 @@ create a database or execute work, and never loads private calendar identifiers.
 The collection's `after` is a range cursor, not an ownership credential. Read-only
 candidate UI discovery/detail is the next delivery unit.
 
+The collection also accepts an optional validated `status` filter (`proposed`,
+`accepted`, `declined`, `reschedule_requested`, or `cancelled`). Filtering remains
+owner-scoped in SQL, preserves event-ID keyset pagination, and is available from the
+read-only candidate dashboard without enabling calendar actions.
+
 `RuntimeCandidateApp.list_schedule_events(user_id=..., limit=25, after=None)` reads
 bounded owner-only event snapshots in stable event-ID order (maximum 100), using
 the same minimal exact-time projection as detail. `next_after` is the last returned

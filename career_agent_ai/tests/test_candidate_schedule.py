@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
-from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType, ScheduleStatus
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
 
@@ -119,6 +119,30 @@ def test_schedule_pages_restart_isolation_and_read_only(tmp_path):
     with pytest.raises(RuntimeError, match="closed"):
         runtime.list_schedule_events(user_id="owner")
     assert "private" not in str(first) + str(second)
+    assert path.read_bytes() == baseline
+
+
+def test_schedule_pages_filter_status_in_sql_and_preserve_cursor(tmp_path):
+    path = tmp_path / "filtered.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteSchedulingRepository(database)
+    for identifier, status in [("a", ScheduleStatus.PROPOSED), ("b", ScheduleStatus.ACCEPTED),
+                               ("c", ScheduleStatus.PROPOSED), ("d", ScheduleStatus.PROPOSED)]:
+        repository.create(ScheduleEvent(event_id=identifier, candidate_id="owner",
+            employer_name="Employer", event_type=ScheduleEventType.INTERVIEW, location="Location",
+            start_at=datetime.now(timezone.utc), timezone_name="UTC", status=status))
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
+        first = runtime.list_schedule_events(user_id="owner", status=ScheduleStatus.PROPOSED, limit=2)
+        second = runtime.list_schedule_events(user_id="owner", status=ScheduleStatus.PROPOSED,
+                                              after=first["next_after"], limit=2)
+        assert [item["event_id"] for item in first["items"]] == ["a", "c"]
+        assert first["next_after"] == "c"
+        assert [item["event_id"] for item in second["items"]] == ["d"]
+        assert second["next_after"] is None
+        with pytest.raises(TypeError, match="ScheduleStatus"):
+            runtime.list_schedule_events(user_id="owner", status="proposed")
     assert path.read_bytes() == baseline
 
 

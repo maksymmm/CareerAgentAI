@@ -454,10 +454,23 @@ def test_schedule_http_collection_restart_owner_pagination_and_contract(tmp_path
     assert path.read_bytes() == baseline and "private" not in str(first) + str(second)
     operation = candidate_approval_openapi_document()["paths"][route]["get"]
     assert operation["security"] == [{"bearerAuth": []}]
-    assert {parameter["name"] for parameter in operation["parameters"]} == {"limit", "after"}
+    assert {parameter["name"] for parameter in operation["parameters"]} == {"limit", "after", "status"}
     schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert set(first) == set(schema["required"])
     assert set(first["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
+
+
+def test_schedule_http_collection_filters_status():
+    from career_agent_ai.application.scheduling.models import ScheduleStatus
+    route = "/v1/candidate/schedule-events"
+    class Loop:
+        def list_schedule_events(self, **kwargs):
+            assert kwargs == {"user_id": "candidate-1", "limit": 2, "after": "a",
+                              "status": ScheduleStatus.ACCEPTED}
+            return {"schema_version": 1, "items": [], "next_after": None}
+    assert request(app(Loop()), path=route, query="limit=2&after=a&status=accepted")[0][0] == "200 OK"
+    for query in ("status=", "status=unknown", "status=accepted&status=proposed"):
+        assert request(app(Loop()), path=route, query=query)[0][0] == "400 Bad Request"
 
 
 def test_schedule_http_collection_missing_storage_and_corrupt_owned_row(tmp_path):

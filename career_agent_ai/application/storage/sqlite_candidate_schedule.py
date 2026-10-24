@@ -3,7 +3,7 @@
 from dataclasses import asdict
 from typing import Any
 
-from career_agent_ai.application.scheduling.models import HumanScheduleView, validate_schedule_identifier
+from career_agent_ai.application.scheduling.models import HumanScheduleView, ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
 
@@ -40,7 +40,8 @@ class SQLiteCandidateSchedule:
             database.close()
 
     def list_page(self, *, user_id: str, limit: int = 25,
-                  after: str | None = None) -> dict[str, Any]:
+                  after: str | None = None,
+                  status: ScheduleStatus | None = None) -> dict[str, Any]:
         """Read bounded ID-ordered owned events without private fields or calendar I/O."""
         owner = validate_schedule_identifier(user_id, "user_id")
         cursor = "" if after is None else validate_schedule_identifier(after, "after")
@@ -48,13 +49,19 @@ class SQLiteCandidateSchedule:
             raise ValueError("after must be a canonical event identity.")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100.")
+        if status is not None and not isinstance(status, ScheduleStatus):
+            raise TypeError("status must be a ScheduleStatus.")
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             # Bound in SQL, using the owner/ID index installed only by writable startup.
+            where = "candidate_id = ? AND event_id > ?"
+            parameters: tuple[Any, ...] = (owner, cursor)
+            if status is not None:
+                where += " AND status = ?"
+                parameters += (status.value,)
             rows = database.connection.execute(
-                "SELECT " + _VISIBLE_COLUMNS +
-                "FROM scheduling_events WHERE candidate_id = ? AND event_id > ? "
-                "ORDER BY event_id LIMIT ?", (owner, cursor, limit + 1),
+                "SELECT " + _VISIBLE_COLUMNS + "FROM scheduling_events WHERE " +
+                where + " ORDER BY event_id LIMIT ?", parameters + (limit + 1,),
             ).fetchall()
             items = [self._snapshot(row) for row in rows[:limit]]
             return {"schema_version": 1, "items": items,

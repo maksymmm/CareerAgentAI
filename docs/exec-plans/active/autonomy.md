@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate schedule status filtering: the authenticated schedule collection and
+runtime accept an optional domain-validated lifecycle status, apply it inside the
+owner-scoped SQL query, and preserve event-ID keyset pagination. A composite
+candidate/status/event index supports the filtered path, and the read-only dashboard
+keeps the selected status across pages without enabling calendar actions.
+Next: exact-head CI and Codex review, then continue candidate workflow readiness.
+
 Candidate application status filtering: the authenticated tracker API and runtime
 accept an optional domain-validated lifecycle status, filter inside the owner-scoped
 read-only SQL query, and preserve ID-keyset pagination through a dedicated composite

@@ -113,6 +113,13 @@ _HTML = r"""<!doctype html>
   </section>
   <section aria-labelledby="schedule-title">
     <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
+    <label for="event-status">Status</label>
+    <select id="event-status">
+      <option value="">All statuses</option>
+      <option value="proposed">Proposed</option><option value="accepted">Accepted</option>
+      <option value="declined">Declined</option><option value="reschedule_requested">Reschedule requested</option>
+      <option value="cancelled">Cancelled</option>
+    </select>
     <button id="list-events" type="button">Load my events</button>
     <ul id="owned-events" aria-label="My events" aria-busy="false"></ul>
     <p id="events-state" role="status"></p>
@@ -261,17 +268,20 @@ _HTML = r"""<!doctype html>
     async function loadEvents(after = null) {
       clearEvents();
       const generation = eventsGeneration;
+      const selectedStatus = byId('event-status').value;
       byId('list-events').disabled = true;
       byId('owned-events').setAttribute('aria-busy', 'true');
       byId('events-state').textContent = 'Loading events…';
       try {
         const page = await call('/v1/candidate/schedule-events?limit=25' +
+          (selectedStatus === '' ? '' : '&status=' + encodeURIComponent(selectedStatus)) +
           (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
           'Schedule events request failed.');
         if (generation !== eventsGeneration) return;
         if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
             !(page.next_after === null || eventId(page.next_after))) throw new Error('Invalid event page.');
         const items = page.items.map(eventSnapshot);
+        if (!items.every(item => selectedStatus === '' || item.status === selectedStatus)) throw new Error('Invalid event status filter.');
         if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : (after || ''))) ||
             (page.next_after !== null && (items.length !== 25 || page.next_after !== items.at(-1).event_id))) throw new Error('Invalid event cursor.');
         for (const [index, item] of items.entries()) {
@@ -303,6 +313,7 @@ _HTML = r"""<!doctype html>
       }
     }
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents()));
+    byId('event-status').addEventListener('change', clearEvents);
     byId('next-events').addEventListener('click', () => guarded(() => {
       if (nextEventCursor !== null) return loadEvents(nextEventCursor);
     }));
@@ -646,7 +657,7 @@ _HTML = r"""<!doctype html>
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
     byId('clear-session').addEventListener('click', () => {
-      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'application-status']) byId(id).value = '';
+      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'application-status', 'event-status']) byId(id).value = '';
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });

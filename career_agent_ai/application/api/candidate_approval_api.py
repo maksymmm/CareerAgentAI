@@ -23,7 +23,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     validate_loop_identifier,
 )
 from .candidate_sandbox_ui import candidate_sandbox_html
-from career_agent_ai.application.scheduling.models import validate_schedule_identifier
+from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 
 
@@ -52,7 +52,8 @@ class CandidateApprovalLoop(Protocol):
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
-    def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]: ...
+    def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None,
+                             status: ScheduleStatus | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
 
@@ -191,10 +192,10 @@ class CandidateApprovalWSGIApp:
                     if is_schedule_list and re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("invalid escape")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True,
-                                      max_num_fields=3 if is_applications else 2,
+                                      max_num_fields=3 if (is_applications or is_schedule_list) else 2,
                                       errors="strict")
                     values = dict(pairs)
-                    allowed = {"limit", "after", "status"} if is_applications else {"limit", "after"}
+                    allowed = {"limit", "after", "status"} if (is_applications or is_schedule_list) else {"limit", "after"}
                     if len(values) != len(pairs) or set(values) - allowed:
                         raise ValueError("unknown or duplicate query parameter")
                     raw_limit = values.get("limit", "25")
@@ -217,6 +218,8 @@ class CandidateApprovalWSGIApp:
                     status = None
                     if is_applications and "status" in values:
                         status = JobApplicationStatus(values["status"])
+                    elif is_schedule_list and "status" in values:
+                        status = ScheduleStatus(values["status"])
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
                 if is_schedule_list:
@@ -224,7 +227,7 @@ class CandidateApprovalWSGIApp:
                 else:
                     collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
                 arguments = {"user_id": user_id, "limit": limit, "after": after}
-                if is_applications:
+                if is_applications or (is_schedule_list and status is not None):
                     arguments["status"] = status
                 return self._respond(start_response, "200 OK", collection(**arguments))
             if is_start:
@@ -963,7 +966,9 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "parameters": [
             {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
             {"name": "after", "in": "query", "description": "Exclusive event-ID cursor, not an ownership credential",
-             "schema": event_properties["event_id"]}],
+             "schema": event_properties["event_id"]},
+            {"name": "status", "in": "query", "description": "Optional lifecycle status filter preserved across pages",
+             "schema": event_properties["status"]}],
         "responses": {**common_responses,
             "405": schedule_detail["responses"]["405"],
             "200": {"description": "Bounded read-only owned events in event-ID order; no calendar actions",
