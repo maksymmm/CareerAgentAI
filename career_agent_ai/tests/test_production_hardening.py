@@ -155,8 +155,15 @@ def test_candidate_owned_run_pages_are_read_only_and_restart_safe(tmp_path):
     path = tmp_path / "pages.sqlite"
     database = SQLiteDatabase(str(path))
     repository = SQLiteCareerLoopRepository(database)
-    for identifier, owner in (("a", "user-1"), ("b", "foreign"), ("c", "user-1"), ("d", "user-1")):
-        repository.save(CareerLoopState(run_id=identifier, request=replace(request(), user_id=owner)))
+    for identifier, owner, phase in (
+        ("a", "user-1", CareerLoopPhase.SEARCH),
+        ("b", "foreign", CareerLoopPhase.SEARCH),
+        ("c", "user-1", CareerLoopPhase.COMPLETE),
+        ("d", "user-1", CareerLoopPhase.SEARCH),
+        ("e", "user-1", CareerLoopPhase.SEARCH),
+    ):
+        repository.save(CareerLoopState(
+            run_id=identifier, request=replace(request(), user_id=owner), phase=phase))
     database.connection.execute("UPDATE autonomous_career_loops SET payload_json = 'not-json' WHERE run_id = 'b'")
     database.connection.commit()
     database.close()
@@ -171,6 +178,14 @@ def test_candidate_owned_run_pages_are_read_only_and_restart_safe(tmp_path):
         assert first["next_after"] == "c"
         assert set(first["items"][0]) == {"schema_version", "run_id", "state_version", "phase", "waiting_for_human", "terminal"}
         assert runtime.list_run_statuses(user_id="nobody")["items"] == []
+        filtered = runtime.list_run_statuses(
+            user_id="user-1", limit=2, phase=CareerLoopPhase.SEARCH)
+        assert [item["run_id"] for item in filtered["items"]] == ["a", "d"]
+        assert filtered["next_after"] == "d"
+        assert runtime.list_run_statuses(
+            user_id="user-1", phase=CareerLoopPhase.COMPLETE)["items"][0]["run_id"] == "c"
+        with pytest.raises(TypeError):
+            runtime.list_run_statuses(user_id="user-1", phase="search")
         for invalid in (True, 0, 101, "2"):
             with pytest.raises(ValueError):
                 runtime.list_run_statuses(user_id="user-1", limit=invalid)
@@ -178,12 +193,82 @@ def test_candidate_owned_run_pages_are_read_only_and_restart_safe(tmp_path):
         runtime.list_run_statuses(user_id="user-1")
     with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as restarted:
         page = restarted.list_run_statuses(user_id="user-1", limit=2, after=first["next_after"])
-        assert [item["run_id"] for item in page["items"]] == ["d"]
+        assert [item["run_id"] for item in page["items"]] == ["d", "e"]
         assert page["next_after"] is None
         assert restarted.list_run_statuses(user_id="user-1", after="b")["items"][0]["run_id"] == "c"
+        filtered_page = restarted.list_run_statuses(
+            user_id="user-1", limit=2, after=filtered["next_after"], phase=CareerLoopPhase.SEARCH)
+        assert [item["run_id"] for item in filtered_page["items"]] == ["e"]
         with pytest.raises(ValueError):
             restarted.list_run_statuses(user_id="foreign")
     assert path.read_bytes() == before
+
+
+def test_candidate_run_phase_projection_is_backfilled_and_indexed(tmp_path):
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import SQLiteCareerLoopRepository
+    path = tmp_path / "run-phase-index.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    repository.save(CareerLoopState(run_id="legacy", request=request()))
+    database.connection.execute("DROP INDEX idx_autonomous_loop_owner_phase")
+    database.connection.execute("ALTER TABLE autonomous_career_loops RENAME COLUMN phase TO legacy_phase")
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase(str(path))
+    SQLiteCareerLoopRepository(database)
+    assert database.connection.execute(
+        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
+    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
+    # Simulate interruption after ALTER TABLE committed but before backfill.
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET phase = NULL WHERE run_id = 'legacy'"
+    )
+    database.connection.commit()
+    database.close()
+    database = SQLiteDatabase(str(path))
+    SQLiteCareerLoopRepository(database)
+    assert database.connection.execute(
+        "SELECT phase FROM autonomous_career_loops WHERE run_id = 'legacy'"
+    ).fetchone()[0] == CareerLoopPhase.SEARCH.value
+    columns = database.connection.execute(
+        "PRAGMA index_info(idx_autonomous_loop_owner_phase)"
+    ).fetchall()
+    assert [row[2] for row in columns] == ["owner_user_id", "phase", "run_id"]
+    plan = database.connection.execute(
+        "EXPLAIN QUERY PLAN SELECT run_id FROM autonomous_career_loops "
+        "WHERE owner_user_id = ? AND phase = ? AND run_id > ? ORDER BY run_id LIMIT ?",
+        ("owner", "search", "cursor", 26),
+    ).fetchall()
+    details = " ".join(row[3] for row in plan)
+    assert "idx_autonomous_loop_owner_phase" in details
+    assert "TEMP B-TREE" not in details
+    database.close()
+
+
+def test_candidate_filtered_run_page_reads_each_snapshot_in_one_query(tmp_path):
+    from career_agent_ai.application.career.autonomous_loop_models import CareerLoopState
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+        SQLiteCareerLoopRepository,
+    )
+    path = tmp_path / "run-phase-snapshot.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    repository.save(CareerLoopState(run_id="run-1", request=request()))
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    statements = []
+    database.connection.set_trace_callback(statements.append)
+    page = SQLiteCandidateRunStatusProjection(database).list_page(
+        user_id="user-1", phase=CareerLoopPhase.SEARCH)
+    database.connection.set_trace_callback(None)
+    database.close()
+    assert [item["run_id"] for item in page["items"]] == ["run-1"]
+    reads = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+    assert len(reads) == 1
+    assert "payload_json" in reads[0]
 
 
 def test_candidate_run_listing_does_not_create_missing_storage(tmp_path):
@@ -734,6 +819,22 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 exact=True,
             ).wait_for()
             assert page.locator("#owned-runs button").count() == 25
+            phase_requests = []
+            page.on("request", lambda request: phase_requests.append(request.url))
+            page.locator("#run-phase").select_option("complete")
+            assert page.locator("#owned-runs li").count() == 0
+            assert page.locator("#next-runs").is_disabled()
+            page.locator("#list-runs").click()
+            page.locator("#owned-runs button").filter(has_text=durable_run_id).wait_for()
+            assert page.locator("#owned-runs button").count() == 1
+            assert "complete" in page.locator("#owned-runs").text_content()
+            assert any("phase=complete" in url for url in phase_requests)
+            page.locator("#run-phase").select_option("")
+            page.locator("#list-runs").click()
+            page.locator("#list-state").get_by_text(
+                "25 runs on this page. More available. Select a run to inspect.",
+                exact=True,
+            ).wait_for()
             # Collections must never render raw payloads, even before validation.
             for resource, button, state, rows, next_button, ready, empty, retry, error in (
                 ("run-statuses", "list-runs", "list-state", "owned-runs", "next-runs",

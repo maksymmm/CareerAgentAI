@@ -52,12 +52,13 @@ class SQLiteCareerLoopRepository:
                 connection.execute(
                     """
                     INSERT INTO autonomous_career_loops (
-                        run_id, owner_user_id, payload_json, updated_at, version
-                    ) VALUES (?, ?, ?, ?, ?)
+                        run_id, owner_user_id, phase, payload_json, updated_at, version
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         state.run_id,
                         state.request.user_id,
+                        state.phase.value,
                         serialized,
                         state.updated_at.isoformat(),
                         next_version,
@@ -68,11 +69,12 @@ class SQLiteCareerLoopRepository:
                     cursor = connection.execute(
                         """
                         UPDATE autonomous_career_loops
-                        SET payload_json = ?, updated_at = ?, version = ?
+                        SET phase = ?, payload_json = ?, updated_at = ?, version = ?
                         WHERE run_id = ? AND owner_user_id = ? AND version = ?
                           AND execution_claim_owner IS NULL
                         """,
                         (
+                            state.phase.value,
                             serialized,
                             state.updated_at.isoformat(),
                             next_version,
@@ -85,11 +87,12 @@ class SQLiteCareerLoopRepository:
                     cursor = connection.execute(
                         """
                         UPDATE autonomous_career_loops
-                        SET payload_json = ?, updated_at = ?, version = ?
+                        SET phase = ?, payload_json = ?, updated_at = ?, version = ?
                         WHERE run_id = ? AND owner_user_id = ? AND version = ?
                           AND execution_claim_owner = ?
                         """,
                         (
+                            state.phase.value,
                             serialized,
                             state.updated_at.isoformat(),
                             next_version,
@@ -294,6 +297,7 @@ class SQLiteCareerLoopRepository:
             CREATE TABLE IF NOT EXISTS autonomous_career_loops (
                 run_id TEXT PRIMARY KEY,
                 owner_user_id TEXT,
+                phase TEXT,
                 payload_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
@@ -325,6 +329,22 @@ class SQLiteCareerLoopRepository:
                   AND json_type(payload_json, '$.request.user_id') = 'text'
                 """
             )
+        if "phase" not in columns:
+            self._database.connection.execute(
+                "ALTER TABLE autonomous_career_loops ADD COLUMN phase TEXT"
+            )
+        # This backfill is intentionally independent of column creation. If a
+        # process stops after ALTER TABLE has committed but before initialization
+        # finishes, the next startup resumes every still-unprojected valid row.
+        self._database.connection.execute(
+            """
+            UPDATE autonomous_career_loops
+            SET phase = json_extract(payload_json, '$.phase')
+            WHERE phase IS NULL
+              AND json_valid(payload_json)
+              AND json_type(payload_json, '$.phase') = 'text'
+            """
+        )
         if "execution_claim_owner" not in columns:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops "
@@ -345,6 +365,12 @@ class SQLiteCareerLoopRepository:
             """
             CREATE INDEX IF NOT EXISTS idx_autonomous_loop_owner
             ON autonomous_career_loops(owner_user_id, run_id)
+            """
+        )
+        self._database.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_autonomous_loop_owner_phase
+            ON autonomous_career_loops(owner_user_id, phase, run_id)
             """
         )
         self._database.connection.commit()
@@ -588,18 +614,35 @@ class SQLiteCandidateRunStatusProjection:
             raise ValueError("Candidate status projection requires durable storage.")
         self._database = database
 
-    def list_page(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+    def list_page(self, *, user_id: str, limit: int = 25, after: str | None = None,
+                  phase: CareerLoopPhase | None = None) -> dict[str, Any]:
         """Return a bounded owner-only keyset page without parsing foreign snapshots."""
         owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
         cursor = "" if after is None else SQLiteCareerLoopRepository._identifier(after, "after")
-        rows = self._database.connection.execute(
-            "SELECT run_id FROM autonomous_career_loops "
-            "WHERE owner_user_id = ? AND run_id > ? ORDER BY run_id LIMIT ?",
-            (owner, cursor, limit + 1),
-        ).fetchall()
-        items = [self.get(row[0], user_id=owner) for row in rows[:limit]]
+        if phase is not None and not isinstance(phase, CareerLoopPhase):
+            raise TypeError("phase must be a CareerLoopPhase or None")
+        if phase is None:
+            rows = self._database.connection.execute(
+                "SELECT run_id, owner_user_id, payload_json, version "
+                "FROM autonomous_career_loops "
+                "WHERE owner_user_id = ? AND run_id > ? ORDER BY run_id LIMIT ?",
+                (owner, cursor, limit + 1),
+            ).fetchall()
+        else:
+            rows = self._database.connection.execute(
+                "SELECT run_id, owner_user_id, payload_json, version "
+                "FROM autonomous_career_loops "
+                "WHERE owner_user_id = ? AND phase = ? AND run_id > ? "
+                "ORDER BY run_id LIMIT ?",
+                (owner, phase.value, cursor, limit + 1),
+            ).fetchall()
+        # The filter projection and serialized state are read by one SELECT so a
+        # concurrent optimistic transition cannot move the run between two reads.
+        items = [self._status_from_row(row[0], row[1:], owner=owner) for row in rows[:limit]]
+        if phase is not None and any(item["phase"] != phase.value for item in items):
+            raise ValueError("Persisted autonomous-loop phase projection is malformed.")
         return {"schema_version": 1, "items": items,
                 "next_after": rows[limit - 1][0] if len(rows) > limit else None}
 
@@ -616,6 +659,13 @@ class SQLiteCandidateRunStatusProjection:
             (identifier,),
         ).fetchone()
         if row is None or row[0] != owner:
+            raise KeyError("Unknown autonomous career loop for this user.")
+        return self._status_from_row(identifier, row, owner=owner)
+
+    @staticmethod
+    def _status_from_row(identifier: str, row: tuple[Any, ...], *, owner: str) -> dict[str, Any]:
+        """Validate one owner-filtered storage row into the public projection."""
+        if row[0] != owner:
             raise KeyError("Unknown autonomous career loop for this user.")
         try:
             payload = json.loads(row[1])

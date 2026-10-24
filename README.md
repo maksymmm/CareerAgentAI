@@ -354,15 +354,19 @@ timestamps, rendered as text-only allowlisted fields. New selections/page loads/
 edits invalidate older detail responses; failures permit explicit reselection/retry.
 No approval/submission controls exist in this tracker list or detail view.
 
-The sandbox runtime's programmatic `list_run_statuses(user_id=..., limit=25, after=None)`
+The sandbox runtime's programmatic
+`list_run_statuses(user_id=..., limit=25, after=None, phase=None)`
 returns owner-filtered, minimal run status pages in stable run-ID order (maximum 100).
 The caller must supply the authenticated identity. Reads never create or migrate the
 database, execute work, or parse another owner's snapshots. `next_after` is a keyset
 cursor, not an ownership credential. Authenticated `GET /v1/candidate/run-statuses`
-exposes the same read-only page with optional `limit` and `after`; identity comes
+exposes the same read-only page with optional `limit`, `after`, and a validated exact
+lifecycle `phase`; identity comes
 only from bearer authentication. Duplicate/unknown/invalid query parameters fail
-before storage access. The candidate sandbox can load owned pages, advance with
-Next page, and explicitly select a run without executing or approving it. Token
+before storage access. Filtered pages use an owner/phase/run-ID projection index and
+retain the exclusive cursor across pages. The candidate sandbox can select a phase,
+load owned pages, advance with Next page, and explicitly select a run without
+executing or approving it. Filter changes clear old rows and cursors. Token
 edits clear the list/cursor; old list responses and selections are generation-bound.
 Failed next-page requests retain the attempted cursor for explicit retry, without
 restarting pagination or restoring another authentication context.

@@ -83,11 +83,17 @@ def app(loop):
 
 
 def test_run_collection_binds_authenticated_owner_and_query():
+    from career_agent_ai.application.career.autonomous_loop_models import CareerLoopPhase
+
     class Collection:
         def list_run_statuses(self, **kwargs):
-            assert kwargs == {"user_id": "candidate-1", "limit": 2, "after": "run-1"}
+            assert kwargs == {"user_id": "candidate-1", "limit": 2, "after": "run-1",
+                              "phase": CareerLoopPhase.APPLICATION_APPROVAL}
             return {"schema_version": 1, "items": [], "next_after": None}
-    (status, headers), body = request(app(Collection()), path="/v1/candidate/run-statuses", query="limit=2&after=run-1")
+    (status, headers), body = request(
+        app(Collection()), path="/v1/candidate/run-statuses",
+        query="limit=2&phase=application_approval&after=run-1",
+    )
     assert status == "200 OK"
     assert ("Cache-Control", "no-store") in headers
     assert body == {"schema_version": 1, "items": [], "next_after": None}
@@ -122,6 +128,11 @@ def test_invalid_collection_query_never_opens_storage(query, path):
 @pytest.mark.parametrize("query", ["status=", "status=pending", "status=applied&status=offer"])
 def test_invalid_application_status_filter_never_opens_storage(query):
     assert request(app(object()), path="/v1/candidate/applications", query=query)[0][0] == "400 Bad Request"
+
+
+@pytest.mark.parametrize("query", ["phase=", "phase=pending", "phase=search&phase=failed"])
+def test_invalid_run_phase_filter_never_opens_storage(query):
+    assert request(app(object()), path="/v1/candidate/run-statuses", query=query)[0][0] == "400 Bad Request"
 
 
 @pytest.mark.parametrize("path", ["/v1/candidate/run-statuses", "/v1/candidate/applications"])
@@ -1236,6 +1247,8 @@ def test_post_rejects_short_body_even_when_prefix_is_valid_json():
 
 
 def test_openapi_contract_documents_authenticated_get_and_strict_post():
+    from career_agent_ai.application.career.autonomous_loop_models import CareerLoopPhase
+
     document = candidate_approval_openapi_document()
     route = document["paths"]["/v1/candidate/runs/{run_id}/approval"]
 
@@ -1269,6 +1282,14 @@ def test_openapi_contract_documents_authenticated_get_and_strict_post():
     )
     assert "409" in route["get"]["responses"]
     assert "500" in route["get"]["responses"]
+    run_collection = document["paths"]["/v1/candidate/run-statuses"]["get"]
+    phase_parameter = next(
+        parameter for parameter in run_collection["parameters"]
+        if parameter["name"] == "phase"
+    )
+    assert phase_parameter["schema"]["enum"] == [
+        phase.value for phase in CareerLoopPhase
+    ]
     start = document["paths"]["/v1/candidate/runs"]["post"]
     assert start["security"] == [{"bearerAuth": []}]
     start_schema = start["requestBody"]["content"]["application/json"]["schema"]
