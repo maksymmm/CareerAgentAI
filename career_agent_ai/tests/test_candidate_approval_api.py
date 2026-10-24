@@ -93,11 +93,35 @@ def test_run_collection_binds_authenticated_owner_and_query():
     assert body == {"schema_version": 1, "items": [], "next_after": None}
 
 
+def test_application_collection_binds_validated_status_filter():
+    from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+
+    class Collection:
+        def list_applications(self, **kwargs):
+            assert kwargs == {
+                "user_id": "candidate-1", "limit": 2, "after": "app-1",
+                "status": JobApplicationStatus.INTERVIEW,
+            }
+            return {"schema_version": 1, "items": [], "next_after": None}
+
+    (status, _), body = request(
+        app(Collection()), path="/v1/candidate/applications",
+        query="limit=2&status=interview&after=app-1",
+    )
+    assert status == "200 OK"
+    assert body == {"schema_version": 1, "items": [], "next_after": None}
+
+
 @pytest.mark.parametrize("path", ["/v1/candidate/run-statuses", "/v1/candidate/applications"])
 @pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=true", "limit=2&limit=3", "owner=foreign", "after=", "limit=", "limit=2&after=a&other=b", "after=%20padded", "after=" + "a" * 201])
 def test_invalid_collection_query_never_opens_storage(query, path):
     (status, _), _ = request(app(object()), path=path, query=query)
     assert status == "400 Bad Request"
+
+
+@pytest.mark.parametrize("query", ["status=", "status=pending", "status=applied&status=offer"])
+def test_invalid_application_status_filter_never_opens_storage(query):
+    assert request(app(object()), path="/v1/candidate/applications", query=query)[0][0] == "400 Bad Request"
 
 
 @pytest.mark.parametrize("path", ["/v1/candidate/run-statuses", "/v1/candidate/applications"])
@@ -142,6 +166,13 @@ def test_application_http_page_uses_read_only_owner_storage_after_restart(tmp_pa
     runtime.close()
     contract = candidate_approval_openapi_document()["paths"][route]["get"]
     assert contract["security"] == [{"bearerAuth": []}]
+    status_parameter = next(
+        parameter for parameter in contract["parameters"]
+        if parameter["name"] == "status"
+    )
+    assert status_parameter["schema"]["enum"] == [
+        "saved", "applied", "interview", "offer", "rejected", "withdrawn"
+    ]
     schema = contract["responses"]["200"]["content"]["application/json"]["schema"]
     assert set(first["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
 

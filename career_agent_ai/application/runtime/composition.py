@@ -45,6 +45,7 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     ExternalActionOperationRepository,
 )
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
@@ -171,12 +172,13 @@ class RuntimeCandidateApp:
             database.close()
 
     def list_applications(self, *, user_id: str, limit: int = 25,
-                          after: str | None = None) -> dict[str, Any]:
+                          after: str | None = None,
+                          status: JobApplicationStatus | None = None) -> dict[str, Any]:
         """Read trusted caller's bounded application snapshots without workflow actions."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         return SQLiteCandidateApplications(self._database_path).list_page(
-            user_id=user_id, limit=limit, after=after)
+            user_id=user_id, limit=limit, after=after, status=status)
 
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]:
         """Read an owned application snapshot using the trusted caller's identity."""
@@ -244,10 +246,12 @@ class _RequestCandidateLoop:
         return SQLiteCandidateApplications(self._database_path).get_snapshot(
             application_id, user_id=user_id)
 
-    def list_applications(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+    def list_applications(self, *, user_id: str, limit: int = 25,
+                          after: str | None = None,
+                          status: JobApplicationStatus | None = None) -> dict[str, Any]:
         """Read authenticated owner snapshots without building writable repositories."""
         return SQLiteCandidateApplications(self._database_path).list_page(
-            user_id=user_id, limit=limit, after=after)
+            user_id=user_id, limit=limit, after=after, status=status)
 
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None) -> dict[str, Any]:
         """Read an authenticated owner-only collection using request-local storage."""

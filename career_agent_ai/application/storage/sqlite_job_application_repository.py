@@ -462,6 +462,8 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
                 ON job_applications(user_id, status, created_at, application_id);
             CREATE INDEX IF NOT EXISTS idx_applications_user_id
                 ON job_applications(user_id, application_id);
+            CREATE INDEX IF NOT EXISTS idx_applications_user_status_id
+                ON job_applications(user_id, status, application_id);
             CREATE INDEX IF NOT EXISTS idx_applications_company
                 ON job_applications(company_id, created_at, application_id);
             CREATE TABLE IF NOT EXISTS application_external_actions (

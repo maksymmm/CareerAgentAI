@@ -328,15 +328,18 @@ bearer-derived ownership, strict single-parameter validation, no-store and OpenA
 The query preserves opaque Unicode IDs without WSGI path-decoding ambiguity;
 foreign/missing applications share a 404. No update or execution action is exposed.
 
-`RuntimeCandidateApp.list_applications(user_id=..., limit=25, after=None)` exposes
+`RuntimeCandidateApp.list_applications(user_id=..., limit=25, after=None, status=None)` exposes
 minimal owner-only application snapshots with bounded ID-keyset pagination. Reads
 open existing SQLite storage read-only, never migrate it, and omit timeline notes,
 metadata, skills and execution claims. Identity must come from the trusted caller.
-Authenticated `GET /v1/candidate/applications` exposes the same page with `limit`
-and `after`, bearer-derived ownership, strict query validation, no-store and OpenAPI.
+Authenticated `GET /v1/candidate/applications` exposes the same page with `limit`,
+`after`, and an optional validated lifecycle `status`, bearer-derived ownership,
+strict query validation, no-store and OpenAPI. Status-filtered pages use an
+owner/status/application-ID index and retain the same exclusive cursor contract.
 It never executes or updates an application. The candidate sandbox displays owned
 application pages as text-only job/company/status/version snapshots, with explicit
-next-page/retry controls. Token edits clear the list and stale responses cannot
+status selection and next-page/retry controls. A selected status is sent on every
+page request; changing it clears the old page. Token edits clear the list and stale responses cannot
 restore it. View application loads an owner-authenticated detail snapshot with
 timestamps, rendered as text-only allowlisted fields. New selections/page loads/token
 edits invalidate older detail responses; failures permit explicit reselection/retry.

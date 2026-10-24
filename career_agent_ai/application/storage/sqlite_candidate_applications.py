@@ -89,21 +89,30 @@ class SQLiteCandidateApplications:
             raise ValueError("Persisted candidate application history is malformed.") from exc
 
     def list_page(self, *, user_id: str, limit: int = 25,
-                  after: str | None = None) -> dict[str, Any]:
+                  after: str | None = None,
+                  status: JobApplicationStatus | None = None) -> dict[str, Any]:
         """Return ID-ordered snapshots without children, claims, writes or execution."""
         owner = self._identifier(user_id)
         cursor = "" if after is None else self._identifier(after)
+        if status is not None and not isinstance(status, JobApplicationStatus):
+            raise ValueError("status must be a supported application status")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             # Bound and scope in SQL before loading any candidate-visible fields.
-            rows = database.connection.execute(
+            columns = (
                 "SELECT application_id, job_id, company_id, job_title, status, "
                 "version, created_at, updated_at, serialization_version "
                 "FROM job_applications WHERE user_id = ? AND application_id > ? "
-                "ORDER BY application_id LIMIT ?", (owner, cursor, limit + 1),
-            ).fetchall()
+            )
+            if status is None:
+                query = columns + "ORDER BY application_id LIMIT ?"
+                parameters: tuple[Any, ...] = (owner, cursor, limit + 1)
+            else:
+                query = columns + "AND status = ? ORDER BY application_id LIMIT ?"
+                parameters = (owner, cursor, status.value, limit + 1)
+            rows = database.connection.execute(query, parameters).fetchall()
             items = [self._snapshot(row) for row in rows[:limit]]
             return {"schema_version": 1, "items": items,
                     "next_after": items[-1]["application_id"] if len(rows) > limit else None}

@@ -847,6 +847,19 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert application_button.get_attribute("aria-label") == (
                 f"View application 1: {detail['application_id']}"
             )
+            page.locator("#application-status").select_option("interview")
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "0 applications on this page. End of list. Read-only snapshots.",
+                exact=True,
+            ).wait_for()
+            assert page.locator("#owned-applications li").count() == 0
+            page.locator("#application-status").select_option("applied")
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. End of list. Read-only snapshots.",
+                exact=True,
+            ).wait_for()
             page.route(
                 "**/v1/candidate/applications?*",
                 lambda route: route.fulfill(status=200, json={

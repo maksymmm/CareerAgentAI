@@ -88,6 +88,16 @@ _HTML = r"""<!doctype html>
   </section>
   <section aria-labelledby="applications-title">
     <h2 id="applications-title" tabindex="-1">My applications</h2>
+    <label for="application-status">Status</label>
+    <select id="application-status">
+      <option value="">All statuses</option>
+      <option value="saved">Saved</option>
+      <option value="applied">Applied</option>
+      <option value="interview">Interview</option>
+      <option value="offer">Offer</option>
+      <option value="rejected">Rejected</option>
+      <option value="withdrawn">Withdrawn</option>
+    </select>
     <button id="list-applications" type="button">Load my applications</button>
     <ul id="owned-applications" aria-label="My applications" aria-busy="false"></ul>
     <p id="applications-state" role="status"></p>
@@ -424,11 +434,13 @@ _HTML = r"""<!doctype html>
     async function loadApplications(after = null) {
       clearApplications();
       const generation = applicationsGeneration;
+      const selectedStatus = byId('application-status').value;
       byId('list-applications').disabled = true;
       byId('owned-applications').setAttribute('aria-busy', 'true');
       byId('applications-state').textContent = 'Loading…';
       try {
         const page = await call('/v1/candidate/applications?limit=25' +
+          (selectedStatus === '' ? '' : '&status=' + encodeURIComponent(selectedStatus)) +
           (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
           'Applications request failed.');
         if (generation !== applicationsGeneration) return;
@@ -442,7 +454,9 @@ _HTML = r"""<!doctype html>
               item && identifier(item.application_id) && identifier(item.job_id) &&
               typeof item.job_title === 'string' && Array.from(item.job_title).length <= 500 &&
               typeof item.company_id === 'string' && Array.from(item.company_id).length <= 200 &&
-              statuses.includes(item.status) && Number.isSafeInteger(item.state_version) && item.state_version >= 1)) {
+              statuses.includes(item.status) &&
+              (selectedStatus === '' || item.status === selectedStatus) &&
+              Number.isSafeInteger(item.state_version) && item.state_version >= 1)) {
           throw new Error('Invalid application page.');
         }
         for (const [index, item] of page.items.entries()) {
@@ -485,6 +499,7 @@ _HTML = r"""<!doctype html>
     byId('next-applications').addEventListener('click', () => guarded(() => {
       if (nextApplicationCursor !== null) return loadApplications(nextApplicationCursor);
     }));
+    byId('application-status').addEventListener('change', clearApplications);
     byId('token').addEventListener('input', clearApplications);
     function clearRunList() {
       listGeneration += 1;
@@ -631,7 +646,7 @@ _HTML = r"""<!doctype html>
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
     byId('clear-session').addEventListener('click', () => {
-      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id']) byId(id).value = '';
+      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'application-status']) byId(id).value = '';
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });
