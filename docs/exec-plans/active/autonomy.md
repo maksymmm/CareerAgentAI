@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Owner projection restart hardening: writable loop storage now resumes the
+`owner_user_id` payload projection for every valid row still left NULL, even when a
+previous process persisted the schema change before completing its backfill. A
+restart regression proves owner-scoped discovery and subsequent optimistic saves
+recover instead of hiding or permanently conflicting on the legacy run.
+Next: exact-head CI and Codex review, then continue candidate workflow readiness.
+
 Candidate run phase filtering: writable loop storage maintains a migrated phase
 projection and owner/phase/run-ID index on every optimistic save. The authenticated
 runtime and HTTP collection accept only `CareerLoopPhase` values and preserve run-ID

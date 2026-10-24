@@ -321,14 +321,18 @@ class SQLiteCareerLoopRepository:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops ADD COLUMN owner_user_id TEXT"
             )
-            self._database.connection.execute(
-                """
-                UPDATE autonomous_career_loops
-                SET owner_user_id = json_extract(payload_json, '$.request.user_id')
-                WHERE json_valid(payload_json)
-                  AND json_type(payload_json, '$.request.user_id') = 'text'
-                """
-            )
+        # Resume this projection independently of column creation. SQLite may
+        # persist ALTER TABLE before initialization reaches the backfill, so a
+        # restarted process must repair every still-unowned valid snapshot.
+        self._database.connection.execute(
+            """
+            UPDATE autonomous_career_loops
+            SET owner_user_id = json_extract(payload_json, '$.request.user_id')
+            WHERE owner_user_id IS NULL
+              AND json_valid(payload_json)
+              AND json_type(payload_json, '$.request.user_id') = 'text'
+            """
+        )
         if "phase" not in columns:
             self._database.connection.execute(
                 "ALTER TABLE autonomous_career_loops ADD COLUMN phase TEXT"
