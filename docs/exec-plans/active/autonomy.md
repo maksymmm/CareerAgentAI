@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Arbeitnow response media contract: when sandbox transports declare `Content-Type`,
+accept only an unambiguous `application/json` declaration with an optional UTF-8
+charset. Reject non-JSON media, unsupported parameters, non-ASCII/non-string values
+and conflicting duplicates before reading any body. Missing declarations remain
+compatible with existing minimal transports, while bounded reads and strict JSON
+decoding remain authoritative.
+Next: verify exact-head CI and Codex review; continue provider failure coverage.
+
 Candidate run phase filtering: writable loop storage maintains a migrated phase
 projection and owner/phase/run-ID index on every optimistic save. The authenticated
 runtime and HTTP collection accept only `CareerLoopPhase` values and preserve run-ID
