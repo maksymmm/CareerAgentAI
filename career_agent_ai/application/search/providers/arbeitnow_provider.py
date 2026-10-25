@@ -110,6 +110,47 @@ def _validate_content_length(response: Any, *, maximum: int) -> None:
         raise RuntimeError("Arbeitnow Content-Length values conflict")
 
 
+def _validate_content_type(response: Any) -> None:
+    """Require unambiguous JSON media declarations before reading a body."""
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Type") or []
+        else:
+            value = headers.get("Content-Type")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    if not values:
+        return
+
+    declarations: set[tuple[str, str | None]] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.isascii():
+            raise RuntimeError("Arbeitnow Content-Type is invalid")
+        segments = tuple(segment.strip().lower() for segment in value.split(";"))
+        media_type, parameters = segments[0], segments[1:]
+        charset: str | None = None
+        if len(parameters) == 1:
+            name, separator, parameter_value = parameters[0].partition("=")
+            parameter_value = parameter_value.strip()
+            if (
+                separator != "="
+                or name.strip() != "charset"
+                or parameter_value not in {"utf-8", '"utf-8"'}
+            ):
+                raise RuntimeError("Arbeitnow response is not JSON")
+            charset = "utf-8"
+        if media_type != "application/json" or len(parameters) > 1:
+            raise RuntimeError("Arbeitnow response is not JSON")
+        declarations.add((media_type, charset))
+    if len(declarations) != 1:
+        raise RuntimeError("Arbeitnow Content-Type values conflict")
+
+
 class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
     """Validate a redirect destination before urllib sends the next request."""
 
@@ -399,6 +440,7 @@ class ArbeitnowProvider(JobProvider):
                 response_url = getattr(response, "geturl", lambda: url)()
                 self._validate_response_url(response_url)
 
+                _validate_content_type(response)
                 _validate_content_length(
                     response,
                     maximum=self._max_response_bytes,

@@ -112,8 +112,11 @@ pagination envelope. Malformed data, links or next-page state abort the entire s
 instead of silently returning an incomplete prefix; an explicit retry starts again at
 page one. Every transport response must provide an integer HTTP status in the protocol
 range and a byte body; malformed adapter responses fail deterministically and close
-before decoding; a missing status is never treated as an implicit success. An optional
-Every `Content-Length` occurrence must contain only ASCII digits, agree with any
+before decoding; a missing status is never treated as an implicit success. When a
+`Content-Type` is present it must unambiguously declare `application/json`, optionally
+with only a UTF-8 charset; conflicting duplicates and unsafe media declarations are
+rejected before reading the body. Every `Content-Length` occurrence must contain only
+ASCII digits, agree with any
 duplicate, and remain within the configured byte limit; unsafe declarations are
 rejected before the body is read, while the bounded
 read remains authoritative when the header is absent or understates the body. JSON decoding is strict: duplicate object members, non-finite numeric
