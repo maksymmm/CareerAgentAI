@@ -4,8 +4,9 @@ Candidate start request deduplication: the sandbox disables its start control an
 marks the start panel busy while the current authenticated POST is unresolved.
 Repeated pointer or programmatic activation cannot launch a second start; completion
 and failure restore the control, while input invalidation retires the stale response
-so it cannot select a run after the token or inputs change. Chromium covers a delayed start,
-duplicate activation and token invalidation without enabling external actions.
+so it cannot select a run after the token or any submitted run ID, keyword, location,
+or profile changes. Chromium covers delayed starts, duplicate activation, token
+invalidation, and every editable start field without enabling external actions.
 Next: exact-head CI/review, then continue candidate workflow readiness.
 
 Owner projection restart hardening: writable loop storage now resumes the

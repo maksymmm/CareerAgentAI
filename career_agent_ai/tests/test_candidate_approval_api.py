@@ -653,6 +653,12 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("aria-busy', 'false'", start_assignment) > start_assignment
     assert "byId('run-id').addEventListener('input'" in html
     assert "byId('token').addEventListener('input', invalidateInputContext)" in html
+    for start_input in ("start-run-id", "keyword", "location", "profile"):
+        assert f"'{start_input}'" in html[
+            html.index("for (const id of ['start-run-id'") :
+            html.index("byId('clear-session').addEventListener")
+        ]
+    assert "byId(id).addEventListener('input', invalidateInputContext)" in html
     assert "contextGeneration !== inputContextGeneration" in html
     assert 'id="run-overview" role="status"' in html
     assert 'id="owned-runs"' in html
