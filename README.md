@@ -75,6 +75,10 @@ It supports:
 - run summaries in memory
 
 A human-gated run pauses instead of performing the next external action automatically.
+The candidate sandbox also serializes each browser-side start request: its start
+control remains disabled and exposes a busy state until the authenticated request
+settles, preventing duplicate concurrent POSTs while stale results are discarded
+after token or input changes.
 
 ---
 

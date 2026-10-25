@@ -642,8 +642,15 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     start_handler = html.index("byId('start').addEventListener")
     start_post = html.index("await call('/v1/candidate/runs'", start_handler)
     start_assignment = html.index("selectRun(payload.run_id)", start_post)
+    assert html.index("if (startInFlight)", start_handler) < start_post
+    assert html.index("startInFlight = true", start_handler) < start_post
+    assert html.index("byId('start').disabled = true", start_handler) < start_post
+    assert html.index("aria-busy', 'true'", start_handler) < start_post
     assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
     assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]
+    assert html.index("startInFlight = false", start_assignment) > start_assignment
+    assert html.index("byId('start').disabled = false", start_assignment) > start_assignment
+    assert html.index("aria-busy', 'false'", start_assignment) > start_assignment
     assert "byId('run-id').addEventListener('input'" in html
     assert "byId('token').addEventListener('input', invalidateInputContext)" in html
     assert "contextGeneration !== inputContextGeneration" in html
