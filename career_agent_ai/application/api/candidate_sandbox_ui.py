@@ -662,6 +662,9 @@ _HTML = r"""<!doctype html>
     }
     byId('start').addEventListener('click', () => guarded(async () => {
       if (startInFlight) throw new Error('A run start is already in progress.');
+      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
       startInFlight = true;
       byId('start').disabled = true;
       byId('start-panel').setAttribute('aria-busy', 'true');
@@ -700,6 +703,7 @@ _HTML = r"""<!doctype html>
     });
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
+      if (startInFlight) throw new Error('Wait for the run start to finish.');
       if (recoveryInFlight || decisionInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
       byId('status').disabled = true;
@@ -724,6 +728,7 @@ _HTML = r"""<!doctype html>
       }
     }));
     byId('continue').addEventListener('click', () => guarded(async () => {
+      if (startInFlight) throw new Error('Wait for the run start to finish.');
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
@@ -751,6 +756,7 @@ _HTML = r"""<!doctype html>
       }
     }));
     byId('prompt').addEventListener('click', () => guarded(async () => {
+      if (startInFlight) throw new Error('Wait for the run start to finish.');
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       if (promptInFlight) throw new Error('An approval prompt is already loading.');
       promptInFlight = true;
@@ -798,6 +804,7 @@ _HTML = r"""<!doctype html>
       }
     }));
     async function decide(decision) {
+      if (startInFlight) throw new Error('Wait for the run start to finish.');
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');

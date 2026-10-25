@@ -147,6 +147,12 @@ Chromium coverage proves a programmatic recovery activation cannot cross the rea
 later replace the post-action UI with a stale snapshot.
 Next: exact-head CI/review, then continue bounded candidate workflow hardening.
 
+Candidate start/workflow exclusion: a pending run-creation POST blocks status, prompt,
+recovery and decision operations, and those operations block a new start. Delayed
+Chromium coverage proves programmatic status activation cannot escape the lock while
+the new run identity is still unresolved.
+Next: exact-head CI/review, then continue bounded candidate workflow hardening.
+
 Candidate collection loading state: owned run, application and event lists expose
 `aria-busy` only while their current authenticated page request is active. Success,
 failure, token/session invalidation and stale responses restore the idle state without

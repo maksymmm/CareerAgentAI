@@ -881,6 +881,11 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                   document.body.dataset.startWaiting = 'yes';
                   await new Promise(resolve => { window.startRelease = resolve; });
                 }
+                if (String(args[0]).endsWith('/status')) {
+                  document.body.dataset.startRaceStatusRequests = String(
+                    Number(document.body.dataset.startRaceStatusRequests || 0) + 1
+                  );
+                }
                 return window.startOriginalFetch(...args);
               };
             }""")
@@ -889,7 +894,9 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#start").is_disabled()
             assert page.locator("#start-panel").get_attribute("aria-busy") == "true"
             page.evaluate("document.getElementById('start').click()")
+            page.evaluate("document.getElementById('status').click()")
             assert page.locator("body").get_attribute("data-start-requests") == "1"
+            assert page.locator("body").get_attribute("data-start-race-status-requests") is None
             page.locator("#token").fill("changed-token")
             page.evaluate("window.startRelease(); window.fetch = window.startOriginalFetch")
             page.locator("#start:not([disabled])").wait_for()
