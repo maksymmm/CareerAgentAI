@@ -688,6 +688,9 @@ _HTML = r"""<!doctype html>
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
+    for (const id of ['start-run-id', 'keyword', 'location', 'profile']) {
+      byId(id).addEventListener('input', invalidateInputContext);
+    }
     byId('clear-session').addEventListener('click', () => {
       for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'run-phase', 'application-status', 'event-status']) byId(id).value = '';
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
