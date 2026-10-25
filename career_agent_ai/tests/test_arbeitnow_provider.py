@@ -186,6 +186,78 @@ def test_arbeitnow_provider_empty_page(
 
 
 @pytest.mark.parametrize(
+    ("minimum", "maximum"),
+    [
+        (-1, 50_000),
+        ("NaN", "50000"),
+        ("Infinity", "50000"),
+        ("-1", "50000"),
+        (60_000, 50_000),
+    ],
+)
+def test_invalid_numeric_salary_is_dropped_without_losing_job(
+    monkeypatch,
+    minimum,
+    maximum,
+):
+    payload = {
+        "data": [
+            {
+                "slug": "warehouse-operator-example-1",
+                "company_name": "Example",
+                "title": "Warehouse Operator",
+                "location": "Karlsruhe",
+                "description": "Warehouse operations",
+                "salary_min": minimum,
+                "salary_max": maximum,
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    result = ArbeitnowProvider(max_pages=1).search("")
+
+    assert len(result) == 1
+    assert result[0].salary is None
+
+
+@pytest.mark.parametrize(
+    ("minimum", "maximum", "expected"),
+    [
+        (50_000, 60_000, (50_000, 60_000)),
+        ("50000", "60000", (50_000, 60_000)),
+        (None, 60_000, (60_000, 60_000)),
+        (50_000, None, (50_000, 50_000)),
+    ],
+)
+def test_valid_numeric_salary_is_normalized(monkeypatch, minimum, maximum, expected):
+    payload = {
+        "data": [
+            {
+                "slug": "warehouse-operator-example-1",
+                "company_name": "Example",
+                "title": "Warehouse Operator",
+                "location": "Karlsruhe",
+                "description": "Warehouse operations",
+                "salary_min": minimum,
+                "salary_max": maximum,
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    salary = ArbeitnowProvider(max_pages=1).search("")[0].salary
+
+    assert (salary.minimum, salary.maximum) == expected
+
+
+@pytest.mark.parametrize(
     "timeout",
     [
         0,

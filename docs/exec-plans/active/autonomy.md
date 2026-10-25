@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow numeric salary contract: structured salary values accept only finite,
+non-negative numbers with minimum not exceeding maximum. NaN, infinity, negative and
+reversed ranges no longer abort discovery or create corrupt ranking inputs; the valid
+vacancy remains available without salary metadata. Sandbox regressions cover numeric
+and string edge cases plus valid ranges and one-sided values.
+Next: exact-head CI/review, then continue provider result integrity coverage.
+
 Arbeitnow response encoding contract: sandbox transports reject compressed or
 otherwise encoded HTTP bodies before reading them, so the configured byte ceiling
 cannot be bypassed by decompression and JSON parsing never depends on implicit
