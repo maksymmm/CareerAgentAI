@@ -6,6 +6,12 @@ cannot be bypassed by decompression and JSON parsing never depends on implicit
 transport behavior. Missing or explicit identity encoding remains compatible.
 Next: exact-head CI/review, then continue provider failure coverage.
 
+Candidate workflow request exclusion: approval-prompt loading now refuses to overlap
+status refresh or recovery, while status refresh refuses to overlap a pending prompt.
+Static regression contracts verify every guard precedes its authenticated fetch and
+that prompt controls remain disabled until all competing workflow requests settle.
+Next: exact-head CI/review, then continue candidate/provider workflow readiness.
+
 Candidate approval prompt request deduplication: prompt invalidation now retires stale
 content without releasing the independent in-flight lock. A run or token change cannot
 start a replacement authenticated prompt read until the original settles; the controls
