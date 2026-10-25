@@ -151,6 +151,7 @@ _HTML = r"""<!doctype html>
     let approvalPrompt = null;
     let decisionInFlight = false;
     let activePromptLoadGeneration = null;
+    let promptInFlight = false;
     let recoveryInFlight = false;
     let startInFlight = false;
     let statusInFlight = false;
@@ -613,7 +614,7 @@ _HTML = r"""<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       activePromptLoadGeneration = null;
-      byId('prompt').disabled = decisionInFlight || recoveryInFlight;
+      byId('prompt').disabled = decisionInFlight || recoveryInFlight || promptInFlight;
     }
     function selectRun(runId) {
       clearOverview();
@@ -749,7 +750,8 @@ _HTML = r"""<!doctype html>
     }));
     byId('prompt').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
-      if (activePromptLoadGeneration !== null) throw new Error('An approval prompt is already loading.');
+      if (promptInFlight) throw new Error('An approval prompt is already loading.');
+      promptInFlight = true;
       invalidateApprovalPrompt('Loading approval prompt…');
       const promptGeneration = approvalPromptGeneration;
       const promptRunId = byId('run-id').value;
@@ -786,10 +788,11 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
+        promptInFlight = false;
         if (activePromptLoadGeneration === promptGeneration) {
           activePromptLoadGeneration = null;
-          byId('prompt').disabled = false;
         }
+        byId('prompt').disabled = decisionInFlight || recoveryInFlight;
       }
     }));
     async function decide(decision) {
