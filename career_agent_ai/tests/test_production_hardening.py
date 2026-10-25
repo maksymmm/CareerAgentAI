@@ -1022,7 +1022,28 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#next-runs").click()
             page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
             assert page.locator("#approve").is_disabled()
+            page.evaluate("""() => {
+              window.statusOriginalFetch = window.fetch;
+              window.fetch = async (...args) => {
+                if (String(args[0]).endsWith('/status')) {
+                  document.body.dataset.statusRequests = String(
+                    Number(document.body.dataset.statusRequests || 0) + 1
+                  );
+                  document.body.dataset.statusWaiting = 'yes';
+                  await new Promise(resolve => { window.statusRelease = resolve; });
+                }
+                return window.statusOriginalFetch(...args);
+              };
+            }""")
             page.locator("#status").click()
+            page.locator('body[data-status-waiting="yes"]').wait_for()
+            assert page.locator("#status").is_disabled()
+            assert page.locator("#inspect-panel").get_attribute("aria-busy") == "true"
+            page.evaluate("document.getElementById('status').click()")
+            assert page.locator("body").get_attribute("data-status-requests") == "1"
+            page.evaluate("window.statusRelease(); window.fetch = window.statusOriginalFetch")
+            page.locator("#status:not([disabled])").wait_for()
+            assert page.locator("#inspect-panel").get_attribute("aria-busy") == "false"
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert page.locator("#run-id").input_value() == durable_run_id
             page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()

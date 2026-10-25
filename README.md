@@ -79,6 +79,8 @@ The candidate sandbox also serializes each browser-side start request: its start
 control remains disabled and exposes a busy state until the authenticated request
 settles, preventing duplicate concurrent POSTs while stale results are discarded
 after the token or any submitted start field changes.
+Status refreshes are likewise serialized in the browser so repeated activation cannot
+issue overlapping authenticated reads or race the displayed run snapshot.
 
 ---
 
