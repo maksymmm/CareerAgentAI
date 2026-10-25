@@ -708,6 +708,32 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#status").click()
             page.locator("#run-overview").get_by_text("Your decision is needed", exact=False).wait_for()
 
+            page.evaluate("""() => {
+              window.promptOriginalFetch = window.fetch;
+              window.fetch = async (...args) => {
+                if (String(args[0]).endsWith('/approval')) {
+                  document.body.dataset.promptRequests = String(
+                    Number(document.body.dataset.promptRequests || 0) + 1
+                  );
+                  document.body.dataset.promptWaiting = 'yes';
+                  await new Promise(resolve => { window.promptRelease = resolve; });
+                }
+                return window.promptOriginalFetch(...args);
+              };
+            }""")
+            page.locator("#prompt").click()
+            page.locator('body[data-prompt-waiting="yes"]').wait_for()
+            page.locator("#run-id").fill("superseded-prompt-run")
+            assert page.locator("#prompt").is_disabled()
+            page.evaluate("document.getElementById('prompt').click()")
+            assert page.locator("body").get_attribute("data-prompt-requests") == "1"
+            page.evaluate("window.promptRelease(); window.fetch = window.promptOriginalFetch")
+            page.locator("#prompt:not([disabled])").wait_for()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+            assert page.locator("#action-details").text_content() == ""
+            page.locator("#run-id").fill(durable_run_id)
+
             for replacement in ({"run_id": "other-owned-run"}, {"schema_version": 9},
                                 {"state_version": True}, {"state_version": -1},
                                 {"action_kind": "reconcile_application_submission"}, {"title": ""},

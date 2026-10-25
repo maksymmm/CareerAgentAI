@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate approval prompt request deduplication: prompt invalidation now retires stale
+content without releasing the independent in-flight lock. A run or token change cannot
+start a replacement authenticated prompt read until the original settles; the controls
+then recover without exposing the stale prompt. Chromium covers delayed response,
+context invalidation and repeated programmatic activation.
+Next: exact-head CI/review, then continue candidate workflow readiness.
+
 Candidate status request deduplication: the sandbox disables its refresh control and
 marks the inspect panel busy while the authenticated status read is unresolved.
 Repeated pointer or programmatic activation cannot launch an overlapping read, and

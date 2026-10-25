@@ -633,6 +633,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     prompt_handler = html.index("byId('prompt').addEventListener")
     prompt_get = html.index("const loadedPrompt = await call", prompt_handler)
     assert html.index("if (decisionInFlight)", prompt_handler) < prompt_get
+    assert html.index("if (promptInFlight)", prompt_handler) < prompt_get
+    assert html.index("promptInFlight = true", prompt_handler) < prompt_get
     assert html.index("invalidateApprovalPrompt('Loading approval prompt…')", prompt_handler) < prompt_get
     invalidation_helper = html.index("function invalidateApprovalPrompt")
     assert html.index(
@@ -689,8 +691,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "promptGeneration !== approvalPromptGeneration" in html[prompt_get:]
     assert "promptRunId !== byId('run-id').value" in html[prompt_get:]
     assert "activePromptLoadGeneration = null" in html[invalidation_helper:prompt_handler]
+    assert "recoveryInFlight || promptInFlight" in html[invalidation_helper:prompt_handler]
     assert "activePromptLoadGeneration = promptGeneration" in html[prompt_handler:prompt_get]
     assert "activePromptLoadGeneration === promptGeneration" in html[prompt_get:]
+    assert html.index("promptInFlight = false", prompt_get) > prompt_get
     recovery_handler = html.index("byId('continue').addEventListener")
     recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
     assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
