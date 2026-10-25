@@ -724,7 +724,7 @@ _HTML = r"""<!doctype html>
     }));
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
-      if (activePromptLoadGeneration !== null) throw new Error('Wait for the approval prompt to finish loading.');
+      if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (recoveryInFlight) throw new Error('Recovery is already running.');
       recoveryInFlight = true;
       byId('continue').disabled = true;
@@ -797,7 +797,7 @@ _HTML = r"""<!doctype html>
     }));
     async function decide(decision) {
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
-      if (activePromptLoadGeneration !== null) throw new Error('Wait for the approval prompt to finish loading.');
+      if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
       decisionInFlight = true;

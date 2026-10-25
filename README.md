@@ -83,6 +83,8 @@ Status refreshes are likewise serialized in the browser so repeated activation c
 issue overlapping authenticated reads or race the displayed run snapshot.
 Approval prompt loading keeps a separate in-flight lock even when run or token changes
 invalidate the response, preventing a replacement request from overlapping the stale read.
+Recovery and decision controls use the same durable lock, so an invalidated prompt GET
+cannot overlap a consequential POST before the stale read settles.
 
 ---
 

@@ -718,6 +718,11 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                   document.body.dataset.promptWaiting = 'yes';
                   await new Promise(resolve => { window.promptRelease = resolve; });
                 }
+                if (String(args[0]).endsWith('/continue')) {
+                  document.body.dataset.recoveryRequests = String(
+                    Number(document.body.dataset.recoveryRequests || 0) + 1
+                  );
+                }
                 return window.promptOriginalFetch(...args);
               };
             }""")
@@ -726,7 +731,9 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#run-id").fill("superseded-prompt-run")
             assert page.locator("#prompt").is_disabled()
             page.evaluate("document.getElementById('prompt').click()")
+            page.evaluate("document.getElementById('continue').click()")
             assert page.locator("body").get_attribute("data-prompt-requests") == "1"
+            assert page.locator("body").get_attribute("data-recovery-requests") is None
             page.evaluate("window.promptRelease(); window.fetch = window.promptOriginalFetch")
             page.locator("#prompt:not([disabled])").wait_for()
             assert page.locator("#approve").is_disabled()

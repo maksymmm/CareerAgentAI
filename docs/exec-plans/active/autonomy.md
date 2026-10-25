@@ -135,6 +135,12 @@ invalidation restore the controls; delayed-response Chromium coverage verifies a
 three collections together with their `aria-busy` state.
 Next: exact-head CI/review, then continue bounded dashboard usability.
 
+Candidate prompt/recovery exclusion: recovery and decision handlers consult the
+independent prompt in-flight lock instead of its invalidatable generation marker.
+Changing run or token during a delayed prompt GET can no longer enable a concurrent
+recovery POST; Chromium proves the attempted programmatic activation sends no request.
+Next: exact-head CI/review, then continue bounded candidate workflow hardening.
+
 Candidate collection loading state: owned run, application and event lists expose
 `aria-busy` only while their current authenticated page request is active. Success,
 failure, token/session invalidation and stale responses restore the idle state without
