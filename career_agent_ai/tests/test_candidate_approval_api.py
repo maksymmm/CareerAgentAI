@@ -654,6 +654,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("startInFlight = false", start_assignment) > start_assignment
     assert html.index("byId('start').disabled = false", start_assignment) > start_assignment
     assert html.index("aria-busy', 'false'", start_assignment) > start_assignment
+    assert html.index(
+        "byId('prompt').disabled = statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight",
+        start_assignment,
+    ) > start_assignment
     assert "byId('run-id').addEventListener('input'" in html
     assert "byId('token').addEventListener('input', invalidateInputContext)" in html
     for start_input in ("start-run-id", "keyword", "location", "profile"):
@@ -676,13 +680,17 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     status_get = html.index("await call(runPath('/status'))", status_handler)
     assert html.index("if (statusInFlight)", status_handler) < status_get
     assert html.index("if (startInFlight)", status_handler) < status_get
-    assert html.index("recoveryInFlight || decisionInFlight", status_handler) < status_get
+    assert html.index("promptInFlight || recoveryInFlight || decisionInFlight", status_handler) < status_get
     assert html.index("statusInFlight = true", status_handler) < status_get
     assert html.index("byId('status').disabled = true", status_handler) < status_get
     assert html.index("aria-busy', 'true'", status_handler) < status_get
     assert html.index("statusInFlight = false", status_get) > status_get
     assert html.index("byId('status').disabled = false", status_get) > status_get
     assert html.index("aria-busy', 'false'", status_get) > status_get
+    assert html.index(
+        "byId('prompt').disabled = startInFlight || decisionInFlight || recoveryInFlight || promptInFlight",
+        status_get,
+    ) > status_get
     selection = html[html.index("function selectRun"):html.index("async function call")]
     assert "inputContextGeneration += 1" in selection
     assert "latestResultRequest += 1" in selection
@@ -714,6 +722,12 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     assert html.index("if (startInFlight)", prompt_handler) < prompt_get
+    assert html.index("if (recoveryInFlight)", prompt_handler) < prompt_get
+    assert html.index("if (statusInFlight)", prompt_handler) < prompt_get
+    prompt_finally = html.index("promptInFlight = false", prompt_get)
+    assert "startInFlight || statusInFlight || decisionInFlight || recoveryInFlight" in html[
+        prompt_finally:html.index("async function decide", prompt_finally)
+    ]
     decision_start = html.index("async function decide")
     decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
     assert html.index("if (promptInFlight)", decision_start) < decision_post

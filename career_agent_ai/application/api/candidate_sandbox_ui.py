@@ -614,7 +614,7 @@ _HTML = r"""<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       activePromptLoadGeneration = null;
-      byId('prompt').disabled = decisionInFlight || recoveryInFlight || promptInFlight;
+      byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
     }
     function selectRun(runId) {
       clearOverview();
@@ -681,6 +681,7 @@ _HTML = r"""<!doctype html>
         startInFlight = false;
         byId('start').disabled = false;
         byId('start-panel').setAttribute('aria-busy', 'false');
+        byId('prompt').disabled = statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
       }
     }));
     function invalidateInputContext() {
@@ -704,7 +705,7 @@ _HTML = r"""<!doctype html>
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
       if (startInFlight) throw new Error('Wait for the run start to finish.');
-      if (recoveryInFlight || decisionInFlight) throw new Error('Wait for the workflow action to finish.');
+      if (promptInFlight || recoveryInFlight || decisionInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
       byId('status').disabled = true;
       byId('inspect-panel').setAttribute('aria-busy', 'true');
@@ -725,6 +726,7 @@ _HTML = r"""<!doctype html>
         statusInFlight = false;
         byId('status').disabled = false;
         byId('inspect-panel').setAttribute('aria-busy', 'false');
+        byId('prompt').disabled = startInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
       }
     }));
     byId('continue').addEventListener('click', () => guarded(async () => {
@@ -758,6 +760,8 @@ _HTML = r"""<!doctype html>
     byId('prompt').addEventListener('click', () => guarded(async () => {
       if (startInFlight) throw new Error('Wait for the run start to finish.');
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
+      if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
+      if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (promptInFlight) throw new Error('An approval prompt is already loading.');
       promptInFlight = true;
       invalidateApprovalPrompt('Loading approval prompt…');
@@ -800,7 +804,7 @@ _HTML = r"""<!doctype html>
         if (activePromptLoadGeneration === promptGeneration) {
           activePromptLoadGeneration = null;
         }
-        byId('prompt').disabled = decisionInFlight || recoveryInFlight;
+        byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight;
       }
     }));
     async function decide(decision) {
