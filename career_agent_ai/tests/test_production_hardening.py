@@ -816,6 +816,34 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#token").input_value() == "sandbox-token"
             assert page.locator("#approve").is_disabled()
             assert page.locator("#decline").is_disabled()
+            page.locator("#start-run-id").fill("deduplicated-start")
+            page.locator("#keyword").fill("warehouse")
+            page.locator("#profile").fill("Warehouse candidate")
+            page.evaluate("""() => {
+              window.startOriginalFetch = window.fetch;
+              window.fetch = async (...args) => {
+                if (String(args[0]) === '/v1/candidate/runs') {
+                  document.body.dataset.startRequests = String(
+                    Number(document.body.dataset.startRequests || 0) + 1
+                  );
+                  document.body.dataset.startWaiting = 'yes';
+                  await new Promise(resolve => { window.startRelease = resolve; });
+                }
+                return window.startOriginalFetch(...args);
+              };
+            }""")
+            page.locator("#start").click()
+            page.locator('body[data-start-waiting="yes"]').wait_for()
+            assert page.locator("#start").is_disabled()
+            assert page.locator("#start-panel").get_attribute("aria-busy") == "true"
+            page.evaluate("document.getElementById('start').click()")
+            assert page.locator("body").get_attribute("data-start-requests") == "1"
+            page.locator("#token").fill("changed-token")
+            page.evaluate("window.startRelease(); window.fetch = window.startOriginalFetch")
+            page.locator("#start:not([disabled])").wait_for()
+            assert page.locator("#start-panel").get_attribute("aria-busy") == "false"
+            assert page.locator("#run-id").input_value() == ""
+            page.locator("#token").fill("sandbox-token")
             for resource, button, region, marker in (
                 ("run-statuses", "list-runs", "owned-runs", "runs"),
                 ("applications", "list-applications", "owned-applications", "applications"),

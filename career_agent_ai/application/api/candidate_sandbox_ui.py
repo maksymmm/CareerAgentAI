@@ -51,7 +51,7 @@ _HTML = r"""<!doctype html>
   <label>Bearer token <input id="token" type="password" autocomplete="off" required></label>
   <button id="clear-session" type="button">Clear this tab's session</button>
   <p class="muted">Clears credentials, profile and displayed data locally. It does not revoke a token or cancel work already accepted by the server.</p>
-  <fieldset id="start-panel" tabindex="-1">
+  <fieldset id="start-panel" tabindex="-1" aria-busy="false">
     <legend>Start a sandbox run</legend>
     <label>Run ID <input id="start-run-id" value="candidate-demo-1" required></label>
     <label>Job keywords <input id="keyword" required></label>
@@ -152,6 +152,7 @@ _HTML = r"""<!doctype html>
     let decisionInFlight = false;
     let activePromptLoadGeneration = null;
     let recoveryInFlight = false;
+    let startInFlight = false;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -658,14 +659,24 @@ _HTML = r"""<!doctype html>
       }
     }
     byId('start').addEventListener('click', () => guarded(async () => {
+      if (startInFlight) throw new Error('A run start is already in progress.');
+      startInFlight = true;
+      byId('start').disabled = true;
+      byId('start-panel').setAttribute('aria-busy', 'true');
       const requestNumber = ++latestStartRequest;
-      const payload = await call('/v1/candidate/runs', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({schema_version: 1, run_id: byId('start-run-id').value,
-          keyword: byId('keyword').value, candidate_profile: byId('profile').value,
-          location: byId('location').value}),
-      });
-      if (requestNumber === latestStartRequest) selectRun(payload.run_id);
+      try {
+        const payload = await call('/v1/candidate/runs', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({schema_version: 1, run_id: byId('start-run-id').value,
+            keyword: byId('keyword').value, candidate_profile: byId('profile').value,
+            location: byId('location').value}),
+        });
+        if (requestNumber === latestStartRequest) selectRun(payload.run_id);
+      } finally {
+        startInFlight = false;
+        byId('start').disabled = false;
+        byId('start-panel').setAttribute('aria-busy', 'false');
+      }
     }));
     function invalidateInputContext() {
       clearOverview();
