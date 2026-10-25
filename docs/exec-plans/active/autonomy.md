@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate status request deduplication: the sandbox disables its refresh control and
+marks the inspect panel busy while the authenticated status read is unresolved.
+Repeated pointer or programmatic activation cannot launch an overlapping read, and
+success or failure restores the control. Chromium covers the delayed response and
+duplicate activation without enabling external actions.
+Next: exact-head CI/review, then continue candidate workflow readiness.
+
 Candidate start request deduplication: the sandbox disables its start control and
 marks the start panel busy while the current authenticated POST is unresolved.
 Repeated pointer or programmatic activation cannot launch a second start; completion

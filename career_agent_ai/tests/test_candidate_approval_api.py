@@ -669,6 +669,15 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "snapshot.run_id !== runId" in html
     assert "Number.isSafeInteger(snapshot.state_version)" in html
     assert "byId('run-overview').textContent = state" in html
+    status_handler = html.index("byId('status').addEventListener")
+    status_get = html.index("await call(runPath('/status'))", status_handler)
+    assert html.index("if (statusInFlight)", status_handler) < status_get
+    assert html.index("statusInFlight = true", status_handler) < status_get
+    assert html.index("byId('status').disabled = true", status_handler) < status_get
+    assert html.index("aria-busy', 'true'", status_handler) < status_get
+    assert html.index("statusInFlight = false", status_get) > status_get
+    assert html.index("byId('status').disabled = false", status_get) > status_get
+    assert html.index("aria-busy', 'false'", status_get) > status_get
     selection = html[html.index("function selectRun"):html.index("async function call")]
     assert "inputContextGeneration += 1" in selection
     assert "latestResultRequest += 1" in selection

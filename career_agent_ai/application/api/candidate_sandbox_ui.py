@@ -153,6 +153,7 @@ _HTML = r"""<!doctype html>
     let activePromptLoadGeneration = null;
     let recoveryInFlight = false;
     let startInFlight = false;
+    let statusInFlight = false;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -697,18 +698,28 @@ _HTML = r"""<!doctype html>
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });
     byId('status').addEventListener('click', () => guarded(async () => {
+      if (statusInFlight) throw new Error('A status refresh is already in progress.');
+      statusInFlight = true;
+      byId('status').disabled = true;
+      byId('inspect-panel').setAttribute('aria-busy', 'true');
       clearOverview();
       const runId = byId('run-id').value;
       const requestNumber = latestResultRequest + 1;
-      const snapshot = await call(runPath('/status'));
-      if (requestNumber !== latestResultRequest) return;
-      if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
-          !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
-          typeof snapshot.phase !== 'string' || typeof snapshot.waiting_for_human !== 'boolean' ||
-          typeof snapshot.terminal !== 'boolean') throw new Error('Invalid status snapshot.');
-      const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
-      byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
-        ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
+      try {
+        const snapshot = await call(runPath('/status'));
+        if (requestNumber !== latestResultRequest) return;
+        if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
+            !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
+            typeof snapshot.phase !== 'string' || typeof snapshot.waiting_for_human !== 'boolean' ||
+            typeof snapshot.terminal !== 'boolean') throw new Error('Invalid status snapshot.');
+        const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
+        byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
+          ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
+      } finally {
+        statusInFlight = false;
+        byId('status').disabled = false;
+        byId('inspect-panel').setAttribute('aria-busy', 'false');
+      }
     }));
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
