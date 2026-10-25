@@ -700,6 +700,7 @@ _HTML = r"""<!doctype html>
     });
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
+      if (recoveryInFlight || decisionInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
       byId('status').disabled = true;
       byId('inspect-panel').setAttribute('aria-busy', 'true');
@@ -725,6 +726,7 @@ _HTML = r"""<!doctype html>
     byId('continue').addEventListener('click', () => guarded(async () => {
       if (decisionInFlight) throw new Error('Wait for the current decision to finish.');
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
+      if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (recoveryInFlight) throw new Error('Recovery is already running.');
       recoveryInFlight = true;
       byId('continue').disabled = true;
@@ -798,6 +800,7 @@ _HTML = r"""<!doctype html>
     async function decide(decision) {
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
+      if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
       decisionInFlight = true;

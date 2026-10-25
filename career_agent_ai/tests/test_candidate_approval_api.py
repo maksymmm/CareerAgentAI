@@ -674,6 +674,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     status_handler = html.index("byId('status').addEventListener")
     status_get = html.index("await call(runPath('/status'))", status_handler)
     assert html.index("if (statusInFlight)", status_handler) < status_get
+    assert html.index("recoveryInFlight || decisionInFlight", status_handler) < status_get
     assert html.index("statusInFlight = true", status_handler) < status_get
     assert html.index("byId('status').disabled = true", status_handler) < status_get
     assert html.index("aria-busy', 'true'", status_handler) < status_get
@@ -699,6 +700,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
     assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
     assert html.index("if (promptInFlight)", recovery_handler) < recovery_post
+    assert html.index("if (statusInFlight)", recovery_handler) < recovery_post
     assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
     assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
@@ -711,6 +713,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     decision_start = html.index("async function decide")
     decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
     assert html.index("if (promptInFlight)", decision_start) < decision_post
+    assert html.index("if (statusInFlight)", decision_start) < decision_post
     assert html.index("if (recoveryInFlight)", decision_start) < decision_post
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]

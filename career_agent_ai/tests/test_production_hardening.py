@@ -705,7 +705,26 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             durable_run_id = page.locator("#run-id").input_value()
             assert durable_run_id.startswith("scoped-v2:")
+            page.evaluate("""() => {
+              window.statusOriginalFetch = window.fetch;
+              window.fetch = async (...args) => {
+                if (String(args[0]).endsWith('/status')) {
+                  document.body.dataset.statusWaiting = 'yes';
+                  await new Promise(resolve => { window.statusRelease = resolve; });
+                }
+                if (String(args[0]).endsWith('/continue')) {
+                  document.body.dataset.statusRaceRecoveryRequests = String(
+                    Number(document.body.dataset.statusRaceRecoveryRequests || 0) + 1
+                  );
+                }
+                return window.statusOriginalFetch(...args);
+              };
+            }""")
             page.locator("#status").click()
+            page.locator('body[data-status-waiting="yes"]').wait_for()
+            page.evaluate("document.getElementById('continue').click()")
+            assert page.locator("body").get_attribute("data-status-race-recovery-requests") is None
+            page.evaluate("window.statusRelease(); window.fetch = window.statusOriginalFetch")
             page.locator("#run-overview").get_by_text("Your decision is needed", exact=False).wait_for()
 
             page.evaluate("""() => {
