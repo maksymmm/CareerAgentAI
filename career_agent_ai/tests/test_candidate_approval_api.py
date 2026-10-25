@@ -698,6 +698,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     recovery_handler = html.index("byId('continue').addEventListener")
     recovery_post = html.index("await call(runPath('/continue')", recovery_handler)
     assert html.index("if (decisionInFlight)", recovery_handler) < recovery_post
+    assert html.index("if (promptInFlight)", recovery_handler) < recovery_post
     assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
     assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
@@ -709,7 +710,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
     decision_start = html.index("async function decide")
     decision_post = html.index("await call('/v1/candidate/runs/'", decision_start)
-    assert html.index("if (activePromptLoadGeneration !== null)", decision_start) < decision_post
+    assert html.index("if (promptInFlight)", decision_start) < decision_post
     assert html.index("if (recoveryInFlight)", decision_start) < decision_post
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]
