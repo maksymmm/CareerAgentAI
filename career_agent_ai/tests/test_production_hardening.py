@@ -246,6 +246,46 @@ def test_candidate_run_phase_projection_is_backfilled_and_indexed(tmp_path):
     database.close()
 
 
+def test_candidate_run_owner_projection_resumes_after_interrupted_backfill(tmp_path):
+    """Startup repairs a durable owner column left NULL by an interrupted migration."""
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    path = tmp_path / "run-owner-restart.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    state = CareerLoopState(run_id="legacy", request=request())
+    repository.save(state)
+
+    # Reproduce a process exit after ALTER TABLE committed but before its
+    # payload-derived owner projection was persisted.
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET owner_user_id = NULL WHERE run_id = ?",
+        (state.run_id,),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    assert database.connection.execute(
+        "SELECT owner_user_id FROM autonomous_career_loops WHERE run_id = ?",
+        (state.run_id,),
+    ).fetchone()[0] == state.request.user_id
+    page = SQLiteCandidateRunStatusProjection(database).list_page(
+        user_id=state.request.user_id
+    )
+    assert [item["run_id"] for item in page["items"]] == [state.run_id]
+
+    loaded = repository.get(state.run_id)
+    assert loaded is not None
+    previous_version = loaded.version
+    repository.save(loaded)
+    assert repository.get(state.run_id).version == previous_version + 1
+    database.close()
+
+
 def test_candidate_filtered_run_page_reads_each_snapshot_in_one_query(tmp_path):
     from career_agent_ai.application.career.autonomous_loop_models import CareerLoopState
     from career_agent_ai.application.storage.sqlite_career_loop_repository import (
