@@ -840,8 +840,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("body").get_attribute("data-start-requests") == "1"
             page.locator("#token").fill("changed-token")
             page.evaluate("window.startRelease(); window.fetch = window.startOriginalFetch")
-            page.locator("#start").wait_for(state="visible")
-            page.wait_for_function("!document.getElementById('start').disabled")
+            page.locator("#start:not([disabled])").wait_for()
             assert page.locator("#start-panel").get_attribute("aria-busy") == "false"
             assert page.locator("#run-id").input_value() == ""
             page.locator("#token").fill("sandbox-token")
