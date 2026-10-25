@@ -85,6 +85,8 @@ Approval prompt loading keeps a separate in-flight lock even when run or token c
 invalidate the response, preventing a replacement request from overlapping the stale read.
 Recovery and decision controls use the same durable lock, so an invalidated prompt GET
 cannot overlap a consequential POST before the stale read settles.
+Status reads and workflow-changing recovery/decision requests are mutually exclusive,
+preventing a delayed pre-action snapshot from replacing the current post-action state.
 
 ---
 

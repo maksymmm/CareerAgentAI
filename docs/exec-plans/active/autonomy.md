@@ -141,6 +141,12 @@ Changing run or token during a delayed prompt GET can no longer enable a concurr
 recovery POST; Chromium proves the attempted programmatic activation sends no request.
 Next: exact-head CI/review, then continue bounded candidate workflow hardening.
 
+Candidate status/mutation exclusion: a pending status GET now blocks recovery and
+decision POSTs, while either workflow mutation blocks a new status refresh. Delayed
+Chromium coverage proves a programmatic recovery activation cannot cross the read and
+later replace the post-action UI with a stale snapshot.
+Next: exact-head CI/review, then continue bounded candidate workflow hardening.
+
 Candidate collection loading state: owned run, application and event lists expose
 `aria-busy` only while their current authenticated page request is active. Success,
 failure, token/session invalidation and stale responses restore the idle state without
