@@ -151,6 +151,27 @@ def _validate_content_type(response: Any) -> None:
         raise RuntimeError("Arbeitnow Content-Type values conflict")
 
 
+def _validate_content_encoding(response: Any) -> None:
+    """Reject encoded bodies before reading; the byte limit applies to wire bytes."""
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Encoding") or []
+        else:
+            value = headers.get("Content-Encoding")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    for value in values:
+        if not isinstance(value, str) or not value.isascii():
+            raise RuntimeError("Arbeitnow Content-Encoding is invalid")
+        if value.strip().lower() != "identity":
+            raise RuntimeError("Arbeitnow response encoding is unsupported")
+
+
 class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
     """Validate a redirect destination before urllib sends the next request."""
 
@@ -441,6 +462,7 @@ class ArbeitnowProvider(JobProvider):
                 self._validate_response_url(response_url)
 
                 _validate_content_type(response)
+                _validate_content_encoding(response)
                 _validate_content_length(
                     response,
                     maximum=self._max_response_bytes,

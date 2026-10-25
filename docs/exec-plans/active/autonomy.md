@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow response encoding contract: sandbox transports reject compressed or
+otherwise encoded HTTP bodies before reading them, so the configured byte ceiling
+cannot be bypassed by decompression and JSON parsing never depends on implicit
+transport behavior. Missing or explicit identity encoding remains compatible.
+Next: exact-head CI/review, then continue provider failure coverage.
+
 Candidate approval prompt request deduplication: prompt invalidation now retires stale
 content without releasing the independent in-flight lock. A run or token change cannot
 start a replacement authenticated prompt read until the original settles; the controls

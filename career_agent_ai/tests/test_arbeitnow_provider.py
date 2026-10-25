@@ -353,6 +353,49 @@ def test_equivalent_quoted_content_type_duplicates_are_accepted(monkeypatch):
     assert response.closed
 
 
+@pytest.mark.parametrize(
+    ("content_encoding", "error"),
+    [
+        ("gzip", "response encoding is unsupported"),
+        ("br", "response encoding is unsupported"),
+        ("identity, gzip", "response encoding is unsupported"),
+        (True, "Content-Encoding is invalid"),
+        ("identit\N{SNOWMAN}y", "Content-Encoding is invalid"),
+    ],
+)
+def test_unsafe_content_encoding_is_rejected_before_body_read(
+    monkeypatch, content_encoding, error
+):
+    class UnreadResponse(BytesIO):
+        def read(self, size=-1):
+            pytest.fail("encoded body was read")
+
+    response = UnreadResponse(b'{"data": []}')
+    response.status = 200
+    response.headers = {"Content-Encoding": content_encoding}
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match=error):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
+def test_identity_content_encoding_is_accepted(monkeypatch):
+    response = byte_response(b'{"data": []}')
+    response.headers = {"Content-Encoding": " Identity "}
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    assert ArbeitnowProvider().search("") == ()
+    assert response.closed
+
+
 @pytest.mark.parametrize("body", [None, '{"data": []}', bytearray(b'{"data": []}')])
 def test_non_bytes_response_body_is_rejected(monkeypatch, body):
     class InvalidBodyResponse:
