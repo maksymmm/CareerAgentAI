@@ -653,6 +653,50 @@ def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
     assert calls[-1].endswith("page=1")
 
 
+def test_duplicate_job_ids_across_pages_keep_first_valid_record(monkeypatch):
+    first_record = {
+        "slug": "warehouse-operator-example-1",
+        "company_name": "Example",
+        "title": "Warehouse Operator",
+        "location": "Karlsruhe",
+        "description": "First authoritative record",
+    }
+    duplicate_record = {
+        **first_record,
+        "title": "Changed duplicate title",
+        "description": "Later duplicate record",
+    }
+    second_record = {
+        **first_record,
+        "slug": "warehouse-operator-example-2",
+        "title": "Second Warehouse Operator",
+    }
+    payloads = [
+        {"data": [first_record], "links": {"next": "page-two"}},
+        {"data": [duplicate_record, second_record], "links": {"next": None}},
+    ]
+    calls = []
+
+    def fetch(request, timeout):
+        calls.append(request.full_url)
+        return FakeResponse(payloads.pop(0))
+
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        fetch,
+    )
+
+    result = ArbeitnowProvider(max_pages=3).search("")
+
+    assert [job.job_id for job in result] == [
+        "arbeitnow:warehouse-operator-example-1",
+        "arbeitnow:warehouse-operator-example-2",
+    ]
+    assert result[0].title == "Warehouse Operator"
+    assert result[0].description == "First authoritative record"
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

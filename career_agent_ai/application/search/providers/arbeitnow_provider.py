@@ -376,6 +376,7 @@ class ArbeitnowProvider(JobProvider):
         normalized_query = self._normalize_text(query)
 
         jobs: list[Job] = []
+        accepted_job_ids: set[str] = set()
 
         for page in range(
             1,
@@ -407,6 +408,9 @@ class ArbeitnowProvider(JobProvider):
                     ):
                         continue
 
+                if job.job_id in accepted_job_ids:
+                    continue
+                accepted_job_ids.add(job.job_id)
                 jobs.append(job)
 
             if not has_next:
