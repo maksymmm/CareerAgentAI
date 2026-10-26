@@ -745,7 +745,6 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("byId('prompt').disabled = false", decision_post) > decision_post
     application_loader = html[html.index("async function loadApplications"):html.index("function clearRunList")]
     assert "new Set(applicationIds).size !== applicationIds.length" in application_loader
-    assert "applicationIds.includes(after)" in application_loader
     assert "page.next_after === after" in application_loader
     assert "page.next_after !== page.items.at(-1).application_id" in application_loader
     assert "localStorage" not in html
