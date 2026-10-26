@@ -1172,3 +1172,8 @@ attributes, and repeated outcomes transfer safely across employers. Attribute ev
 requires two applications, each application counts once even when multiple attributes
 match, the relevance-relative cap still applies, and a small bounded exploration bonus
 prevents unseen attributes from being permanently excluded.
+
+Candidate discovery now treats a missing or whitespace-only provider job title as an
+unrankable record instead of manufacturing an `Unknown role` application draft. A
+valid peer can still reach the durable approval boundary, and no submission occurs
+before explicit approval.
