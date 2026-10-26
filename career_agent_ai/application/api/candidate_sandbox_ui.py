@@ -486,6 +486,13 @@ _HTML = r"""<!doctype html>
               Number.isSafeInteger(item.state_version) && item.state_version >= 1)) {
           throw new Error('Invalid application page.');
         }
+        const applicationIds = page.items.map(item => item.application_id);
+        if (new Set(applicationIds).size !== applicationIds.length ||
+            (after !== null && (applicationIds.includes(after) || page.next_after === after)) ||
+            (page.next_after !== null && (page.items.length !== 25 ||
+              page.next_after !== page.items.at(-1).application_id))) {
+          throw new Error('Invalid application cursor.');
+        }
         for (const [index, item] of page.items.entries()) {
           const row = document.createElement('li');
           row.textContent = (item.job_title || item.job_id) + ' — ' + item.company_id +

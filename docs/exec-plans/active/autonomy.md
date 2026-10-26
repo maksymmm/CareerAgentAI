@@ -1189,3 +1189,7 @@ provider counters are unavailable or malformed, without allowing unlimited reque
 Provider page numbers, sizes and totals must also agree with the requested page and
 observed row count before they control traversal. Contradictory counters fall back to
 the same full-page-only rule; short inconsistent pages cannot trigger extra requests.
+
+The candidate sandbox application tracker now rejects duplicate application IDs and
+non-progressing pagination cursors. A malformed backend page cannot trap the operator
+in a repeated page or advertise a next cursor that is not the final row of a full page.
