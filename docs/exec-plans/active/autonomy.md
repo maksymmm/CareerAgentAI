@@ -1177,3 +1177,7 @@ Candidate discovery now treats a missing or whitespace-only provider job title a
 unrankable record instead of manufacturing an `Unknown role` application draft. A
 valid peer can still reach the durable approval boundary, and no submission occurs
 before explicit approval.
+
+Candidate ranking also rejects non-numeric, boolean, non-finite, negative, implausibly
+large, and reversed provider salary ranges before the salary tie-breaker runs. A bad
+salary record cannot outrank a valid peer or cross the application approval boundary.

@@ -641,6 +641,60 @@ def test_discovery_skips_malformed_provider_ranking_scalars(
     database.close()
 
 
+@pytest.mark.parametrize(
+    "salary",
+    [
+        SimpleNamespace(minimum=None, maximum=float("nan")),
+        SimpleNamespace(minimum=None, maximum=float("inf")),
+        SimpleNamespace(minimum=None, maximum=True),
+        SimpleNamespace(minimum=-1, maximum=50_000),
+        SimpleNamespace(minimum=90_000, maximum=50_000),
+        SimpleNamespace(minimum=None, maximum=1_000_000_001),
+        SimpleNamespace(minimum=10**400, maximum=None),
+    ],
+)
+def test_discovery_skips_malformed_provider_salary_before_ranking(salary, tmp_path):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "malformed-ranking-salary.sqlite")
+    )
+    invalid = Job.create(
+        job_id="invalid-salary",
+        title="Logistics",
+        company=Company("bad", "Bad"),
+        location=Location("Germany", "Karlsruhe"),
+        salary=salary,
+        description="Logistics",
+        created_at=START,
+    )
+    valid = Job.create(
+        job_id="valid-salary",
+        title="Logistics",
+        company="Valid Company",
+        location=Location("Germany", "Karlsruhe"),
+        description="Logistics",
+        created_at=START,
+    )
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (invalid, valid)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    started = loop.start(
+        request(with_schedule=False), run_id="malformed-ranking-salary"
+    )
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.selected_job_id == "valid-salary"
+    assert (
+        applications.get("malformed-ranking-salary:application").job_id
+        == "valid-salary"
+    )
+    assert submission.calls == []
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")
