@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate adaptive-attribute bounds: normalized learning terms now discard individual
+tokens that exceed the durable `JobApplication.job_skills` limit. A valid request can
+therefore include a long uninterrupted keyword token without failing application
+preparation or bypassing the approval boundary. Unit and end-to-end loop regressions
+cover bounded skill persistence and prove that no external submission occurs.
+Next: exact-head CI/review, then continue complete candidate workflow hardening.
+
 Arbeitnow pagination continuity: every non-null `links.next` must remain on the exact
 trusted API origin/path and carry one canonical page number matching the next page the
 provider will request. Foreign, repeated, skipped and duplicate page declarations now

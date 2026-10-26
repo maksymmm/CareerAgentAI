@@ -87,6 +87,7 @@ def build_stack(
     *,
     with_schedule: bool = True,
     plain_company: bool = False,
+    job_title: str = "Logistics Coordinator",
     max_iterations: int = AutonomousCareerLoop.DEFAULT_MAX_ITERATIONS,
 ):
     database = SQLiteDatabase(path)
@@ -96,7 +97,7 @@ def build_stack(
     jobs.add(
         Job.create(
             job_id="job-1",
-            title="Logistics Coordinator",
+            title=job_title,
             company=company,
             location=Location("Germany", "Karlsruhe"),
             description="Warehouse logistics coordination",
@@ -917,6 +918,31 @@ def test_loop_without_message_or_interview_completes_after_application_approval(
     ]
     tracked = applications.get("minimal:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+
+def test_oversized_keyword_token_does_not_fail_application_preparation(tmp_path):
+    path = str(tmp_path / "bounded-application-skills.sqlite")
+    oversized = "x" * 101
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path,
+        with_schedule=False,
+        job_title=f"Logistics {oversized}",
+    )
+    request_with_oversized_token = CareerLoopRequest(
+        user_id="user-1",
+        keyword=f"Logistics {oversized}",
+        candidate_profile=PROFILE,
+        location="Karlsruhe",
+    )
+
+    started = loop.start(request_with_oversized_token, run_id="bounded-skills")
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    tracked = applications.get("bounded-skills:application")
+    assert tracked is not None
+    assert tracked.job_skills == ("logistics",)
+    assert submission_provider.calls == []
     database.close()
 
 

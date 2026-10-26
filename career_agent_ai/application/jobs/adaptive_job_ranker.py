@@ -32,6 +32,7 @@ class AdaptiveJobRanker:
     relevance ordering, but cannot overwhelm the job-to-request relevance score.
     """
 
+    MAX_ATTRIBUTE_LENGTH = 100
     MAX_ADJUSTMENT = 8.0
     PRIOR_STRENGTH = 3.0
     ATTRIBUTE_MIN_EVIDENCE = 2
@@ -156,7 +157,14 @@ class AdaptiveJobRanker:
     def attribute_terms(cls, text: str) -> tuple[str, ...]:
         """Normalize bounded user/job text into safe adaptive attributes."""
         terms = re.findall(r"[a-z0-9+#.]{2,}", text.casefold())
-        return tuple(dict.fromkeys(term for term in terms if term not in cls._STOP_WORDS))[:50]
+        return tuple(
+            dict.fromkeys(
+                term
+                for term in terms
+                if term not in cls._STOP_WORDS
+                and len(term) <= cls.MAX_ATTRIBUTE_LENGTH
+            )
+        )[:50]
 
     @classmethod
     def _application_attributes(cls, application: JobApplication) -> tuple[str, ...]:

@@ -49,6 +49,15 @@ def _application(
     return result
 
 
+def test_attribute_terms_drop_tokens_too_large_for_durable_job_skills():
+    oversized = "x" * 101
+
+    assert AdaptiveJobRanker.attribute_terms(f"Logistics {oversized} python") == (
+        "logistics",
+        "python",
+    )
+
+
 def test_interview_outcomes_break_equal_relevance_tie_with_explanation():
     repository = InMemoryJobApplicationRepository()
     repository.add(_application("a1", "candidate", "preferred", (JobApplicationStatus.APPLIED, JobApplicationStatus.INTERVIEW)))
