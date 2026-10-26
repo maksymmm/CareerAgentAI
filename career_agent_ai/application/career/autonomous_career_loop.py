@@ -723,6 +723,14 @@ class AutonomousCareerLoop:
                     continue
                 try:
                     normalized_job_id = self._external_identifier(raw_job_id, "job_id")
+                    # Validate the same bounded presentation that will enter the
+                    # durable draft before selecting a page or ranking its jobs.
+                    # One unusable provider record must not hide valid later jobs.
+                    self._external_text(
+                        str(getattr(job, "title", None) or ""),
+                        "job_title", maximum=500, fallback="Unknown role",
+                    )
+                    self._company_name(getattr(job, "company", None))
                 except (TypeError, ValueError):
                     continue
                 if normalized_job_id not in progressed_job_ids:

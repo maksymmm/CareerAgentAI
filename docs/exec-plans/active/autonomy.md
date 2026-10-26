@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate discovery now validates bounded title/company text before ranking and
+page selection. Unpersistable provider records are skipped, allowing a valid peer
+or later page to reach the durable approval boundary. Eight regressions cover NUL
+and surrogate text in both fields, same/next-page selection, restart and no submission.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate optional company identity: malformed provider-owned company IDs now degrade
 to the existing empty aggregate identity instead of failing an otherwise valid run.
 The human approval still exposes the bounded company name, while the durable draft
