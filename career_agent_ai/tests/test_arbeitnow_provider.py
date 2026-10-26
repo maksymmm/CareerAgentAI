@@ -632,7 +632,16 @@ def test_response_byte_boundary_before_json_decode(monkeypatch, oversized):
 
 
 def test_oversized_second_page_stops_pagination_and_allows_retry(monkeypatch):
-    first = json.dumps({"data": [], "links": {"next": "page-two"}}).encode()
+    first = json.dumps(
+        {
+            "data": [],
+            "links": {
+                "next": (
+                    "https://www.arbeitnow.com/api/job-board-api?page=2"
+                )
+            },
+        }
+    ).encode()
     responses = [byte_response(first), byte_response(b"x" * 1000)]
     calls = []
 
@@ -672,7 +681,14 @@ def test_duplicate_job_ids_across_pages_keep_first_valid_record(monkeypatch):
         "title": "Second Warehouse Operator",
     }
     payloads = [
-        {"data": [first_record], "links": {"next": "page-two"}},
+        {
+            "data": [first_record],
+            "links": {
+                "next": (
+                    "https://www.arbeitnow.com/api/job-board-api?page=2"
+                )
+            },
+        },
         {"data": [duplicate_record, second_record], "links": {"next": None}},
     ]
     calls = []
@@ -705,6 +721,32 @@ def test_duplicate_job_ids_across_pages_keep_first_valid_record(monkeypatch):
         ({"data": [], "links": []}, "invalid pagination links"),
         ({"data": [], "links": {"next": True}}, "invalid next-page state"),
         ({"data": [], "links": {"next": "  "}}, "invalid next-page state"),
+        (
+            {"data": [], "links": {"next": "https://evil.example/?page=2"}},
+            "invalid next-page state",
+        ),
+        (
+            {
+                "data": [],
+                "links": {
+                    "next": (
+                        "https://www.arbeitnow.com/api/job-board-api?page=1"
+                    )
+                },
+            },
+            "invalid next-page state",
+        ),
+        (
+            {
+                "data": [],
+                "links": {
+                    "next": (
+                        "https://www.arbeitnow.com/api/job-board-api?page=2&page=3"
+                    )
+                },
+            },
+            "invalid next-page state",
+        ),
     ],
 )
 def test_invalid_page_envelope_fails_closed(monkeypatch, payload, message):
@@ -730,7 +772,9 @@ def test_invalid_second_page_returns_no_partial_results_and_retry_starts_over(
                 "description": "Warehouse operations",
             }
         ],
-        "links": {"next": "page-two"},
+        "links": {
+            "next": "https://www.arbeitnow.com/api/job-board-api?page=2"
+        },
     }
     payloads = [
         first_page,
