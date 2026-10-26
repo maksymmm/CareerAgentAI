@@ -481,6 +481,56 @@ def test_search_continues_to_next_page_when_first_page_is_progressed(tmp_path):
     database.close()
 
 
+@pytest.mark.parametrize("field", ["title", "company"])
+@pytest.mark.parametrize("invalid_text", ["Logistics\x00invalid", "Logistics\ud800invalid"])
+@pytest.mark.parametrize("next_page", [False, True])
+def test_discovery_skips_unpersistable_job_text_before_approval(
+    tmp_path, field, invalid_text, next_page
+):
+    path = str(tmp_path / "valid-selection.sqlite")
+    database, loop, applications, _, _, submission, *_ = build_stack(path)
+    invalid = Job.create(
+        job_id="invalid-job", title="Logistics", company="Acme Logistics",
+        location=Location("Germany", "Karlsruhe"), created_at=START,
+    )
+    object.__setattr__(invalid, field, invalid_text)
+    valid = Job.create(
+        job_id="valid-job", title="Logistics", company="Valid Company",
+        location=Location("Germany", "Karlsruhe"), created_at=START,
+    )
+    pages = []
+    original_agents = loop._agents
+
+    def execute(context):
+        page = context.payload["page"]
+        pages.append(page)
+        return SimpleNamespace(success=True, metadata={
+            "jobs": ((invalid,) if page == 1 else (valid,))
+            if next_page else (invalid, valid),
+            "page": page, "page_size": 1 if next_page else 2, "total": 2,
+        })
+
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=execute) if name == "job_search"
+        else original_agents.resolve(name)
+    ))
+    started = loop.start(request(with_schedule=False), run_id="valid-selection")
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.selected_job_id == "valid-job"
+    assert pages == ([1, 2] if next_page else [1])
+    assert applications.get("valid-selection:application").job_id == "valid-job"
+    assert submission.calls == []
+    database.close()
+
+    database, loop, _, _, _, submission, *_ = build_stack(path)
+    restored = loop.get("valid-selection", user_id="user-1")
+    assert restored.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert restored.selected_job_id == "valid-job"
+    assert restored.human_action == started.human_action
+    assert submission.calls == []
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")
