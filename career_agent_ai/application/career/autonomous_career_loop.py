@@ -739,7 +739,9 @@ class AutonomousCareerLoop:
                 if normalized_job_id not in progressed_job_ids:
                     eligible.append(job)
             eligible_jobs = tuple(eligible)
-            if eligible_jobs or not self._has_next_search_page(result.metadata, page):
+            if eligible_jobs or not self._has_next_search_page(
+                result.metadata, page, received_count=len(jobs)
+            ):
                 break
         if not saw_jobs:
             raise RuntimeError("Job discovery returned no opportunities.")
@@ -788,9 +790,14 @@ class AutonomousCareerLoop:
         state.phase = CareerLoopPhase.DECISION
 
     @staticmethod
-    def _has_next_search_page(metadata: Any, current_page: int) -> bool:
-        if not isinstance(metadata, Mapping):
+    def _has_next_search_page(
+        metadata: Any, current_page: int, *, received_count: int
+    ) -> bool:
+        """Use trusted pagination metadata, or bounded full-page inference."""
+        if not isinstance(received_count, int) or isinstance(received_count, bool):
             return False
+        if not isinstance(metadata, Mapping):
+            return received_count >= 20
         total = metadata.get("total")
         page_size = metadata.get("page_size")
         page = metadata.get("page", current_page)
@@ -798,7 +805,7 @@ class AutonomousCareerLoop:
             not isinstance(value, int) or isinstance(value, bool) or value < 1
             for value in (total, page_size, page)
         ):
-            return False
+            return received_count >= 20
         return page * page_size < total
 
     @classmethod

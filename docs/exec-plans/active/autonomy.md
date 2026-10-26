@@ -1181,3 +1181,8 @@ before explicit approval.
 Candidate ranking also rejects non-numeric, boolean, non-finite, negative, implausibly
 large, and reversed provider salary ranges before the salary tie-breaker runs. A bad
 salary record cannot outrank a valid peer or cross the application approval boundary.
+
+Candidate discovery now tolerates malformed pagination metadata without becoming
+unbounded: a full 20-item page permits the next bounded discovery page, while a short
+page still terminates discovery. This lets valid later-page peers reach approval when
+provider counters are unavailable or malformed, without allowing unlimited requests.
