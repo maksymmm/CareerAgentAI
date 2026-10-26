@@ -806,6 +806,13 @@ class AutonomousCareerLoop:
             for value in (total, page_size, page)
         ):
             return received_count >= 20
+        observed_through = (page - 1) * page_size + received_count
+        if (
+            page != current_page
+            or received_count > page_size
+            or total < observed_through
+        ):
+            return received_count >= 20
         return page * page_size < total
 
     @classmethod

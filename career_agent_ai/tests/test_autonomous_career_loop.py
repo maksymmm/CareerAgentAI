@@ -695,7 +695,17 @@ def test_discovery_skips_malformed_provider_salary_before_ranking(salary, tmp_pa
     database.close()
 
 
-@pytest.mark.parametrize("metadata", [None, {}, {"page": "one", "page_size": 20, "total": 21}])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        {},
+        {"page": "one", "page_size": 20, "total": 21},
+        {"page": 99, "page_size": 20, "total": 2_000},
+        {"page": 1, "page_size": 10, "total": 21},
+        {"page": 1, "page_size": 20, "total": 10},
+    ],
+)
 def test_discovery_uses_bounded_full_page_fallback_for_malformed_pagination(
     metadata, tmp_path
 ):
@@ -740,6 +750,39 @@ def test_discovery_uses_bounded_full_page_fallback_for_malformed_pagination(
     assert applications.get(
         "malformed-provider-pagination:application"
     ).job_id == "valid-page-two"
+    assert submission.calls == []
+    database.close()
+
+
+def test_discovery_does_not_infer_next_page_from_short_inconsistent_page(tmp_path):
+    database, loop, _, _, _, submission, *_ = build_stack(
+        str(tmp_path / "short-inconsistent-pagination.sqlite")
+    )
+    invalid = Job.create(
+        job_id="invalid-short-page", title=" ", company="Invalid Company",
+        location=Location("Germany", "Karlsruhe"), description="Logistics",
+        created_at=START,
+    )
+    pages = []
+    original_agents = loop._agents
+
+    def execute(context):
+        pages.append(context.payload["page"])
+        return SimpleNamespace(success=True, metadata={
+            "jobs": (invalid,), "page": 99, "page_size": 1, "total": 100,
+        })
+
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=execute) if name == "job_search"
+        else original_agents.resolve(name)
+    ))
+
+    failed = loop.start(
+        request(with_schedule=False), run_id="short-inconsistent-pagination"
+    )
+
+    assert pages == [1]
+    assert failed.phase == CareerLoopPhase.FAILED
     assert submission.calls == []
     database.close()
 
