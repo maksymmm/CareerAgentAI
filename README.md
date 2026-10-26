@@ -92,6 +92,12 @@ Approval-prompt and status reads are mutually exclusive with each other and reco
 closing the remaining current-run overlap before any authenticated fetch begins.
 the selected-run context cannot change while another workflow operation is unresolved.
 
+Candidate discovery validates provider-owned ranking scalars before the deterministic
+scorer sees them. Titles, descriptions, company/location text reject control characters
+and Unicode surrogates within explicit bounds, and remote flags must be booleans. A
+malformed record is skipped so a valid peer can still reach the durable human-approval
+boundary without triggering an external submission.
+
 ---
 
 ## Career Decision Engine

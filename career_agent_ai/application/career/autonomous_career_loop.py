@@ -799,24 +799,45 @@ class AutonomousCareerLoop:
             return False
         return page * page_size < total
 
-    @staticmethod
-    def _validate_rankable_job(job: Any) -> None:
-        """Reject non-text provider scalars before deterministic ranking."""
-        for field in ("title", "description"):
+    @classmethod
+    def _validate_rankable_job(cls, job: Any) -> None:
+        """Reject malformed provider scalars before deterministic ranking."""
+        for field, maximum in (("title", 500), ("description", 20_000)):
             value = getattr(job, field, None)
-            if value is not None and not isinstance(value, str):
-                raise TypeError(f"job {field} must be text.")
+            if value is not None:
+                cls._validate_rankable_text(value, f"job_{field}", maximum)
         location = getattr(job, "location", None)
         if location is not None:
             for field in ("country", "city"):
                 value = getattr(location, field, None)
-                if value is not None and not isinstance(value, str):
-                    raise TypeError(f"job location {field} must be text.")
+                if value is not None:
+                    cls._validate_rankable_text(
+                        value, f"job_location_{field}", 200
+                    )
+            remote = getattr(location, "remote", False)
+            if not isinstance(remote, bool):
+                raise TypeError("job location remote must be boolean.")
         company = getattr(job, "company", None)
-        if company is not None and not isinstance(company, str):
-            name = getattr(company, "name", None)
-            if not isinstance(name, str):
-                raise TypeError("job company name must be text.")
+        if company is not None:
+            name = company if isinstance(company, str) else getattr(company, "name", None)
+            cls._validate_rankable_text(name, "job_company", 200)
+
+    @staticmethod
+    def _validate_rankable_text(value: Any, field: str, maximum: int) -> None:
+        """Validate provider text without silently changing what the scorer sees."""
+        if not isinstance(value, str):
+            raise TypeError(f"{field} must be text.")
+        normalized = value.strip()
+        if len(normalized) > maximum:
+            raise ValueError(f"{field} exceeds its ranking boundary.")
+        if any(
+            (ord(character) < 32 and character not in "\n\t")
+            or ord(character) == 127
+            for character in normalized
+        ):
+            raise ValueError(f"{field} contains forbidden control characters.")
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in normalized):
+            raise ValueError(f"{field} contains a forbidden Unicode surrogate.")
 
     def _decide(self, state: CareerLoopState) -> None:
         decision = self._decision_engine.next_action(
