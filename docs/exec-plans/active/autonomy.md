@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate ranking boundary now rejects non-text provider title, description, company
+name and location scalars before the scorer can stringify or interpret them. A malformed
+record cannot fail the run or leak an object representation when a valid job remains.
+Five end-to-end regressions retain the approval/no-submission boundary.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate discovery now validates bounded title/company text before ranking and
 page selection. Unpersistable provider records are skipped, allowing a valid peer
 or later page to reach the durable approval boundary. Eight regressions cover NUL

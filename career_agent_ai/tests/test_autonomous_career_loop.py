@@ -531,6 +531,49 @@ def test_discovery_skips_unpersistable_job_text_before_approval(
     database.close()
 
 
+@pytest.mark.parametrize(
+    ("field", "nested_field"),
+    [("title", None), ("description", None), ("company", "name"),
+     ("location", "country"), ("location", "city")],
+)
+def test_discovery_skips_non_text_provider_scalars(field, nested_field, tmp_path):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "provider-scalars.sqlite")
+    )
+    invalid = Job.create(
+        job_id="invalid-scalar", title="Logistics", company=Company("bad", "Bad"),
+        location=Location("Germany", "Karlsruhe"), description="Logistics",
+        created_at=START,
+    )
+    if nested_field is None:
+        object.__setattr__(invalid, field, object())
+    else:
+        nested = SimpleNamespace(**{
+            "name": "Bad", "company_id": "bad", "country": "Germany",
+            "city": "Karlsruhe", "remote": False, nested_field: object(),
+        })
+        object.__setattr__(invalid, field, nested)
+    valid = Job.create(
+        job_id="valid-scalar", title="Logistics", company="Valid Company",
+        location=Location("Germany", "Karlsruhe"), description="Logistics",
+        created_at=START,
+    )
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (invalid, valid)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    started = loop.start(request(with_schedule=False), run_id="provider-scalars")
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.selected_job_id == "valid-scalar"
+    assert applications.get("provider-scalars:application").job_id == "valid-scalar"
+    assert submission.calls == []
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")
