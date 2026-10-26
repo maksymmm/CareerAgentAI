@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow pagination continuity: every non-null `links.next` must remain on the exact
+trusted API origin/path and carry one canonical page number matching the next page the
+provider will request. Foreign, repeated, skipped and duplicate page declarations now
+abort discovery instead of silently driving an unrelated continuation. Sandbox
+regressions cover trusted two-page discovery and malformed continuation metadata.
+Next: exact-head CI/review, then continue provider result integrity coverage.
+
 Arbeitnow cross-page deduplication: normalized vacancies are accepted at most once
 per search by stable internal job ID, even when the upstream API repeats a record on
 the same or a later page. The first valid matching record wins, preserving order and

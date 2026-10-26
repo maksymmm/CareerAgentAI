@@ -7,7 +7,7 @@ import re
 from datetime import UTC, datetime
 from html import unescape
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from career_agent_ai.application.jobs.company import Company
@@ -387,7 +387,10 @@ class ArbeitnowProvider(JobProvider):
                 page=page,
             )
 
-            page_jobs, has_next = self._validate_page_envelope(payload)
+            page_jobs, has_next = self._validate_page_envelope(
+                payload,
+                expected_next_page=page + 1,
+            )
 
             for item in page_jobs:
                 if not isinstance(
@@ -421,6 +424,8 @@ class ArbeitnowProvider(JobProvider):
     @staticmethod
     def _validate_page_envelope(
         payload: dict[str, Any],
+        *,
+        expected_next_page: int,
     ) -> tuple[list[Any], bool]:
         """Validate pagination fields before accepting any page results."""
         page_jobs = payload.get("data")
@@ -437,6 +442,22 @@ class ArbeitnowProvider(JobProvider):
         if next_page is None:
             return page_jobs, False
         if not isinstance(next_page, str) or not next_page.strip():
+            raise RuntimeError("Arbeitnow API returned invalid next-page state")
+        try:
+            _validate_arbeitnow_url(next_page)
+            page_values = [
+                value
+                for key, value in parse_qsl(
+                    urlsplit(next_page).query,
+                    keep_blank_values=True,
+                )
+                if key == "page"
+            ]
+        except (RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "Arbeitnow API returned invalid next-page state"
+            ) from exc
+        if page_values != [str(expected_next_page)]:
             raise RuntimeError("Arbeitnow API returned invalid next-page state")
         return page_jobs, True
 
