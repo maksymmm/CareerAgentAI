@@ -695,6 +695,55 @@ def test_discovery_skips_malformed_provider_salary_before_ranking(salary, tmp_pa
     database.close()
 
 
+@pytest.mark.parametrize("metadata", [None, {}, {"page": "one", "page_size": 20, "total": 21}])
+def test_discovery_uses_bounded_full_page_fallback_for_malformed_pagination(
+    metadata, tmp_path
+):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "malformed-provider-pagination.sqlite")
+    )
+    invalid_page = tuple(
+        Job.create(
+            job_id=f"invalid-{index}", title=" ", company="Invalid Company",
+            location=Location("Germany", "Karlsruhe"), description="Logistics",
+            created_at=START,
+        )
+        for index in range(20)
+    )
+    valid = Job.create(
+        job_id="valid-page-two", title="Logistics", company="Valid Company",
+        location=Location("Germany", "Karlsruhe"), description="Logistics",
+        created_at=START,
+    )
+    pages = []
+    original_agents = loop._agents
+
+    def execute(context):
+        page = context.payload["page"]
+        pages.append(page)
+        payload = dict(metadata or {})
+        payload["jobs"] = invalid_page if page == 1 else (valid,)
+        return SimpleNamespace(success=True, metadata=payload)
+
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=execute) if name == "job_search"
+        else original_agents.resolve(name)
+    ))
+
+    started = loop.start(
+        request(with_schedule=False), run_id="malformed-provider-pagination"
+    )
+
+    assert pages == [1, 2]
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.selected_job_id == "valid-page-two"
+    assert applications.get(
+        "malformed-provider-pagination:application"
+    ).job_id == "valid-page-two"
+    assert submission.calls == []
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")
