@@ -1186,3 +1186,6 @@ Candidate discovery now tolerates malformed pagination metadata without becoming
 unbounded: a full 20-item page permits the next bounded discovery page, while a short
 page still terminates discovery. This lets valid later-page peers reach approval when
 provider counters are unavailable or malformed, without allowing unlimited requests.
+Provider page numbers, sizes and totals must also agree with the requested page and
+observed row count before they control traversal. Contradictory counters fall back to
+the same full-page-only rule; short inconsistent pages cannot trigger extra requests.
