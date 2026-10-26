@@ -6,6 +6,8 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import timezone
 from hashlib import sha256
+from math import isfinite
+from numbers import Real
 from threading import Event, Thread
 from time import monotonic
 from typing import Any
@@ -823,6 +825,30 @@ class AutonomousCareerLoop:
         if company is not None:
             name = company if isinstance(company, str) else getattr(company, "name", None)
             cls._validate_rankable_text(name, "job_company", 200)
+        cls._validate_rankable_salary(getattr(job, "salary", None))
+
+    @staticmethod
+    def _validate_rankable_salary(salary: Any) -> None:
+        """Reject provider salary values that can corrupt deterministic ordering."""
+        if salary is None:
+            return
+        amounts: dict[str, float] = {}
+        for field in ("minimum", "maximum"):
+            value = getattr(salary, field, None)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"job_salary_{field} must be numeric.")
+            amount = float(value)
+            if not isfinite(amount) or amount < 0 or amount > 1_000_000_000:
+                raise ValueError(f"job_salary_{field} is outside its ranking boundary.")
+            amounts[field] = amount
+        if (
+            "minimum" in amounts
+            and "maximum" in amounts
+            and amounts["minimum"] > amounts["maximum"]
+        ):
+            raise ValueError("job salary range is reversed.")
 
     @staticmethod
     def _validate_rankable_text(
