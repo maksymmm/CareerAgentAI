@@ -757,11 +757,18 @@ class AutonomousCareerLoop:
             str(title or ""), "job_title", maximum=500, fallback="Unknown role"
         )
         state.selected_company = self._company_name(company)
-        state.selected_company_id = (
-            self._external_identifier(company_id, "company_id")
-            if isinstance(company_id, str) and company_id.strip()
-            else None
-        )
+        state.selected_company_id = None
+        if isinstance(company_id, str) and company_id.strip():
+            try:
+                state.selected_company_id = self._external_identifier(
+                    company_id,
+                    "company_id",
+                )
+            except (TypeError, ValueError):
+                # Provider-owned company identifiers are optional metadata. A
+                # malformed value must not abort an otherwise valid candidate
+                # workflow or cross the durable aggregate boundary.
+                state.selected_company_id = None
         state.selected_job_relevance_score = selection.relevance_score
         state.selected_job_outcome_adjustment = selection.outcome_adjustment
         state.selected_job_score = selection.score

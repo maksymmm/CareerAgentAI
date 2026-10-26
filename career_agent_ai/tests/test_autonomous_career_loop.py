@@ -88,12 +88,17 @@ def build_stack(
     with_schedule: bool = True,
     plain_company: bool = False,
     job_title: str = "Logistics Coordinator",
+    company_id: str = "company-1",
     max_iterations: int = AutonomousCareerLoop.DEFAULT_MAX_ITERATIONS,
 ):
     database = SQLiteDatabase(path)
 
     jobs = InMemoryJobRepository()
-    company = "Acme Logistics" if plain_company else Company("company-1", "Acme Logistics")
+    company = (
+        "Acme Logistics"
+        if plain_company
+        else Company(company_id, "Acme Logistics")
+    )
     jobs.add(
         Job.create(
             job_id="job-1",
@@ -1454,6 +1459,33 @@ def test_plain_string_company_uses_empty_aggregate_company_id(tmp_path):
     )
     assert len(tracked) == 1
     assert tracked[0].company_id == ""
+    assert started.human_action is not None
+    assert started.human_action.details["company"] == "Acme Logistics"
+    assert submission_provider.calls == []
+    database.close()
+
+
+def test_malformed_optional_company_id_does_not_fail_candidate_workflow(tmp_path):
+    path = str(tmp_path / "malformed-company-id.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path,
+        with_schedule=False,
+        company_id="x" * 201,
+    )
+
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id="malformed-company-id",
+    )
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    tracked = applications.get("malformed-company-id:application")
+    assert tracked is not None
+    assert tracked.company_id == ""
     assert started.human_action is not None
     assert started.human_action.details["company"] == "Acme Logistics"
     assert submission_provider.calls == []
