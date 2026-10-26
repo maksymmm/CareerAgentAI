@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate ranking text integrity: provider descriptions and location country/city
+values now pass bounded control-character and Unicode-surrogate validation before
+deterministic ranking, while location remote flags must be actual booleans. Malformed
+records are skipped without hiding a valid peer or crossing the application approval
+boundary. End-to-end regressions cover every rejected scalar and no submission.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate ranking boundary now rejects non-text provider title, description, company
 name and location scalars before the scorer can stringify or interpret them. A malformed
 record cannot fail the run or leak an object representation when a valid job remains.

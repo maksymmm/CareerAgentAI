@@ -574,6 +574,70 @@ def test_discovery_skips_non_text_provider_scalars(field, nested_field, tmp_path
     database.close()
 
 
+@pytest.mark.parametrize(
+    ("field", "nested_field", "invalid_value"),
+    [
+        ("description", None, "Logistics\x00poisoned"),
+        ("description", None, "Logistics\ud800poisoned"),
+        ("location", "country", "Germany\x00poisoned"),
+        ("location", "city", "Karlsruhe\ud800poisoned"),
+        ("location", "remote", "true"),
+        ("description", None, "x" * 20_001),
+        ("description", None, " " * 20_000 + "Logistics"),
+        ("location", "city", "x" * 201),
+    ],
+)
+def test_discovery_skips_malformed_provider_ranking_scalars(
+    field, nested_field, invalid_value, tmp_path
+):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "malformed-ranking-scalars.sqlite")
+    )
+    invalid = Job.create(
+        job_id="invalid-ranking-scalar",
+        title="Logistics",
+        company=Company("bad", "Bad"),
+        location=Location("Germany", "Karlsruhe"),
+        description="Logistics",
+        created_at=START,
+    )
+    if nested_field is None:
+        object.__setattr__(invalid, field, invalid_value)
+    else:
+        location = SimpleNamespace(
+            country="Germany", city="Karlsruhe", remote=False
+        )
+        setattr(location, nested_field, invalid_value)
+        object.__setattr__(invalid, field, location)
+    valid = Job.create(
+        job_id="valid-ranking-scalar",
+        title="Logistics",
+        company="Valid Company",
+        location=Location("Germany", "Karlsruhe"),
+        description="Logistics",
+        created_at=START,
+    )
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (invalid, valid)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    started = loop.start(
+        request(with_schedule=False), run_id="malformed-ranking-scalars"
+    )
+
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.selected_job_id == "valid-ranking-scalar"
+    assert (
+        applications.get("malformed-ranking-scalars:application").job_id
+        == "valid-ranking-scalar"
+    )
+    assert submission.calls == []
+    database.close()
+
+
 def test_concurrent_identical_start_returns_durable_winner(tmp_path):
     database, loop, _, _, _, submission, *_ = build_stack(
         str(tmp_path / "concurrent-start-replay.sqlite")
