@@ -650,6 +650,7 @@ def test_discovery_skips_malformed_provider_ranking_scalars(
         SimpleNamespace(minimum=-1, maximum=50_000),
         SimpleNamespace(minimum=90_000, maximum=50_000),
         SimpleNamespace(minimum=None, maximum=1_000_000_001),
+        SimpleNamespace(minimum=10**400, maximum=None),
     ],
 )
 def test_discovery_skips_malformed_provider_salary_before_ranking(salary, tmp_path):

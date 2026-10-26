@@ -839,7 +839,12 @@ class AutonomousCareerLoop:
                 continue
             if isinstance(value, bool) or not isinstance(value, Real):
                 raise TypeError(f"job_salary_{field} must be numeric.")
-            amount = float(value)
+            try:
+                amount = float(value)
+            except OverflowError as exc:
+                raise ValueError(
+                    f"job_salary_{field} is outside its ranking boundary."
+                ) from exc
             if not isfinite(amount) or amount < 0 or amount > 1_000_000_000:
                 raise ValueError(f"job_salary_{field} is outside its ranking boundary.")
             amounts[field] = amount
