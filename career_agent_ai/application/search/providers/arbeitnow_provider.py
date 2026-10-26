@@ -178,7 +178,7 @@ def _safe_job_url(value: Any) -> str:
         return ""
     candidate = value.strip()
     if not candidate or any(
-        character.isspace() or ord(character) == 127
+        character.isspace() or ord(character) < 32 or ord(character) == 127
         for character in candidate
     ):
         return ""
