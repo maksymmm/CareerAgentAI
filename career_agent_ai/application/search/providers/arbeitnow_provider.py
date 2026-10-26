@@ -859,13 +859,16 @@ class ArbeitnowProvider(JobProvider):
         item: dict[str, Any],
         description: str,
     ) -> Salary | None:
-        minimum = cls._number(
-            item.get("salary_min")
-        )
+        raw_minimum = item.get("salary_min")
+        raw_maximum = item.get("salary_max")
+        minimum = cls._number(raw_minimum)
+        maximum = cls._number(raw_maximum)
 
-        maximum = cls._number(
-            item.get("salary_max")
-        )
+        if (
+            (raw_minimum is not None and minimum is None)
+            or (raw_maximum is not None and maximum is None)
+        ):
+            return None
 
         if (
             minimum is not None
@@ -881,6 +884,8 @@ class ArbeitnowProvider(JobProvider):
                 minimum is not None
                 and maximum is not None
             ):
+                if minimum > maximum:
+                    return None
                 return Salary(
                     minimum=int(minimum),
                     maximum=int(maximum),
@@ -940,7 +945,8 @@ class ArbeitnowProvider(JobProvider):
             value,
             (int, float),
         ):
-            return float(value)
+            number = float(value)
+            return number if math.isfinite(number) and number >= 0 else None
 
         text = str(value).strip()
 
@@ -948,9 +954,10 @@ class ArbeitnowProvider(JobProvider):
             return None
 
         try:
-            return float(text)
-        except ValueError:
+            number = float(text)
+        except (OverflowError, ValueError):
             return None
+        return number if math.isfinite(number) and number >= 0 else None
 
     @staticmethod
     def _parse_money(
