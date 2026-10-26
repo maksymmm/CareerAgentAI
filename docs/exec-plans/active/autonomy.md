@@ -7,6 +7,13 @@ vacancy remains available without salary metadata. Sandbox regressions cover num
 and string edge cases plus valid ranges and one-sided values.
 Next: exact-head CI/review, then continue provider result integrity coverage.
 
+Arbeitnow job-link safety: provider payload links now reach the internal job model
+only when they are absolute HTTP(S) URLs without control characters, malformed ports
+or embedded credentials. Unsafe links are dropped while the otherwise valid vacancy
+and its stable slug identity remain discoverable. Sandbox regressions cover active
+content schemes, scheme-relative URLs, credentials, invalid ports and valid links.
+Next: exact-head CI/review, then continue provider failure coverage.
+
 Arbeitnow response encoding contract: sandbox transports reject compressed or
 otherwise encoded HTTP bodies before reading them, so the configured byte ceiling
 cannot be bypassed by decompression and JSON parsing never depends on implicit

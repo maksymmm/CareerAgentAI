@@ -156,6 +156,77 @@ def test_arbeitnow_provider_detects_remote(
     assert result[0].location.city == "Remote"
 
 
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "//evil.example/job",
+        "https://user:secret@evil.example/job",
+        "https://evil.example:99999/job",
+        "https://evil.example/job\nnext",
+        "https://evil.example/job\x00apply",
+        "https://evil.example/job\x1bapply",
+        "https://evil.example/job\x7fapply",
+        "https://evil example/job",
+        123,
+    ],
+)
+def test_arbeitnow_provider_drops_unsafe_job_urls(monkeypatch, unsafe_url):
+    payload = {
+        "data": [
+            {
+                "slug": "safe-stable-id",
+                "company_name": "Example",
+                "title": "Warehouse Operator",
+                "location": "Karlsruhe",
+                "url": unsafe_url,
+                "description": "Warehouse operations",
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    result = ArbeitnowProvider(max_pages=1).search("")
+
+    assert len(result) == 1
+    assert result[0].job_id == "arbeitnow:safe-stable-id"
+    assert result[0].url == ""
+
+
+@pytest.mark.parametrize(
+    "safe_url",
+    [
+        "https://www.arbeitnow.com/view/warehouse-operator",
+        "http://jobs.example.test:8080/opening?id=1#apply",
+    ],
+)
+def test_arbeitnow_provider_preserves_absolute_http_job_urls(monkeypatch, safe_url):
+    payload = {
+        "data": [
+            {
+                "slug": "safe-stable-id",
+                "company_name": "Example",
+                "title": "Warehouse Operator",
+                "location": "Karlsruhe",
+                "url": safe_url,
+                "description": "Warehouse operations",
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    result = ArbeitnowProvider(max_pages=1).search("")
+
+    assert result[0].url == safe_url
+
+
 def test_arbeitnow_provider_empty_page(
     monkeypatch,
 ):

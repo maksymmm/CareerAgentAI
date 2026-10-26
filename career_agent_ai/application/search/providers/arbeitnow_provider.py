@@ -172,6 +172,32 @@ def _validate_content_encoding(response: Any) -> None:
             raise RuntimeError("Arbeitnow response encoding is unsupported")
 
 
+def _safe_job_url(value: Any) -> str:
+    """Keep only absolute HTTP(S) job links without embedded credentials."""
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip()
+    if not candidate or any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127
+        for character in candidate
+    ):
+        return ""
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None and not 1 <= port <= 65535
+    ):
+        return ""
+    return candidate
+
+
 class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
     """Validate a redirect destination before urllib sends the next request."""
 
@@ -559,7 +585,7 @@ class ArbeitnowProvider(JobProvider):
             description=description,
         )
 
-        url = self._string(
+        url = _safe_job_url(
             item.get("url")
         )
 
