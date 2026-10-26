@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate optional company identity: malformed provider-owned company IDs now degrade
+to the existing empty aggregate identity instead of failing an otherwise valid run.
+The human approval still exposes the bounded company name, while the durable draft
+stays valid and no submission occurs. An end-to-end regression covers an oversized
+external ID through discovery, application preparation and the approval boundary.
+Next: exact-head CI/review, then continue complete candidate workflow hardening.
+
 Candidate adaptive-attribute bounds: normalized learning terms now discard individual
 tokens that exceed the durable `JobApplication.job_skills` limit. A valid request can
 therefore include a long uninterrupted keyword token without failing application
