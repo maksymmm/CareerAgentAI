@@ -827,9 +827,9 @@ class AutonomousCareerLoop:
         """Validate provider text without silently changing what the scorer sees."""
         if not isinstance(value, str):
             raise TypeError(f"{field} must be text.")
+        if len(value) > maximum:
+            raise ValueError(f"{field} exceeds its raw ranking boundary.")
         normalized = value.strip()
-        if len(normalized) > maximum:
-            raise ValueError(f"{field} exceeds its ranking boundary.")
         if any(
             (ord(character) < 32 and character not in "\n\t")
             or ord(character) == 127

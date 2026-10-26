@@ -583,6 +583,7 @@ def test_discovery_skips_non_text_provider_scalars(field, nested_field, tmp_path
         ("location", "city", "Karlsruhe\ud800poisoned"),
         ("location", "remote", "true"),
         ("description", None, "x" * 20_001),
+        ("description", None, " " * 20_000 + "Logistics"),
         ("location", "city", "x" * 201),
     ],
 )
