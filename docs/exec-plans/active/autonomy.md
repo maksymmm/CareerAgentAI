@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow cross-page deduplication: normalized vacancies are accepted at most once
+per search by stable internal job ID, even when the upstream API repeats a record on
+the same or a later page. The first valid matching record wins, preserving order and
+preventing duplicate ranking/decision inputs. A two-page sandbox regression proves
+the duplicate is suppressed while a distinct vacancy remains discoverable.
+Next: exact-head CI/review, then continue provider result integrity coverage.
+
 Arbeitnow numeric salary contract: structured salary values accept only finite,
 non-negative numbers with minimum not exceeding maximum. NaN, infinity, negative and
 reversed ranges no longer abort discovery or create corrupt ranking inputs; the valid
