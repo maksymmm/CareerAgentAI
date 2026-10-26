@@ -723,6 +723,7 @@ class AutonomousCareerLoop:
                     continue
                 try:
                     normalized_job_id = self._external_identifier(raw_job_id, "job_id")
+                    self._validate_rankable_job(job)
                     # Validate the same bounded presentation that will enter the
                     # durable draft before selecting a page or ranking its jobs.
                     # One unusable provider record must not hide valid later jobs.
@@ -797,6 +798,25 @@ class AutonomousCareerLoop:
         ):
             return False
         return page * page_size < total
+
+    @staticmethod
+    def _validate_rankable_job(job: Any) -> None:
+        """Reject non-text provider scalars before deterministic ranking."""
+        for field in ("title", "description"):
+            value = getattr(job, field, None)
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"job {field} must be text.")
+        location = getattr(job, "location", None)
+        if location is not None:
+            for field in ("country", "city"):
+                value = getattr(location, field, None)
+                if value is not None and not isinstance(value, str):
+                    raise TypeError(f"job location {field} must be text.")
+        company = getattr(job, "company", None)
+        if company is not None and not isinstance(company, str):
+            name = getattr(company, "name", None)
+            if not isinstance(name, str):
+                raise TypeError("job company name must be text.")
 
     def _decide(self, state: CareerLoopState) -> None:
         decision = self._decision_engine.next_action(
