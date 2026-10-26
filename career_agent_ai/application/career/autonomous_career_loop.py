@@ -802,7 +802,9 @@ class AutonomousCareerLoop:
     @classmethod
     def _validate_rankable_job(cls, job: Any) -> None:
         """Reject malformed provider scalars before deterministic ranking."""
-        for field, maximum in (("title", 500), ("description", 20_000)):
+        title = getattr(job, "title", None)
+        cls._validate_rankable_text(title, "job_title", 500, required=True)
+        for field, maximum in (("description", 20_000),):
             value = getattr(job, field, None)
             if value is not None:
                 cls._validate_rankable_text(value, f"job_{field}", maximum)
@@ -823,13 +825,21 @@ class AutonomousCareerLoop:
             cls._validate_rankable_text(name, "job_company", 200)
 
     @staticmethod
-    def _validate_rankable_text(value: Any, field: str, maximum: int) -> None:
+    def _validate_rankable_text(
+        value: Any,
+        field: str,
+        maximum: int,
+        *,
+        required: bool = False,
+    ) -> None:
         """Validate provider text without silently changing what the scorer sees."""
         if not isinstance(value, str):
             raise TypeError(f"{field} must be text.")
         if len(value) > maximum:
             raise ValueError(f"{field} exceeds its raw ranking boundary.")
         normalized = value.strip()
+        if required and not normalized:
+            raise ValueError(f"{field} must not be empty.")
         if any(
             (ord(character) < 32 and character not in "\n\t")
             or ord(character) == 127

@@ -577,6 +577,9 @@ def test_discovery_skips_non_text_provider_scalars(field, nested_field, tmp_path
 @pytest.mark.parametrize(
     ("field", "nested_field", "invalid_value"),
     [
+        ("title", None, None),
+        ("title", None, ""),
+        ("title", None, " \t\n "),
         ("description", None, "Logistics\x00poisoned"),
         ("description", None, "Logistics\ud800poisoned"),
         ("location", "country", "Germany\x00poisoned"),
