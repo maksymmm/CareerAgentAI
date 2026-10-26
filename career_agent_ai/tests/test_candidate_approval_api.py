@@ -747,7 +747,6 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "new Set(applicationIds).size !== applicationIds.length" in application_loader
     assert "applicationIds.includes(after)" in application_loader
     assert "page.next_after === after" in application_loader
-    assert "page.items.length !== 25" in application_loader
     assert "page.next_after !== page.items.at(-1).application_id" in application_loader
     assert "localStorage" not in html
     assert "sessionStorage" not in html

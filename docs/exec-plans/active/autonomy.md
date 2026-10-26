@@ -1192,4 +1192,4 @@ the same full-page-only rule; short inconsistent pages cannot trigger extra requ
 
 The candidate sandbox application tracker now rejects duplicate application IDs and
 non-progressing pagination cursors. A malformed backend page cannot trap the operator
-in a repeated page or advertise a next cursor that is not the final row of a full page.
+in a repeated page or advertise a next cursor that is not its final visible row.
