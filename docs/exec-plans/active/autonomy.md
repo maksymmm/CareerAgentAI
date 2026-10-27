@@ -1198,3 +1198,7 @@ the same full-page-only rule; short inconsistent pages cannot trigger extra requ
 The candidate sandbox application tracker now rejects duplicate application IDs and
 non-progressing pagination cursors. A malformed backend page cannot trap the operator
 in a repeated page or advertise a next cursor that is not its final visible row.
+
+Candidate run pagination hardening: the sandbox accepts sparse owner/phase pages when
+their next cursor identifies the final visible run. Strict ordering still rejects
+duplicate, replayed, or forged pages, with static and Chromium regression coverage.

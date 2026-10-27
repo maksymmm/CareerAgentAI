@@ -750,6 +750,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
     assert "items.length !== 25" not in event_loader
     assert "page.next_after !== items.at(-1).event_id" in event_loader
+    run_loader = html[
+        html.index("async function loadRunList") : html.index("byId('list-runs').addEventListener")
+    ]
+    assert "page.items.length !== 25" not in run_loader
+    assert "page.next_after !== page.items.at(-1).run_id" in run_loader
     assert "localStorage" not in html
     assert "sessionStorage" not in html
     assert ".innerHTML" not in html

@@ -397,6 +397,8 @@ executing or approving it. Filter changes clear old rows and cursors. Token
 edits clear the list/cursor; old list responses and selections are generation-bound.
 Failed next-page requests retain the attempted cursor for explicit retry, without
 restarting pagination or restoring another authentication context.
+Sparse owner/phase projections may carry a valid next cursor; it must identify the
+final visible run while run IDs remain strictly increasing across the traversal.
 
 The application tracker persists an immutable aggregate for each candidate/job pair.
 It models validated transitions through `saved`, `applied`, `interview`, `offer`,
