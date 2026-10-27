@@ -1212,3 +1212,5 @@ Terminal application pages may repeat the requested cursor row but cannot roll b
 below it; non-terminal pages must begin strictly after the requested cursor.
 Event detail cannot roll back below the state version of its selected owner-scoped list
 snapshot; concurrently newer event detail remains valid and read-only.
+Application detail is bound to the state version selected from the owner-scoped list;
+older detail is rejected while concurrently newer detail remains valid and read-only.
