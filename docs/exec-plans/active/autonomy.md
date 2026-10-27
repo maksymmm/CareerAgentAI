@@ -1217,3 +1217,6 @@ older detail is rejected while concurrently newer detail remains valid and read-
 
 Run status detail accepts only the same closed phase vocabulary as the owner-scoped run
 list, preventing malformed provider state from being rendered as a trusted workflow phase.
+
+Run status detail also requires terminal flags to agree with complete/failed phases and
+rejects terminal state that simultaneously claims a pending human decision.
