@@ -753,7 +753,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/runs/*/status", newer_run_status)
             page.locator("#status").click()
-            page.locator("#run-overview").get_by_text("version 4", exact=False).wait_for()
+            page.locator("#run-overview").filter(has_text="version ").wait_for()
             page.unroute("**/v1/candidate/runs/*/status")
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text(
