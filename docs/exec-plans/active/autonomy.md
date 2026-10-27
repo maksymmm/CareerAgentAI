@@ -1214,3 +1214,6 @@ Event detail cannot roll back below the state version of its selected owner-scop
 snapshot; concurrently newer event detail remains valid and read-only.
 Application detail is bound to the state version selected from the owner-scoped list;
 older detail is rejected while concurrently newer detail remains valid and read-only.
+
+Run status detail accepts only the same closed phase vocabulary as the owner-scoped run
+list, preventing malformed provider state from being rendered as a trusted workflow phase.

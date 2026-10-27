@@ -820,6 +820,8 @@ Authenticated `GET /v1/candidate/runs/{run_id}/status` returns only the durable 
 ID, phase, state version, human-wait flag and terminal flag in a versioned, no-store
 snapshot. It never advances the loop, acquires an execution lease or returns profile,
 provider, error or human-action details. Foreign and missing IDs are indistinguishable.
+The sandbox renders status only when its phase is in the closed workflow phase vocabulary;
+unknown provider values fail closed instead of being presented as trusted run state.
 The projection opens the existing SQLite database read-only and checks the indexed
 owner metadata before decoding the private durable payload, so a missing database is
 not recreated and malformed foreign state remains indistinguishable from absence.

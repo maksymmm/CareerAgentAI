@@ -564,6 +564,10 @@ _HTML = r"""<!doctype html>
       byId('list-state').textContent = '';
       byId('next-runs').disabled = true;
     }
+    const runPhases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
+      'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
+      'message_send', 'message_reconciliation', 'track', 'interview_coordination',
+      'interview_approval', 'interview_accept', 'interview_reconciliation', 'complete', 'failed'];
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
@@ -578,13 +582,9 @@ _HTML = r"""<!doctype html>
           'Run statuses request failed.');
         if (generation !== listGeneration) return;
         const validId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
-        const phases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
-          'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
-          'message_send', 'message_reconciliation', 'track', 'interview_coordination',
-          'interview_approval', 'interview_accept', 'interview_reconciliation', 'complete', 'failed'];
         if (page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
             !(page.next_after === null || validId(page.next_after)) ||
-            !page.items.every(item => item && validId(item.run_id) && phases.includes(item.phase) &&
+            !page.items.every(item => item && validId(item.run_id) && runPhases.includes(item.phase) &&
               (selectedPhase === '' || item.phase === selectedPhase))) {
           throw new Error('Invalid run page.');
         }
@@ -743,7 +743,7 @@ _HTML = r"""<!doctype html>
         if (requestNumber !== latestResultRequest) return;
         if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
             !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
-            typeof snapshot.phase !== 'string' || typeof snapshot.waiting_for_human !== 'boolean' ||
+            !runPhases.includes(snapshot.phase) || typeof snapshot.waiting_for_human !== 'boolean' ||
             typeof snapshot.terminal !== 'boolean') throw new Error('Invalid status snapshot.');
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
