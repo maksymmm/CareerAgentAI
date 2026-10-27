@@ -436,6 +436,7 @@ _HTML = r"""<!doctype html>
                 Date.parse(item.occurred_at) >= Date.parse(history.items[index - 1].occurred_at))))) {
           throw new Error('Invalid application history.');
         }
+        selectedApplicationVersion = history.state_version;
         const snapshot = {schema_version: 1, application_id: applicationId, state_version: history.state_version,
           items: history.items.map(item => ({sequence: item.sequence, from_status: item.from_status,
             to_status: item.to_status, occurred_at: item.occurred_at}))};

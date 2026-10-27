@@ -1338,6 +1338,25 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert history["application_id"] == detail["application_id"] and history["state_version"] == 2
             assert len(history["items"]) == 1 and history["items"][0]["to_status"] == "applied"
             assert set(history["items"][0]) == {"sequence", "from_status", "to_status", "occurred_at"}
+            def newer_history(route):
+                payload = route.fetch().json()
+                payload["state_version"] = 3
+                payload["items"].append({
+                    "sequence": 1,
+                    "from_status": "applied",
+                    "to_status": "interview",
+                    "occurred_at": "2026-01-02T00:00:00+00:00",
+                })
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/application/history?*", newer_history)
+            page.locator("#load-application-history").click()
+            page.locator("#application-history").get_by_text('"state_version": 3', exact=False).wait_for()
+            page.unroute("**/v1/candidate/application/history?*")
+            page.locator("#load-application-history").click()
+            page.locator("#application-history-state").get_by_text("Load history again to retry.").wait_for()
+            assert page.locator("#application-history").text_content() == ""
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
             def expanded_history(route):
                 payload = route.fetch().json()
                 payload["private"] = "private-history-secret"

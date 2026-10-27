@@ -352,6 +352,8 @@ execute work or create storage. After selecting an application, Load application
 history displays allowlisted transitions/version as text only. Empty history and
 explicit retry are supported; detail/page/token changes invalidate pending history.
 Raw history responses and backend error text never enter the result pane.
+Accepted newer history advances the selected application version floor, preventing a
+later history read from rolling back behind the newest observed timeline.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The
