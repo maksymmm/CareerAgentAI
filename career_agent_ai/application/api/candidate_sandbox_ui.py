@@ -487,9 +487,21 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid application page.');
         }
         const applicationIds = page.items.map(item => item.application_id);
+        // SQLite compares UTF-8 text by Unicode scalar value. JavaScript's
+        // relational operators compare UTF-16 code units, which reverses some
+        // BMP/supplementary pairs (for example U+E000 and U+1F600).
+        const compareIdentifiers = (left, right) => {
+          const leftScalars = Array.from(left, character => character.codePointAt(0));
+          const rightScalars = Array.from(right, character => character.codePointAt(0));
+          for (let index = 0; index < Math.min(leftScalars.length, rightScalars.length); index += 1) {
+            if (leftScalars[index] !== rightScalars[index]) return leftScalars[index] - rightScalars[index];
+          }
+          return leftScalars.length - rightScalars.length;
+        };
         if (new Set(applicationIds).size !== applicationIds.length ||
-            applicationIds.some((identifier, index) => index > 0 && identifier <= applicationIds[index - 1]) ||
-            (after !== null && page.next_after !== null && page.next_after <= after) ||
+            applicationIds.some((identifier, index) =>
+              index > 0 && compareIdentifiers(identifier, applicationIds[index - 1]) <= 0) ||
+            (after !== null && page.next_after !== null && compareIdentifiers(page.next_after, after) <= 0) ||
             (page.next_after !== null && page.next_after !== page.items.at(-1).application_id)) {
           throw new Error('Invalid application cursor.');
         }

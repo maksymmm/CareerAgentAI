@@ -745,8 +745,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("byId('prompt').disabled = false", decision_post) > decision_post
     application_loader = html[html.index("async function loadApplications"):html.index("function clearRunList")]
     assert "new Set(applicationIds).size !== applicationIds.length" in application_loader
-    assert "identifier <= applicationIds[index - 1]" in application_loader
-    assert "page.next_after !== null && page.next_after <= after" in application_loader
+    assert "character.codePointAt(0)" in application_loader
+    assert "compareIdentifiers(identifier, applicationIds[index - 1]) <= 0" in application_loader
+    assert "compareIdentifiers(page.next_after, after) <= 0" in application_loader
     assert "page.next_after !== page.items.at(-1).application_id" in application_loader
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
     assert "items.length !== 25" not in event_loader

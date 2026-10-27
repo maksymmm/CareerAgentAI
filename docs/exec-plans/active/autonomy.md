@@ -1206,3 +1206,5 @@ duplicate, replayed, or forged pages, with static and Chromium regression covera
 Application ordering hardening: application IDs must increase strictly within each
 page, and a non-terminal cursor must advance beyond the requested cursor. Terminal
 sparse pages retain their established cursor-row compatibility without enabling a loop.
+The browser comparator follows the server's Unicode-scalar ordering rather than
+JavaScript UTF-16 code-unit ordering, including mixed BMP/supplementary identifiers.
