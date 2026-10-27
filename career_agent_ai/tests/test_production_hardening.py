@@ -542,6 +542,21 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             assert detail["event_id"] == "event-025" and detail["local_start_time"] == "02:30:00.123456"
             assert detail["utc_offset"] == "+02:00" and detail["end_utc_offset"] == "+01:00"
             assert "private" not in page.locator("body").text_content()
+            def newer_event_detail(route):
+                payload = route.fetch().json()
+                payload["event"]["state_version"] += 1
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/schedule-event?*", newer_event_detail)
+            page.locator("#owned-events button").first.click()
+            page.locator("#event-detail").get_by_text('"state_version": 2', exact=False).wait_for()
+            page.unroute("**/v1/candidate/schedule-event?*")
+            page.locator("#owned-events button").first.click()
+            page.locator("#event-detail-state").get_by_text("Select the event again to retry.").wait_for()
+            assert page.locator("#event-detail").text_content() == ""
+            page.locator("#list-events").click()
+            page.locator("#events-state").get_by_text(
+                "25 events on this page. More available. Read-only snapshots.", exact=True
+            ).wait_for()
             def expanded_detail(route):
                 payload = route.fetch().json()
                 payload["private"] = "private-top-secret"
