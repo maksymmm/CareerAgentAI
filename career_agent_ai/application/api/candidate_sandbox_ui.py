@@ -362,7 +362,7 @@ _HTML = r"""<!doctype html>
       byId('application-detail').textContent = '';
       byId('application-detail-state').textContent = '';
     }
-    async function loadApplicationDetail(applicationId, trigger) {
+    async function loadApplicationDetail(applicationId, minimumVersion, trigger) {
       clearApplicationDetail();
       const generation = applicationDetailGeneration;
       applicationDetailTrigger = trigger;
@@ -380,6 +380,7 @@ _HTML = r"""<!doctype html>
             typeof item.company_id !== 'string' || Array.from(item.company_id).length > 200 ||
             !['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'].includes(item.status) ||
             !Number.isSafeInteger(item.state_version) || item.state_version < 1 ||
+            item.state_version < minimumVersion ||
             !['created_at', 'updated_at'].every(key => typeof item[key] === 'string' &&
               item[key].length <= 64 && Number.isFinite(Date.parse(item[key])))) {
           throw new Error('Invalid application detail.');
@@ -522,7 +523,8 @@ _HTML = r"""<!doctype html>
           // distinct whitespace sequences inside otherwise-valid opaque IDs.
           button.setAttribute('aria-label', 'View application ' + (index + 1) + ': ' + item.application_id);
           button.addEventListener('click', () => {
-            if (generation === applicationsGeneration) guarded(() => loadApplicationDetail(item.application_id, button));
+            if (generation === applicationsGeneration) guarded(() =>
+              loadApplicationDetail(item.application_id, item.state_version, button));
           });
           row.append(button);
           byId('owned-applications').append(row);

@@ -1358,6 +1358,17 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#application-detail-state").get_by_text("Select the application again to retry.").wait_for()
             assert page.locator("#application-detail").text_content() == ""
             page.unroute("**/v1/candidate/application?*")
+            def stale_application_detail(route):
+                payload = route.fetch().json()
+                payload["application"]["state_version"] -= 1
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/application?*", stale_application_detail)
+            page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text(
+                "Select the application again to retry.", exact=True
+            ).wait_for()
+            assert page.locator("#application-detail").text_content() == ""
+            page.unroute("**/v1/candidate/application?*")
             # Delay detail in the browser while changing authentication context.
             page.evaluate("""() => {
                 const original = window.fetch;

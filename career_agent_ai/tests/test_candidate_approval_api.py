@@ -751,6 +751,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "page.next_after !== null && cursorFloor === 0" in application_loader
     assert "compareIdentifiers(page.next_after, after) <= 0" in application_loader
     assert "page.next_after !== page.items.at(-1).application_id" in application_loader
+    detail_loader = html[html.index("async function loadApplicationDetail"):html.index("async function loadApplicationHistory")]
+    assert "item.state_version < minimumVersion" in detail_loader
+    assert "loadApplicationDetail(item.application_id, item.state_version, button)" in application_loader
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
     assert "items.length !== 25" not in event_loader
     assert "page.next_after !== items.at(-1).event_id" in event_loader
