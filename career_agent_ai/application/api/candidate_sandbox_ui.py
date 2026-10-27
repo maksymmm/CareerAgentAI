@@ -161,6 +161,7 @@ _HTML = r"""<!doctype html>
     let inputContextGeneration = 0;
     let listGeneration = 0;
     let nextRunCursor = null;
+    let selectedRunVersion = null;
     const byId = (id) => document.getElementById(id);
     const pageSummary = (count, singular, plural, hasMore, instruction = '') =>
       count + ' ' + (count === 1 ? singular : plural) + ' on this page. ' +
@@ -588,6 +589,8 @@ _HTML = r"""<!doctype html>
         if (page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
             !(page.next_after === null || validId(page.next_after)) ||
             !page.items.every(item => item && validId(item.run_id) && runPhases.includes(item.phase) &&
+              Number.isSafeInteger(item.state_version) && item.state_version >= 0 &&
+              typeof item.waiting_for_human === 'boolean' && typeof item.terminal === 'boolean' &&
               (selectedPhase === '' || item.phase === selectedPhase))) {
           throw new Error('Invalid run page.');
         }
@@ -604,7 +607,7 @@ _HTML = r"""<!doctype html>
           button.addEventListener('click', () => {
             if (generation !== listGeneration) return;
             latestStartRequest += 1;
-            selectRun(item.run_id);
+            selectRun(item.run_id, item.state_version);
             byId('result').textContent = 'Run selected. Refresh status or load its current prompt.';
           });
           row.append(button); byId('owned-runs').append(row);
@@ -645,8 +648,9 @@ _HTML = r"""<!doctype html>
       activePromptLoadGeneration = null;
       byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
     }
-    function selectRun(runId) {
+    function selectRun(runId, minimumVersion = null) {
       clearOverview();
+      selectedRunVersion = minimumVersion;
       inputContextGeneration += 1;
       latestResultRequest += 1;
       byId('run-id').value = runId;
@@ -715,6 +719,7 @@ _HTML = r"""<!doctype html>
     }));
     function invalidateInputContext() {
       clearOverview();
+      selectedRunVersion = null;
       inputContextGeneration += 1;
       latestResultRequest += 1;
       latestStartRequest += 1;
@@ -746,6 +751,7 @@ _HTML = r"""<!doctype html>
         if (requestNumber !== latestResultRequest) return;
         if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
             !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
+            (selectedRunVersion !== null && snapshot.state_version < selectedRunVersion) ||
             !runPhases.includes(snapshot.phase) || typeof snapshot.waiting_for_human !== 'boolean' ||
             typeof snapshot.terminal !== 'boolean' || !validRunFlags(snapshot)) {
           throw new Error('Invalid status snapshot.');
