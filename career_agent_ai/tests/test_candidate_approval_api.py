@@ -776,7 +776,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "items.length !== 25" not in event_loader
     assert "page.next_after !== items.at(-1).event_id" in event_loader
     event_detail_loader = html[html.index("async function loadEventDetail"):html.index("async function loadEvents")]
-    assert "snapshot.state_version < minimumVersion" in event_detail_loader
+    assert "Math.max(minimumVersion, selectedEventVersion)" in event_detail_loader
+    assert "snapshot.state_version < versionFloor" in event_detail_loader
+    assert event_detail_loader.index("selectedEventVersion = snapshot.state_version") > event_detail_loader.index(
+        "throw new Error('Stale event detail.')"
+    )
     assert "loadEventDetail(item.event_id, item.state_version, button)" in event_loader
     run_loader = html[
         html.index("async function loadRunList") : html.index("byId('list-runs').addEventListener")

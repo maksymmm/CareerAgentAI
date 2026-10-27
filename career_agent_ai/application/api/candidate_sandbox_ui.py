@@ -170,6 +170,8 @@ _HTML = r"""<!doctype html>
     let eventDetailGeneration = 0;
     let eventDetailTrigger = null;
     let nextEventCursor = null;
+    let selectedEventId = null;
+    let selectedEventVersion = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
     const eventFields = ['event_id', 'employer_name', 'event_type', 'location', 'status', 'state_version',
       'start_at', 'end_at', 'local_date', 'local_start_time', 'local_end_date', 'local_end_time',
@@ -250,6 +252,7 @@ _HTML = r"""<!doctype html>
     }
     function clearEvents() {
       clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
+      selectedEventId = null; selectedEventVersion = null;
       byId('list-events').disabled = false;
       byId('owned-events').setAttribute('aria-busy', 'false');
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
@@ -268,7 +271,11 @@ _HTML = r"""<!doctype html>
         if (generation !== eventDetailGeneration) return;
         if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
         const snapshot = eventSnapshot(detail.event);
-        if (snapshot.state_version < minimumVersion) throw new Error('Stale event detail.');
+        const versionFloor = selectedEventId === identifier && selectedEventVersion !== null
+          ? Math.max(minimumVersion, selectedEventVersion) : minimumVersion;
+        if (snapshot.state_version < versionFloor) throw new Error('Stale event detail.');
+        selectedEventId = identifier;
+        selectedEventVersion = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
       } catch (error) {
