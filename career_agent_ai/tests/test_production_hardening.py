@@ -1191,6 +1191,48 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 "button", name="View application 2: candidate one", exact=True
             ).count() == 1
             page.unroute("**/v1/candidate/applications?*")
+            page.route(
+                "**/v1/candidate/applications?*",
+                lambda route: route.fulfill(status=200, json={
+                    "schema_version": 1,
+                    "items": [
+                        {"application_id": "\ue000", "job_id": "job-bmp",
+                         "job_title": "BMP", "company_id": "company",
+                         "status": "saved", "state_version": 1},
+                        {"application_id": "😀", "job_id": "job-supplementary",
+                         "job_title": "Supplementary", "company_id": "company",
+                         "status": "saved", "state_version": 1},
+                    ],
+                    "next_after": None,
+                }),
+            )
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "2 applications on this page. End of list. Read-only snapshots.", exact=True
+            ).wait_for()
+            assert page.locator("#owned-applications li").count() == 2
+            page.unroute("**/v1/candidate/applications?*")
+            page.route(
+                "**/v1/candidate/applications?*",
+                lambda route: route.fulfill(status=200, json={
+                    "schema_version": 1,
+                    "items": [
+                        {"application_id": "application-b", "job_id": "job-2",
+                         "job_title": "Second", "company_id": "company",
+                         "status": "saved", "state_version": 1},
+                        {"application_id": "application-a", "job_id": "job-1",
+                         "job_title": "First", "company_id": "company",
+                         "status": "saved", "state_version": 1},
+                    ],
+                    "next_after": None,
+                }),
+            )
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "Load or retry the application page.", exact=True
+            ).wait_for()
+            assert page.locator("#owned-applications li").count() == 0
+            page.unroute("**/v1/candidate/applications?*")
             page.locator("#list-applications").click()
             page.locator("#applications-state").get_by_text(
                 "1 application on this page. End of list. Read-only snapshots.", exact=True
