@@ -1223,3 +1223,6 @@ rejects terminal state that simultaneously claims a pending human decision.
 
 Run selection retains the owner-scoped list version, validates every minimal status
 field, and rejects a later status refresh that rolls back below the selected snapshot.
+
+Application history cannot roll back below the state version of the selected detail
+snapshot; a concurrently newer history remains valid and read-only.
