@@ -769,7 +769,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/runs/*/approval", newer_approval_prompt)
             page.locator("#prompt").click()
-            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.wait_for_function("!document.getElementById(\'approve\').disabled")
             assert page.locator("#approve").is_enabled()
             page.unroute("**/v1/candidate/runs/*/approval")
             page.locator("#status").click()
