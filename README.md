@@ -356,6 +356,8 @@ Accepted newer history advances the selected application version floor, preventi
 later history read from rolling back behind the newest observed timeline.
 Accepted newer event detail similarly advances the selected event version floor, so a
 later read cannot roll back behind schedule state already shown to the candidate.
+Run creation responses are accepted only when they contain a canonical owner-scoped
+durable run ID and a known workflow phase; malformed responses never replace the active run.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

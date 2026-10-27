@@ -740,10 +740,27 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
             page.locator("#token").fill("sandbox-token")
-            page.locator("#start-run-id").fill("browser-composed-run")
             page.locator("#keyword").fill("logistics")
             page.locator("#location").fill("Karlsruhe")
             page.locator("#profile").fill(PROFILE)
+            for index, replacement in enumerate((  # pragma: no cover - CI Chromium
+                {"run_id": "other-run"},
+                {"phase": "future_untrusted_phase"},
+                {"extra": "private-start-secret"},
+            )):
+                requested_run_id = f"malformed-start-{index}"
+                page.locator("#start-run-id").fill(requested_run_id)
+                def malformed_start_response(route):
+                    payload = route.fetch().json()
+                    payload.update(replacement)
+                    route.fulfill(status=201, json=payload)
+                page.route("**/v1/candidate/runs", malformed_start_response)
+                page.locator("#start").click()
+                page.locator("#result").get_by_text("Invalid run start response.", exact=False).wait_for()
+                assert page.locator("#run-id").input_value() == ""
+                assert "private-start-secret" not in page.locator("body").text_content()
+                page.unroute("**/v1/candidate/runs")
+            page.locator("#start-run-id").fill("browser-composed-run")
             page.locator("#start").click()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             durable_run_id = page.locator("#run-id").input_value()
