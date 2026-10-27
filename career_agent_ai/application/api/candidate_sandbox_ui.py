@@ -345,6 +345,7 @@ _HTML = r"""<!doctype html>
     let applicationDetailGeneration = 0;
     let applicationDetailTrigger = null;
     let selectedApplicationId = null;
+    let selectedApplicationVersion = null;
     let applicationHistoryGeneration = 0;
     function clearApplicationHistory() {
       applicationHistoryGeneration += 1;
@@ -357,6 +358,7 @@ _HTML = r"""<!doctype html>
       applicationDetailTrigger = null;
       clearApplicationHistory();
       selectedApplicationId = null;
+      selectedApplicationVersion = null;
       byId('load-application-history').disabled = true;
       applicationDetailGeneration += 1;
       byId('application-detail').setAttribute('aria-busy', 'false');
@@ -391,6 +393,7 @@ _HTML = r"""<!doctype html>
         byId('application-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('application-detail-state').textContent = 'Read-only application detail.';
         selectedApplicationId = applicationId;
+        selectedApplicationVersion = item.state_version;
         byId('load-application-history').disabled = false;
       } catch (error) {
         if (generation === applicationDetailGeneration) {
@@ -423,6 +426,7 @@ _HTML = r"""<!doctype html>
           interview: ['offer', 'rejected', 'withdrawn'], offer: ['withdrawn'], rejected: [], withdrawn: []};
         if (!history || history.schema_version !== 1 || history.application_id !== applicationId ||
             !Number.isSafeInteger(history.state_version) || history.state_version < 1 ||
+            selectedApplicationVersion === null || history.state_version < selectedApplicationVersion ||
             !Array.isArray(history.items) || history.items.length > 4 ||
             history.items.length !== history.state_version - 1 || !history.items.every((item, index) =>
               item && item.sequence === index && statuses.includes(item.from_status) && statuses.includes(item.to_status) &&

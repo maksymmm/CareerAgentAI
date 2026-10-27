@@ -1306,6 +1306,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.unroute("**/v1/candidate/application/history?*")
             for payload in ({**history, "application_id": "foreign"},
                             {**history, "items": []}, {**history, "schema_version": 99},
+                            {**history, "state_version": 1, "items": []},
                             *({**history, "items": [{**history["items"][0], "from_status": source, "to_status": target}]}
                               for source, target in [("saved", "offer"), ("applied", "applied"),
                                                      ("rejected", "interview"), ("withdrawn", "saved")])):
