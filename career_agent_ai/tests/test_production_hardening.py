@@ -733,15 +733,6 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             durable_run_id = page.locator("#run-id").input_value()
             assert durable_run_id.startswith("scoped-v2:")
-            def stale_run_status(route):
-                payload = route.fetch().json()
-                payload["state_version"] -= 1
-                route.fulfill(status=200, json=payload)
-            page.route("**/v1/candidate/runs/*/status", stale_run_status)
-            page.locator("#status").click()
-            page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
-            assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
-            page.unroute("**/v1/candidate/runs/*/status")
             def malformed_run_phase(route):
                 payload = route.fetch().json()
                 payload["phase"] = "future_untrusted_phase"
@@ -1150,6 +1141,15 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#next-runs").click()
             page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
             assert page.locator("#approve").is_disabled()
+            def stale_run_status(route):
+                payload = route.fetch().json()
+                payload["state_version"] -= 1
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/runs/*/status", stale_run_status)
+            page.locator("#status").click()
+            page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
+            assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
+            page.unroute("**/v1/candidate/runs/*/status")
             page.evaluate("""() => {
               window.statusOriginalFetch = window.fetch;
               window.fetch = async (...args) => {
