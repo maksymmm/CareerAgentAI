@@ -569,8 +569,7 @@ _HTML = r"""<!doctype html>
         }
         if (!page.items.every((item, index) => item.run_id >
               (index ? page.items[index - 1].run_id : (after || ''))) ||
-            (page.next_after !== null && (page.items.length !== 25 ||
-              page.next_after !== page.items.at(-1).run_id))) {
+            (page.next_after !== null && page.next_after !== page.items.at(-1).run_id)) {
           throw new Error('Invalid run cursor.');
         }
         for (const item of page.items) {

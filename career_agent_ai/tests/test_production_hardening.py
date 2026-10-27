@@ -1072,6 +1072,18 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 assert page.locator("#owned-runs li").count() == 0
                 assert page.locator("#next-runs").is_disabled()
                 page.unroute("**/v1/candidate/run-statuses?*")
+            sparse_run_page = json.loads(json.dumps(first_run_page))
+            sparse_run_page["items"] = sparse_run_page["items"][:2]
+            sparse_run_page["next_after"] = sparse_run_page["items"][-1]["run_id"]
+            page.route("**/v1/candidate/run-statuses?limit=25",
+                       lambda route: route.fulfill(status=200, json=sparse_run_page))
+            page.locator("#list-runs").click()
+            page.locator("#list-state").get_by_text(
+                "2 runs on this page. More available. Select a run to inspect.", exact=True
+            ).wait_for()
+            assert page.locator("#owned-runs button").count() == 2
+            assert page.locator("#next-runs").is_enabled()
+            page.unroute("**/v1/candidate/run-statuses?limit=25")
             page.locator("#list-runs").click()
             page.locator("#list-state").get_by_text(
                 "25 runs on this page. More available. Select a run to inspect.",
