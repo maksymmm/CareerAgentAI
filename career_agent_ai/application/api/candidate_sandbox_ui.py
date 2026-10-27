@@ -488,7 +488,8 @@ _HTML = r"""<!doctype html>
         }
         const applicationIds = page.items.map(item => item.application_id);
         if (new Set(applicationIds).size !== applicationIds.length ||
-            (after !== null && page.next_after === after) ||
+            applicationIds.some((identifier, index) => index > 0 && identifier <= applicationIds[index - 1]) ||
+            (after !== null && page.next_after !== null && page.next_after <= after) ||
             (page.next_after !== null && page.next_after !== page.items.at(-1).application_id)) {
           throw new Error('Invalid application cursor.');
         }

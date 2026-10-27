@@ -380,6 +380,9 @@ restore it. View application loads an owner-authenticated detail snapshot with
 timestamps, rendered as text-only allowlisted fields. New selections/page loads/token
 edits invalidate older detail responses; failures permit explicit reselection/retry.
 No approval/submission controls exist in this tracker list or detail view.
+Application IDs increase strictly within each page, and every advertised continuation
+cursor advances beyond the requested cursor while identifying the final visible row.
+Terminal sparse pages may contain the cursor row because they cannot trigger another request.
 
 The sandbox runtime's programmatic
 `list_run_statuses(user_id=..., limit=25, after=None, phase=None)`
