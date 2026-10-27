@@ -677,6 +677,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "Number.isSafeInteger(snapshot.state_version)" in html
     assert "byId('run-overview').textContent = state" in html
     assert "!runPhases.includes(snapshot.phase)" in html
+    assert "!validRunFlags(snapshot)" in html
     status_handler = html.index("byId('status').addEventListener")
     status_get = html.index("await call(runPath('/status'))", status_handler)
     assert html.index("if (statusInFlight)", status_handler) < status_get

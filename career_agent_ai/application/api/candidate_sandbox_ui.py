@@ -568,6 +568,9 @@ _HTML = r"""<!doctype html>
       'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
       'message_send', 'message_reconciliation', 'track', 'interview_coordination',
       'interview_approval', 'interview_accept', 'interview_reconciliation', 'complete', 'failed'];
+    const validRunFlags = item =>
+      item.terminal === ['complete', 'failed'].includes(item.phase) &&
+      (!item.terminal || !item.waiting_for_human);
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
@@ -744,7 +747,9 @@ _HTML = r"""<!doctype html>
         if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
             !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
             !runPhases.includes(snapshot.phase) || typeof snapshot.waiting_for_human !== 'boolean' ||
-            typeof snapshot.terminal !== 'boolean') throw new Error('Invalid status snapshot.');
+            typeof snapshot.terminal !== 'boolean' || !validRunFlags(snapshot)) {
+          throw new Error('Invalid status snapshot.');
+        }
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;

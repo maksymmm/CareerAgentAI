@@ -822,6 +822,8 @@ snapshot. It never advances the loop, acquires an execution lease or returns pro
 provider, error or human-action details. Foreign and missing IDs are indistinguishable.
 The sandbox renders status only when its phase is in the closed workflow phase vocabulary;
 unknown provider values fail closed instead of being presented as trusted run state.
+Terminal flags must agree with complete/failed phases, and terminal snapshots cannot
+claim a pending human decision; inconsistent provider state also fails closed.
 The projection opens the existing SQLite database read-only and checks the indexed
 owner metadata before decoding the private durable payload, so a missing database is
 not recreated and malformed foreign state remains indistinguishable from absence.

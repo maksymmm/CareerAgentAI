@@ -742,6 +742,15 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
             assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
             page.unroute("**/v1/candidate/runs/*/status")
+            def inconsistent_run_flags(route):
+                payload = route.fetch().json()
+                payload["terminal"] = not payload["terminal"]
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/runs/*/status", inconsistent_run_flags)
+            page.locator("#status").click()
+            page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
+            assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
+            page.unroute("**/v1/candidate/runs/*/status")
             page.evaluate("""() => {
               window.statusOriginalFetch = window.fetch;
               window.fetch = async (...args) => {
