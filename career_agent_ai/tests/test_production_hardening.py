@@ -1345,7 +1345,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                     "sequence": 1,
                     "from_status": "applied",
                     "to_status": "interview",
-                    "occurred_at": "2026-01-02T00:00:00+00:00",
+                    "occurred_at": payload["items"][-1]["occurred_at"],
                 })
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/application/history?*", newer_history)
