@@ -1397,6 +1397,30 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             ).wait_for()
             assert seen_pages == [None, [opaque_cursor]]
             assert page.locator("#next-applications").is_disabled()
+            page.unroute("**/v1/candidate/applications?*")
+            rollback_pages = []
+            def rollback_application_page(route):
+                query = parse_qs(urlsplit(route.request.url).query)
+                rollback_pages.append(query.get("after"))
+                identifier = "application-b" if len(rollback_pages) == 1 else "application-a"
+                route.fulfill(status=200, json={
+                    "schema_version": 1,
+                    "items": [{"application_id": identifier, "job_id": "job-rollback",
+                               "job_title": "Rollback", "company_id": "company",
+                               "status": "saved", "state_version": 1}],
+                    "next_after": "application-b" if len(rollback_pages) == 1 else None,
+                })
+            page.route("**/v1/candidate/applications?*", rollback_application_page)
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. More available. Read-only snapshots.", exact=True
+            ).wait_for()
+            page.locator("#next-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "Load or retry the application page.", exact=True
+            ).wait_for()
+            assert rollback_pages == [None, ["application-b"]]
+            assert page.locator("#owned-applications li").count() == 0
             page.locator("#token").fill("changed")
             assert page.locator("#owned-applications li").count() == 0
             assert page.locator("#next-applications").is_disabled()

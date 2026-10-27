@@ -498,9 +498,13 @@ _HTML = r"""<!doctype html>
           }
           return leftScalars.length - rightScalars.length;
         };
+        const cursorFloor = after === null || applicationIds.length === 0 ? null :
+          compareIdentifiers(applicationIds[0], after);
         if (new Set(applicationIds).size !== applicationIds.length ||
             applicationIds.some((identifier, index) =>
               index > 0 && compareIdentifiers(identifier, applicationIds[index - 1]) <= 0) ||
+            (cursorFloor !== null && (cursorFloor < 0 ||
+              (page.next_after !== null && cursorFloor === 0))) ||
             (after !== null && page.next_after !== null && compareIdentifiers(page.next_after, after) <= 0) ||
             (page.next_after !== null && page.next_after !== page.items.at(-1).application_id)) {
           throw new Error('Invalid application cursor.');
