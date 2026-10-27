@@ -281,6 +281,10 @@ pending reads/starts and approval prompts, and performs no HTTP request. Chromiu
 clears while event detail is delayed, verifies empty credentials/inputs/panes and
 disabled decisions, then confirms the late response cannot restore private state.
 This does not revoke server credentials or cancel previously accepted work.
+Accepted candidate status refreshes now advance the observed run version floor. A later
+approval prompt cannot roll back behind a newer status already rendered; static and
+Chromium regressions cover the composed status-to-prompt workflow.
+
 Next: verify fresh review/integration once Codex review capacity is available;
 continue candidate dashboard usability and bounded empty-state acceptance.
 

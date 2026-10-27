@@ -760,6 +760,7 @@ _HTML = r"""<!doctype html>
             typeof snapshot.terminal !== 'boolean' || !validRunFlags(snapshot)) {
           throw new Error('Invalid status snapshot.');
         }
+        selectedRunVersion = snapshot.state_version;
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;

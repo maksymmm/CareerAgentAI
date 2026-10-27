@@ -826,6 +826,8 @@ Terminal flags must agree with complete/failed phases, and terminal snapshots ca
 claim a pending human decision; inconsistent provider state also fails closed.
 After selecting an owner-scoped run snapshot, an approval prompt cannot roll back below
 that run version; stale prompts never enable approve or decline controls.
+Each accepted status refresh advances that floor, so a later prompt cannot roll back
+behind any newer run state already shown to the candidate.
 The projection opens the existing SQLite database read-only and checks the indexed
 owner metadata before decoding the private durable payload, so a missing database is
 not recreated and malformed foreign state remains indistinguishable from absence.
