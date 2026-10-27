@@ -1226,3 +1226,6 @@ field, and rejects a later status refresh that rolls back below the selected sna
 
 Application history cannot roll back below the state version of the selected detail
 snapshot; a concurrently newer history remains valid and read-only.
+
+The selected owner-scoped run version also floors approval prompts, so an older prompt
+cannot restore decision controls after the candidate observed a newer run snapshot.
