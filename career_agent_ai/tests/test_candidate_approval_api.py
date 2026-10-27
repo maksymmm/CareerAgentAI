@@ -651,7 +651,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("aria-busy', 'true'", start_handler) < start_post
     assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
     assert html.index("const requestedRunId = byId('start-run-id').value", start_handler) < start_post
-    assert "payload.run_id !== requestedRunId" in html[start_post:start_assignment]
+    assert "/^scoped-v2:[0-9a-f]{128}$/.test(payload.run_id)" in html[start_post:start_assignment]
     assert "!runPhases.includes(payload.phase)" in html[start_post:start_assignment]
     assert "Object.keys(payload).length !== 2" in html[start_post:start_assignment]
     assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]

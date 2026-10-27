@@ -724,7 +724,8 @@ _HTML = r"""<!doctype html>
         });
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
             Object.keys(payload).length !== 2 || !Object.hasOwn(payload, 'run_id') ||
-            !Object.hasOwn(payload, 'phase') || payload.run_id !== requestedRunId ||
+            !Object.hasOwn(payload, 'phase') ||
+            typeof payload.run_id !== 'string' || !/^scoped-v2:[0-9a-f]{128}$/.test(payload.run_id) ||
             !runPhases.includes(payload.phase)) {
           throw new Error('Invalid run start response.');
         }

@@ -1221,8 +1221,8 @@ Event detail cannot roll back below the state version of its selected owner-scop
 snapshot; concurrently newer event detail remains valid and read-only.
 Accepted newer event detail advances the selected event version floor; subsequent
 detail reads cannot roll back behind the newest observed schedule state.
-Run creation responses must contain only the exact requested run identity and a known
-workflow phase before the sandbox selects the new run.
+Run creation responses must contain only a canonical owner-scoped durable run identity
+and a known workflow phase before the sandbox selects the new run.
 Application detail is bound to the state version selected from the owner-scoped list;
 older detail is rejected while concurrently newer detail remains valid and read-only.
 
