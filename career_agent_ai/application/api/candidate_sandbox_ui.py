@@ -299,7 +299,7 @@ _HTML = r"""<!doctype html>
         const items = page.items.map(eventSnapshot);
         if (!items.every(item => selectedStatus === '' || item.status === selectedStatus)) throw new Error('Invalid event status filter.');
         if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : (after || ''))) ||
-            (page.next_after !== null && (items.length !== 25 || page.next_after !== items.at(-1).event_id))) throw new Error('Invalid event cursor.');
+            (page.next_after !== null && page.next_after !== items.at(-1).event_id)) throw new Error('Invalid event cursor.');
         for (const [index, item] of items.entries()) {
           const row = document.createElement('li');
           row.textContent = item.employer_name + ' — ' + item.event_type + ' — ' + item.status + ' — ' +

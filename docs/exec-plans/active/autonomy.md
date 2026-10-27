@@ -311,6 +311,11 @@ private extras/errors/parse failures, identity/version/status/offset rejection a
 delayed detail invalidation after token edits. No calendar actions enabled.
 Next: verify reviewed integration, then candidate dashboard usability/empty-state refinement.
 
+Schedule pagination hardening: the candidate sandbox accepts sparse owner/status event
+pages that advertise a valid next cursor, while strict event-ID ordering and final-row
+cursor binding continue to reject duplicate, stalled, or forged traversal. Chromium
+acceptance covers the sparse continuation contract without enabling calendar actions.
+
 Schedule HTTP collection delivered: GET /v1/candidate/schedule-events authenticates
 before strict bounded limit/after parsing and request-local read-only owner queries.
 Malformed escapes, duplicate/unknown/invalid inputs fail before storage; errors are

@@ -652,6 +652,19 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             page.locator("#events-state").get_by_text(
                 "25 events on this page. More available. Read-only snapshots.", exact=True
             ).wait_for()
+            def sparse_event_page(route):
+                payload = route.fetch().json()
+                payload["items"] = payload["items"][:2]
+                payload["next_after"] = payload["items"][-1]["event_id"]
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/schedule-events?limit=25", sparse_event_page)
+            page.locator("#list-events").click()
+            page.locator("#events-state").get_by_text(
+                "2 events on this page. More available. Read-only snapshots.", exact=True
+            ).wait_for()
+            assert page.locator("#owned-events button").count() == 2
+            assert page.locator("#next-events").is_enabled()
+            page.unroute("**/v1/candidate/schedule-events?limit=25")
             assert page.locator("#approve").is_disabled()
             browser.close()
     finally:
