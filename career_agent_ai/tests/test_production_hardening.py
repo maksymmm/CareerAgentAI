@@ -599,6 +599,21 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             page.locator("#result").get_by_text("Event detail request failed.", exact=False).wait_for()
             assert "private-malformed-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/schedule-event?*")
+            def newer_event_page(route):
+                payload = route.fetch().json()
+                payload["items"][0]["state_version"] += 1
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/schedule-events?*", newer_event_page)
+            page.locator("#list-events").click()
+            page.locator("#events-state").get_by_text(
+                "25 events on this page. More available. Read-only snapshots.", exact=True
+            ).wait_for()
+            page.locator("#owned-events button").first.click()
+            page.locator("#event-detail-state").get_by_text(
+                "Select the event again to retry.", exact=True
+            ).wait_for()
+            assert page.locator("#event-detail").text_content() == ""
+            page.unroute("**/v1/candidate/schedule-events?*")
             page.evaluate("""() => {
               window.originalEventFetch = window.fetch;
               window.fetch = async (...args) => {

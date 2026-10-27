@@ -254,7 +254,7 @@ _HTML = r"""<!doctype html>
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
       byId('next-events').disabled = true;
     }
-    async function loadEventDetail(identifier, trigger) {
+    async function loadEventDetail(identifier, minimumVersion, trigger) {
       clearEventDetail();
       const generation = eventDetailGeneration;
       eventDetailTrigger = trigger;
@@ -266,7 +266,9 @@ _HTML = r"""<!doctype html>
           'Event detail request failed.');
         if (generation !== eventDetailGeneration) return;
         if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
-        byId('event-detail').textContent = JSON.stringify(eventSnapshot(detail.event), null, 2);
+        const snapshot = eventSnapshot(detail.event);
+        if (snapshot.state_version < minimumVersion) throw new Error('Stale event detail.');
+        byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
       } catch (error) {
         if (generation === eventDetailGeneration) {
@@ -308,7 +310,7 @@ _HTML = r"""<!doctype html>
           button.type = 'button'; button.textContent = 'View event';
           button.setAttribute('aria-label', 'View event ' + (index + 1) + ': ' + item.event_id);
           button.addEventListener('click', () => {
-            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id, button));
+            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id, item.state_version, button));
           });
           row.append(button); byId('owned-events').append(row);
         }

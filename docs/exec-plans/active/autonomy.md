@@ -1210,3 +1210,5 @@ The browser comparator follows the server's Unicode-scalar ordering rather than
 JavaScript UTF-16 code-unit ordering, including mixed BMP/supplementary identifiers.
 Terminal application pages may repeat the requested cursor row but cannot roll back
 below it; non-terminal pages must begin strictly after the requested cursor.
+Event detail cannot roll back below the state version of its selected owner-scoped list
+snapshot; concurrently newer event detail remains valid and read-only.
