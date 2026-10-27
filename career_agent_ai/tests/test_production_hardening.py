@@ -1085,7 +1085,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 f"http://127.0.0.1:{restarted_server.server_port}/v1/candidate/run-statuses?limit=25",
                 headers={"Authorization": "Bearer sandbox-token"},
             ).json()
-            for corruption in ("duplicate", "reverse", "wrong-cursor", "short", "empty"):
+            for corruption in ("duplicate", "reverse", "wrong-cursor", "invalid-version", "short", "empty"):
                 malformed = json.loads(json.dumps(first_run_page))
                 if corruption == "duplicate":
                     malformed["items"][1]["run_id"] = malformed["items"][0]["run_id"]
@@ -1093,6 +1093,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                     malformed["items"].reverse()
                 elif corruption == "wrong-cursor":
                     malformed["next_after"] = malformed["items"][0]["run_id"]
+                elif corruption == "invalid-version":
+                    malformed["items"][0]["state_version"] = -1
                 else:
                     malformed["items"] = malformed["items"][:1] if corruption == "short" else []
 
@@ -1139,6 +1141,15 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#next-runs").click()
             page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
             assert page.locator("#approve").is_disabled()
+            def stale_run_status(route):
+                payload = route.fetch().json()
+                payload["state_version"] -= 1
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/runs/*/status", stale_run_status)
+            page.locator("#status").click()
+            page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
+            assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
+            page.unroute("**/v1/candidate/runs/*/status")
             page.evaluate("""() => {
               window.statusOriginalFetch = window.fetch;
               window.fetch = async (...args) => {

@@ -678,6 +678,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "byId('run-overview').textContent = state" in html
     assert "!runPhases.includes(snapshot.phase)" in html
     assert "!validRunFlags(snapshot)" in html
+    assert "snapshot.state_version < selectedRunVersion" in html
     status_handler = html.index("byId('status').addEventListener")
     status_get = html.index("await call(runPath('/status'))", status_handler)
     assert html.index("if (statusInFlight)", status_handler) < status_get
@@ -767,6 +768,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     ]
     assert "page.items.length !== 25" not in run_loader
     assert "page.next_after !== page.items.at(-1).run_id" in run_loader
+    assert "Number.isSafeInteger(item.state_version)" in run_loader
+    assert "selectRun(item.run_id, item.state_version)" in run_loader
     assert "localStorage" not in html
     assert "sessionStorage" not in html
     assert ".innerHTML" not in html

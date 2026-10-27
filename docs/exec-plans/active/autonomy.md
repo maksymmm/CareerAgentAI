@@ -1220,3 +1220,6 @@ list, preventing malformed provider state from being rendered as a trusted workf
 
 Run status detail also requires terminal flags to agree with complete/failed phases and
 rejects terminal state that simultaneously claims a pending human decision.
+
+Run selection retains the owner-scoped list version, validates every minimal status
+field, and rejects a later status refresh that rolls back below the selected snapshot.
