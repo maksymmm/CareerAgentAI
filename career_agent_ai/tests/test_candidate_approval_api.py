@@ -724,6 +724,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "Recovery result is uncertain. Load the current approval prompt." in html[recovery_post:prompt_handler]
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
+    assert "loadedPrompt.state_version < selectedRunVersion" in html[
+        prompt_get:html.index("promptInFlight = false", prompt_get)
+    ]
     assert html.index("if (startInFlight)", prompt_handler) < prompt_get
     assert html.index("if (recoveryInFlight)", prompt_handler) < prompt_get
     assert html.index("if (statusInFlight)", prompt_handler) < prompt_get

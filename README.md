@@ -824,6 +824,8 @@ The sandbox renders status only when its phase is in the closed workflow phase v
 unknown provider values fail closed instead of being presented as trusted run state.
 Terminal flags must agree with complete/failed phases, and terminal snapshots cannot
 claim a pending human decision; inconsistent provider state also fails closed.
+After selecting an owner-scoped run snapshot, an approval prompt cannot roll back below
+that run version; stale prompts never enable approve or decline controls.
 The projection opens the existing SQLite database read-only and checks the indexed
 owner metadata before decoding the private durable payload, so a missing database is
 not recreated and malformed foreign state remains indistinguishable from absence.

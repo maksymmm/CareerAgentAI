@@ -822,6 +822,7 @@ _HTML = r"""<!doctype html>
             Object.keys(loadedPrompt).length !== fields.length || !fields.every(key => Object.hasOwn(loadedPrompt, key)) ||
             loadedPrompt.schema_version !== 1 || loadedPrompt.run_id !== promptRunId ||
             !Number.isSafeInteger(loadedPrompt.state_version) || loadedPrompt.state_version < 0 ||
+            (selectedRunVersion !== null && loadedPrompt.state_version < selectedRunVersion) ||
             !['approve_application', 'approve_message', 'approve_interview'].includes(loadedPrompt.action_kind) ||
             typeof loadedPrompt.title !== 'string' || !loadedPrompt.title.trim() ||
             !loadedPrompt.details || typeof loadedPrompt.details !== 'object' || Array.isArray(loadedPrompt.details) ||
