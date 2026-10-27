@@ -747,6 +747,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "new Set(applicationIds).size !== applicationIds.length" in application_loader
     assert "character.codePointAt(0)" in application_loader
     assert "compareIdentifiers(identifier, applicationIds[index - 1]) <= 0" in application_loader
+    assert "cursorFloor < 0" in application_loader
+    assert "page.next_after !== null && cursorFloor === 0" in application_loader
     assert "compareIdentifiers(page.next_after, after) <= 0" in application_loader
     assert "page.next_after !== page.items.at(-1).application_id" in application_loader
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
