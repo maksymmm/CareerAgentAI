@@ -763,6 +763,20 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#decline").is_disabled()
             page.locator("#list-runs").click()
             page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
+            def newer_approval_prompt(route):
+                payload = route.fetch().json()
+                payload["state_version"] += 1
+                route.fulfill(status=200, json=payload)
+            page.route("**/v1/candidate/runs/*/approval", newer_approval_prompt)
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            assert page.locator("#approve").is_enabled()
+            page.unroute("**/v1/candidate/runs/*/approval")
+            page.locator("#status").click()
+            page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
+            assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
+            page.locator("#list-runs").click()
+            page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
             def malformed_run_phase(route):
                 payload = route.fetch().json()
                 payload["phase"] = "future_untrusted_phase"

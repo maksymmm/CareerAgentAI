@@ -828,6 +828,8 @@ After selecting an owner-scoped run snapshot, an approval prompt cannot roll bac
 that run version; stale prompts never enable approve or decline controls.
 Each accepted status refresh advances that floor, so a later prompt cannot roll back
 behind any newer run state already shown to the candidate.
+An accepted newer prompt advances the same floor, so a later status snapshot cannot
+roll back behind decision state already shown to the candidate.
 The projection opens the existing SQLite database read-only and checks the indexed
 owner metadata before decoding the private durable payload, so a missing database is
 not recreated and malformed foreign state remains indistinguishable from absence.

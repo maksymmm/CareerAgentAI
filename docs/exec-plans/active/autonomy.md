@@ -284,6 +284,9 @@ This does not revoke server credentials or cancel previously accepted work.
 Accepted candidate status refreshes now advance the observed run version floor. A later
 approval prompt cannot roll back behind a newer status already rendered; static and
 Chromium regressions cover the composed status-to-prompt workflow.
+Accepted newer approval prompts also advance that floor. A later status refresh cannot
+roll back behind decision state already rendered; the inverse prompt-to-status workflow
+has static and Chromium regression coverage.
 
 Next: verify fresh review/integration once Codex review capacity is available;
 continue candidate dashboard usability and bounded empty-state acceptance.
