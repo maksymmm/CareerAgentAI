@@ -832,6 +832,7 @@ _HTML = r"""<!doctype html>
             !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {
           throw new Error('Invalid approval prompt. Load it again.');
         }
+        selectedRunVersion = loadedPrompt.state_version;
         approvalPrompt = loadedPrompt;
         byId('action-title').textContent = loadedPrompt.title;
         byId('action-details').textContent = JSON.stringify(loadedPrompt.details, null, 2);
