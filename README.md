@@ -382,6 +382,9 @@ or all valid, so malformed provider schedule details cannot activate a calendar 
 Message approval prompts likewise require provider-safe message/sender/recipient identifiers,
 a normalized non-empty header-safe subject, and a normalized non-empty body. Malformed message
 details are rejected before rendering or enabling an external-action decision.
+Application approval prompts require normalized non-empty job/application identities and visible
+text, preserve the nullable company identity contract, and cryptographically verify that the
+lowercase SHA-256 digest matches the exact normalized UTF-8 artifact before enabling a decision.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

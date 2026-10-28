@@ -553,7 +553,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 "application_version": 1,
                 "application_status": "saved",
                 "artifact_content": "Candidate application",
-                "artifact_sha256": "1" * 64,
+                "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
             }
             if self.prompt_reads == 1:
                 details["private_provider_payload"] = "must not render"
@@ -561,9 +561,11 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["company"] = {"private_provider_payload": "must not render"}
             elif self.prompt_reads == 3:
                 details["company"] = "x" * 201
+            elif self.prompt_reads == 4:
+                details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 5 <= self.prompt_reads <= 6:
+            if 6 <= self.prompt_reads <= 7:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -580,10 +582,10 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "end_utc_offset": None,
                     "status": "proposed",
                 }
-                if self.prompt_reads == 5:
+                if self.prompt_reads == 6:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
-            elif self.prompt_reads >= 7:
+            elif self.prompt_reads >= 8:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -593,7 +595,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 7:
+                if self.prompt_reads == 8:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
             return SimpleNamespace(
@@ -653,6 +655,12 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             page.locator("#prompt").click()
             page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
             assert "x" * 201 not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert '"artifact_sha256": "' not in page.locator("#action-details").text_content()
             assert page.locator("#approve").is_disabled()
             assert page.locator("#decline").is_disabled()
 
@@ -849,13 +857,18 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         prompt_get:html.index("promptInFlight = false", prompt_get)
     ]
     assert "const approvalDetailFields" in html
-    assert "!validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details)" in html
+    assert "const approvalDetailsValid" in html
+    assert "await validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details)" in html
+    assert "!approvalDetailsValid" in html
     assert "Number.isSafeInteger(value.application_version)" in html
     assert "/^[0-9a-f]{64}$/.test(value.artifact_sha256)" in html
-    assert "value.company_id === null || validApprovalText(value.company_id, 200)" in html
+    assert "value.company_id === null || normalizedApplicationText(value.company_id, 200)" in html
     assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
     assert "const approvalTextLimits" in html
     assert "const communicationIdentifier" in html
+    assert "const normalizedApplicationText" in html
+    assert "await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))" in html
+    assert "await sha256Hex(value.artifact_content) === value.artifact_sha256" in html
     assert "!/^\\p{White_Space}|\\p{White_Space}$/u.test(value)" in html
     assert "communicationIdentifier(value.message_id)" in html
     assert "communicationIdentifier(value.sender) && communicationIdentifier(value.recipient)" in html

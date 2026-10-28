@@ -625,18 +625,26 @@ _HTML = r"""<!doctype html>
       !/^\p{White_Space}|\p{White_Space}$/u.test(value) &&
       (!header || !/[\u0000-\u001f\u007f-\u009f]/.test(value)) &&
       (header || !value.includes('\r'));
-    const validApprovalDetails = (kind, value) => {
+    const normalizedApplicationText = (value, maximum) =>
+      validApprovalText(value, maximum) && value.length > 0 &&
+      !/^\p{White_Space}|\p{White_Space}$/u.test(value) && !value.includes('\r');
+    const sha256Hex = async value => Array.from(new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))))
+      .map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const validApprovalDetails = async (kind, value) => {
       const fields = approvalDetailFields[kind];
       if (!fields || !hasExactFields(value, fields)) return false;
       if (kind === 'approve_application') {
-        const textFields = fields.filter(field =>
-          !['company_id', 'application_version', 'artifact_sha256'].includes(field));
-        return textFields.every(field =>
-          validApprovalText(value[field], approvalTextLimits[kind][field])) &&
-          (value.company_id === null || validApprovalText(value.company_id, 200)) &&
+        return normalizedApplicationText(value.job_id, 200) &&
+          normalizedApplicationText(value.job_title, 500) &&
+          normalizedApplicationText(value.company, 200) &&
+          (value.company_id === null || normalizedApplicationText(value.company_id, 200)) &&
+          normalizedApplicationText(value.application_id, 200) &&
           value.application_status === 'saved' &&
           Number.isSafeInteger(value.application_version) && value.application_version >= 1 &&
-          typeof value.artifact_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.artifact_sha256);
+          normalizedApplicationText(value.artifact_content, 100000) &&
+          typeof value.artifact_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.artifact_sha256) &&
+          await sha256Hex(value.artifact_content) === value.artifact_sha256;
       }
       if (kind === 'approve_message') {
         return communicationIdentifier(value.message_id) &&
@@ -942,6 +950,11 @@ _HTML = r"""<!doctype html>
         const loadedPrompt = await call('/v1/candidate/runs/' + encodeURIComponent(promptRunId) + '/approval', {},
           'Approval prompt request failed.');
         if (promptGeneration !== approvalPromptGeneration || promptRunId !== byId('run-id').value) return;
+        const approvalDetailsValid = loadedPrompt && typeof loadedPrompt === 'object' &&
+          !Array.isArray(loadedPrompt) && Object.hasOwn(loadedPrompt, 'action_kind') &&
+          Object.hasOwn(loadedPrompt, 'details') &&
+          await validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details);
+        if (promptGeneration !== approvalPromptGeneration || promptRunId !== byId('run-id').value) return;
         const fields = ['schema_version', 'run_id', 'state_version', 'action_kind', 'title',
           'details', 'action_fingerprint', 'allowed_decisions'];
         if (!loadedPrompt || typeof loadedPrompt !== 'object' || Array.isArray(loadedPrompt) ||
@@ -951,7 +964,7 @@ _HTML = r"""<!doctype html>
             (selectedRunVersion !== null && loadedPrompt.state_version < selectedRunVersion) ||
             !Object.hasOwn(approvalDetailFields, loadedPrompt.action_kind) ||
             !validApprovalText(loadedPrompt.title, 500) || !loadedPrompt.title.trim() ||
-            !validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details) ||
+            !approvalDetailsValid ||
             typeof loadedPrompt.action_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(loadedPrompt.action_fingerprint) ||
             !Array.isArray(loadedPrompt.allowed_decisions) || loadedPrompt.allowed_decisions.length !== 2 ||
             !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {

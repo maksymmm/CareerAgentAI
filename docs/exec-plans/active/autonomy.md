@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate application approval semantics: job/application identities and visible text must be
+normalized and non-empty, optional company identity remains nullable, and Web Crypto must prove
+the lowercase SHA-256 digest matches the exact UTF-8 artifact before rendering. Chromium rejects
+a syntactically valid mismatched digest without disclosure or decision activation, then proves the
+next valid nullable-company application remains actionable.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate message approval semantics: provider message details now require provider-safe message,
 sender and recipient identifiers, a normalized non-empty header-safe subject, and a normalized
 non-empty body before rendering. Chromium rejects a path-like message ID and injected subject
