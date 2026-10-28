@@ -531,6 +531,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
         def __init__(self):
             super().__init__()
             self.run_id = None
+            self.prompt_reads = 0
 
         def start(self, request, *, run_id=None):
             self.started = (request, run_id)
@@ -542,6 +543,20 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
 
         def get_candidate_approval_prompt(self, run_id, *, user_id):
             assert (run_id, user_id) == (self.run_id, "candidate-1")
+            self.prompt_reads += 1
+            details = {
+                "job_id": "job-1",
+                "job_title": "Platform Engineer",
+                "company": "Sandbox GmbH",
+                "company_id": "company-1",
+                "application_id": "application-1",
+                "application_version": 1,
+                "application_status": "saved",
+                "artifact_content": "Candidate application",
+                "artifact_sha256": "1" * 64,
+            }
+            if self.prompt_reads == 1:
+                details["private_provider_payload"] = "must not render"
             return SimpleNamespace(
                 to_dict=lambda: {
                     "schema_version": 1,
@@ -551,7 +566,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "allowed_decisions": ["approve", "decline"],
                     "action_fingerprint": "0" * 64,
                     "title": "Approve application",
-                    "details": {"company": "Sandbox GmbH"},
+                    "details": details,
                 }
             )
 
@@ -585,10 +600,14 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
 
             page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert "private_provider_payload" not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve application").wait_for()
-            assert page.locator("#action-details").text_content() == (
-                '{\n  "company": "Sandbox GmbH"\n}'
-            )
+            assert '"company": "Sandbox GmbH"' in page.locator("#action-details").text_content()
 
             page.locator("#token").fill("changed")
             assert page.locator("#approve").is_disabled()
@@ -755,6 +774,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "loadedPrompt.state_version < selectedRunVersion" in html[
         prompt_get:html.index("promptInFlight = false", prompt_get)
     ]
+    assert "const approvalDetailFields" in html
+    assert "!hasExactFields(loadedPrompt.details, approvalDetailFields[loadedPrompt.action_kind])" in html
     assert html.index("selectedRunVersion = loadedPrompt.state_version", prompt_get) > html.index(
         "throw new Error(\'Invalid approval prompt. Load it again.\')", prompt_get
     )

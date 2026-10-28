@@ -364,6 +364,9 @@ Run status responses are validated as an exact six-field minimal snapshot before
 unexpected or private backend fields are rejected without entering the result pane.
 Recovery and decision responses likewise require only the selected run ID and a known phase;
 private provider fields are rejected before either action result is rendered.
+Approval prompt details are restricted to the exact public field set for application,
+message or interview decisions. Extra provider/internal fields invalidate the prompt
+before any details render or approve/decline controls become available.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

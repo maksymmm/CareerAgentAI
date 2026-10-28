@@ -584,6 +584,17 @@ _HTML = r"""<!doctype html>
     const validRunFlags = item =>
       item.terminal === ['complete', 'failed'].includes(item.phase) &&
       (!item.terminal || !item.waiting_for_human);
+    const approvalDetailFields = {
+      approve_application: ['job_id', 'job_title', 'company', 'company_id', 'application_id',
+        'application_version', 'application_status', 'artifact_content', 'artifact_sha256'],
+      approve_message: ['message_id', 'sender', 'recipient', 'subject', 'body'],
+      approve_interview: ['event_id', 'employer', 'event_type', 'location', 'local_date',
+        'local_start_time', 'local_end_date', 'local_end_time', 'timezone', 'utc_offset',
+        'end_utc_offset', 'status'],
+    };
+    const hasExactFields = (value, fields) => value && typeof value === 'object' &&
+      !Array.isArray(value) && Object.keys(value).length === fields.length &&
+      fields.every(field => Object.hasOwn(value, field));
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
@@ -868,9 +879,9 @@ _HTML = r"""<!doctype html>
             loadedPrompt.schema_version !== 1 || loadedPrompt.run_id !== promptRunId ||
             !Number.isSafeInteger(loadedPrompt.state_version) || loadedPrompt.state_version < 0 ||
             (selectedRunVersion !== null && loadedPrompt.state_version < selectedRunVersion) ||
-            !['approve_application', 'approve_message', 'approve_interview'].includes(loadedPrompt.action_kind) ||
+            !Object.hasOwn(approvalDetailFields, loadedPrompt.action_kind) ||
             typeof loadedPrompt.title !== 'string' || !loadedPrompt.title.trim() ||
-            !loadedPrompt.details || typeof loadedPrompt.details !== 'object' || Array.isArray(loadedPrompt.details) ||
+            !hasExactFields(loadedPrompt.details, approvalDetailFields[loadedPrompt.action_kind]) ||
             typeof loadedPrompt.action_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(loadedPrompt.action_fingerprint) ||
             !Array.isArray(loadedPrompt.allowed_decisions) || loadedPrompt.allowed_decisions.length !== 2 ||
             !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {
