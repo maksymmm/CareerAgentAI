@@ -4,7 +4,8 @@ Candidate approval-detail value boundary: exact field names are no longer suffic
 message/interview details must contain only string values, while application versions and
 artifact digests retain their bounded integer and lowercase SHA-256 contracts. Chromium
 proves a structured private payload hidden inside an allowed field is rejected without
-rendering or activating a decision, followed by a valid actionable prompt.
+rendering or activating a decision. It then proves the existing nullable application
+company ID and nullable interview end fields remain valid and actionable.
 Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
 
 Candidate approval-detail boundary: the sandbox now accepts only the exact public detail

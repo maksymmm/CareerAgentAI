@@ -599,10 +599,17 @@ _HTML = r"""<!doctype html>
       const fields = approvalDetailFields[kind];
       if (!fields || !hasExactFields(value, fields)) return false;
       if (kind === 'approve_application') {
-        const textFields = fields.filter(field => !['application_version', 'artifact_sha256'].includes(field));
+        const textFields = fields.filter(field =>
+          !['company_id', 'application_version', 'artifact_sha256'].includes(field));
         return textFields.every(field => typeof value[field] === 'string') &&
+          (value.company_id === null || typeof value.company_id === 'string') &&
           Number.isSafeInteger(value.application_version) && value.application_version >= 1 &&
           typeof value.artifact_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.artifact_sha256);
+      }
+      if (kind === 'approve_interview') {
+        const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];
+        return fields.every(field => typeof value[field] === 'string' ||
+          (nullableFields.includes(field) && value[field] === null));
       }
       return fields.every(field => typeof value[field] === 'string');
     };
