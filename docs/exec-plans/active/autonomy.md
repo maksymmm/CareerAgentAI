@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate approval-detail boundary: the sandbox now accepts only the exact public detail
+field set for application, message and interview prompts. Extra provider or internal fields
+invalidate the prompt before rendering and before approve/decline controls activate. A
+Chromium regression proves a contaminated prompt cannot disclose its private field and that
+a subsequent valid prompt remains actionable.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate ranking text integrity: provider descriptions and location country/city
 values now pass bounded control-character and Unicode-surrogate validation before
 deterministic ranking, while location remote flags must be actual booleans. Malformed
