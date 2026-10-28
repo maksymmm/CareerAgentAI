@@ -173,71 +173,80 @@ _HTML = r"""<!doctype html>
     let selectedEventId = null;
     let selectedEventVersion = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+    const calendarDate = value => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const [year, month, day] = value.split('-').map(Number);
+      const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+      const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+      return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1];
+    };
+    const localTime = value => typeof value === 'string' &&
+      /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{6})?$/.test(value);
+    const utcOffset = value => typeof value === 'string' &&
+      /^[+-](?:[01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
+    const timezoneName = value => {
+      if (typeof value !== 'string' || !value || /^[+-]/.test(value)) return false;
+      try { new Intl.DateTimeFormat('en-GB', {timeZone: value}); } catch (error) { return false; }
+      return true;
+    };
+    const localEpoch = (day, clock, zoneOffset) => {
+      const [year, month, dayOfMonth] = day.split('-').map(Number);
+      const [wholeTime, fraction = '000000'] = clock.split('.');
+      const utc = new Date(0);
+      utc.setUTCFullYear(year, month - 1, dayOfMonth);
+      utc.setUTCHours(...wholeTime.split(':').map(Number), 0);
+      const [hours, minutes, seconds = 0] = zoneOffset.slice(1).split(':').map(Number);
+      const offsetSeconds = (hours * 3600 + minutes * 60 + seconds) * (zoneOffset[0] === '-' ? -1 : 1);
+      return BigInt(utc.getTime()) * 1000n + BigInt(fraction) - BigInt(offsetSeconds) * 1000000n;
+    };
+    const timezoneMatches = (zoneName, micros, day, clock) => {
+      const zone = new Intl.DateTimeFormat('en-GB-u-ca-iso8601-nu-latn', {
+        timeZone: zoneName, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
+      const remainder = ((micros % 1000000n) + 1000000n) % 1000000n;
+      const wholeSecond = new Date(Number((micros - remainder) / 1000n));
+      const parts = Object.fromEntries(zone.formatToParts(wholeSecond).map(part => [part.type, part.value]));
+      return [parts.year.padStart(4, '0'), parts.month, parts.day].join('-') === day &&
+        [parts.hour, parts.minute, parts.second].join(':') === clock.split('.')[0];
+    };
     const eventFields = ['event_id', 'employer_name', 'event_type', 'location', 'status', 'state_version',
       'start_at', 'end_at', 'local_date', 'local_start_time', 'local_end_date', 'local_end_time',
       'timezone_name', 'utc_offset', 'end_utc_offset'];
     function eventSnapshot(item) {
       const text = (value, max) => typeof value === 'string' && value.length > 0 && Array.from(value).length <= max;
-      const date = value => {
-        if (!text(value, 10) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-        const [year, month, day] = value.split('-').map(Number);
-        const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-        const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1];
-      };
-      const time = value => text(value, 15) && [8, 15].includes(value.length) && /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{6})?$/.test(value);
-      const offset = value => text(value, 9) && [6, 9].includes(value.length) && /^[+-](?:[01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
       const instant = value => {
         if (!text(value, 40)) return false;
         const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-]\d{2}:\d{2}(?::\d{2})?)$/.exec(value);
-        return !!match && match[0] === value && date(match[1]) && time(match[2]) && offset(match[3]);
-      };
-      const epoch = (day, clock, zoneOffset) => {
-        // Date supplies exact whole seconds only; BigInt retains every microsecond.
-        const [year, month, dayOfMonth] = day.split('-').map(Number);
-        const [wholeTime, fraction = '000000'] = clock.split('.');
-        const utc = new Date(0);
-        utc.setUTCFullYear(year, month - 1, dayOfMonth);
-        utc.setUTCHours(...wholeTime.split(':').map(Number), 0);
-        const [hours, minutes, seconds = 0] = zoneOffset.slice(1).split(':').map(Number);
-        const offsetSeconds = (hours * 3600 + minutes * 60 + seconds) * (zoneOffset[0] === '-' ? -1 : 1);
-        return BigInt(utc.getTime()) * 1000n + BigInt(fraction) - BigInt(offsetSeconds) * 1000000n;
+        return !!match && match[0] === value && calendarDate(match[1]) &&
+          localTime(match[2]) && utcOffset(match[3]);
       };
       const instantEpoch = value => {
         const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d{6})?)([+-].+)$/.exec(value);
-        return epoch(match[1], match[2], match[3]);
+        return localEpoch(match[1], match[2], match[3]);
       };
       if (!item || !eventId(item.event_id) || !text(item.employer_name, 500) || !text(item.location, 2000) ||
           !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(item.event_type) ||
           !['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(item.status) ||
           !Number.isSafeInteger(item.state_version) || item.state_version < 1 || !instant(item.start_at) ||
-          !date(item.local_date) || !time(item.local_start_time) || !text(item.timezone_name, 200) || !offset(item.utc_offset) ||
+          !calendarDate(item.local_date) || !localTime(item.local_start_time) ||
+          !text(item.timezone_name, 200) || !utcOffset(item.utc_offset) ||
           !(item.end_at === null ? [item.local_end_date, item.local_end_time, item.end_utc_offset].every(value => value === null) :
             instant(item.end_at) &&
-            date(item.local_end_date) && time(item.local_end_time) && offset(item.end_utc_offset))) {
+            calendarDate(item.local_end_date) && localTime(item.local_end_time) && utcOffset(item.end_utc_offset))) {
         throw new Error('Invalid event snapshot.');
       }
       const start = instantEpoch(item.start_at);
-      if (epoch(item.local_date, item.local_start_time, item.utc_offset) !== start ||
+      if (localEpoch(item.local_date, item.local_start_time, item.utc_offset) !== start ||
           (item.end_at !== null && (instantEpoch(item.end_at) <= start ||
-            epoch(item.local_end_date, item.local_end_time, item.end_utc_offset) !== instantEpoch(item.end_at)))) {
+            localEpoch(item.local_end_date, item.local_end_time, item.end_utc_offset) !== instantEpoch(item.end_at)))) {
         throw new Error('Inconsistent event timestamps.');
       }
       // Browser and server timezone databases may differ historically. Fail closed
       // on disagreement instead of displaying an unverified zone label.
       if (/^[+-]/.test(item.timezone_name)) throw new Error('Invalid event timezone.');
-      const zone = new Intl.DateTimeFormat('en-GB-u-ca-iso8601-nu-latn', {
-        timeZone: item.timezone_name, year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
-      const zoneMatches = (micros, localDate, localTime) => {
-        const remainder = ((micros % 1000000n) + 1000000n) % 1000000n;
-        const wholeSecond = new Date(Number((micros - remainder) / 1000n));
-        const parts = Object.fromEntries(zone.formatToParts(wholeSecond).map(part => [part.type, part.value]));
-        return [parts.year.padStart(4, '0'), parts.month, parts.day].join('-') === localDate &&
-          [parts.hour, parts.minute, parts.second].join(':') === localTime.split('.')[0];
-      };
-      if (!zoneMatches(start, item.local_date, item.local_start_time) ||
-          (item.end_at !== null && !zoneMatches(instantEpoch(item.end_at), item.local_end_date, item.local_end_time))) {
+      if (!timezoneMatches(item.timezone_name, start, item.local_date, item.local_start_time) ||
+          (item.end_at !== null && !timezoneMatches(item.timezone_name, instantEpoch(item.end_at),
+            item.local_end_date, item.local_end_time))) {
         throw new Error('Event timezone data does not match this browser.');
       }
       return Object.fromEntries(eventFields.map(key => [key, item[key]]));
@@ -624,8 +633,22 @@ _HTML = r"""<!doctype html>
       }
       if (kind === 'approve_interview') {
         const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];
-        return fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]) ||
+        const validScalars = fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]) ||
           (nullableFields.includes(field) && value[field] === null));
+        const endValues = nullableFields.map(field => value[field]);
+        if (!validScalars || !eventId(value.event_id) ||
+            !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(value.event_type) ||
+            !['proposed', 'reschedule_requested'].includes(value.status) ||
+            !calendarDate(value.local_date) || !localTime(value.local_start_time) ||
+            !timezoneName(value.timezone) || !utcOffset(value.utc_offset) ||
+            !(endValues.every(item => item === null) ||
+              (calendarDate(value.local_end_date) && localTime(value.local_end_time) &&
+                utcOffset(value.end_utc_offset)))) return false;
+        const start = localEpoch(value.local_date, value.local_start_time, value.utc_offset);
+        if (!timezoneMatches(value.timezone, start, value.local_date, value.local_start_time)) return false;
+        if (endValues.every(item => item === null)) return true;
+        const end = localEpoch(value.local_end_date, value.local_end_time, value.end_utc_offset);
+        return end > start && timezoneMatches(value.timezone, end, value.local_end_date, value.local_end_time);
       }
       return fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]));
     };
