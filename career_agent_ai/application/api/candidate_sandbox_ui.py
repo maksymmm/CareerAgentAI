@@ -631,6 +631,15 @@ _HTML = r"""<!doctype html>
     const sha256Hex = async value => Array.from(new Uint8Array(
       await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))))
       .map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const canonicalJson = value => {
+      if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
+      if (value && typeof value === 'object') return '{' + Object.keys(value).sort()
+        .map(key => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
+      return JSON.stringify(value);
+    };
+    const approvalFingerprint = (kind, title, details) => sha256Hex(canonicalJson({
+      details, kind, title,
+    }));
     const validApprovalDetails = async (kind, value) => {
       const fields = approvalDetailFields[kind];
       if (!fields || !hasExactFields(value, fields)) return false;
@@ -954,6 +963,11 @@ _HTML = r"""<!doctype html>
           !Array.isArray(loadedPrompt) && Object.hasOwn(loadedPrompt, 'action_kind') &&
           Object.hasOwn(loadedPrompt, 'details') &&
           await validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details);
+        const fingerprintValid = approvalDetailsValid &&
+          typeof loadedPrompt.title === 'string' &&
+          typeof loadedPrompt.action_fingerprint === 'string' &&
+          await approvalFingerprint(loadedPrompt.action_kind, loadedPrompt.title, loadedPrompt.details) ===
+            loadedPrompt.action_fingerprint;
         if (promptGeneration !== approvalPromptGeneration || promptRunId !== byId('run-id').value) return;
         const fields = ['schema_version', 'run_id', 'state_version', 'action_kind', 'title',
           'details', 'action_fingerprint', 'allowed_decisions'];
@@ -964,7 +978,7 @@ _HTML = r"""<!doctype html>
             (selectedRunVersion !== null && loadedPrompt.state_version < selectedRunVersion) ||
             !Object.hasOwn(approvalDetailFields, loadedPrompt.action_kind) ||
             !validApprovalText(loadedPrompt.title, 500) || !loadedPrompt.title.trim() ||
-            !approvalDetailsValid ||
+            !approvalDetailsValid || !fingerprintValid ||
             typeof loadedPrompt.action_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(loadedPrompt.action_fingerprint) ||
             !Array.isArray(loadedPrompt.allowed_decisions) || loadedPrompt.allowed_decisions.length !== 2 ||
             !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {
