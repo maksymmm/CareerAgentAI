@@ -367,6 +367,11 @@ private provider fields are rejected before either action result is rendered.
 Approval prompt details are restricted to the exact public field set for application,
 message or interview decisions. Extra provider/internal fields invalidate the prompt
 before any details render or approve/decline controls become available.
+Allowed detail values must also match the public scalar contract: message/interview values
+are strings, while application versions and artifact digests retain their integer and
+lowercase SHA-256 formats. Structured private payloads cannot hide inside an allowed field.
+The existing optional application company ID and interview end-date/time/offset fields remain
+nullable, preserving valid provider records that do not carry those optional values.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

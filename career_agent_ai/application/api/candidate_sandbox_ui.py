@@ -595,6 +595,24 @@ _HTML = r"""<!doctype html>
     const hasExactFields = (value, fields) => value && typeof value === 'object' &&
       !Array.isArray(value) && Object.keys(value).length === fields.length &&
       fields.every(field => Object.hasOwn(value, field));
+    const validApprovalDetails = (kind, value) => {
+      const fields = approvalDetailFields[kind];
+      if (!fields || !hasExactFields(value, fields)) return false;
+      if (kind === 'approve_application') {
+        const textFields = fields.filter(field =>
+          !['company_id', 'application_version', 'artifact_sha256'].includes(field));
+        return textFields.every(field => typeof value[field] === 'string') &&
+          (value.company_id === null || typeof value.company_id === 'string') &&
+          Number.isSafeInteger(value.application_version) && value.application_version >= 1 &&
+          typeof value.artifact_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.artifact_sha256);
+      }
+      if (kind === 'approve_interview') {
+        const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];
+        return fields.every(field => typeof value[field] === 'string' ||
+          (nullableFields.includes(field) && value[field] === null));
+      }
+      return fields.every(field => typeof value[field] === 'string');
+    };
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
@@ -881,7 +899,7 @@ _HTML = r"""<!doctype html>
             (selectedRunVersion !== null && loadedPrompt.state_version < selectedRunVersion) ||
             !Object.hasOwn(approvalDetailFields, loadedPrompt.action_kind) ||
             typeof loadedPrompt.title !== 'string' || !loadedPrompt.title.trim() ||
-            !hasExactFields(loadedPrompt.details, approvalDetailFields[loadedPrompt.action_kind]) ||
+            !validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details) ||
             typeof loadedPrompt.action_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(loadedPrompt.action_fingerprint) ||
             !Array.isArray(loadedPrompt.allowed_decisions) || loadedPrompt.allowed_decisions.length !== 2 ||
             !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {

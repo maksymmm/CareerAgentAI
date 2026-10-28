@@ -548,7 +548,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 "job_id": "job-1",
                 "job_title": "Platform Engineer",
                 "company": "Sandbox GmbH",
-                "company_id": "company-1",
+                "company_id": None,
                 "application_id": "application-1",
                 "application_version": 1,
                 "application_status": "saved",
@@ -557,15 +557,36 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             }
             if self.prompt_reads == 1:
                 details["private_provider_payload"] = "must not render"
+            elif self.prompt_reads == 2:
+                details["company"] = {"private_provider_payload": "must not render"}
+            action_kind = "approve_application"
+            title = "Approve application"
+            if self.prompt_reads >= 4:
+                action_kind = "approve_interview"
+                title = "Approve interview"
+                details = {
+                    "event_id": "event-1",
+                    "employer": "Sandbox GmbH",
+                    "event_type": "interview",
+                    "location": "Berlin",
+                    "local_date": "2026-10-29",
+                    "local_start_time": "10:00",
+                    "local_end_date": None,
+                    "local_end_time": None,
+                    "timezone": "Europe/Berlin",
+                    "utc_offset": "+01:00",
+                    "end_utc_offset": None,
+                    "status": "pending",
+                }
             return SimpleNamespace(
                 to_dict=lambda: {
                     "schema_version": 1,
                     "run_id": run_id,
                     "state_version": 3,
-                    "action_kind": "approve_application",
+                    "action_kind": action_kind,
                     "allowed_decisions": ["approve", "decline"],
                     "action_fingerprint": "0" * 64,
-                    "title": "Approve application",
+                    "title": title,
                     "details": details,
                 }
             )
@@ -606,8 +627,15 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert page.locator("#decline").is_disabled()
 
             page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert "private_provider_payload" not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve application").wait_for()
             assert '"company": "Sandbox GmbH"' in page.locator("#action-details").text_content()
+            assert '"company_id": null' in page.locator("#action-details").text_content()
 
             page.locator("#token").fill("changed")
             assert page.locator("#approve").is_disabled()
@@ -616,7 +644,10 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             page.locator("#token").fill("valid")
             assert page.locator("#approve").is_disabled()
             page.locator("#prompt").click()
-            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.locator("#action-title").get_by_text("Approve interview").wait_for()
+            assert '"local_end_date": null' in page.locator("#action-details").text_content()
+            assert '"local_end_time": null' in page.locator("#action-details").text_content()
+            assert '"end_utc_offset": null' in page.locator("#action-details").text_content()
             page.locator("#approve").click()
             page.locator("#result").get_by_text('"phase": "message_approval"').wait_for()
             browser.close()
@@ -775,7 +806,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         prompt_get:html.index("promptInFlight = false", prompt_get)
     ]
     assert "const approvalDetailFields" in html
-    assert "!hasExactFields(loadedPrompt.details, approvalDetailFields[loadedPrompt.action_kind])" in html
+    assert "!validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details)" in html
+    assert "Number.isSafeInteger(value.application_version)" in html
+    assert "/^[0-9a-f]{64}$/.test(value.artifact_sha256)" in html
+    assert "value.company_id === null || typeof value.company_id === 'string'" in html
+    assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
     assert html.index("selectedRunVersion = loadedPrompt.state_version", prompt_get) > html.index(
         "throw new Error(\'Invalid approval prompt. Load it again.\')", prompt_get
     )
