@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate approval-text boundary: prompt titles and every candidate-visible text detail now
+retain their domain length ceilings and reject forbidden controls or malformed Unicode before
+rendering. Application prompts additionally require the expected pre-submission `saved` status.
+Chromium rejects an oversized provider company value, then proves nullable application and
+interview prompts remain actionable.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate approval-detail value boundary: exact field names are no longer sufficient;
 message/interview details must contain only string values, while application versions and
 artifact digests retain their bounded integer and lowercase SHA-256 contracts. Chromium

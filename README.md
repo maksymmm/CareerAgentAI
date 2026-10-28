@@ -372,6 +372,9 @@ are strings, while application versions and artifact digests retain their intege
 lowercase SHA-256 formats. Structured private payloads cannot hide inside an allowed field.
 The existing optional application company ID and interview end-date/time/offset fields remain
 nullable, preserving valid provider records that do not carry those optional values.
+Candidate-visible prompt titles and text details also enforce their domain length ceilings,
+reject forbidden control characters and reject malformed Unicode before rendering. Application
+status remains the expected pre-submission `saved` state.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

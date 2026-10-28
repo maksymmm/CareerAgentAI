@@ -559,9 +559,11 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["private_provider_payload"] = "must not render"
             elif self.prompt_reads == 2:
                 details["company"] = {"private_provider_payload": "must not render"}
+            elif self.prompt_reads == 3:
+                details["company"] = "x" * 201
             action_kind = "approve_application"
             title = "Approve application"
-            if self.prompt_reads >= 4:
+            if self.prompt_reads >= 5:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -629,6 +631,12 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             page.locator("#prompt").click()
             page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
             assert "private_provider_payload" not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert "x" * 201 not in page.locator("body").text_content()
             assert page.locator("#approve").is_disabled()
             assert page.locator("#decline").is_disabled()
 
@@ -809,8 +817,13 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "!validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details)" in html
     assert "Number.isSafeInteger(value.application_version)" in html
     assert "/^[0-9a-f]{64}$/.test(value.artifact_sha256)" in html
-    assert "value.company_id === null || typeof value.company_id === 'string'" in html
+    assert "value.company_id === null || validApprovalText(value.company_id, 200)" in html
     assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
+    assert "const approvalTextLimits" in html
+    assert "validApprovalText(value[field], approvalTextLimits[kind][field])" in html
+    assert "Array.from(value).length > maximum" in html
+    assert "encodeURIComponent(value)" in html
+    assert "value.application_status === 'saved'" in html
     assert html.index("selectedRunVersion = loadedPrompt.state_version", prompt_get) > html.index(
         "throw new Error(\'Invalid approval prompt. Load it again.\')", prompt_get
     )

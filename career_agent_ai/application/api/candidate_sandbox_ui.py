@@ -595,23 +595,39 @@ _HTML = r"""<!doctype html>
     const hasExactFields = (value, fields) => value && typeof value === 'object' &&
       !Array.isArray(value) && Object.keys(value).length === fields.length &&
       fields.every(field => Object.hasOwn(value, field));
+    const approvalTextLimits = {
+      approve_application: {job_id: 200, job_title: 500, company: 200, company_id: 200,
+        application_id: 200, application_status: 20, artifact_content: 100000},
+      approve_message: {message_id: 200, sender: 200, recipient: 200, subject: 500, body: 100000},
+      approve_interview: {event_id: 200, employer: 500, event_type: 50, location: 2000,
+        local_date: 50, local_start_time: 50, local_end_date: 50, local_end_time: 50,
+        timezone: 100, utc_offset: 20, end_utc_offset: 20, status: 50},
+    };
+    const validApprovalText = (value, maximum) => {
+      if (typeof value !== 'string' || Array.from(value).length > maximum ||
+          /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(value)) return false;
+      try { encodeURIComponent(value); } catch (error) { return false; }
+      return true;
+    };
     const validApprovalDetails = (kind, value) => {
       const fields = approvalDetailFields[kind];
       if (!fields || !hasExactFields(value, fields)) return false;
       if (kind === 'approve_application') {
         const textFields = fields.filter(field =>
           !['company_id', 'application_version', 'artifact_sha256'].includes(field));
-        return textFields.every(field => typeof value[field] === 'string') &&
-          (value.company_id === null || typeof value.company_id === 'string') &&
+        return textFields.every(field =>
+          validApprovalText(value[field], approvalTextLimits[kind][field])) &&
+          (value.company_id === null || validApprovalText(value.company_id, 200)) &&
+          value.application_status === 'saved' &&
           Number.isSafeInteger(value.application_version) && value.application_version >= 1 &&
           typeof value.artifact_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.artifact_sha256);
       }
       if (kind === 'approve_interview') {
         const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];
-        return fields.every(field => typeof value[field] === 'string' ||
+        return fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]) ||
           (nullableFields.includes(field) && value[field] === null));
       }
-      return fields.every(field => typeof value[field] === 'string');
+      return fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]));
     };
     async function loadRunList(after = null) {
       clearRunList();
@@ -898,7 +914,7 @@ _HTML = r"""<!doctype html>
             !Number.isSafeInteger(loadedPrompt.state_version) || loadedPrompt.state_version < 0 ||
             (selectedRunVersion !== null && loadedPrompt.state_version < selectedRunVersion) ||
             !Object.hasOwn(approvalDetailFields, loadedPrompt.action_kind) ||
-            typeof loadedPrompt.title !== 'string' || !loadedPrompt.title.trim() ||
+            !validApprovalText(loadedPrompt.title, 500) || !loadedPrompt.title.trim() ||
             !validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details) ||
             typeof loadedPrompt.action_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(loadedPrompt.action_fingerprint) ||
             !Array.isArray(loadedPrompt.allowed_decisions) || loadedPrompt.allowed_decisions.length !== 2 ||
