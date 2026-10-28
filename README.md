@@ -379,6 +379,9 @@ Interview approval prompts additionally require a valid event identity, closed e
 actionable lifecycle status, real calendar date, exact local time and UTC-offset formats, and a
 browser-recognized IANA timezone. Optional end date/time/offset values must be either all absent
 or all valid, so malformed provider schedule details cannot activate a calendar decision.
+Message approval prompts likewise require provider-safe message/sender/recipient identifiers,
+a normalized non-empty header-safe subject, and a normalized non-empty body. Malformed message
+details are rejected before rendering or enabling an external-action decision.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The
