@@ -819,6 +819,7 @@ _HTML = r"""<!doctype html>
         const runId = byId('run-id').value;
         const requestNumber = latestResultRequest + 1;
         const payload = await call(runPath('/continue'), {method: 'POST'}, 'Recovery request failed.');
+        if (requestNumber !== latestResultRequest) return;
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
             Object.keys(payload).length !== 2 || payload.run_id !== runId ||
             !Object.hasOwn(payload, 'phase') || !runPhases.includes(payload.phase)) {
@@ -913,6 +914,7 @@ _HTML = r"""<!doctype html>
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)}, 'Decision request failed.');
+        if (requestNumber !== latestResultRequest) return;
         if (!result || typeof result !== 'object' || Array.isArray(result) ||
             Object.keys(result).length !== 2 || result.run_id !== payload.run_id ||
             !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {

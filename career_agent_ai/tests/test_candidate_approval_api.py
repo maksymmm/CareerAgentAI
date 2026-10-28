@@ -742,6 +742,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "payload.run_id !== runId" in html[recovery_post:prompt_handler]
     assert "!runPhases.includes(payload.phase)" in html[recovery_post:prompt_handler]
     assert "requestNumber === latestResultRequest" in html[recovery_post:prompt_handler]
+    assert html.index("requestNumber !== latestResultRequest", recovery_post) < html.index(
+        "Object.keys(payload).length !== 2", recovery_post
+    )
     assert html.index("show({status: 200, payload: {run_id: payload.run_id", recovery_post) < prompt_handler
     assert "error.code = payload.error" in html
     assert "error.code === 'recovery_unavailable'" in html[recovery_post:prompt_handler]
@@ -775,6 +778,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "result.run_id !== payload.run_id" in html[decision_post:]
     assert "!runPhases.includes(result.phase)" in html[decision_post:]
     assert "requestNumber === latestResultRequest" in html[decision_post:]
+    assert html.index("requestNumber !== latestResultRequest", decision_post) < html.index(
+        "Object.keys(result).length !== 2", decision_post
+    )
     assert html.index("show({status: 200, payload: {run_id: result.run_id", decision_post) > decision_post
     call_helper = html[html.index("async function call"):html.index("async function guarded")]
     assert "safe.status = error.status" in call_helper
