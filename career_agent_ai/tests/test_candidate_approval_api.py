@@ -557,6 +557,8 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             }
             if self.prompt_reads == 1:
                 details["private_provider_payload"] = "must not render"
+            elif self.prompt_reads == 2:
+                details["company"] = {"private_provider_payload": "must not render"}
             return SimpleNamespace(
                 to_dict=lambda: {
                     "schema_version": 1,
@@ -598,6 +600,12 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             page.locator("#profile").fill("Senior Python engineer")
             page.locator("#start").click()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
+
+            page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert "private_provider_payload" not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
 
             page.locator("#prompt").click()
             page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
@@ -775,7 +783,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         prompt_get:html.index("promptInFlight = false", prompt_get)
     ]
     assert "const approvalDetailFields" in html
-    assert "!hasExactFields(loadedPrompt.details, approvalDetailFields[loadedPrompt.action_kind])" in html
+    assert "!validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details)" in html
+    assert "Number.isSafeInteger(value.application_version)" in html
+    assert "/^[0-9a-f]{64}$/.test(value.artifact_sha256)" in html
     assert html.index("selectedRunVersion = loadedPrompt.state_version", prompt_get) > html.index(
         "throw new Error(\'Invalid approval prompt. Load it again.\')", prompt_get
     )

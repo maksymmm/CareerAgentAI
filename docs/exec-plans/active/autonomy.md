@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate approval-detail value boundary: exact field names are no longer sufficient;
+message/interview details must contain only string values, while application versions and
+artifact digests retain their bounded integer and lowercase SHA-256 contracts. Chromium
+proves a structured private payload hidden inside an allowed field is rejected without
+rendering or activating a decision, followed by a valid actionable prompt.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate approval-detail boundary: the sandbox now accepts only the exact public detail
 field set for application, message and interview prompts. Extra provider or internal fields
 invalidate the prompt before rendering and before approve/decline controls activate. A
