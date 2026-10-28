@@ -1223,6 +1223,8 @@ Accepted newer event detail advances the selected event version floor; subsequen
 detail reads cannot roll back behind the newest observed schedule state.
 Run creation responses must contain only a canonical owner-scoped durable run identity
 and a known workflow phase before the sandbox selects the new run.
+Run-start responses are now validated before rendering and reduced to the allowlisted ID
+and phase, with stale start results prevented from replacing newer dashboard output.
 Candidate status responses are validated as an exact six-field minimal snapshot before
 any result rendering. Unexpected or private backend fields are rejected without entering
 the sandbox UI, with static and Chromium regression coverage.

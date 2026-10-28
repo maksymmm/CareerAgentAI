@@ -714,6 +714,7 @@ _HTML = r"""<!doctype html>
       byId('start').disabled = true;
       byId('start-panel').setAttribute('aria-busy', 'true');
       const requestNumber = ++latestStartRequest;
+      const resultRequest = latestResultRequest + 1;
       const requestedRunId = byId('start-run-id').value;
       try {
         const payload = await call('/v1/candidate/runs', {
@@ -721,7 +722,7 @@ _HTML = r"""<!doctype html>
           body: JSON.stringify({schema_version: 1, run_id: requestedRunId,
             keyword: byId('keyword').value, candidate_profile: byId('profile').value,
             location: byId('location').value}),
-        });
+        }, 'Run start request failed.');
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
             Object.keys(payload).length !== 2 || !Object.hasOwn(payload, 'run_id') ||
             !Object.hasOwn(payload, 'phase') ||
@@ -729,7 +730,10 @@ _HTML = r"""<!doctype html>
             !runPhases.includes(payload.phase)) {
           throw new Error('Invalid run start response.');
         }
-        if (requestNumber === latestStartRequest) selectRun(payload.run_id);
+        if (requestNumber === latestStartRequest && resultRequest === latestResultRequest) {
+          show({status: 201, payload: {run_id: payload.run_id, phase: payload.phase}});
+          selectRun(payload.run_id);
+        }
       } finally {
         startInFlight = false;
         byId('start').disabled = false;
