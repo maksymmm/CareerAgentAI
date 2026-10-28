@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from io import BytesIO
 import json
 import re
@@ -565,7 +566,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 6 <= self.prompt_reads <= 7:
+            if 7 <= self.prompt_reads <= 8:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -582,10 +583,10 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "end_utc_offset": None,
                     "status": "proposed",
                 }
-                if self.prompt_reads == 6:
+                if self.prompt_reads == 7:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
-            elif self.prompt_reads >= 8:
+            elif self.prompt_reads >= 9:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -595,9 +596,18 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 8:
+                if self.prompt_reads == 9:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
+            fingerprint = sha256(json.dumps(
+                {"kind": action_kind, "title": title, "details": details},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")).hexdigest()
+            if self.prompt_reads == 5:
+                fingerprint = "0" * 64
             return SimpleNamespace(
                 to_dict=lambda: {
                     "schema_version": 1,
@@ -605,7 +615,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "state_version": 3,
                     "action_kind": action_kind,
                     "allowed_decisions": ["approve", "decline"],
-                    "action_fingerprint": "0" * 64,
+                    "action_fingerprint": fingerprint,
                     "title": title,
                     "details": details,
                 }
@@ -665,6 +675,11 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert page.locator("#decline").is_disabled()
 
             page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve application").wait_for()
             assert '"company": "Sandbox GmbH"' in page.locator("#action-details").text_content()
             assert '"company_id": null' in page.locator("#action-details").text_content()
@@ -710,7 +725,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
     assert loop.submission is not None
     assert loop.submission.run_id == loop.run_id
     assert loop.submission.state_version == 3
-    assert loop.submission.action_fingerprint == "0" * 64
+    assert loop.submission.action_fingerprint != "0" * 64
     assert loop.submission.decision is ApprovalDecision.APPROVE
 
 
@@ -869,6 +884,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "const normalizedApplicationText" in html
     assert "await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))" in html
     assert "await sha256Hex(value.artifact_content) === value.artifact_sha256" in html
+    assert "const canonicalJson = value =>" in html
+    assert "await approvalFingerprint(loadedPrompt.action_kind, loadedPrompt.title, loadedPrompt.details)" in html
+    assert "!approvalDetailsValid || !fingerprintValid" in html
     assert "!/^\\p{White_Space}|\\p{White_Space}$/u.test(value)" in html
     assert "communicationIdentifier(value.message_id)" in html
     assert "communicationIdentifier(value.sender) && communicationIdentifier(value.recipient)" in html
