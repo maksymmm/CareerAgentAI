@@ -682,13 +682,18 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "byId('run-overview').textContent = state" in html
     assert "!runPhases.includes(snapshot.phase)" in html
     assert "!validRunFlags(snapshot)" in html
+    assert "Object.keys(snapshot).length !== statusFields.length" in html
+    assert "!statusFields.every(field => Object.hasOwn(snapshot, field))" in html
     assert "snapshot.state_version < selectedRunVersion" in html
     status_slice = html[html.index("byId(\'status\').addEventListener"):html.index("byId(\'continue\').addEventListener")]
     assert status_slice.index("selectedRunVersion = snapshot.state_version") > status_slice.index(
         "throw new Error(\'Invalid status snapshot.\')"
     )
+    assert status_slice.index("show({status: 200, payload: Object.fromEntries(") > status_slice.index(
+        "throw new Error(\'Invalid status snapshot.\')"
+    )
     status_handler = html.index("byId('status').addEventListener")
-    status_get = html.index("await call(runPath('/status'))", status_handler)
+    status_get = html.index("await call(runPath('/status'), {}, 'Status request failed.')", status_handler)
     assert html.index("if (statusInFlight)", status_handler) < status_get
     assert html.index("if (startInFlight)", status_handler) < status_get
     assert html.index("promptInFlight || recoveryInFlight || decisionInFlight", status_handler) < status_get

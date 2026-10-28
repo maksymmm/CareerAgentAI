@@ -358,6 +358,8 @@ Accepted newer event detail similarly advances the selected event version floor,
 later read cannot roll back behind schedule state already shown to the candidate.
 Run creation responses are accepted only when they contain a canonical owner-scoped
 durable run ID and a known workflow phase; malformed responses never replace the active run.
+Run status responses are validated as an exact six-field minimal snapshot before rendering;
+unexpected or private backend fields are rejected without entering the result pane.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

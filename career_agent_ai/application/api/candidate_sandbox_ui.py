@@ -767,9 +767,14 @@ _HTML = r"""<!doctype html>
       const runId = byId('run-id').value;
       const requestNumber = latestResultRequest + 1;
       try {
-        const snapshot = await call(runPath('/status'));
+        const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
         if (requestNumber !== latestResultRequest) return;
-        if (snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
+        const statusFields = ['schema_version', 'run_id', 'state_version', 'phase',
+          'waiting_for_human', 'terminal'];
+        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
+            Object.keys(snapshot).length !== statusFields.length ||
+            !statusFields.every(field => Object.hasOwn(snapshot, field)) ||
+            snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
             !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
             (selectedRunVersion !== null && snapshot.state_version < selectedRunVersion) ||
             !runPhases.includes(snapshot.phase) || typeof snapshot.waiting_for_human !== 'boolean' ||
@@ -777,6 +782,9 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid status snapshot.');
         }
         selectedRunVersion = snapshot.state_version;
+        show({status: 200, payload: Object.fromEntries(
+          statusFields.map(field => [field, snapshot[field]])
+        )});
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
