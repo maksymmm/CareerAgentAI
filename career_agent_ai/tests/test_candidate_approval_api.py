@@ -590,8 +590,8 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "message_id": "message-1",
                     "sender": "candidate@example.test",
                     "recipient": "recruiter@example.test",
-                    "subject": "Application follow-up",
-                    "body": "Thank you for considering my application.",
+                    "subject": "\ufeffApplication follow-up\ufeff",
+                    "body": "\ufeffThank you for considering my application.\ufeff",
                 }
                 if self.prompt_reads == 7:
                     details["message_id"] = "../private-message"
@@ -691,7 +691,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve message").wait_for()
             assert '"message_id": "message-1"' in page.locator("#action-details").text_content()
-            assert '"subject": "Application follow-up"' in page.locator("#action-details").text_content()
+            assert "Application follow-up" in page.locator("#action-details").text_content()
             assert not page.locator("#approve").is_disabled()
             browser.close()
     finally:
@@ -856,6 +856,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
     assert "const approvalTextLimits" in html
     assert "const communicationIdentifier" in html
+    assert "!/^\\p{White_Space}|\\p{White_Space}$/u.test(value)" in html
     assert "communicationIdentifier(value.message_id)" in html
     assert "communicationIdentifier(value.sender) && communicationIdentifier(value.recipient)" in html
     assert "normalizedMessageText(value.subject, approvalTextLimits[kind].subject, true)" in html

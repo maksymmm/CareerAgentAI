@@ -621,7 +621,8 @@ _HTML = r"""<!doctype html>
     const communicationIdentifier = value => typeof value === 'string' &&
       /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
     const normalizedMessageText = (value, maximum, header = false) =>
-      validApprovalText(value, maximum) && value.length > 0 && value === value.trim() &&
+      validApprovalText(value, maximum) && value.length > 0 &&
+      !/^\p{White_Space}|\p{White_Space}$/u.test(value) &&
       (!header || !/[\u0000-\u001f\u007f-\u009f]/.test(value)) &&
       (header || !value.includes('\r'));
     const validApprovalDetails = (kind, value) => {
