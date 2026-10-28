@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate interview approval semantics: provider schedule details now require a valid event ID,
+closed event type, actionable proposed/reschedule status, real calendar date, exact local time and
+UTC-offset formats, and a browser-recognized IANA timezone before rendering. Optional end fields
+must be wholly absent or wholly valid. Chromium rejects an impossible provider date/status without
+disclosure or decision activation, then proves the next valid nullable interview remains actionable.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate approval-text boundary: prompt titles and every candidate-visible text detail now
 retain their domain length ceilings and reject forbidden controls or malformed Unicode before
 rendering. Application prompts additionally require the expected pre-submission `saved` status.

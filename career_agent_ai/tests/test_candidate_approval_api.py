@@ -572,14 +572,17 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "event_type": "interview",
                     "location": "Berlin",
                     "local_date": "2026-10-29",
-                    "local_start_time": "10:00",
+                    "local_start_time": "10:00:00",
                     "local_end_date": None,
                     "local_end_time": None,
                     "timezone": "Europe/Berlin",
                     "utc_offset": "+01:00",
                     "end_utc_offset": None,
-                    "status": "pending",
+                    "status": "proposed",
                 }
+                if self.prompt_reads == 5:
+                    details["local_date"] = "2026-02-30"
+                    details["status"] = "accepted"
             return SimpleNamespace(
                 to_dict=lambda: {
                     "schema_version": 1,
@@ -651,6 +654,12 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert page.locator("#action-details").text_content() == ""
             page.locator("#token").fill("valid")
             assert page.locator("#approve").is_disabled()
+            page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert "2026-02-30" not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve interview").wait_for()
             assert '"local_end_date": null' in page.locator("#action-details").text_content()
@@ -820,6 +829,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "value.company_id === null || validApprovalText(value.company_id, 200)" in html
     assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
     assert "const approvalTextLimits" in html
+    assert "!calendarDate(value.local_date) || !localTime(value.local_start_time)" in html
+    assert "['proposed', 'reschedule_requested'].includes(value.status)" in html
+    assert "!timezoneName(value.timezone) || !utcOffset(value.utc_offset)" in html
+    assert "endValues.every(item => item === null)" in html
+    assert "end > start && timezoneMatches(value.timezone, end" in html
     assert "validApprovalText(value[field], approvalTextLimits[kind][field])" in html
     assert "Array.from(value).length > maximum" in html
     assert "encodeURIComponent(value)" in html
