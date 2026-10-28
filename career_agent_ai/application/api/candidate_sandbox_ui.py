@@ -693,7 +693,12 @@ _HTML = r"""<!doctype html>
         }
         return payload;
       } catch (error) {
-        if (!renderRaw) error = new Error(safeError);
+        if (!renderRaw) {
+          const safe = new Error(safeError);
+          safe.status = error.status;
+          safe.code = error.code;
+          error = safe;
+        }
         error.resultRequest = resultRequest;
         throw error;
       }
@@ -811,7 +816,17 @@ _HTML = r"""<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       try {
-        await call(runPath('/continue'), {method: 'POST'});
+        const runId = byId('run-id').value;
+        const requestNumber = latestResultRequest + 1;
+        const payload = await call(runPath('/continue'), {method: 'POST'}, 'Recovery request failed.');
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+            Object.keys(payload).length !== 2 || payload.run_id !== runId ||
+            !Object.hasOwn(payload, 'phase') || !runPhases.includes(payload.phase)) {
+          throw new Error('Invalid recovery response.');
+        }
+        if (requestNumber === latestResultRequest) {
+          show({status: 200, payload: {run_id: payload.run_id, phase: payload.phase}});
+        }
         invalidateApprovalPrompt('Recovery finished. Load the current approval prompt.');
       } catch (error) {
         if (error.code === 'recovery_unavailable') {
@@ -894,9 +909,18 @@ _HTML = r"""<!doctype html>
       const payload = {schema_version: 1, run_id: approvalPrompt.run_id,
         state_version: approvalPrompt.state_version,
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
+      const requestNumber = latestResultRequest + 1;
       try {
-        await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)});
+        const result = await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)}, 'Decision request failed.');
+        if (!result || typeof result !== 'object' || Array.isArray(result) ||
+            Object.keys(result).length !== 2 || result.run_id !== payload.run_id ||
+            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+          throw new Error('Invalid decision response.');
+        }
+        if (requestNumber === latestResultRequest) {
+          show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
+        }
       } finally {
         decisionInFlight = false;
         approvalPrompt = null;

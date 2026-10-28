@@ -1228,6 +1228,8 @@ and phase, with stale start results prevented from replacing newer dashboard out
 Candidate status responses are validated as an exact six-field minimal snapshot before
 any result rendering. Unexpected or private backend fields are rejected without entering
 the sandbox UI, with static and Chromium regression coverage.
+Candidate recovery and decision responses are also exact two-field contracts. Mismatched
+run identities, unknown phases, and unexpected private fields fail closed before rendering.
 Application detail is bound to the state version selected from the owner-scoped list;
 older detail is rejected while concurrently newer detail remains valid and read-only.
 

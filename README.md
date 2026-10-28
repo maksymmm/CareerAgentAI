@@ -362,6 +362,8 @@ They are validated before rendering, and only the allowlisted run ID and phase e
 result pane when the start remains the latest workflow result request.
 Run status responses are validated as an exact six-field minimal snapshot before rendering;
 unexpected or private backend fields are rejected without entering the result pane.
+Recovery and decision responses likewise require only the selected run ID and a known phase;
+private provider fields are rejected before either action result is rendered.
 
 `RuntimeCandidateApp.get_application(application_id, user_id=...)` reads a versioned
 single-application snapshot with the same minimal fields as the collection. The

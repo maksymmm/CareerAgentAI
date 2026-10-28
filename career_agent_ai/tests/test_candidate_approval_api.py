@@ -737,6 +737,12 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
     assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
+    assert "'Recovery request failed.'" in html[recovery_post:prompt_handler]
+    assert "Object.keys(payload).length !== 2" in html[recovery_post:prompt_handler]
+    assert "payload.run_id !== runId" in html[recovery_post:prompt_handler]
+    assert "!runPhases.includes(payload.phase)" in html[recovery_post:prompt_handler]
+    assert "requestNumber === latestResultRequest" in html[recovery_post:prompt_handler]
+    assert html.index("show({status: 200, payload: {run_id: payload.run_id", recovery_post) < prompt_handler
     assert "error.code = payload.error" in html
     assert "error.code === 'recovery_unavailable'" in html[recovery_post:prompt_handler]
     assert "byId('approve').disabled = !approvalPrompt" in html[recovery_post:prompt_handler]
@@ -764,6 +770,15 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("if (recoveryInFlight)", decision_start) < decision_post
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]
+    assert "'Decision request failed.'" in html[decision_post:]
+    assert "Object.keys(result).length !== 2" in html[decision_post:]
+    assert "result.run_id !== payload.run_id" in html[decision_post:]
+    assert "!runPhases.includes(result.phase)" in html[decision_post:]
+    assert "requestNumber === latestResultRequest" in html[decision_post:]
+    assert html.index("show({status: 200, payload: {run_id: result.run_id", decision_post) > decision_post
+    call_helper = html[html.index("async function call"):html.index("async function guarded")]
+    assert "safe.status = error.status" in call_helper
+    assert "safe.code = error.code" in call_helper
     assert html.index("decisionInFlight = true", decision_start) < decision_post
     assert html.index(
         "byId('approve').disabled = true", decision_start

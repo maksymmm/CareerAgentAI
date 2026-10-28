@@ -767,6 +767,15 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert durable_run_id.startswith("scoped-v2:")
             page.locator("#list-runs").click()
             page.locator("#owned-runs button").filter(has_text=durable_run_id).click()
+            if True:  # pragma: no cover - CI Chromium
+                page.route("**/v1/candidate/runs/*/continue", lambda route: route.fulfill(
+                    status=200, json={"run_id": durable_run_id,
+                                      "phase": "application_approval",
+                                      "private": "private-recovery-secret"}))
+                page.locator("#continue").click()
+                page.locator("#result").get_by_text("Invalid recovery response.", exact=False).wait_for()
+                assert "private-recovery-secret" not in page.locator("body").text_content()
+                page.unroute("**/v1/candidate/runs/*/continue")
             def stale_approval_prompt(route):
                 payload = route.fetch().json()
                 payload["state_version"] -= 1
@@ -909,6 +918,21 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text("Approval prompt request failed.", exact=False).wait_for()
             assert "private-prompt-json-secret" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/runs/*/approval")
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve job application").wait_for()
+            if True:  # pragma: no cover - CI Chromium
+                def malformed_decision_response(route):
+                    if route.request.method == "POST":
+                        route.fulfill(status=200, json={"run_id": durable_run_id,
+                                                        "phase": "complete",
+                                                        "private": "private-decision-secret"})
+                    else:
+                        route.continue_()
+                page.route("**/v1/candidate/runs/*/approval", malformed_decision_response)
+                page.locator("#approve").click()
+                page.locator("#result").get_by_text("Invalid decision response.", exact=False).wait_for()
+                assert "private-decision-secret" not in page.locator("body").text_content()
+                page.unroute("**/v1/candidate/runs/*/approval")
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve job application").wait_for()
             page.locator("#approve").click()
