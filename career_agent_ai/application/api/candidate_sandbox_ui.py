@@ -618,6 +618,12 @@ _HTML = r"""<!doctype html>
       try { encodeURIComponent(value); } catch (error) { return false; }
       return true;
     };
+    const communicationIdentifier = value => typeof value === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+    const normalizedMessageText = (value, maximum, header = false) =>
+      validApprovalText(value, maximum) && value.length > 0 && value === value.trim() &&
+      (!header || !/[\u0000-\u001f\u007f-\u009f]/.test(value)) &&
+      (header || !value.includes('\r'));
     const validApprovalDetails = (kind, value) => {
       const fields = approvalDetailFields[kind];
       if (!fields || !hasExactFields(value, fields)) return false;
@@ -630,6 +636,12 @@ _HTML = r"""<!doctype html>
           value.application_status === 'saved' &&
           Number.isSafeInteger(value.application_version) && value.application_version >= 1 &&
           typeof value.artifact_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.artifact_sha256);
+      }
+      if (kind === 'approve_message') {
+        return communicationIdentifier(value.message_id) &&
+          communicationIdentifier(value.sender) && communicationIdentifier(value.recipient) &&
+          normalizedMessageText(value.subject, approvalTextLimits[kind].subject, true) &&
+          normalizedMessageText(value.body, approvalTextLimits[kind].body);
       }
       if (kind === 'approve_interview') {
         const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];

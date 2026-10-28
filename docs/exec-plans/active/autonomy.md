@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate message approval semantics: provider message details now require provider-safe message,
+sender and recipient identifiers, a normalized non-empty header-safe subject, and a normalized
+non-empty body before rendering. Chromium rejects a path-like message ID and injected subject
+without disclosure or decision activation, then proves the next valid message remains actionable.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate interview approval semantics: provider schedule details now require a valid event ID,
 closed event type, actionable proposed/reschedule status, real calendar date, exact local time and
 UTC-offset formats, and a browser-recognized IANA timezone before rendering. Optional end fields

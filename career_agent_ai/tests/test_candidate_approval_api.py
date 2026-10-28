@@ -563,7 +563,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["company"] = "x" * 201
             action_kind = "approve_application"
             title = "Approve application"
-            if self.prompt_reads >= 5:
+            if 5 <= self.prompt_reads <= 6:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -583,6 +583,19 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 if self.prompt_reads == 5:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
+            elif self.prompt_reads >= 7:
+                action_kind = "approve_message"
+                title = "Approve message"
+                details = {
+                    "message_id": "message-1",
+                    "sender": "candidate@example.test",
+                    "recipient": "recruiter@example.test",
+                    "subject": "Application follow-up",
+                    "body": "Thank you for considering my application.",
+                }
+                if self.prompt_reads == 7:
+                    details["message_id"] = "../private-message"
+                    details["subject"] = "Approved\nBcc: attacker@example.test"
             return SimpleNamespace(
                 to_dict=lambda: {
                     "schema_version": 1,
@@ -667,6 +680,19 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert '"end_utc_offset": null' in page.locator("#action-details").text_content()
             page.locator("#approve").click()
             page.locator("#result").get_by_text('"phase": "message_approval"').wait_for()
+
+            page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert "attacker@example.test" not in page.locator("body").text_content()
+            assert "../private-message" not in page.locator("body").text_content()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve message").wait_for()
+            assert '"message_id": "message-1"' in page.locator("#action-details").text_content()
+            assert '"subject": "Application follow-up"' in page.locator("#action-details").text_content()
+            assert not page.locator("#approve").is_disabled()
             browser.close()
     finally:
         server.shutdown()
@@ -829,6 +855,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "value.company_id === null || validApprovalText(value.company_id, 200)" in html
     assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
     assert "const approvalTextLimits" in html
+    assert "const communicationIdentifier" in html
+    assert "communicationIdentifier(value.message_id)" in html
+    assert "communicationIdentifier(value.sender) && communicationIdentifier(value.recipient)" in html
+    assert "normalizedMessageText(value.subject, approvalTextLimits[kind].subject, true)" in html
+    assert "normalizedMessageText(value.body, approvalTextLimits[kind].body)" in html
     assert "!calendarDate(value.local_date) || !localTime(value.local_start_time)" in html
     assert "['proposed', 'reschedule_requested'].includes(value.status)" in html
     assert "!timezoneName(value.timezone) || !utcOffset(value.utc_offset)" in html
