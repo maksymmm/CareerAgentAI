@@ -1007,7 +1007,9 @@ _HTML = r"""<!doctype html>
         if (promptGeneration === approvalPromptGeneration) {
           byId('action-title').textContent = error.code === 'approval_unavailable'
             ? 'Approval is no longer available. Refresh run status.'
-            : 'Approval prompt unavailable. Load it again.';
+            : error.code === 'approval_conflict'
+              ? 'Run state changed while loading approval. Refresh run status.'
+              : 'Approval prompt unavailable. Load it again.';
         }
         throw error;
       } finally {

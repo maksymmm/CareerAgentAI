@@ -1027,6 +1027,58 @@ def test_candidate_sandbox_browser_recovers_when_prompt_is_unavailable():
         server.server_close()
 
 
+def test_candidate_sandbox_browser_refreshes_status_after_prompt_conflict():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class ConflictingPromptLoop(Loop):
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            raise CareerLoopConflictError("private concurrent workflow owner")
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 4,
+                "phase": "application_submit", "waiting_for_human": False,
+                "terminal": False,
+            }
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(ConflictingPromptLoop()), handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Approval prompt request failed").wait_for()
+            assert page.locator("#action-title").text_content() == (
+                "Run state changed while loading approval. Refresh run status."
+            )
+            assert page.locator("#action-details").text_content() == ""
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+            assert "private concurrent workflow owner" not in page.locator("body").text_content()
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text(
+                "In progress — application submit"
+            ).wait_for()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -1058,6 +1110,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "Approval prompt unavailable. Load it again." in html
     assert "error.code === 'approval_unavailable'" in html[prompt_get:prompt_end]
     assert "Approval is no longer available. Refresh run status." in html[
+        prompt_get:prompt_end
+    ]
+    assert "error.code === 'approval_conflict'" in html[prompt_get:prompt_end]
+    assert "Run state changed while loading approval. Refresh run status." in html[
         prompt_get:prompt_end
     ]
     start_handler = html.index("byId('start').addEventListener")
