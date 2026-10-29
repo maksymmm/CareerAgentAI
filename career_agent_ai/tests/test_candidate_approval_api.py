@@ -905,6 +905,77 @@ def test_candidate_sandbox_browser_preserves_prompt_when_recovery_is_unavailable
         server.server_close()
 
 
+def test_candidate_sandbox_browser_refreshes_status_after_recovery_conflict():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    details = {
+        "job_id": "job-1", "job_title": "Platform Engineer",
+        "company": "Sandbox GmbH", "company_id": None,
+        "application_id": "application-1", "application_version": 1,
+        "application_status": "saved", "artifact_content": "Candidate application",
+        "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
+    }
+    fingerprint = sha256(json.dumps(
+        {"kind": "approve_application", "title": "Approve application", "details": details},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+    class ConflictingRecoveryLoop(Loop):
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return SimpleNamespace(to_dict=lambda: {
+                "schema_version": 1, "run_id": run_id, "state_version": 3,
+                "action_kind": "approve_application", "title": "Approve application",
+                "details": details, "action_fingerprint": fingerprint,
+                "allowed_decisions": ["approve", "decline"],
+            })
+
+        def continue_run(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            raise CareerLoopConflictError("private execution lease owner")
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 4,
+                "phase": "submitting", "waiting_for_human": False, "terminal": False,
+            }
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(ConflictingRecoveryLoop()), handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.locator("#continue").click()
+            page.locator("#result").get_by_text("Recovery request failed").wait_for()
+            assert page.locator("#action-title").text_content() == (
+                "Run state changed during recovery. Refresh run status."
+            )
+            assert page.locator("#action-details").text_content() == ""
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+            assert "private execution lease owner" not in page.locator("body").text_content()
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("In progress — submitting").wait_for()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -1048,6 +1119,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         recovery_post:prompt_handler
     ]
     assert "byId('approve').disabled = !approvalPrompt" in html[recovery_post:prompt_handler]
+    assert "error.code === 'approval_conflict'" in html[recovery_post:prompt_handler]
+    assert "Run state changed during recovery. Refresh run status." in html[
+        recovery_post:prompt_handler
+    ]
     assert "Recovery result is uncertain. Load the current approval prompt." in html[recovery_post:prompt_handler]
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get
     assert html.index("byId('decline').disabled = true", prompt_handler) < prompt_get
