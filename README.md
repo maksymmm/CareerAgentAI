@@ -140,10 +140,10 @@ before decoding; a missing status is never treated as an implicit success. When 
 `Content-Type` is present it must unambiguously declare `application/json`, optionally
 with only a UTF-8 charset; conflicting duplicates and unsafe media declarations are
 rejected before reading the body. Every `Content-Length` occurrence must contain only
-ASCII digits, agree with any
-duplicate, and remain within the configured byte limit; unsafe declarations are
-rejected before the body is read, while the bounded
-read remains authoritative when the header is absent or understates the body. JSON decoding is strict: duplicate object members, non-finite numeric
+ASCII digits, agree with every duplicate, remain within the configured byte limit, and
+match the actual bytes returned by the transport. Truncated or surplus bodies are
+rejected before JSON decoding; when the header is absent, the bounded read remains
+authoritative. JSON decoding is strict: duplicate object members, non-finite numeric
 constants and excessive nesting are rejected rather than interpreted ambiguously.
 
 The job-search layer provides:

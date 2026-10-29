@@ -933,6 +933,26 @@ def test_valid_content_length_allows_body_read(monkeypatch):
     assert response.closed
 
 
+@pytest.mark.parametrize("declared_delta", [-1, 1])
+def test_content_length_must_match_actual_body(monkeypatch, declared_delta):
+    body = b'{"data": []}'
+
+    class MismatchedLengthResponse(BytesIO):
+        status = 200
+        headers = {"Content-Length": str(len(body) + declared_delta)}
+
+    response = MismatchedLengthResponse(body)
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: response,
+    )
+
+    with pytest.raises(RuntimeError, match="Content-Length does not match body"):
+        ArbeitnowProvider().search("")
+
+    assert response.closed
+
+
 @pytest.mark.parametrize(
     ("lengths", "error"),
     [

@@ -87,11 +87,11 @@ def _validate_arbeitnow_url(
         raise RuntimeError("Arbeitnow response URL is not trusted")
 
 
-def _validate_content_length(response: Any, *, maximum: int) -> None:
-    """Reject an invalid or oversized declared body before reading it."""
+def _validate_content_length(response: Any, *, maximum: int) -> int | None:
+    """Return one valid bounded declared length, when the response provides it."""
     headers = getattr(response, "headers", None)
     if headers is None:
-        return
+        return None
     try:
         get_all = getattr(headers, "get_all", None)
         if callable(get_all):
@@ -102,7 +102,7 @@ def _validate_content_length(response: Any, *, maximum: int) -> None:
     except Exception as exc:
         raise RuntimeError("Arbeitnow response headers are invalid") from exc
     if not values:
-        return
+        return None
     declared_lengths: set[int] = set()
     for value in values:
         if not isinstance(value, str) or not value.isascii() or not value.isdigit():
@@ -113,6 +113,7 @@ def _validate_content_length(response: Any, *, maximum: int) -> None:
         declared_lengths.add(declared)
     if len(declared_lengths) != 1:
         raise RuntimeError("Arbeitnow Content-Length values conflict")
+    return next(iter(declared_lengths))
 
 
 def _validate_content_type(response: Any) -> None:
@@ -522,7 +523,7 @@ class ArbeitnowProvider(JobProvider):
 
                 _validate_content_type(response)
                 _validate_content_encoding(response)
-                _validate_content_length(
+                declared_length = _validate_content_length(
                     response,
                     maximum=self._max_response_bytes,
                 )
@@ -532,6 +533,10 @@ class ArbeitnowProvider(JobProvider):
                     raise RuntimeError("Arbeitnow API returned an invalid body")
                 if len(raw_body) > self._max_response_bytes:
                     raise RuntimeError("Arbeitnow response exceeds byte limit")
+                if declared_length is not None and len(raw_body) != declared_length:
+                    raise RuntimeError(
+                        "Arbeitnow Content-Length does not match body"
+                    )
 
         except Exception as exc:
             raise RuntimeError(
