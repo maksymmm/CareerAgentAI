@@ -4,7 +4,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 import re
-from threading import Thread
+from threading import Event, Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
@@ -1081,6 +1081,7 @@ def test_candidate_sandbox_browser_refreshes_status_after_prompt_conflict():
 
 def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    release_status = Event()
     details = {
         "job_id": "job-1", "job_title": "Platform Engineer",
         "company": "Sandbox GmbH", "company_id": None,
@@ -1105,7 +1106,14 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
 
         def get_candidate_run_status(self, run_id, *, user_id):
             assert (run_id, user_id) == ("run-1", "candidate-1")
+            assert release_status.wait(timeout=5)
             raise RuntimeError("private status storage failure")
+
+        def list_run_statuses(self, **kwargs):
+            assert kwargs == {
+                "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
+            }
+            return {"schema_version": 1, "items": [], "next_after": None}
 
     class QuietHandler(WSGIRequestHandler):
         def log_message(self, format, *args):
@@ -1128,6 +1136,8 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
             assert not page.locator("#approve").is_disabled()
             assert not page.locator("#decline").is_disabled()
             page.locator("#status").click()
+            page.locator("#list-runs").click()
+            release_status.set()
             page.locator("#result").get_by_text("Status request failed").wait_for()
             assert page.locator("#action-title").text_content() == (
                 "Status could not be verified. Load the current approval prompt."
@@ -1242,6 +1252,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         "throw new Error(\'Invalid status snapshot.\')"
     )
     assert "Status could not be verified. Load the current approval prompt." in status_slice
+    assert "const statusContextGeneration = inputContextGeneration" in status_slice
+    assert "statusContextGeneration === inputContextGeneration" in status_slice
+    assert "runId === byId('run-id').value" in status_slice
     assert status_slice.index(
         "invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.')"
     ) > status_slice.index(

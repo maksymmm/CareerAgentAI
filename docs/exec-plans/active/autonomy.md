@@ -4,6 +4,8 @@ Candidate status failure fail-closed: an unsuccessful or invalid authenticated s
 refresh now retires any locally loaded approval prompt, clears its details and disables
 both decisions until a current prompt is loaded again. Chromium covers a private backend
 failure without leaking its text or preserving stale action controls.
+The invalidation is guarded by input context rather than unrelated result-pane ordering,
+so an overlapping read-only collection request cannot preserve the stale prompt.
 Next: exact-head CI/review, then continue candidate/provider workflow readiness.
 
 Candidate application approval semantics: job/application identities and visible text must be

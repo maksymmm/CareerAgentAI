@@ -877,6 +877,7 @@ _HTML = r"""<!doctype html>
       byId('inspect-panel').setAttribute('aria-busy', 'true');
       clearOverview();
       const runId = byId('run-id').value;
+      const statusContextGeneration = inputContextGeneration;
       const requestNumber = latestResultRequest + 1;
       try {
         const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
@@ -906,7 +907,8 @@ _HTML = r"""<!doctype html>
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
       } catch (error) {
-        if (requestNumber === latestResultRequest) {
+        if (statusContextGeneration === inputContextGeneration &&
+            runId === byId('run-id').value) {
           invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.');
         }
         throw error;
