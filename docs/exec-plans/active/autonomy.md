@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow declared/body length integrity: a valid bounded `Content-Length` must equal
+the actual bytes returned by the transport. Understated and overstated bodies now fail
+before JSON decoding instead of being accepted as a different response representation.
+Sandbox regressions cover both mismatch directions and response closure.
+Next: exact-head CI/review, then continue provider response integrity coverage.
+
 Arbeitnow request-query integrity: trusted-origin redirects and final response URLs
 must preserve the exact requested page/search query. Same-host page substitution,
 parameter injection and reordering are rejected before following or reading a body.
