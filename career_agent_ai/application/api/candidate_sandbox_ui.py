@@ -1005,7 +1005,9 @@ _HTML = r"""<!doctype html>
         byId('decline').disabled = false;
       } catch (error) {
         if (promptGeneration === approvalPromptGeneration) {
-          byId('action-title').textContent = 'Approval prompt unavailable. Load it again.';
+          byId('action-title').textContent = error.code === 'approval_unavailable'
+            ? 'Approval is no longer available. Refresh run status.'
+            : 'Approval prompt unavailable. Load it again.';
         }
         throw error;
       } finally {

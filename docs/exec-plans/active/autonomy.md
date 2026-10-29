@@ -1309,4 +1309,9 @@ Candidate recovery conflict guidance: a retryable `approval_conflict` now clears
 stale approval snapshot, keeps decisions disabled, suppresses private backend text and
 directs the candidate to refresh durable run status. Unknown recovery failures remain
 explicitly uncertain. Chromium covers the conflict and refreshed in-progress status.
+
+An `approval_unavailable` prompt-read response is also a known workflow transition:
+the sandbox keeps decision controls disabled, exposes no stale details, and directs the
+candidate to refresh durable status rather than retrying a prompt that no longer exists.
+Chromium covers the completed-run recovery path.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
