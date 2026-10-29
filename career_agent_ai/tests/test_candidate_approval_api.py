@@ -533,6 +533,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             super().__init__()
             self.run_id = None
             self.prompt_reads = 0
+            self.status_reads = 0
 
         def start(self, request, *, run_id=None):
             self.started = (request, run_id)
@@ -566,7 +567,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 7 <= self.prompt_reads <= 8:
+            if 8 <= self.prompt_reads <= 9:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -583,10 +584,10 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "end_utc_offset": None,
                     "status": "proposed",
                 }
-                if self.prompt_reads == 7:
+                if self.prompt_reads == 8:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
-            elif self.prompt_reads >= 9:
+            elif self.prompt_reads >= 10:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -596,7 +597,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 9:
+                if self.prompt_reads == 10:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
             fingerprint = sha256(json.dumps(
@@ -612,7 +613,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 to_dict=lambda: {
                     "schema_version": 1,
                     "run_id": run_id,
-                    "state_version": 3,
+                    "state_version": 3 if self.prompt_reads <= 6 else 4,
                     "action_kind": action_kind,
                     "allowed_decisions": ["approve", "decline"],
                     "action_fingerprint": fingerprint,
@@ -620,6 +621,18 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "details": details,
                 }
             )
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == (self.run_id, "candidate-1")
+            self.status_reads += 1
+            return {
+                "schema_version": 1,
+                "run_id": run_id,
+                "state_version": 4,
+                "phase": "application_approval",
+                "waiting_for_human": True,
+                "terminal": False,
+            }
 
         def resume_candidate_submission(self, *, user_id, submission):
             assert user_id == "candidate-1"
@@ -684,6 +697,18 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert '"company": "Sandbox GmbH"' in page.locator("#action-details").text_content()
             assert '"company_id": null' in page.locator("#action-details").text_content()
 
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("version 4").wait_for()
+            assert page.locator("#action-title").text_content() == (
+                "Run state changed. Load the current approval prompt."
+            )
+            assert page.locator("#action-details").text_content() == ""
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+
             page.locator("#token").fill("changed")
             assert page.locator("#approve").is_disabled()
             assert page.locator("#decline").is_disabled()
@@ -724,7 +749,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
 
     assert loop.submission is not None
     assert loop.submission.run_id == loop.run_id
-    assert loop.submission.state_version == 3
+    assert loop.submission.state_version == 4
     assert loop.submission.action_fingerprint != "0" * 64
     assert loop.submission.decision is ApprovalDecision.APPROVE
 
@@ -807,6 +832,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "Object.keys(snapshot).length !== statusFields.length" in html
     assert "!statusFields.every(field => Object.hasOwn(snapshot, field))" in html
     assert "snapshot.state_version < selectedRunVersion" in html
+    assert "const approvalPhases = {" in html
+    assert "snapshot.state_version !== approvalPrompt.state_version" in html
+    assert "approvalPhases[approvalPrompt.action_kind] !== snapshot.phase" in html
+    assert "Run state changed. Load the current approval prompt." in html
     status_slice = html[html.index("byId(\'status\').addEventListener"):html.index("byId(\'continue\').addEventListener")]
     assert status_slice.index("selectedRunVersion = snapshot.state_version") > status_slice.index(
         "throw new Error(\'Invalid status snapshot.\')"
