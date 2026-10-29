@@ -535,6 +535,9 @@ context changes or other results and never substitutes for an approval prompt. D
 the prompt's run ID, state version, and action fingerprint back to the strict API, so
 the interface cannot silently approve a changed or stale action. The page is served
 with `no-store`, anti-sniffing, no-referrer, and restrictive content-security headers.
+An accepted status refresh clears an already displayed approval when its version,
+approval phase, or waiting state no longer matches the durable run snapshot, preventing
+stale decision controls from surviving a concurrent workflow advance.
 CI runs the complete start, prompt inspection, prompt-bound approval, runtime/server
 restart, and durable status recovery path in a fresh headless Chromium session against
 the sandbox-gated SQLite composition. The browser test verifies that the only persisted
