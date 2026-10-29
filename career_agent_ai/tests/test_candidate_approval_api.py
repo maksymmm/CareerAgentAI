@@ -16,6 +16,7 @@ from career_agent_ai.application.api import (
 )
 from career_agent_ai.application.career import (
     ApprovalDecision,
+    CandidateApprovalUnavailableError,
     CareerLoopConflictError,
     HumanActionRequiredError,
 )
@@ -770,6 +771,76 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
     assert loop.submission.decision is ApprovalDecision.APPROVE
 
 
+def test_candidate_sandbox_browser_recovers_when_approval_is_unavailable():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    details = {
+        "job_id": "job-1",
+        "job_title": "Platform Engineer",
+        "company": "Sandbox GmbH",
+        "company_id": None,
+        "application_id": "application-1",
+        "application_version": 1,
+        "application_status": "saved",
+        "artifact_content": "Candidate application",
+        "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
+    }
+    fingerprint = sha256(json.dumps(
+        {"kind": "approve_application", "title": "Approve application", "details": details},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+    class UnavailableLoop(Loop):
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return SimpleNamespace(to_dict=lambda: {
+                "schema_version": 1, "run_id": run_id, "state_version": 3,
+                "action_kind": "approve_application", "title": "Approve application",
+                "details": details, "action_fingerprint": fingerprint,
+                "allowed_decisions": ["approve", "decline"],
+            })
+
+        def resume_candidate_submission(self, *, user_id, submission):
+            raise CandidateApprovalUnavailableError("private workflow state")
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 4,
+                "phase": "complete", "waiting_for_human": False, "terminal": True,
+            }
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, app(UnavailableLoop()), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.locator("#approve").click()
+            page.locator("#result").get_by_text("Decision request failed").wait_for()
+            assert page.locator("#action-title").text_content() == (
+                "Approval is no longer available. Refresh run status."
+            )
+            assert page.locator("#action-details").text_content() == ""
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("Finished — complete").wait_for()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -967,6 +1038,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "'Decision request failed.'" in html[decision_post:]
     assert "error.code === 'approval_conflict'" in html[decision_post:]
     assert "Approval changed. Load the current approval prompt." in html[decision_post:]
+    assert "error.code === 'approval_unavailable'" in html[decision_post:]
+    assert "Approval is no longer available. Refresh run status." in html[decision_post:]
     assert "Decision result is uncertain. Load the current approval prompt." in html[decision_start:]
     assert "invalidateApprovalPrompt(completionMessage)" in html[decision_post:]
     assert "Object.keys(result).length !== 2" in html[decision_post:]
