@@ -1303,5 +1303,10 @@ clears the obsolete approval and directs the candidate to refresh durable run st
 Candidate recovery guidance: `recovery_unavailable` now preserves the already validated
 approval prompt, restores its decision controls, and explains that the pending decision
 must be handled through that prompt. Backend exception text remains suppressed. Chromium
-covers the exact 409 recovery path. Next: exact-head CI/review, then continue bounded
-candidate workflow recovery hardening.
+covers the exact 409 recovery path.
+
+Candidate recovery conflict guidance: a retryable `approval_conflict` now clears the
+stale approval snapshot, keeps decisions disabled, suppresses private backend text and
+directs the candidate to refresh durable run status. Unknown recovery failures remain
+explicitly uncertain. Chromium covers the conflict and refreshed in-progress status.
+Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.

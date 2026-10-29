@@ -942,6 +942,8 @@ _HTML = r"""<!doctype html>
           byId('approve').disabled = !approvalPrompt;
           byId('decline').disabled = !approvalPrompt;
           error.message = 'Recovery is unavailable while a decision is pending. Use the current approval prompt.';
+        } else if (error.code === 'approval_conflict') {
+          invalidateApprovalPrompt('Run state changed during recovery. Refresh run status.');
         } else {
           invalidateApprovalPrompt('Recovery result is uncertain. Load the current approval prompt.');
         }

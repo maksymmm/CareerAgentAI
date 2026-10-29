@@ -475,6 +475,10 @@ The recovery endpoint maps only an explicit pending-human-action signal to
 unexpected runtime failures remain sanitized internal errors. Its OpenAPI `409`
 contract documents both `recovery_unavailable` and retryable `approval_conflict`
 payloads.
+The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
+it clears any stale approval snapshot, keeps decision controls disabled, suppresses
+private backend text, and directs the candidate to refresh run status. Unknown recovery
+failures remain explicitly uncertain and require a fresh approval prompt.
 The sandbox composition also exposes `POST /v1/candidate/runs` to start a durable
 candidate-owned run. Its versioned body accepts only a caller-supplied idempotent
 `run_id`, search keyword, bounded candidate profile, and optional location. The owner
