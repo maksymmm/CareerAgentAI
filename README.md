@@ -541,6 +541,9 @@ stale decision controls from surviving a concurrent workflow advance.
 If decision submission reports `approval_conflict`, the sandbox clears the stale
 prompt and explicitly requires a fresh load; other failed submissions are marked
 uncertain rather than being presented as completed decisions.
+An `approval_unavailable` response clears the obsolete decision and directs the
+candidate to refresh durable run status instead of repeatedly requesting a prompt that
+no longer exists.
 CI runs the complete start, prompt inspection, prompt-bound approval, runtime/server
 restart, and durable status recovery path in a fresh headless Chromium session against
 the sandbox-gated SQLite composition. The browser test verifies that the only persisted
