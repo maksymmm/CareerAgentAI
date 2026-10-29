@@ -817,6 +817,9 @@ def test_invalid_second_page_returns_no_partial_results_and_retry_starts_over(
         "https://www.arbeitnow.com/api/job-board-api//?page=1",
         "https://www.arbeitnow.com/api/job-board-api////?page=1",
         "https://www.arbeitnow.com/api/job-board-api?page=1#fragment",
+        "https://www.arbeitnow.com/api/job-board-api?page=2",
+        "https://www.arbeitnow.com/api/job-board-api?page=1&search=other",
+        "https://www.arbeitnow.com/api/job-board-api?search=&page=1",
     ],
 )
 def test_untrusted_final_response_url_is_rejected_before_read(
@@ -1038,7 +1041,7 @@ def test_trusted_redirect_is_followed(monkeypatch, redirect_url):
     handler = _TrustedArbeitnowRedirectHandler()
 
     result = handler.redirect_request(
-        Request(ArbeitnowProvider.BASE_URL),
+        Request(f"{ArbeitnowProvider.BASE_URL}?page=2"),
         None,
         302,
         "Found",
@@ -1048,3 +1051,34 @@ def test_trusted_redirect_is_followed(monkeypatch, redirect_url):
 
     assert result is expected_request
     assert followed == [redirect_url]
+
+
+@pytest.mark.parametrize(
+    "redirect_url",
+    [
+        "https://www.arbeitnow.com/api/job-board-api?page=2",
+        "https://www.arbeitnow.com/api/job-board-api?page=1&search=other",
+        "https://www.arbeitnow.com/api/job-board-api?search=python&page=1",
+    ],
+)
+def test_redirect_query_change_is_rejected_before_following(monkeypatch, redirect_url):
+    followed = []
+
+    def record_follow(self, req, fp, code, msg, headers, newurl):
+        followed.append(newurl)
+        return req
+
+    monkeypatch.setattr(HTTPRedirectHandler, "redirect_request", record_follow)
+    handler = _TrustedArbeitnowRedirectHandler()
+
+    with pytest.raises(RuntimeError, match="response URL is not trusted"):
+        handler.redirect_request(
+            Request(f"{ArbeitnowProvider.BASE_URL}?page=1&search=python"),
+            None,
+            302,
+            "Found",
+            {},
+            redirect_url,
+        )
+
+    assert followed == []
