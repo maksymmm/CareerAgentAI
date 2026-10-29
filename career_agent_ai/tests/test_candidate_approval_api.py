@@ -534,6 +534,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             self.run_id = None
             self.prompt_reads = 0
             self.status_reads = 0
+            self.submission_attempts = 0
 
         def start(self, request, *, run_id=None):
             self.started = (request, run_id)
@@ -567,7 +568,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 8 <= self.prompt_reads <= 9:
+            if 8 <= self.prompt_reads <= 10:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -587,7 +588,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 if self.prompt_reads == 8:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
-            elif self.prompt_reads >= 10:
+            elif self.prompt_reads >= 11:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -597,7 +598,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 10:
+                if self.prompt_reads == 11:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
             fingerprint = sha256(json.dumps(
@@ -636,6 +637,9 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
 
         def resume_candidate_submission(self, *, user_id, submission):
             assert user_id == "candidate-1"
+            self.submission_attempts += 1
+            if self.submission_attempts == 1:
+                raise CareerLoopConflictError("stale private durable state")
             self.submission = submission
             return SimpleNamespace(
                 run_id=self.run_id,
@@ -727,6 +731,17 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert '"local_end_time": null' in page.locator("#action-details").text_content()
             assert '"end_utc_offset": null' in page.locator("#action-details").text_content()
             page.locator("#approve").click()
+            page.locator("#result").get_by_text("Decision request failed").wait_for()
+            assert page.locator("#action-title").text_content() == (
+                "Approval changed. Load the current approval prompt."
+            )
+            assert page.locator("#action-details").text_content() == ""
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve interview").wait_for()
+            page.locator("#approve").click()
             page.locator("#result").get_by_text('"phase": "message_approval"').wait_for()
 
             page.locator("#prompt").click()
@@ -748,6 +763,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
         server.server_close()
 
     assert loop.submission is not None
+    assert loop.submission_attempts == 2
     assert loop.submission.run_id == loop.run_id
     assert loop.submission.state_version == 4
     assert loop.submission.action_fingerprint != "0" * 64
@@ -949,6 +965,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]
     assert "'Decision request failed.'" in html[decision_post:]
+    assert "error.code === 'approval_conflict'" in html[decision_post:]
+    assert "Approval changed. Load the current approval prompt." in html[decision_post:]
+    assert "Decision result is uncertain. Load the current approval prompt." in html[decision_start:]
+    assert "invalidateApprovalPrompt(completionMessage)" in html[decision_post:]
     assert "Object.keys(result).length !== 2" in html[decision_post:]
     assert "result.run_id !== payload.run_id" in html[decision_post:]
     assert "!runPhases.includes(result.phase)" in html[decision_post:]
@@ -966,7 +986,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     ) < decision_post
     assert html.index("byId('prompt').disabled = true", decision_start) < decision_post
     assert html.index("byId('continue').disabled = true", decision_start) < decision_post
-    assert html.index("byId('prompt').disabled = false", decision_post) > decision_post
+    assert html.index("decisionInFlight = false", decision_post) < html.index(
+        "invalidateApprovalPrompt(completionMessage)", decision_post
+    )
     application_loader = html[html.index("async function loadApplications"):html.index("function clearRunList")]
     assert "new Set(applicationIds).size !== applicationIds.length" in application_loader
     assert "character.codePointAt(0)" in application_loader
