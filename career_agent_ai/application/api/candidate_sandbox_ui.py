@@ -1046,6 +1046,8 @@ _HTML = r"""<!doctype html>
       } catch (error) {
         if (error.code === 'approval_conflict') {
           completionMessage = 'Approval changed. Load the current approval prompt.';
+        } else if (error.code === 'approval_unavailable') {
+          completionMessage = 'Approval is no longer available. Refresh run status.';
         }
         throw error;
       } finally {
