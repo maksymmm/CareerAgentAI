@@ -878,7 +878,6 @@ _HTML = r"""<!doctype html>
       clearOverview();
       const runId = byId('run-id').value;
       const requestNumber = latestResultRequest + 1;
-      let completionMessage = 'Decision result is uncertain. Load the current approval prompt.';
       try {
         const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
         if (requestNumber !== latestResultRequest) return;
@@ -1030,6 +1029,7 @@ _HTML = r"""<!doctype html>
         state_version: approvalPrompt.state_version,
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
       const requestNumber = latestResultRequest + 1;
+      let completionMessage = 'Decision result is uncertain. Load the current approval prompt.';
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)}, 'Decision request failed.');
