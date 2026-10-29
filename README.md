@@ -538,6 +538,9 @@ with `no-store`, anti-sniffing, no-referrer, and restrictive content-security he
 An accepted status refresh clears an already displayed approval when its version,
 approval phase, or waiting state no longer matches the durable run snapshot, preventing
 stale decision controls from surviving a concurrent workflow advance.
+If decision submission reports `approval_conflict`, the sandbox clears the stale
+prompt and explicitly requires a fresh load; other failed submissions are marked
+uncertain rather than being presented as completed decisions.
 CI runs the complete start, prompt inspection, prompt-bound approval, runtime/server
 restart, and durable status recovery path in a fresh headless Chromium session against
 the sandbox-gated SQLite composition. The browser test verifies that the only persisted
