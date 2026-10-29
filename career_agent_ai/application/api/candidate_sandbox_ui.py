@@ -941,6 +941,7 @@ _HTML = r"""<!doctype html>
         if (error.code === 'recovery_unavailable') {
           byId('approve').disabled = !approvalPrompt;
           byId('decline').disabled = !approvalPrompt;
+          error.message = 'Recovery is unavailable while a decision is pending. Use the current approval prompt.';
         } else {
           invalidateApprovalPrompt('Recovery result is uncertain. Load the current approval prompt.');
         }

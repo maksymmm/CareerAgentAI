@@ -1299,3 +1299,9 @@ failure, clears the stale prompt in both cases, and requires an explicit fresh p
 load before another candidate decision.
 An `approval_unavailable` decision response is a known workflow transition: the sandbox
 clears the obsolete approval and directs the candidate to refresh durable run status.
+
+Candidate recovery guidance: `recovery_unavailable` now preserves the already validated
+approval prompt, restores its decision controls, and explains that the pending decision
+must be handled through that prompt. Backend exception text remains suppressed. Chromium
+covers the exact 409 recovery path. Next: exact-head CI/review, then continue bounded
+candidate workflow recovery hardening.

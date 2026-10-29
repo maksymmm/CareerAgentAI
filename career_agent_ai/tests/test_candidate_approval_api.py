@@ -841,6 +841,70 @@ def test_candidate_sandbox_browser_recovers_when_approval_is_unavailable():
         server.server_close()
 
 
+def test_candidate_sandbox_browser_preserves_prompt_when_recovery_is_unavailable():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    details = {
+        "job_id": "job-1", "job_title": "Platform Engineer",
+        "company": "Sandbox GmbH", "company_id": None,
+        "application_id": "application-1", "application_version": 1,
+        "application_status": "saved", "artifact_content": "Candidate application",
+        "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
+    }
+    fingerprint = sha256(json.dumps(
+        {"kind": "approve_application", "title": "Approve application", "details": details},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+    class PendingDecisionLoop(Loop):
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return SimpleNamespace(to_dict=lambda: {
+                "schema_version": 1, "run_id": run_id, "state_version": 3,
+                "action_kind": "approve_application", "title": "Approve application",
+                "details": details, "action_fingerprint": fingerprint,
+                "allowed_decisions": ["approve", "decline"],
+            })
+
+        def continue_run(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            raise HumanActionRequiredError("private pending action")
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(PendingDecisionLoop()), handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.locator("#continue").click()
+            page.locator("#result").get_by_text(
+                "Recovery is unavailable while a decision is pending"
+            ).wait_for()
+            assert page.locator("#action-title").text_content() == "Approve application"
+            assert '"application_id": "application-1"' in page.locator(
+                "#action-details"
+            ).text_content()
+            assert not page.locator("#approve").is_disabled()
+            assert not page.locator("#decline").is_disabled()
+            assert "private pending action" not in page.locator("body").text_content()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -980,6 +1044,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("show({status: 200, payload: {run_id: payload.run_id", recovery_post) < prompt_handler
     assert "error.code = payload.error" in html
     assert "error.code === 'recovery_unavailable'" in html[recovery_post:prompt_handler]
+    assert "Recovery is unavailable while a decision is pending. Use the current approval prompt." in html[
+        recovery_post:prompt_handler
+    ]
     assert "byId('approve').disabled = !approvalPrompt" in html[recovery_post:prompt_handler]
     assert "Recovery result is uncertain. Load the current approval prompt." in html[recovery_post:prompt_handler]
     assert html.index("byId('approve').disabled = true", prompt_handler) < prompt_get

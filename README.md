@@ -523,6 +523,9 @@ apply the same single-request rule. Failure restores an explicit retry control, 
 selection, authentication and session invalidation safely retire stale requests.
 Private read-only failures use operation-specific generic messages for application
 details, history, event details and approval prompts without rendering server payloads.
+When recovery is unavailable because an ordinary candidate decision is pending, the
+sandbox preserves the validated prompt, restores its decision controls, and gives
+explicit guidance to use that prompt without exposing the backend failure text.
 Application and event view buttons keep concise visible text while their accessible
 names include a page ordinal and the validated record ID. The ordinal keeps repeated
 controls distinguishable even if assistive technology folds whitespace inside opaque IDs.
