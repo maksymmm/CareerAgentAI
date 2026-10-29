@@ -1,13 +1,57 @@
 """Career orchestration and decision-making primitives."""
 
+from .application_submission import (
+    ApplicationSubmissionAdapter,
+    ApplicationSubmissionService,
+    FakeApplicationSubmissionAdapter,
+    PreSubmissionError,
+)
+from .approval_contract import (
+    ApprovalDecision,
+    CandidateApprovalConflictError,
+    CandidateApprovalPrompt,
+    CandidateApprovalSubmission,
+    CandidateApprovalUnavailableError,
+    build_candidate_approval_prompt,
+    validate_candidate_approval_submission,
+)
+from .autonomous_career_loop import AutonomousCareerLoop, HumanActionRequiredError
+from .autonomous_loop_models import (
+    CareerLoopPhase,
+    CareerLoopRequest,
+    CareerLoopResult,
+    HumanActionEvent,
+    HumanActionKind,
+)
+from .autonomous_loop_repository import CareerLoopConflictError, CareerLoopRepository
 from .career_orchestrator import CareerOrchestrator, CareerRunResult
 from .career_plan import CareerPlan, CareerPlanStep
 from .career_step_result import CareerStepResult
 
 __all__ = [
+    "ApprovalDecision",
+    "ApplicationSubmissionAdapter",
+    "ApplicationSubmissionService",
+    "AutonomousCareerLoop",
+    "CareerLoopPhase",
+    "CareerLoopConflictError",
+    "CareerLoopRepository",
+    "CareerLoopRequest",
+    "CareerLoopResult",
     "CareerOrchestrator",
-    "CareerRunResult",
     "CareerPlan",
     "CareerPlanStep",
+    "CareerRunResult",
     "CareerStepResult",
+    "CandidateApprovalPrompt",
+    "CandidateApprovalConflictError",
+    "CandidateApprovalSubmission",
+    "CandidateApprovalUnavailableError",
+    "FakeApplicationSubmissionAdapter",
+    "HumanActionEvent",
+    "HumanActionKind",
+    "HumanActionRequiredError",
+    "PreSubmissionError",
+    "build_candidate_approval_prompt",
+    "validate_candidate_approval_submission",
 ]

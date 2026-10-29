@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 from datetime import UTC, datetime
 from html import unescape
 from typing import Any
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from career_agent_ai.application.jobs.company import Company
 from career_agent_ai.application.jobs.employment_type import EmploymentType
@@ -16,6 +17,218 @@ from career_agent_ai.application.jobs.job_source import JobSource
 from career_agent_ai.application.jobs.location import Location
 from career_agent_ai.application.jobs.salary import Salary
 from career_agent_ai.application.search.job_provider import JobProvider
+
+
+def _reject_nonfinite_json_constant(value: str) -> None:
+    """Reject non-standard numeric constants accepted by Python's JSON decoder."""
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting ambiguous duplicate member names."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member: {key}")
+        result[key] = value
+    return result
+
+
+def _validate_json_depth(value: str, *, maximum: int = 100) -> None:
+    """Reject excessive JSON container nesting without counting quoted brackets."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > maximum:
+                raise ValueError("JSON nesting exceeds limit")
+        elif character in "]}":
+            depth -= 1
+
+
+def _validate_arbeitnow_url(
+    response_url: object,
+    *,
+    expected_query: str | None = None,
+) -> None:
+    """Reject URLs outside the API route or with a changed request query."""
+    if not isinstance(response_url, str):
+        raise RuntimeError("Arbeitnow response URL is invalid")
+
+    expected = urlsplit(ArbeitnowProvider.BASE_URL)
+    actual = urlsplit(response_url)
+    trusted_authorities = {
+        expected.netloc,
+        f"{expected.netloc}:443",
+    }
+    trusted_paths = {
+        expected.path,
+        f"{expected.path}/",
+    }
+    if (
+        actual.scheme != "https"
+        or actual.netloc not in trusted_authorities
+        or actual.path not in trusted_paths
+        or actual.fragment
+        or expected_query is not None and actual.query != expected_query
+    ):
+        raise RuntimeError("Arbeitnow response URL is not trusted")
+
+
+def _validate_content_length(response: Any, *, maximum: int) -> int | None:
+    """Return one valid bounded declared length, when the response provides it."""
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Length") or []
+        else:
+            value = headers.get("Content-Length")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    if not values:
+        return None
+    declared_lengths: set[int] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+            raise RuntimeError("Arbeitnow Content-Length is invalid")
+        declared = int(value)
+        if declared > maximum:
+            raise RuntimeError("Arbeitnow response exceeds byte limit")
+        declared_lengths.add(declared)
+    if len(declared_lengths) != 1:
+        raise RuntimeError("Arbeitnow Content-Length values conflict")
+    return next(iter(declared_lengths))
+
+
+def _validate_content_type(response: Any) -> None:
+    """Require unambiguous JSON media declarations before reading a body."""
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Type") or []
+        else:
+            value = headers.get("Content-Type")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    if not values:
+        return
+
+    declarations: set[tuple[str, str | None]] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.isascii():
+            raise RuntimeError("Arbeitnow Content-Type is invalid")
+        segments = tuple(segment.strip().lower() for segment in value.split(";"))
+        media_type, parameters = segments[0], segments[1:]
+        charset: str | None = None
+        if len(parameters) == 1:
+            name, separator, parameter_value = parameters[0].partition("=")
+            parameter_value = parameter_value.strip()
+            if (
+                separator != "="
+                or name.strip() != "charset"
+                or parameter_value not in {"utf-8", '"utf-8"'}
+            ):
+                raise RuntimeError("Arbeitnow response is not JSON")
+            charset = "utf-8"
+        if media_type != "application/json" or len(parameters) > 1:
+            raise RuntimeError("Arbeitnow response is not JSON")
+        declarations.add((media_type, charset))
+    if len(declarations) != 1:
+        raise RuntimeError("Arbeitnow Content-Type values conflict")
+
+
+def _validate_content_encoding(response: Any) -> None:
+    """Reject encoded bodies before reading; the byte limit applies to wire bytes."""
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Content-Encoding") or []
+        else:
+            value = headers.get("Content-Encoding")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    for value in values:
+        if not isinstance(value, str) or not value.isascii():
+            raise RuntimeError("Arbeitnow Content-Encoding is invalid")
+        if value.strip().lower() != "identity":
+            raise RuntimeError("Arbeitnow response encoding is unsupported")
+
+
+def _safe_job_url(value: Any) -> str:
+    """Keep only absolute HTTP(S) job links without embedded credentials."""
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip()
+    if not candidate or any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127
+        for character in candidate
+    ):
+        return ""
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None and not 1 <= port <= 65535
+    ):
+        return ""
+    return candidate
+
+
+class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
+    """Validate a redirect destination before urllib sends the next request."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request | None:
+        _validate_arbeitnow_url(
+            newurl,
+            expected_query=urlsplit(req.full_url).query,
+        )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def urlopen(request: Request, *, timeout: float) -> Any:
+    """Open one Arbeitnow request with fail-closed redirect validation."""
+    return build_opener(_TrustedArbeitnowRedirectHandler()).open(
+        request,
+        timeout=timeout,
+    )
 
 
 class ArbeitnowProvider(JobProvider):
@@ -144,19 +357,26 @@ class ArbeitnowProvider(JobProvider):
         *,
         timeout: float = 20.0,
         max_pages: int = 3,
+        max_response_bytes: int = 2_000_000,
     ) -> None:
-        if timeout <= 0:
-            raise ValueError(
-                "timeout must be greater than 0"
-            )
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError("timeout must be a finite positive number")
+        try:
+            normalized_timeout = float(timeout)
+        except OverflowError as exc:
+            raise ValueError("timeout must be a finite positive number") from exc
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
 
-        if max_pages < 1:
-            raise ValueError(
-                "max_pages must be greater than or equal to 1"
-            )
+        if type(max_pages) is not int or max_pages < 1:
+            raise ValueError("max_pages must be a positive integer")
 
-        self._timeout = timeout
+        if type(max_response_bytes) is not int or max_response_bytes < 1:
+            raise ValueError("max_response_bytes must be a positive integer")
+
+        self._timeout = normalized_timeout
         self._max_pages = max_pages
+        self._max_response_bytes = max_response_bytes
 
     def search(
         self,
@@ -165,6 +385,7 @@ class ArbeitnowProvider(JobProvider):
         normalized_query = self._normalize_text(query)
 
         jobs: list[Job] = []
+        accepted_job_ids: set[str] = set()
 
         for page in range(
             1,
@@ -175,16 +396,10 @@ class ArbeitnowProvider(JobProvider):
                 page=page,
             )
 
-            page_jobs = payload.get(
-                "data",
-                [],
+            page_jobs, has_next = self._validate_page_envelope(
+                payload,
+                expected_next_page=page + 1,
             )
-
-            if not isinstance(
-                page_jobs,
-                list,
-            ):
-                break
 
             for item in page_jobs:
                 if not isinstance(
@@ -205,20 +420,55 @@ class ArbeitnowProvider(JobProvider):
                     ):
                         continue
 
+                if job.job_id in accepted_job_ids:
+                    continue
+                accepted_job_ids.add(job.job_id)
                 jobs.append(job)
 
-            links = payload.get("links")
-
-            if not isinstance(
-                links,
-                dict,
-            ):
-                break
-
-            if not links.get("next"):
+            if not has_next:
                 break
 
         return tuple(jobs)
+
+    @staticmethod
+    def _validate_page_envelope(
+        payload: dict[str, Any],
+        *,
+        expected_next_page: int,
+    ) -> tuple[list[Any], bool]:
+        """Validate pagination fields before accepting any page results."""
+        page_jobs = payload.get("data")
+        if not isinstance(page_jobs, list):
+            raise RuntimeError("Arbeitnow API returned invalid page data")
+
+        links = payload.get("links")
+        if links is None:
+            return page_jobs, False
+        if not isinstance(links, dict):
+            raise RuntimeError("Arbeitnow API returned invalid pagination links")
+
+        next_page = links.get("next")
+        if next_page is None:
+            return page_jobs, False
+        if not isinstance(next_page, str) or not next_page.strip():
+            raise RuntimeError("Arbeitnow API returned invalid next-page state")
+        try:
+            _validate_arbeitnow_url(next_page)
+            page_values = [
+                value
+                for key, value in parse_qsl(
+                    urlsplit(next_page).query,
+                    keep_blank_values=True,
+                )
+                if key == "page"
+            ]
+        except (RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "Arbeitnow API returned invalid next-page state"
+            ) from exc
+        if page_values != [str(expected_next_page)]:
+            raise RuntimeError("Arbeitnow API returned invalid next-page state")
+        return page_jobs, True
 
     def _fetch_page(
         self,
@@ -255,15 +505,38 @@ class ArbeitnowProvider(JobProvider):
                 status = getattr(
                     response,
                     "status",
-                    200,
+                    None,
                 )
 
-                if status < 200 or status >= 300:
+                if type(status) is not int or not 100 <= status <= 599:
+                    raise RuntimeError(
+                        "Arbeitnow API returned an invalid HTTP status"
+                    )
+
+                if not 200 <= status < 300:
                     raise RuntimeError(
                         f"Arbeitnow API returned HTTP {status}"
                     )
 
-                raw_body = response.read()
+                response_url = getattr(response, "geturl", lambda: url)()
+                self._validate_response_url(response_url, expected_url=url)
+
+                _validate_content_type(response)
+                _validate_content_encoding(response)
+                declared_length = _validate_content_length(
+                    response,
+                    maximum=self._max_response_bytes,
+                )
+
+                raw_body = response.read(self._max_response_bytes + 1)
+                if not isinstance(raw_body, bytes):
+                    raise RuntimeError("Arbeitnow API returned an invalid body")
+                if len(raw_body) > self._max_response_bytes:
+                    raise RuntimeError("Arbeitnow response exceeds byte limit")
+                if declared_length is not None and len(raw_body) != declared_length:
+                    raise RuntimeError(
+                        "Arbeitnow Content-Length does not match body"
+                    )
 
         except Exception as exc:
             raise RuntimeError(
@@ -272,12 +545,17 @@ class ArbeitnowProvider(JobProvider):
             ) from exc
 
         try:
+            decoded_body = raw_body.decode("utf-8")
+            _validate_json_depth(decoded_body)
             payload = json.loads(
-                raw_body.decode("utf-8")
+                decoded_body,
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_unique_json_object,
             )
         except (
             UnicodeDecodeError,
-            json.JSONDecodeError,
+            ValueError,
+            RecursionError,
         ) as exc:
             raise RuntimeError(
                 "Arbeitnow API returned invalid JSON"
@@ -293,6 +571,17 @@ class ArbeitnowProvider(JobProvider):
             )
 
         return payload
+
+    def _validate_response_url(
+        self,
+        response_url: object,
+        *,
+        expected_url: str,
+    ) -> None:
+        _validate_arbeitnow_url(
+            response_url,
+            expected_query=urlsplit(expected_url).query,
+        )
 
     def _to_job(
         self,
@@ -342,7 +631,7 @@ class ArbeitnowProvider(JobProvider):
             description=description,
         )
 
-        url = self._string(
+        url = _safe_job_url(
             item.get("url")
         )
 
@@ -642,13 +931,16 @@ class ArbeitnowProvider(JobProvider):
         item: dict[str, Any],
         description: str,
     ) -> Salary | None:
-        minimum = cls._number(
-            item.get("salary_min")
-        )
+        raw_minimum = item.get("salary_min")
+        raw_maximum = item.get("salary_max")
+        minimum = cls._number(raw_minimum)
+        maximum = cls._number(raw_maximum)
 
-        maximum = cls._number(
-            item.get("salary_max")
-        )
+        if (
+            (raw_minimum is not None and minimum is None)
+            or (raw_maximum is not None and maximum is None)
+        ):
+            return None
 
         if (
             minimum is not None
@@ -664,6 +956,8 @@ class ArbeitnowProvider(JobProvider):
                 minimum is not None
                 and maximum is not None
             ):
+                if minimum > maximum:
+                    return None
                 return Salary(
                     minimum=int(minimum),
                     maximum=int(maximum),
@@ -723,7 +1017,8 @@ class ArbeitnowProvider(JobProvider):
             value,
             (int, float),
         ):
-            return float(value)
+            number = float(value)
+            return number if math.isfinite(number) and number >= 0 else None
 
         text = str(value).strip()
 
@@ -731,9 +1026,10 @@ class ArbeitnowProvider(JobProvider):
             return None
 
         try:
-            return float(text)
-        except ValueError:
+            number = float(text)
+        except (OverflowError, ValueError):
             return None
+        return number if math.isfinite(number) and number >= 0 else None
 
     @staticmethod
     def _parse_money(
