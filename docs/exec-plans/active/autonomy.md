@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Arbeitnow request-query integrity: trusted-origin redirects and final response URLs
+must preserve the exact requested page/search query. Same-host page substitution,
+parameter injection and reordering are rejected before following or reading a body.
+Sandbox regressions cover redirect preflight, final-response rejection and compatible
+authority/path normalization.
+Next: exact-head CI/review, then continue provider result integrity coverage.
+
 Candidate status failure fail-closed: an unsuccessful or invalid authenticated status
 refresh now retires any locally loaded approval prompt, clears its details and disables
 both decisions until a current prompt is loaded again. Chromium covers a private backend

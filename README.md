@@ -128,7 +128,9 @@ Every redirect destination is validated before urllib follows it, and the final
 response URL is checked again before its body is read. Only the expected Arbeitnow
 HTTPS endpoint is accepted (omitted port or literal `:443`, at most one trailing
 slash, no credentials or fragment); cross-host, downgraded, alternate-path and
-ambiguous authority/path spellings fail closed without a follow-up request.
+ambiguous authority/path spellings fail closed without a follow-up request. Redirects
+and final responses must also preserve the exact requested page/search query, so a
+trusted host cannot substitute a different result page or inject/reorder parameters.
 Each decoded page must also contain a list-valued `data` field and a valid optional
 pagination envelope. Malformed data, links or next-page state abort the entire search
 instead of silently returning an incomplete prefix; an explicit retry starts again at

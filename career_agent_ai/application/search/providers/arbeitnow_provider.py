@@ -58,8 +58,12 @@ def _validate_json_depth(value: str, *, maximum: int = 100) -> None:
             depth -= 1
 
 
-def _validate_arbeitnow_url(response_url: object) -> None:
-    """Reject any URL outside the exact Arbeitnow API origin and path."""
+def _validate_arbeitnow_url(
+    response_url: object,
+    *,
+    expected_query: str | None = None,
+) -> None:
+    """Reject URLs outside the API route or with a changed request query."""
     if not isinstance(response_url, str):
         raise RuntimeError("Arbeitnow response URL is invalid")
 
@@ -78,6 +82,7 @@ def _validate_arbeitnow_url(response_url: object) -> None:
         or actual.netloc not in trusted_authorities
         or actual.path not in trusted_paths
         or actual.fragment
+        or expected_query is not None and actual.query != expected_query
     ):
         raise RuntimeError("Arbeitnow response URL is not trusted")
 
@@ -210,7 +215,10 @@ class _TrustedArbeitnowRedirectHandler(HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> Request | None:
-        _validate_arbeitnow_url(newurl)
+        _validate_arbeitnow_url(
+            newurl,
+            expected_query=urlsplit(req.full_url).query,
+        )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -510,7 +518,7 @@ class ArbeitnowProvider(JobProvider):
                     )
 
                 response_url = getattr(response, "geturl", lambda: url)()
-                self._validate_response_url(response_url)
+                self._validate_response_url(response_url, expected_url=url)
 
                 _validate_content_type(response)
                 _validate_content_encoding(response)
@@ -559,8 +567,16 @@ class ArbeitnowProvider(JobProvider):
 
         return payload
 
-    def _validate_response_url(self, response_url: object) -> None:
-        _validate_arbeitnow_url(response_url)
+    def _validate_response_url(
+        self,
+        response_url: object,
+        *,
+        expected_url: str,
+    ) -> None:
+        _validate_arbeitnow_url(
+            response_url,
+            expected_query=urlsplit(expected_url).query,
+        )
 
     def _to_job(
         self,
