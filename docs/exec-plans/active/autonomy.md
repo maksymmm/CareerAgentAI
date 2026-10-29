@@ -1314,4 +1314,9 @@ An `approval_unavailable` prompt-read response is also a known workflow transiti
 the sandbox keeps decision controls disabled, exposes no stale details, and directs the
 candidate to refresh durable status rather than retrying a prompt that no longer exists.
 Chromium covers the completed-run recovery path.
+
+An `approval_conflict` prompt-read response now has distinct fail-closed guidance: stale
+decision state remains cleared, controls stay disabled, backend text is suppressed, and
+the candidate is directed to refresh durable status. Chromium covers the conflict and
+the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.

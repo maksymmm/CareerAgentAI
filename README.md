@@ -551,6 +551,9 @@ uncertain rather than being presented as completed decisions.
 An `approval_unavailable` response from either prompt loading or decision submission
 clears the obsolete decision state and directs the candidate to refresh durable run
 status instead of repeatedly requesting a prompt that no longer exists.
+An `approval_conflict` while loading the prompt is also treated as a known durable-state
+advance: stale decision state remains cleared, backend details stay private, and the
+candidate is directed to refresh run status before attempting another prompt read.
 CI runs the complete start, prompt inspection, prompt-bound approval, runtime/server
 restart, and durable status recovery path in a fresh headless Chromium session against
 the sandbox-gated SQLite composition. The browser test verifies that the only persisted
