@@ -937,7 +937,7 @@ def test_candidate_sandbox_browser_refreshes_status_after_recovery_conflict():
             assert (run_id, user_id) == ("run-1", "candidate-1")
             return {
                 "schema_version": 1, "run_id": run_id, "state_version": 4,
-                "phase": "submitting", "waiting_for_human": False, "terminal": False,
+                "phase": "application_submit", "waiting_for_human": False, "terminal": False,
             }
 
     class QuietHandler(WSGIRequestHandler):
@@ -968,7 +968,9 @@ def test_candidate_sandbox_browser_refreshes_status_after_recovery_conflict():
             assert page.locator("#decline").is_disabled()
             assert "private execution lease owner" not in page.locator("body").text_content()
             page.locator("#status").click()
-            page.locator("#run-overview").get_by_text("In progress — submitting").wait_for()
+            page.locator("#run-overview").get_by_text(
+                "In progress — application submit"
+            ).wait_for()
             browser.close()
     finally:
         server.shutdown()
