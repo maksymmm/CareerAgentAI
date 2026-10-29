@@ -1294,3 +1294,6 @@ cannot restore decision controls after the candidate observed a newer run snapsh
 An accepted status refresh invalidates any displayed approval whose version, approval
 phase, or waiting state no longer matches the durable run snapshot, preventing stale
 decision controls from surviving a concurrent workflow advance.
+Decision submission distinguishes a retryable `approval_conflict` from an uncertain
+failure, clears the stale prompt in both cases, and requires an explicit fresh prompt
+load before another candidate decision.
