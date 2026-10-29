@@ -878,6 +878,7 @@ _HTML = r"""<!doctype html>
       clearOverview();
       const runId = byId('run-id').value;
       const requestNumber = latestResultRequest + 1;
+      let completionMessage = 'Decision result is uncertain. Load the current approval prompt.';
       try {
         const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
         if (requestNumber !== latestResultRequest) return;
@@ -1041,12 +1042,15 @@ _HTML = r"""<!doctype html>
         if (requestNumber === latestResultRequest) {
           show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
         }
+        completionMessage = 'Decision finished. Load the current prompt.';
+      } catch (error) {
+        if (error.code === 'approval_conflict') {
+          completionMessage = 'Approval changed. Load the current approval prompt.';
+        }
+        throw error;
       } finally {
         decisionInFlight = false;
-        approvalPrompt = null;
-        byId('action-title').textContent = 'Decision finished. Load the current prompt.';
-        byId('action-details').textContent = '';
-        byId('prompt').disabled = false;
+        invalidateApprovalPrompt(completionMessage);
         byId('continue').disabled = false;
       }
     }
