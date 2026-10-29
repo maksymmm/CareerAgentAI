@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate status failure fail-closed: an unsuccessful or invalid authenticated status
+refresh now retires any locally loaded approval prompt, clears its details and disables
+both decisions until a current prompt is loaded again. Chromium covers a private backend
+failure without leaking its text or preserving stale action controls.
+Next: exact-head CI/review, then continue candidate/provider workflow readiness.
+
 Candidate application approval semantics: job/application identities and visible text must be
 normalized and non-empty, optional company identity remains nullable, and Web Crypto must prove
 the lowercase SHA-256 digest matches the exact UTF-8 artifact before rendering. Chromium rejects

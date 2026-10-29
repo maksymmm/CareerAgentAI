@@ -905,6 +905,11 @@ _HTML = r"""<!doctype html>
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
+      } catch (error) {
+        if (requestNumber === latestResultRequest) {
+          invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.');
+        }
+        throw error;
       } finally {
         statusInFlight = false;
         byId('status').disabled = false;

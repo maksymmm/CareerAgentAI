@@ -361,7 +361,9 @@ durable run ID and a known workflow phase; malformed responses never replace the
 They are validated before rendering, and only the allowlisted run ID and phase enter the
 result pane when the start remains the latest workflow result request.
 Run status responses are validated as an exact six-field minimal snapshot before rendering;
-unexpected or private backend fields are rejected without entering the result pane.
+unexpected or private backend fields are rejected without entering the result pane. An
+unsuccessful or invalid status refresh also retires any locally loaded approval prompt,
+keeping decision controls fail-closed until the candidate reloads a current prompt.
 Recovery and decision responses likewise require only the selected run ID and a known phase;
 private provider fields are rejected before either action result is rendered.
 Approval prompt details are restricted to the exact public field set for application,
