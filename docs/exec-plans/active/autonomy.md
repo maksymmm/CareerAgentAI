@@ -1297,3 +1297,5 @@ decision controls from surviving a concurrent workflow advance.
 Decision submission distinguishes a retryable `approval_conflict` from an uncertain
 failure, clears the stale prompt in both cases, and requires an explicit fresh prompt
 load before another candidate decision.
+An `approval_unavailable` decision response is a known workflow transition: the sandbox
+clears the obsolete approval and directs the candidate to refresh durable run status.
