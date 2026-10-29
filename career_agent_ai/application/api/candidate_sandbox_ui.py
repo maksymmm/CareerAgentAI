@@ -601,6 +601,11 @@ _HTML = r"""<!doctype html>
         'local_start_time', 'local_end_date', 'local_end_time', 'timezone', 'utc_offset',
         'end_utc_offset', 'status'],
     };
+    const approvalPhases = {
+      approve_application: 'application_approval',
+      approve_message: 'message_approval',
+      approve_interview: 'interview_approval',
+    };
     const hasExactFields = (value, fields) => value && typeof value === 'object' &&
       !Array.isArray(value) && Object.keys(value).length === fields.length &&
       fields.every(field => Object.hasOwn(value, field));
@@ -889,6 +894,11 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid status snapshot.');
         }
         selectedRunVersion = snapshot.state_version;
+        if (approvalPrompt && (snapshot.state_version !== approvalPrompt.state_version ||
+            approvalPhases[approvalPrompt.action_kind] !== snapshot.phase ||
+            !snapshot.waiting_for_human)) {
+          invalidateApprovalPrompt('Run state changed. Load the current approval prompt.');
+        }
         show({status: 200, payload: Object.fromEntries(
           statusFields.map(field => [field, snapshot[field]])
         )});

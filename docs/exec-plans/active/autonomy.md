@@ -1291,3 +1291,6 @@ subsequent history reads cannot roll back behind the newest observed timeline.
 
 The selected owner-scoped run version also floors approval prompts, so an older prompt
 cannot restore decision controls after the candidate observed a newer run snapshot.
+An accepted status refresh invalidates any displayed approval whose version, approval
+phase, or waiting state no longer matches the durable run snapshot, preventing stale
+decision controls from surviving a concurrent workflow advance.
