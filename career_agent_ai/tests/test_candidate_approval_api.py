@@ -4,7 +4,7 @@ from hashlib import sha256
 from io import BytesIO
 import json
 import re
-from threading import Thread
+from threading import Event, Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
@@ -1079,6 +1079,82 @@ def test_candidate_sandbox_browser_refreshes_status_after_prompt_conflict():
         server.server_close()
 
 
+def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    release_status = Event()
+    details = {
+        "job_id": "job-1", "job_title": "Platform Engineer",
+        "company": "Sandbox GmbH", "company_id": None,
+        "application_id": "application-1", "application_version": 1,
+        "application_status": "saved", "artifact_content": "Candidate application",
+        "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
+    }
+    fingerprint = sha256(json.dumps(
+        {"kind": "approve_application", "title": "Approve application", "details": details},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+    class FailingStatusLoop(Loop):
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return SimpleNamespace(to_dict=lambda: {
+                "schema_version": 1, "run_id": run_id, "state_version": 3,
+                "action_kind": "approve_application", "title": "Approve application",
+                "details": details, "action_fingerprint": fingerprint,
+                "allowed_decisions": ["approve", "decline"],
+            })
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            assert release_status.wait(timeout=5)
+            raise RuntimeError("private status storage failure")
+
+        def list_run_statuses(self, **kwargs):
+            assert kwargs == {
+                "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
+            }
+            return {"schema_version": 1, "items": [], "next_after": None}
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(FailingStatusLoop()), handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            assert not page.locator("#approve").is_disabled()
+            assert not page.locator("#decline").is_disabled()
+            page.locator("#status").click()
+            page.locator("#list-runs").click()
+            release_status.set()
+            page.locator("#action-title").get_by_text(
+                "Status could not be verified. Load the current approval prompt."
+            ).wait_for()
+            assert page.locator("#action-title").text_content() == (
+                "Status could not be verified. Load the current approval prompt."
+            )
+            assert page.locator("#action-details").text_content() == ""
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+            assert "private status storage failure" not in page.locator("body").text_content()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -1176,6 +1252,15 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     )
     assert status_slice.index("show({status: 200, payload: Object.fromEntries(") > status_slice.index(
         "throw new Error(\'Invalid status snapshot.\')"
+    )
+    assert "Status could not be verified. Load the current approval prompt." in status_slice
+    assert "const statusContextGeneration = inputContextGeneration" in status_slice
+    assert "statusContextGeneration === inputContextGeneration" in status_slice
+    assert "runId === byId('run-id').value" in status_slice
+    assert status_slice.index(
+        "invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.')"
+    ) > status_slice.index(
+        "byId(\'run-overview\').textContent = state"
     )
     status_handler = html.index("byId('status').addEventListener")
     status_get = html.index("await call(runPath('/status'), {}, 'Status request failed.')", status_handler)
