@@ -1138,7 +1138,9 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
             page.locator("#status").click()
             page.locator("#list-runs").click()
             release_status.set()
-            page.locator("#result").get_by_text("Status request failed").wait_for()
+            page.locator("#action-title").get_by_text(
+                "Status could not be verified. Load the current approval prompt."
+            ).wait_for()
             assert page.locator("#action-title").text_content() == (
                 "Status could not be verified. Load the current approval prompt."
             )
