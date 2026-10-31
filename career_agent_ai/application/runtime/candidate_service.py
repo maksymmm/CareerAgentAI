@@ -118,7 +118,9 @@ class CandidateServiceWSGIApp:
         path = environ.get("PATH_INFO", "")
         if path not in {"/healthz", "/readyz"}:
             return self._app(environ, start_response)
-        if environ.get("REQUEST_METHOD", "GET") != "GET":
+        # Probes are local infrastructure endpoints: do not let a malformed
+        # request method silently default to GET and disclose readiness.
+        if environ.get("REQUEST_METHOD") != "GET":
             start_response(
                 "405 Method Not Allowed",
                 [
