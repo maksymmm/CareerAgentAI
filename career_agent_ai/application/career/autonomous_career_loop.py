@@ -702,6 +702,7 @@ class AutonomousCareerLoop:
         search_agent = self._agents.resolve("job_search")
         eligible_jobs: tuple[Any, ...] = ()
         saw_jobs = False
+        seen_job_ids: set[str] = set()
         for page in range(1, self.MAX_DISCOVERY_PAGES + 1):
             context = self._context(
                 state,
@@ -739,7 +740,11 @@ class AutonomousCareerLoop:
                     self._company_name(getattr(job, "company", None))
                 except (TypeError, ValueError):
                     continue
-                if normalized_job_id not in progressed_job_ids:
+                if (
+                    normalized_job_id not in progressed_job_ids
+                    and normalized_job_id not in seen_job_ids
+                ):
+                    seen_job_ids.add(normalized_job_id)
                     eligible.append(job)
             eligible_jobs = tuple(eligible)
             if eligible_jobs or not self._has_next_search_page(
