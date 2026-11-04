@@ -157,6 +157,29 @@ def _validate_content_type(response: Any) -> None:
         raise RuntimeError("Arbeitnow Content-Type values conflict")
 
 
+def _validate_transfer_encoding(response: Any) -> None:
+    """Reject ambiguous transfer framing before consuming provider bytes.
+
+    urllib normally decodes chunked HTTP responses before exposing them, but a
+    declared Content-Length alongside Transfer-Encoding is ambiguous and must
+    not be treated as a trustworthy bounded response.
+    """
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    try:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Transfer-Encoding") or []
+        else:
+            value = headers.get("Transfer-Encoding")
+            values = [] if value is None else [value]
+    except Exception as exc:
+        raise RuntimeError("Arbeitnow response headers are invalid") from exc
+    if values:
+        raise RuntimeError("Arbeitnow Transfer-Encoding is unsupported")
+
+
 def _validate_content_encoding(response: Any) -> None:
     """Reject encoded bodies before reading; the byte limit applies to wire bytes."""
     headers = getattr(response, "headers", None)
@@ -523,6 +546,7 @@ class ArbeitnowProvider(JobProvider):
 
                 _validate_content_type(response)
                 _validate_content_encoding(response)
+                _validate_transfer_encoding(response)
                 declared_length = _validate_content_length(
                     response,
                     maximum=self._max_response_bytes,

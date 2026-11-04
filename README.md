@@ -143,7 +143,9 @@ rejected before reading the body. Every `Content-Length` occurrence must contain
 ASCII digits, agree with every duplicate, remain within the configured byte limit, and
 match the actual bytes returned by the transport. Truncated or surplus bodies are
 rejected before JSON decoding; when the header is absent, the bounded read remains
-authoritative. JSON decoding is strict: duplicate object members, non-finite numeric
+authoritative. Transfer-coded responses are rejected before body reads so decoded
+transport framing cannot bypass those byte and declared-length guarantees. JSON
+decoding is strict: duplicate object members, non-finite numeric
 constants and excessive nesting are rejected rather than interpreted ambiguously.
 
 The job-search layer provides:
