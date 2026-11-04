@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Arbeitnow transfer-framing integrity: any declared `Transfer-Encoding` now aborts the
+sandbox response before its body is read. This keeps urllib's decoded transfer framing
+from making the configured byte ceiling or `Content-Length` contract ambiguous.
+Regressions cover chunked/identity/combined, non-string, empty and duplicate values.
+Next: exact-head CI/review, then continue provider response integrity coverage.
+
 Arbeitnow declared/body length integrity: a valid bounded `Content-Length` must equal
 the actual bytes returned by the transport. Understated and overstated bodies now fail
 before JSON decoding instead of being accepted as a different response representation.
