@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate provider identity deduplication: stable job IDs are accepted once before
+adaptive ranking, preventing repeated upstream records from multiplying ranking inputs
+or durable draft candidates. An end-to-end regression proves the first valid record
+wins and the workflow still stops at human approval without submission.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate discovery page-size continuity: pagination metadata is trusted only when its
 declared page size does not exceed the 20 records requested by the workflow. A larger
 declaration now uses bounded full-page inference, allowing a valid second-page vacancy
