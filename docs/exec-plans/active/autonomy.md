@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate probe method integrity: public liveness/readiness routes now require an
+explicit exact `GET` instead of defaulting a missing WSGI method to an authorized
+probe read. Missing, empty, differently cased, non-string and unsupported methods fail
+with `405` before readiness can open storage. Fourteen regressions cover both routes.
+Next: exact-head CI/review, then continue candidate service boundary hardening.
+
 Candidate readiness schema completeness: startup and `/readyz` now require every
 durable career-loop column used by ownership, phase projection, optimistic versioning
 and execution claims. A partially migrated table fails closed instead of advertising

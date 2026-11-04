@@ -140,7 +140,9 @@ class CandidateServiceWSGIApp:
         path = environ.get("PATH_INFO", "")
         if path not in {"/healthz", "/readyz"}:
             return self._app(environ, start_response)
-        if environ.get("REQUEST_METHOD", "GET") != "GET":
+        # Probe authorization is method-bound. A malformed WSGI request must
+        # not silently become a GET and disclose liveness or readiness.
+        if environ.get("REQUEST_METHOD") != "GET":
             start_response(
                 "405 Method Not Allowed",
                 [

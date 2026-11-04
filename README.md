@@ -749,7 +749,9 @@ in read-only mode and returns a sanitized `503` when storage is missing, unavail
 or lacks any required durable career-loop column; it never creates or migrates a
 replacement database. Startup applies the same complete-schema validation after the
 SQLite integrity check. Candidate workflow routes retain bearer authentication, and
-all probe responses disable caching.
+all probe responses disable caching. Probe requests require an explicit, exact `GET`
+WSGI method; missing, differently cased, non-string, and other methods receive `405`
+without opening candidate storage.
 
 Coordinated schema changes use `SQLiteMigrationRunner`. Migration versions are
 ordered, transactionally applied, and recorded with immutable SHA-256 checksums.
