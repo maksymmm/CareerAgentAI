@@ -744,6 +744,7 @@ def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
         {"page": "one", "page_size": 20, "total": 21},
         {"page": 99, "page_size": 20, "total": 2_000},
         {"page": 1, "page_size": 10, "total": 21},
+        {"page": 1, "page_size": 100, "total": 100},
         {"page": 1, "page_size": 20, "total": 10},
     ],
 )
