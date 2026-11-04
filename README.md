@@ -96,7 +96,9 @@ Candidate discovery validates provider-owned ranking scalars before the determin
 scorer sees them. Titles, descriptions, company/location text reject control characters
 and Unicode surrogates within explicit bounds, and remote flags must be booleans. A
 malformed record is skipped so a valid peer can still reach the durable human-approval
-boundary without triggering an external submission.
+boundary without triggering an external submission. Candidate discovery also rejects
+provider pages larger than the requested 20-record contract before ranking or durable
+application preparation, keeping each workflow step computationally bounded.
 
 ---
 

@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate discovery page bounds: the workflow now rejects a provider page containing
+more than the requested 20 records before ranking or durable application preparation.
+An end-to-end regression proves an oversized otherwise-valid page creates no approval,
+application or submission, preserving bounded work at the provider boundary.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate probe cache isolation: liveness/readiness success, sanitized failure and
 method-rejection responses now emit both modern `Cache-Control: no-store` and legacy
 `Pragma: no-cache` directives from one shared policy. Four regressions cover both
