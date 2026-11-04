@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate discovery page-size continuity: pagination metadata is trusted only when its
+declared page size does not exceed the 20 records requested by the workflow. A larger
+declaration now uses bounded full-page inference, allowing a valid second-page vacancy
+to reach approval without permitting unbounded traversal or external submission.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate discovery page bounds: the workflow now rejects a provider page containing
 more than the requested 20 records before ranking or durable application preparation.
 An end-to-end regression proves an oversized otherwise-valid page creates no approval,
