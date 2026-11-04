@@ -695,6 +695,47 @@ def test_discovery_skips_malformed_provider_salary_before_ranking(salary, tmp_pa
     database.close()
 
 
+def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "oversized-provider-page.sqlite")
+    )
+    jobs = tuple(
+        Job.create(
+            job_id=f"oversized-{index:02d}",
+            title="Logistics Coordinator",
+            company="Provider Company",
+            location=Location("Germany", "Karlsruhe"),
+            description="Warehouse logistics coordination",
+            created_at=START,
+        )
+        for index in range(AutonomousCareerLoop.DISCOVERY_PAGE_SIZE + 1)
+    )
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(
+        resolve=lambda name: (
+            SimpleNamespace(
+                execute=lambda _: SimpleNamespace(
+                    success=True, metadata={"jobs": jobs}
+                )
+            )
+            if name == "job_search"
+            else original_agents.resolve(name)
+        )
+    )
+
+    result = loop.start(
+        request(with_schedule=False), run_id="oversized-provider-page"
+    )
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert result.error == (
+        "RuntimeError: Job discovery exceeded its requested page size."
+    )
+    assert applications.list("user-1") == ()
+    assert submission.calls == []
+    database.close()
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
