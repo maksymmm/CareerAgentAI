@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate readiness schema completeness: startup and `/readyz` now require every
+durable career-loop column used by ownership, phase projection, optimistic versioning
+and execution claims. A partially migrated table fails closed instead of advertising
+readiness and failing later during an authenticated workflow. Nine SQLite regressions
+cover each missing column and the complete compatible schema.
+Next: exact-head CI/review, then continue candidate workflow readiness.
+
 Arbeitnow transfer-framing integrity: any declared `Transfer-Encoding` now aborts the
 sandbox response before its body is read. This keeps urllib's decoded transfer framing
 from making the configured byte ceiling or `Content-Length` contract ambiguous.
