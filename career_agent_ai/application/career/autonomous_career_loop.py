@@ -172,6 +172,7 @@ class AutonomousCareerLoop:
 
     DEFAULT_MAX_ITERATIONS = 16
     MAX_DISCOVERY_PAGES = 10
+    DISCOVERY_PAGE_SIZE = 20
     EXECUTION_LEASE_SECONDS = 900
     EXECUTION_HEARTBEAT_SECONDS = 60
     POST_EFFECT_RECOVERY_PHASES = frozenset({
@@ -708,7 +709,7 @@ class AutonomousCareerLoop:
                     "keyword": state.request.keyword,
                     "location": state.request.location,
                     "page": page,
-                    "page_size": 20,
+                    "page_size": self.DISCOVERY_PAGE_SIZE,
                 },
             )
             result = search_agent.execute(context)
@@ -717,6 +718,8 @@ class AutonomousCareerLoop:
             jobs = result.metadata.get("jobs", ())
             if not isinstance(jobs, (tuple, list)):
                 raise RuntimeError("Job discovery returned malformed opportunities.")
+            if len(jobs) > self.DISCOVERY_PAGE_SIZE:
+                raise RuntimeError("Job discovery exceeded its requested page size.")
             saw_jobs = saw_jobs or bool(jobs)
             eligible: list[Any] = []
             for job in jobs:
@@ -797,7 +800,7 @@ class AutonomousCareerLoop:
         if not isinstance(received_count, int) or isinstance(received_count, bool):
             return False
         if not isinstance(metadata, Mapping):
-            return received_count >= 20
+            return received_count >= AutonomousCareerLoop.DISCOVERY_PAGE_SIZE
         total = metadata.get("total")
         page_size = metadata.get("page_size")
         page = metadata.get("page", current_page)
@@ -805,14 +808,14 @@ class AutonomousCareerLoop:
             not isinstance(value, int) or isinstance(value, bool) or value < 1
             for value in (total, page_size, page)
         ):
-            return received_count >= 20
+            return received_count >= AutonomousCareerLoop.DISCOVERY_PAGE_SIZE
         observed_through = (page - 1) * page_size + received_count
         if (
             page != current_page
             or received_count > page_size
             or total < observed_through
         ):
-            return received_count >= 20
+            return received_count >= AutonomousCareerLoop.DISCOVERY_PAGE_SIZE
         return page * page_size < total
 
     @classmethod
