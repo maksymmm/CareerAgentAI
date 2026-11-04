@@ -87,6 +87,28 @@ class CandidateServiceConfig:
         return self.user_id if hmac.compare_digest(presented_bytes, expected) else None
 
 
+_REQUIRED_LOOP_COLUMNS = frozenset(
+    {
+        "run_id",
+        "owner_user_id",
+        "phase",
+        "payload_json",
+        "updated_at",
+        "version",
+        "execution_claim_owner",
+        "execution_claim_expires_at",
+    }
+)
+
+
+def _validate_loop_schema(connection: Any) -> None:
+    """Reject missing or partially migrated candidate loop storage."""
+    rows = connection.execute("PRAGMA table_info(autonomous_career_loops)").fetchall()
+    columns = {row[1] for row in rows}
+    if not _REQUIRED_LOOP_COLUMNS.issubset(columns):
+        raise RuntimeError("candidate schema is unavailable")
+
+
 class CandidateServiceWSGIApp:
     """Expose unauthenticated probe routes around the authenticated candidate API."""
 
@@ -135,12 +157,7 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
-            schema = database.connection.execute(
-                """SELECT 1 FROM sqlite_master
-                   WHERE type = 'table' AND name = 'autonomous_career_loops'"""
-            ).fetchone()
-            if schema is None:
-                raise RuntimeError("candidate schema is unavailable")
+            _validate_loop_schema(database.connection)
         except Exception:
             return self._respond(
                 start_response, "503 Service Unavailable", self._UNAVAILABLE_BODY
@@ -162,12 +179,7 @@ def _validate_candidate_storage(database_path: str) -> None:
         database = SQLiteDatabase.open_read_only(database_path)
         if database.connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
             raise RuntimeError("candidate storage integrity check failed")
-        schema = database.connection.execute(
-            """SELECT 1 FROM sqlite_master
-               WHERE type = 'table' AND name = 'autonomous_career_loops'"""
-        ).fetchone()
-        if schema is None:
-            raise RuntimeError("candidate schema is unavailable")
+        _validate_loop_schema(database.connection)
     except Exception as exc:
         raise RuntimeError("Candidate storage failed startup validation.") from exc
     finally:
