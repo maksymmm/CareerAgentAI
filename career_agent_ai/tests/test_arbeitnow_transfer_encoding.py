@@ -10,7 +10,10 @@ from career_agent_ai.application.search.providers.arbeitnow_provider import (
 )
 
 
-@pytest.mark.parametrize("transfer_encoding", ["chunked", "identity", "gzip", "", "chunked, gzip"])
+@pytest.mark.parametrize(
+    "transfer_encoding",
+    ["chunked", "identity", "gzip", "", "chunked, gzip"],
+)
 def test_transfer_encoding_is_rejected_before_body_read(monkeypatch, transfer_encoding):
     class UnreadResponse(BytesIO):
         status = 200
@@ -39,7 +42,9 @@ def test_transfer_encoding_is_rejected_before_body_read(monkeypatch, transfer_en
 def test_transfer_encoding_header_lookup_failure_is_fail_closed(monkeypatch):
     class BrokenHeaders:
         def get(self, name):
-            raise ValueError("private upstream detail")
+            if name == "Transfer-Encoding":
+                raise ValueError("private upstream detail")
+            return None
 
     class UnreadResponse(BytesIO):
         status = 200
