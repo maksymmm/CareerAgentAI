@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate probe cache isolation: liveness/readiness success, sanitized failure and
+method-rejection responses now emit both modern `Cache-Control: no-store` and legacy
+`Pragma: no-cache` directives from one shared policy. Four regressions cover both
+probe routes across body responses and empty `405` rejection responses.
+Next: exact-head CI/review, then continue candidate service boundary hardening.
+
 Candidate probe method integrity: public liveness/readiness routes now require an
 explicit exact `GET` instead of defaulting a missing WSGI method to an authorized
 probe read. Missing, empty, differently cased, non-string and unsupported methods fail
