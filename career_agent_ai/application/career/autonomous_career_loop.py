@@ -812,6 +812,7 @@ class AutonomousCareerLoop:
         observed_through = (page - 1) * page_size + received_count
         if (
             page != current_page
+            or page_size > AutonomousCareerLoop.DISCOVERY_PAGE_SIZE
             or received_count > page_size
             or total < observed_through
         ):
