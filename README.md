@@ -98,7 +98,9 @@ and Unicode surrogates within explicit bounds, and remote flags must be booleans
 malformed record is skipped so a valid peer can still reach the durable human-approval
 boundary without triggering an external submission. Candidate discovery also rejects
 provider pages larger than the requested 20-record contract before ranking or durable
-application preparation, keeping each workflow step computationally bounded.
+application preparation, keeping each workflow step computationally bounded. Provider
+pagination metadata cannot declare a page size larger than the request; oversized
+declarations fall back to bounded full-page inference instead of hiding a later page.
 
 ---
 
