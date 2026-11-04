@@ -745,9 +745,11 @@ for deployment lifecycle hooks.
 
 The deployable candidate service also exposes unauthenticated `GET /healthz` liveness
 and `GET /readyz` readiness probes. Readiness opens the configured durable SQLite file
-in read-only mode and returns a sanitized `503` when storage is missing or unavailable;
-it never creates a replacement database. Candidate workflow routes retain bearer
-authentication, and all probe responses disable caching.
+in read-only mode and returns a sanitized `503` when storage is missing, unavailable,
+or lacks any required durable career-loop column; it never creates or migrates a
+replacement database. Startup applies the same complete-schema validation after the
+SQLite integrity check. Candidate workflow routes retain bearer authentication, and
+all probe responses disable caching.
 
 Coordinated schema changes use `SQLiteMigrationRunner`. Migration versions are
 ordered, transactionally applied, and recorded with immutable SHA-256 checksums.
