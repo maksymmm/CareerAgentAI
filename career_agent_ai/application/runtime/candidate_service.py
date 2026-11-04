@@ -114,6 +114,10 @@ class CandidateServiceWSGIApp:
 
     _HEALTH_BODY = b'{"status":"ok"}'
     _UNAVAILABLE_BODY = b'{"status":"unavailable"}'
+    _CACHE_HEADERS = (
+        ("Cache-Control", "no-store"),
+        ("Pragma", "no-cache"),
+    )
 
     def __init__(self, app: RuntimeCandidateApp, *, database_path: str) -> None:
         self._app = app
@@ -128,7 +132,7 @@ class CandidateServiceWSGIApp:
             [
                 ("Content-Type", "application/json; charset=utf-8"),
                 ("Content-Length", str(len(body))),
-                ("Cache-Control", "no-store"),
+                *CandidateServiceWSGIApp._CACHE_HEADERS,
                 ("X-Content-Type-Options", "nosniff"),
             ],
         )
@@ -148,7 +152,7 @@ class CandidateServiceWSGIApp:
                 [
                     ("Allow", "GET"),
                     ("Content-Length", "0"),
-                    ("Cache-Control", "no-store"),
+                    *self._CACHE_HEADERS,
                     ("X-Content-Type-Options", "nosniff"),
                 ],
             )
