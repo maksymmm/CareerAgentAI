@@ -695,6 +695,48 @@ def test_discovery_skips_malformed_provider_salary_before_ranking(salary, tmp_pa
     database.close()
 
 
+def test_discovery_deduplicates_provider_job_ids_before_ranking(tmp_path):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "duplicate-provider-job-ids.sqlite")
+    )
+    first = Job.create(
+        job_id="duplicate-provider-id", title="Logistics Coordinator",
+        company="Provider Company", location=Location("Germany", "Karlsruhe"),
+        description="Warehouse logistics coordination", created_at=START,
+    )
+    duplicate = Job.create(
+        job_id="duplicate-provider-id", title="Duplicate Logistics Coordinator",
+        company="Duplicate Company", location=Location("Germany", "Karlsruhe"),
+        description="Duplicate upstream record", created_at=START,
+    )
+    ranked_job_ids = []
+    original_ranker = loop._adaptive_job_ranker
+    loop._adaptive_job_ranker = SimpleNamespace(
+        rank=lambda user_id, jobs, job_filter: (
+            ranked_job_ids.extend(job.job_id for job in jobs)
+            or original_ranker.rank(user_id, jobs, job_filter)
+        )
+    )
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (first, duplicate)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    started = loop.start(
+        request(with_schedule=False), run_id="duplicate-provider-job-ids"
+    )
+
+    assert ranked_job_ids == ["duplicate-provider-id"]
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert applications.get(
+        "duplicate-provider-job-ids:application"
+    ).job_id == "duplicate-provider-id"
+    assert submission.calls == []
+    database.close()
+
+
 def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
     database, loop, applications, _, _, submission, *_ = build_stack(
         str(tmp_path / "oversized-provider-page.sqlite")
