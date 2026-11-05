@@ -1993,6 +1993,57 @@ def test_post_action_crash_after_application_success_recovers_without_resubmit(t
     database.close()
 
 
+def test_snapshot_bound_applied_replay_rejects_missing_provider_receipt(tmp_path):
+    path = str(tmp_path / "applied-receipt-tamper.sqlite")
+    run_id = "applied-receipt-tamper"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    approval = loop._states.get(run_id).pending_human_action
+    assert approval is not None
+
+    completed = loop.resume(run_id, approved=True, user_id="user-1")
+    assert completed.completed is True
+    assert len(submission_provider.calls) == 1
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    assert dict(tracked.timeline[-1].metadata) == {
+        "provider_submission_id": f"fake:{run_id}:application"
+    }
+
+    database.connection.execute(
+        """UPDATE application_timeline SET metadata_json = '{}'
+           WHERE application_id = ? AND to_status = ?""",
+        (f"{run_id}:application", JobApplicationStatus.APPLIED.value),
+    )
+    state = loop._states.get(run_id)
+    assert state is not None
+    state.phase = CareerLoopPhase.APPLICATION_SUBMIT
+    state.pending_human_action = None
+    state.approved_human_action = approval
+    state.last_error = None
+    loop._states.save(state)
+    database.close()
+
+    database, restarted, applications, _, _, restarted_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    blocked = restarted.continue_run(run_id, user_id="user-1")
+
+    assert blocked.completed is False
+    assert blocked.phase == CareerLoopPhase.APPLICATION_SUBMIT
+    assert "receipt does not match" in (blocked.error or "")
+    assert restarted_provider.calls == []
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+
 def test_post_action_crash_after_message_send_replays_without_duplicate(tmp_path):
     path = str(tmp_path / "post-message-crash.sqlite")
     run_id = "post-message-crash"
