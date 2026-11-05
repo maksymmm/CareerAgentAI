@@ -1776,6 +1776,7 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
             application_id,
             artifact_content,
             artifact_sha256,
+            candidate_snapshot_sha256,
         ):
             result = dict(
                 super().submit(
@@ -1784,6 +1785,7 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
                     application_id,
                     artifact_content,
                     artifact_sha256,
+                    candidate_snapshot_sha256,
                 )
             )
             result["provider_debug_timestamp"] = CREATED
