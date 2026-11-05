@@ -1167,6 +1167,28 @@ class AutonomousCareerLoop:
             },
         )
 
+    @staticmethod
+    def _require_matching_submission_result(
+        state: CareerLoopState,
+        result: Mapping[str, Any],
+        durable_payload: Mapping[str, Any],
+    ) -> None:
+        expected = {
+            "job_id": state.selected_job_id,
+            "application_id": state.application_id,
+            "artifact_sha256": state.application_artifact_sha256,
+        }
+        if (
+            "candidate_snapshot_sha256" in durable_payload
+            or "candidate_snapshot_sha256" in result
+        ):
+            expected["candidate_snapshot_sha256"] = state.selected_job_snapshot_sha256
+        if any(result.get(key) != value for key, value in expected.items()):
+            raise _RecoverableCareerLoopError(
+                "Durable application submission result does not match the current "
+                "tracker and candidate snapshot; tracker completion must be retried."
+            )
+
     def _submit_application(self, state: CareerLoopState) -> None:
         if state.application_id is None or state.selected_job_id is None:
             raise RuntimeError("Application submission state is incomplete.")
@@ -1219,6 +1241,9 @@ class AutonomousCareerLoop:
             )
             if replay is None:
                 raise RuntimeError("Confirmed application submission could not be replayed.")
+            self._require_matching_submission_result(
+                state, replay, durable_operation.payload
+            )
             state.approved_human_action = None
             state.phase = CareerLoopPhase.MESSAGE_PREPARE
             return
@@ -1311,6 +1336,12 @@ class AutonomousCareerLoop:
                 )
                 return
             raise RuntimeError("Application submission did not reach a confirmed outcome.")
+        durable_operation = self._submission.get_operation(operation_id)
+        self._require_matching_submission_result(
+            state,
+            result,
+            durable_operation.payload if durable_operation is not None else {},
+        )
         updated = claimed.transition(
             JobApplicationStatus.APPLIED,
             operation_id=operation_id,
