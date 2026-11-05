@@ -210,3 +210,25 @@ def test_arbeitnow_provider_empty_query_returns_all():
         result = provider.search("")
 
     assert len(result) == 2
+
+def test_arbeitnow_skips_malformed_listings_without_losing_valid_results():
+    valid = {
+        "slug": "valid-role", "company_name": "Acme", "title": "Engineer",
+        "description": "Python", "url": "https://example.com/valid",
+        "location": "Berlin", "created_at": 1700000000,
+    }
+    malformed = [
+        {**valid, "slug": ""},
+        {**valid, "title": None},
+        {**valid, "company_name": []},
+        {**valid, "url": None},
+        {**valid, "slug": "invalid-timestamp", "created_at": 10**100},
+    ]
+    with patch(
+        "career_agent_ai.application.search.providers.arbeitnow_job_provider.urlopen",
+        return_value=FakeResponse({"data": [*malformed, valid]}),
+    ):
+        jobs = ArbeitnowJobProvider(max_pages=1).search("python")
+
+    assert len(jobs) == 1
+    assert jobs[0].job_id == "arbeitnow:valid-role"
