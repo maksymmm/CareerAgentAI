@@ -36,6 +36,16 @@ def _validated_artifact(content: Any, digest: Any) -> tuple[str, str]:
     return normalized, normalized_digest
 
 
+def _validated_sha256(value: Any, field: str) -> str:
+    """Validate a normalized SHA-256 digest used to bind durable intent."""
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be text.")
+    normalized = value.strip().lower()
+    if len(normalized) != 64 or any(ch not in "0123456789abcdef" for ch in normalized):
+        raise ValueError(f"{field} must be a lowercase SHA-256 digest.")
+    return normalized
+
+
 def _provider_result_identifier(
     value: Any, field: str, *, maximum: int = 200
 ) -> str:
@@ -70,8 +80,9 @@ class ApplicationSubmissionAdapter(Protocol):
         application_id: str,
         artifact_content: str,
         artifact_sha256: str,
+        candidate_snapshot_sha256: str,
     ) -> Mapping[str, Any]:
-        """Submit one exact approved artifact using operation_id as the idempotency key."""
+        """Submit one artifact bound to the approved candidate snapshot."""
 
 
 class _SubmissionActionAdapter:
@@ -89,6 +100,10 @@ class _SubmissionActionAdapter:
             payload.get("artifact_content"),
             payload.get("artifact_sha256"),
         )
+        candidate_snapshot_digest = _validated_sha256(
+            payload.get("candidate_snapshot_sha256"),
+            "candidate_snapshot_sha256",
+        )
         if not job_id or not application_id:
             raise ValueError("Prepared application submission identifiers are malformed.")
         try:
@@ -98,6 +113,7 @@ class _SubmissionActionAdapter:
                 application_id,
                 artifact_content,
                 artifact_digest,
+                candidate_snapshot_digest,
             )
         except PreSubmissionError:
             raise
@@ -114,9 +130,13 @@ class _SubmissionActionAdapter:
                 result.get("application_id"), "application_id"
             )
             returned_job = _provider_result_identifier(result.get("job_id"), "job_id")
-            returned_digest = _provider_result_identifier(
+            returned_digest = _validated_sha256(
                 result.get("artifact_sha256"), "artifact_sha256"
-            ).lower()
+            )
+            returned_candidate_snapshot = _validated_sha256(
+                result.get("candidate_snapshot_sha256"),
+                "candidate_snapshot_sha256",
+            )
             provider_submission_id = _provider_result_identifier(
                 result.get("provider_submission_id"),
                 "provider_submission_id",
@@ -130,6 +150,7 @@ class _SubmissionActionAdapter:
             returned_application != application_id
             or returned_job != job_id
             or returned_digest != artifact_digest
+            or returned_candidate_snapshot != candidate_snapshot_digest
         ):
             raise AmbiguousExternalActionError(
                 "Application provider result does not match the prepared intent."
@@ -141,6 +162,7 @@ class _SubmissionActionAdapter:
             "application_id": returned_application,
             "provider_submission_id": provider_submission_id,
             "artifact_sha256": returned_digest,
+            "candidate_snapshot_sha256": returned_candidate_snapshot,
         }
 
 
@@ -173,6 +195,7 @@ class ApplicationSubmissionService:
         application_id: str,
         artifact_content: str,
         artifact_sha256: str,
+        candidate_snapshot_sha256: str,
         human_approved: bool,
     ) -> Mapping[str, Any] | None:
         """Submit one exact approved application artifact after explicit human approval."""
@@ -184,11 +207,15 @@ class ApplicationSubmissionService:
         artifact_content, artifact_sha256 = _validated_artifact(
             artifact_content, artifact_sha256
         )
+        candidate_snapshot_sha256 = _validated_sha256(
+            candidate_snapshot_sha256, "candidate_snapshot_sha256"
+        )
         payload = {
             "job_id": job_id,
             "application_id": application_id,
             "artifact_content": artifact_content,
             "artifact_sha256": artifact_sha256,
+            "candidate_snapshot_sha256": candidate_snapshot_sha256,
         }
         existing = self._external_actions.get(operation_id)
         if existing is not None:
@@ -276,6 +303,10 @@ class ApplicationSubmissionService:
                     "application_id": application_id,
                     "provider_submission_id": provider_id,
                     "artifact_sha256": artifact_digest,
+                    "candidate_snapshot_sha256": _validated_sha256(
+                        payload.get("candidate_snapshot_sha256"),
+                        "candidate_snapshot_sha256",
+                    ),
                 },
             )
         if provider_submission_id is not None:
@@ -307,6 +338,7 @@ class FakeApplicationSubmissionAdapter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
         self.artifacts: dict[str, tuple[str, str]] = {}
+        self.candidate_snapshots: dict[str, str] = {}
         self._results: dict[str, Mapping[str, Any]] = {}
         self.failure: Exception | None = None
 
@@ -321,12 +353,14 @@ class FakeApplicationSubmissionAdapter:
         application_id: str,
         artifact_content: str,
         artifact_sha256: str,
+        candidate_snapshot_sha256: str,
     ) -> Mapping[str, Any]:
         existing = self._results.get(operation_id)
         if existing is not None:
             return existing
         self.calls.append((operation_id, job_id, application_id))
         self.artifacts[operation_id] = (artifact_content, artifact_sha256)
+        self.candidate_snapshots[operation_id] = candidate_snapshot_sha256
         if self.failure is not None:
             raise PreSubmissionError(str(self.failure)) from self.failure
         result = {
@@ -334,6 +368,7 @@ class FakeApplicationSubmissionAdapter:
             "application_id": application_id,
             "provider_submission_id": f"fake:{application_id}",
             "artifact_sha256": artifact_sha256,
+            "candidate_snapshot_sha256": candidate_snapshot_sha256,
         }
         self._results[operation_id] = result
         return result
