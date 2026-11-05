@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate ranking snapshot integrity: normalized job ID, title, company and optional
+company ID are captured before adaptive ranking. Any mutation of selected or non-selected
+candidate objects fails before state persistence, approval or submission, and durable
+state is populated only from the validated snapshot. End-to-end regressions cover each
+persisted field and a non-selected candidate.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate ranker result-set integrity: the adaptive ranker must return one unique,
 score-ordered selection for every validated provider job in an immutable tuple. Missing,
 duplicate, injected or malformed tail results now fail before state mutation, approval
