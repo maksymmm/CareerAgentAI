@@ -769,6 +769,13 @@ class AutonomousCareerLoop:
         selected = selection.job
         if not any(selected is job for job in eligible_jobs):
             raise RuntimeError("Job ranking selected an unvalidated opportunity.")
+        (
+            relevance_score,
+            outcome_adjustment,
+            score,
+            evidence_count,
+            decision_reason,
+        ) = self._validate_ranker_selection(selection)
         job_id = getattr(selected, "job_id", None)
         title = getattr(selected, "title", None)
         company = getattr(selected, "company", None)
@@ -792,13 +799,6 @@ class AutonomousCareerLoop:
                 # malformed value must not abort an otherwise valid candidate
                 # workflow or cross the durable aggregate boundary.
                 state.selected_company_id = None
-        (
-            relevance_score,
-            outcome_adjustment,
-            score,
-            evidence_count,
-            decision_reason,
-        ) = self._validate_ranker_selection(selection)
         state.selected_job_relevance_score = relevance_score
         state.selected_job_outcome_adjustment = outcome_adjustment
         state.selected_job_score = score
