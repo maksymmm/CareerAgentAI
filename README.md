@@ -100,7 +100,7 @@ boundary without triggering an external submission. Candidate discovery also rej
 provider pages larger than the requested 20-record contract before ranking or durable
 application preparation, keeping each workflow step computationally bounded. Provider
 pagination metadata cannot declare a page size larger than the request; oversized
-declarations fall back to bounded full-page inference instead of hiding a later page.
+declarations fall back to bounded full-page inference instead of hiding a later page. Stable provider job IDs are accepted only once before adaptive ranking, so upstream duplicates cannot multiply ranking evidence or draft candidates.
 
 ---
 
