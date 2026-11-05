@@ -431,8 +431,11 @@ class ArbeitnowProvider(JobProvider):
                 ):
                     continue
 
-                company_name = item.get("company_name")
-                if company_name is not None and not isinstance(company_name, str):
+                if any(
+                    item.get(field) is not None
+                    and not isinstance(item.get(field), str)
+                    for field in ("title", "company_name", "location", "slug")
+                ):
                     continue
                 try:
                     job = self._to_job(item)
