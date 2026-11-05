@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate ranker result-set integrity: the adaptive ranker must return one unique,
+score-ordered selection for every validated provider job in an immutable tuple. Missing,
+duplicate, injected or malformed tail results now fail before state mutation, approval
+or submission; regressions cover container, completeness, membership, ordering and
+non-selected metadata.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate ranker metadata integrity: relevance, adjustment, total score, evidence count
 and decision reason are now validated together before durable state mutation. Malformed,
 non-finite, inconsistent, negative or unbounded ranker output fails before application

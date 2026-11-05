@@ -763,19 +763,17 @@ class AutonomousCareerLoop:
             eligible_jobs,
             JobFilter(keyword=state.request.keyword, city=state.request.location),
         )
-        if not ranked:
-            raise RuntimeError("Job discovery returned no rankable opportunities.")
-        selection = ranked[0]
-        selected = selection.job
-        if not any(selected is job for job in eligible_jobs):
-            raise RuntimeError("Job ranking selected an unvalidated opportunity.")
         (
-            relevance_score,
-            outcome_adjustment,
-            score,
-            evidence_count,
-            decision_reason,
-        ) = self._validate_ranker_selection(selection)
+            selection,
+            (
+                relevance_score,
+                outcome_adjustment,
+                score,
+                evidence_count,
+                decision_reason,
+            ),
+        ) = self._validate_ranker_results(ranked, eligible_jobs)
+        selected = selection.job
         job_id = getattr(selected, "job_id", None)
         title = getattr(selected, "title", None)
         company = getattr(selected, "company", None)
@@ -805,6 +803,53 @@ class AutonomousCareerLoop:
         state.selected_job_evidence_count = evidence_count
         state.selected_job_decision_reason = decision_reason
         state.phase = CareerLoopPhase.DECISION
+
+    @classmethod
+    def _validate_ranker_results(
+        cls, ranked: Any, eligible_jobs: tuple[Any, ...]
+    ) -> tuple[Any, tuple[float, float, float, int, str]]:
+        """Require one ordered, unique rank result for every validated job."""
+        if not isinstance(ranked, tuple):
+            raise RuntimeError("Job ranking returned a malformed result container.")
+        if not ranked:
+            raise RuntimeError("Job discovery returned no rankable opportunities.")
+        if len(ranked) != len(eligible_jobs):
+            raise RuntimeError("Job ranking returned an incomplete result set.")
+
+        seen_job_objects: set[int] = set()
+        selected_metadata: tuple[float, float, float, int, str] | None = None
+        previous_score: float | None = None
+        for index, selection in enumerate(ranked):
+            selected = getattr(selection, "job", None)
+            if not any(selected is job for job in eligible_jobs):
+                if index == 0:
+                    raise RuntimeError(
+                        "Job ranking selected an unvalidated opportunity."
+                    )
+                raise RuntimeError(
+                    "Job ranking returned an unvalidated opportunity."
+                )
+            object_identity = id(selected)
+            if object_identity in seen_job_objects:
+                raise RuntimeError("Job ranking returned duplicate opportunities.")
+            seen_job_objects.add(object_identity)
+
+            metadata = cls._validate_ranker_selection(selection)
+            current_score = metadata[2]
+            if (
+                previous_score is not None
+                and current_score > previous_score + 1e-9
+            ):
+                raise RuntimeError(
+                    "Job ranking returned non-deterministically ordered results."
+                )
+            previous_score = current_score
+            if index == 0:
+                selected_metadata = metadata
+
+        if selected_metadata is None:
+            raise RuntimeError("Job discovery returned no rankable opportunities.")
+        return ranked[0], selected_metadata
 
     @classmethod
     def _validate_ranker_selection(

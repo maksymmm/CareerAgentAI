@@ -97,6 +97,11 @@ decision reason before any of them enter durable workflow state. Non-finite,
 inconsistent, wrongly typed, negative or unbounded ranker metadata fails closed before
 application creation, approval or submission.
 
+Candidate ranking also requires one ordered, unique result for every validated
+provider job. Malformed containers, missing or duplicate candidates, injected tail
+entries, invalid non-selected metadata and score-order violations fail before durable
+state mutation or any approval/submission boundary.
+
 Candidate discovery validates provider-owned ranking scalars before the deterministic
 scorer sees them. Titles, descriptions, company/location text reject control characters
 and Unicode surrogates within explicit bounds, and remote flags must be booleans. A
