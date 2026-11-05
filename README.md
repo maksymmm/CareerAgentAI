@@ -166,6 +166,7 @@ authoritative. Transfer-coded responses are rejected before body reads so decode
 transport framing cannot bypass those byte and declared-length guarantees. JSON
 decoding is strict: duplicate object members, non-finite numeric
 constants and excessive nesting are rejected rather than interpreted ambiguously.
+Each listing must also supply scalar text for title, company, location and slug when present; malformed identity fields are isolated per record so valid siblings remain discoverable.
 
 The job-search layer provides:
 
