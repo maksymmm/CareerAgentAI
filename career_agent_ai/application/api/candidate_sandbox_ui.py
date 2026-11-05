@@ -594,8 +594,9 @@ _HTML = r"""<!doctype html>
       item.terminal === ['complete', 'failed'].includes(item.phase) &&
       (!item.terminal || !item.waiting_for_human);
     const approvalDetailFields = {
-      approve_application: ['job_id', 'job_title', 'company', 'company_id', 'application_id',
-        'application_version', 'application_status', 'artifact_content', 'artifact_sha256'],
+      approve_application: ['job_id', 'job_title', 'company', 'company_id',
+        'candidate_snapshot_sha256', 'application_id', 'application_version',
+        'application_status', 'artifact_content', 'artifact_sha256'],
       approve_message: ['message_id', 'sender', 'recipient', 'subject', 'body'],
       approve_interview: ['event_id', 'employer', 'event_type', 'location', 'local_date',
         'local_start_time', 'local_end_date', 'local_end_time', 'timezone', 'utc_offset',
@@ -653,6 +654,8 @@ _HTML = r"""<!doctype html>
           normalizedApplicationText(value.job_title, 500) &&
           normalizedApplicationText(value.company, 200) &&
           (value.company_id === null || normalizedApplicationText(value.company_id, 200)) &&
+          typeof value.candidate_snapshot_sha256 === 'string' &&
+          /^[0-9a-f]{64}$/.test(value.candidate_snapshot_sha256) &&
           normalizedApplicationText(value.application_id, 200) &&
           value.application_status === 'saved' &&
           Number.isSafeInteger(value.application_version) && value.application_version >= 1 &&
