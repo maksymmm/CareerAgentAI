@@ -212,3 +212,53 @@ def test_non_text_provider_snapshot_digest_requires_reconciliation():
     assert result is None
     assert operation is not None
     assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+def test_submission_replay_rejects_tampered_durable_snapshot_evidence():
+    artifact = "Experienced logistics professional."
+    artifact_digest = sha256(artifact.encode("utf-8")).hexdigest()
+    snapshot_digest = sha256(b"approved-candidate-job-snapshot").hexdigest()
+    database = SQLiteDatabase()
+    operations = SQLiteExternalActionOperationRepository(database)
+    provider = FakeApplicationSubmissionAdapter()
+    external = ExternalActionService(
+        operations,
+        ApplicationSubmissionService.action_adapter(provider),
+    )
+    service = ApplicationSubmissionService(provider, external)
+
+    result = service.submit(
+        "submit:tampered-replay",
+        job_id="job-1",
+        application_id="application-1",
+        artifact_content=artifact,
+        artifact_sha256=artifact_digest,
+        candidate_snapshot_sha256=snapshot_digest,
+        human_approved=True,
+    )
+    assert result is not None
+    external.replace_succeeded_result(
+        "submit:tampered-replay",
+        {
+            **result,
+            "candidate_snapshot_sha256": sha256(b"substituted-snapshot").hexdigest(),
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="does not match its candidate snapshot",
+    ):
+        service.submit(
+            "submit:tampered-replay",
+            job_id="job-1",
+            application_id="application-1",
+            artifact_content=artifact,
+            artifact_sha256=artifact_digest,
+            candidate_snapshot_sha256=snapshot_digest,
+            human_approved=True,
+        )
+
+    assert provider.calls == [
+        ("submit:tampered-replay", "job-1", "application-1")
+    ]
