@@ -28,6 +28,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopRequest,
     CareerLoopState,
     HumanActionKind,
+    candidate_snapshot_sha256,
 )
 from career_agent_ai.application.career.autonomous_loop_repository import (
     CareerLoopConflictError,
@@ -3700,5 +3701,73 @@ def test_application_prepare_rejects_invalid_artifact_before_draft_or_approval(
     assert state.application_id is None
     assert state.pending_human_action is None
     assert state.phase == CareerLoopPhase.APPLICATION_PREPARE
+    database.close()
+
+def test_selected_candidate_snapshot_digest_survives_restart(tmp_path):
+    path = str(tmp_path / "candidate-snapshot-digest.sqlite")
+    database, loop, *_ = build_stack(path, max_iterations=1)
+    loop.start(request(with_schedule=False), run_id="candidate-snapshot-digest")
+    state = loop._states.get("candidate-snapshot-digest")
+
+    assert state.selected_job_snapshot_sha256 == candidate_snapshot_sha256(
+        "job-1",
+        "Logistics Coordinator",
+        "Acme Logistics",
+        "company-1",
+    )
+    database.close()
+
+    database, restarted, *_ = build_stack(path, max_iterations=1)
+    durable = restarted._states.get("candidate-snapshot-digest")
+    assert durable.selected_job_snapshot_sha256 == state.selected_job_snapshot_sha256
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.update(selected_job_title="Different title"),
+        lambda payload: payload.update(selected_company="Different company"),
+        lambda payload: payload.update(selected_company_id="different-company"),
+        lambda payload: payload.update(selected_job_snapshot_sha256="0" * 64),
+        lambda payload: payload.pop("selected_job_snapshot_sha256"),
+    ],
+)
+def test_restart_rejects_tampered_candidate_snapshot(tmp_path, mutation):
+    database, loop, *_ = build_stack(
+        str(tmp_path / "tampered-candidate-snapshot.sqlite"),
+        max_iterations=1,
+    )
+    loop.start(request(with_schedule=False), run_id="tampered-candidate-snapshot")
+    payload = SQLiteCareerLoopRepository._serialize(
+        loop._states.get("tampered-candidate-snapshot")
+    )
+    mutation(payload)
+
+    with pytest.raises(ValueError, match="state is malformed"):
+        SQLiteCareerLoopRepository._deserialize(payload)
+    database.close()
+
+
+def test_legacy_candidate_snapshot_is_upgraded_with_digest(tmp_path):
+    database, loop, *_ = build_stack(
+        str(tmp_path / "legacy-candidate-snapshot.sqlite"),
+        max_iterations=1,
+    )
+    loop.start(request(with_schedule=False), run_id="legacy-candidate-snapshot")
+    payload = SQLiteCareerLoopRepository._serialize(
+        loop._states.get("legacy-candidate-snapshot")
+    )
+    payload["serialization_version"] = 1
+    payload.pop("selected_job_snapshot_sha256")
+
+    restored = SQLiteCareerLoopRepository._deserialize(payload)
+
+    assert restored.selected_job_snapshot_sha256 == candidate_snapshot_sha256(
+        "job-1",
+        "Logistics Coordinator",
+        "Acme Logistics",
+        "company-1",
+    )
     database.close()
 
