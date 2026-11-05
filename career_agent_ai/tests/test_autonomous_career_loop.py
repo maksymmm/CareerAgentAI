@@ -737,6 +737,46 @@ def test_discovery_deduplicates_provider_job_ids_before_ranking(tmp_path):
     database.close()
 
 
+def test_discovery_rejects_ranker_selection_outside_validated_jobs(tmp_path):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / "unvalidated-ranker-selection.sqlite")
+    )
+    validated = Job.create(
+        job_id="validated-provider-job", title="Logistics Coordinator",
+        company="Provider Company", location=Location("Germany", "Karlsruhe"),
+        description="Warehouse logistics coordination", created_at=START,
+    )
+    injected = Job.create(
+        job_id="injected-ranker-job", title="Injected Role",
+        company="Injected Company", location=Location("Germany", "Karlsruhe"),
+        description="Not returned by the provider", created_at=START,
+    )
+    original_ranker = loop._adaptive_job_ranker
+    loop._adaptive_job_ranker = SimpleNamespace(
+        rank=lambda user_id, jobs, job_filter: original_ranker.rank(
+            user_id, (injected,), job_filter
+        )
+    )
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (validated,)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    failed = loop.start(
+        request(with_schedule=False), run_id="unvalidated-ranker-selection"
+    )
+
+    assert failed.phase == CareerLoopPhase.FAILED
+    assert failed.error == (
+        "RuntimeError: Job ranking selected an unvalidated opportunity."
+    )
+    assert applications.list("user-1") == ()
+    assert submission.calls == []
+    database.close()
+
+
 def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
     database, loop, applications, _, _, submission, *_ = build_stack(
         str(tmp_path / "oversized-provider-page.sqlite")
