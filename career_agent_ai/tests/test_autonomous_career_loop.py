@@ -3056,6 +3056,18 @@ def test_ambiguous_application_submission_enters_explicit_reconciliation_and_can
     tracked = applications.get(f"{run_id}:application")
     assert tracked is not None and tracked.status == JobApplicationStatus.APPLIED
     assert operation_id in tracked.external_action_operation_ids
+    assert dict(tracked.timeline[-1].metadata) == {
+        "provider_submission_id": "provider/confirmed=123"
+    }
+    database.close()
+
+    database, _, restarted_applications, *_ = build_stack(path, with_schedule=False)
+    restarted = restarted_applications.get(f"{run_id}:application")
+    assert restarted is not None
+    assert restarted.status == JobApplicationStatus.APPLIED
+    assert dict(restarted.timeline[-1].metadata) == {
+        "provider_submission_id": "provider/confirmed=123"
+    }
     database.close()
 
 
