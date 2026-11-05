@@ -261,6 +261,7 @@ class ApplicationSubmissionService:
         payload: Mapping[str, Any],
         *,
         candidate_snapshot_sha256: str | None,
+        strict_schema: bool = True,
     ) -> Mapping[str, Any]:
         """Validate durable success evidence against its immutable intent."""
         if operation.result is None:
@@ -274,7 +275,11 @@ class ApplicationSubmissionService:
         }
         if candidate_snapshot_sha256 is not None:
             expected_keys.add("candidate_snapshot_sha256")
-        if set(result) != expected_keys:
+        result_keys = set(result)
+        if (
+            (strict_schema and result_keys != expected_keys)
+            or (not strict_schema and not expected_keys.issubset(result_keys))
+        ):
             raise ValueError("Durable submission result has an invalid schema.")
         artifact_content, artifact_digest = _validated_artifact(
             payload.get("artifact_content"), payload.get("artifact_sha256")
@@ -315,10 +320,15 @@ class ApplicationSubmissionService:
         payload: Mapping[str, Any],
     ) -> Mapping[str, Any]:
         """Replay a pre-upgrade success without inventing snapshot-binding evidence."""
+        if operation.result is not None and "candidate_snapshot_sha256" in operation.result:
+            raise ValueError(
+                "Legacy submission result unexpectedly claims snapshot-binding evidence."
+            )
         return ApplicationSubmissionService._validated_result(
             operation,
             payload,
             candidate_snapshot_sha256=None,
+            strict_schema=False,
         )
 
     def resolve_reconciliation(
