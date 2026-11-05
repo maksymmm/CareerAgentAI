@@ -9,6 +9,7 @@ from career_agent_ai.application.career.application_submission import (
     FakeApplicationSubmissionAdapter,
 )
 from career_agent_ai.application.external_actions import (
+    ExternalActionOperation,
     ExternalActionService,
     ExternalActionStatus,
 )
@@ -262,3 +263,61 @@ def test_submission_replay_rejects_tampered_durable_snapshot_evidence():
     assert provider.calls == [
         ("submit:tampered-replay", "job-1", "application-1")
     ]
+
+
+def test_legacy_replay_preserves_valid_historical_provider_extras():
+    artifact = "Experienced logistics professional."
+    artifact_digest = sha256(artifact.encode("utf-8")).hexdigest()
+    snapshot_digest = sha256(b"approved-candidate-job-snapshot").hexdigest()
+    database = SQLiteDatabase()
+    operations = SQLiteExternalActionOperationRepository(database)
+    provider = FakeApplicationSubmissionAdapter()
+    external = ExternalActionService(
+        operations,
+        ApplicationSubmissionService.action_adapter(provider),
+    )
+    service = ApplicationSubmissionService(provider, external)
+    operation_id = "submit:legacy-provider-extras"
+    operations.create(
+        ExternalActionOperation(
+            operation_id=operation_id,
+            action_type="application.submit",
+            payload={
+                "job_id": "job-1",
+                "application_id": "application-1",
+                "artifact_content": artifact,
+                "artifact_sha256": artifact_digest,
+            },
+        )
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.SUCCEEDED,
+        result={
+            "job_id": "job-1",
+            "application_id": "application-1",
+            "provider_submission_id": "legacy:application-1",
+            "artifact_sha256": artifact_digest,
+            "status": "submitted",
+        },
+    )
+
+    result = service.submit(
+        operation_id,
+        job_id="job-1",
+        application_id="application-1",
+        artifact_content=artifact,
+        artifact_sha256=artifact_digest,
+        candidate_snapshot_sha256=snapshot_digest,
+        human_approved=True,
+    )
+
+    assert result is not None
+    assert result["status"] == "submitted"
+    assert provider.calls == []
