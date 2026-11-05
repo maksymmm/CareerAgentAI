@@ -815,16 +815,16 @@ class AutonomousCareerLoop:
         for field in ("relevance_score", "outcome_adjustment", "score"):
             value = getattr(selection, field, None)
             if isinstance(value, bool) or not isinstance(value, Real):
-                raise TypeError(`ranker ${field} must be numeric.`)
+                raise TypeError(f"ranker {field} must be numeric.")
             try:
                 normalized = float(value)
             except OverflowError as exc:
                 raise ValueError(
-                    `ranker ${field} is outside its durable boundary.`
+                    f"ranker {field} is outside its durable boundary."
                 ) from exc
             if not isfinite(normalized) or abs(normalized) > 1_000_000:
                 raise ValueError(
-                    `ranker ${field} is outside its durable boundary.`
+                    f"ranker {field} is outside its durable boundary."
                 )
             numeric[field] = normalized
 
