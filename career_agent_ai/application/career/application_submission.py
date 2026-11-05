@@ -249,19 +249,33 @@ class ApplicationSubmissionService:
         )
         if operation.status != ExternalActionStatus.SUCCEEDED:
             return None
-        if operation.result is None:
-            raise ValueError("Successful application submission has no durable result.")
-        return dict(operation.result)
+        return self._validated_result(
+            operation,
+            payload,
+            candidate_snapshot_sha256=candidate_snapshot_sha256,
+        )
 
     @staticmethod
-    def _validated_legacy_result(
+    def _validated_result(
         operation: ExternalActionOperation,
         payload: Mapping[str, Any],
+        *,
+        candidate_snapshot_sha256: str | None,
     ) -> Mapping[str, Any]:
-        """Replay a pre-upgrade success without inventing snapshot-binding evidence."""
+        """Validate durable success evidence against its immutable intent."""
         if operation.result is None:
-            raise ValueError("Successful legacy submission has no durable result.")
+            raise ValueError("Successful application submission has no durable result.")
         result = dict(operation.result)
+        expected_keys = {
+            "job_id",
+            "application_id",
+            "provider_submission_id",
+            "artifact_sha256",
+        }
+        if candidate_snapshot_sha256 is not None:
+            expected_keys.add("candidate_snapshot_sha256")
+        if set(result) != expected_keys:
+            raise ValueError("Durable submission result has an invalid schema.")
         artifact_content, artifact_digest = _validated_artifact(
             payload.get("artifact_content"), payload.get("artifact_sha256")
         )
@@ -276,17 +290,36 @@ class ApplicationSubmissionService:
             or _validated_sha256(result.get("artifact_sha256"), "artifact_sha256")
             != artifact_digest
         ):
-            raise ValueError("Legacy submission result does not match its durable intent.")
+            raise ValueError("Durable submission result does not match its intent.")
         _provider_result_identifier(
             result.get("provider_submission_id"),
             "provider_submission_id",
             maximum=1_000,
         )
-        if "candidate_snapshot_sha256" in result:
-            raise ValueError(
-                "Legacy submission result unexpectedly claims snapshot-binding evidence."
-            )
+        if candidate_snapshot_sha256 is not None:
+            if (
+                _validated_sha256(
+                    result.get("candidate_snapshot_sha256"),
+                    "candidate_snapshot_sha256",
+                )
+                != candidate_snapshot_sha256
+            ):
+                raise ValueError(
+                    "Durable submission result does not match its candidate snapshot."
+                )
         return result
+
+    @staticmethod
+    def _validated_legacy_result(
+        operation: ExternalActionOperation,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Replay a pre-upgrade success without inventing snapshot-binding evidence."""
+        return ApplicationSubmissionService._validated_result(
+            operation,
+            payload,
+            candidate_snapshot_sha256=None,
+        )
 
     def resolve_reconciliation(
         self,
@@ -310,14 +343,26 @@ class ApplicationSubmissionService:
                 human_approved=True,
             )
         if submitted and operation.status == ExternalActionStatus.SUCCEEDED:
-            if operation.result is None:
-                raise ValueError("Resolved submission has no durable result.")
+            payload = dict(operation.payload)
+            candidate_digest = (
+                _validated_sha256(
+                    payload.get("candidate_snapshot_sha256"),
+                    "candidate_snapshot_sha256",
+                )
+                if "candidate_snapshot_sha256" in payload
+                else None
+            )
+            result = self._validated_result(
+                operation,
+                payload,
+                candidate_snapshot_sha256=candidate_digest,
+            )
             expected_provider = _provider_result_identifier(
                 provider_submission_id,
                 "provider_submission_id",
                 maximum=1_000,
             )
-            if operation.result.get("provider_submission_id") != expected_provider:
+            if result.get("provider_submission_id") != expected_provider:
                 raise ValueError(
                     "Resolved submission does not match provider_submission_id."
                 )
