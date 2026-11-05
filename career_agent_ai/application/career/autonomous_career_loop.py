@@ -766,6 +766,7 @@ class AutonomousCareerLoop:
         if not ranked:
             raise RuntimeError("Job discovery returned no rankable opportunities.")
         selection = ranked[0]
+        self._validate_ranker_selection(selection)
         selected = selection.job
         if not any(selected is job for job in eligible_jobs):
             raise RuntimeError("Job ranking selected an unvalidated opportunity.")
@@ -798,6 +799,25 @@ class AutonomousCareerLoop:
         state.selected_job_evidence_count = selection.evidence_count
         state.selected_job_decision_reason = selection.reason
         state.phase = CareerLoopPhase.DECISION
+
+    @staticmethod
+    def _validate_ranker_selection(selection: Any) -> None:
+        """Reject malformed ranking evidence before any durable state mutation."""
+        for field in ("relevance_score", "outcome_adjustment", "score"):
+            value = getattr(selection, field, None)
+            if isinstance(value, bool) or not isinstance(value, Real) or not isfinite(value):
+                raise ValueError(f"Job ranking returned invalid {field}.")
+        evidence = getattr(selection, "evidence_count", None)
+        if isinstance(evidence, bool) or not isinstance(evidence, int) or evidence < 0:
+            raise ValueError("Job ranking returned invalid evidence_count.")
+        reason = getattr(selection, "reason", None)
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason) > 1000
+            or any(ord(char) < 32 or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in reason)
+        ):
+            raise ValueError("Job ranking returned invalid reason.")
 
     @staticmethod
     def _has_next_search_page(
