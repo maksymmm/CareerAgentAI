@@ -1214,6 +1214,7 @@ class AutonomousCareerLoop:
                 application_id=state.application_id,
                 artifact_content=artifact_content,
                 artifact_sha256=artifact_digest,
+                candidate_snapshot_sha256=state.selected_job_snapshot_sha256,
                 human_approved=True,
             )
             if replay is None:
@@ -1250,6 +1251,7 @@ class AutonomousCareerLoop:
                 application_id=state.application_id,
                 artifact_content=artifact_content,
                 artifact_sha256=artifact_digest,
+                candidate_snapshot_sha256=state.selected_job_snapshot_sha256,
                 human_approved=True,
             )
         except Exception:

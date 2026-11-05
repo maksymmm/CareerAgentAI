@@ -135,6 +135,43 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             raise OperationConflictError("Operation disappeared after transition.")
         return operation
 
+    def replace_prepared_payload(
+        self,
+        operation_id: str,
+        expected_payload: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> ExternalActionOperation:
+        """Atomically replace a prepared payload using compare-and-swap semantics."""
+        expected_json = self._dump(expected_payload)
+        payload_json = self._dump(payload)
+        cursor = self._database.connection.execute(
+            """
+            UPDATE external_action_operations
+            SET payload_json = ?, updated_at = ?
+            WHERE operation_id = ? AND status = ? AND payload_json = ?
+            """,
+            (
+                payload_json,
+                datetime.now(timezone.utc).isoformat(),
+                operation_id,
+                ExternalActionStatus.PREPARED.value,
+                expected_json,
+            ),
+        )
+        try:
+            self._database.connection.commit()
+        except Exception:
+            self._database.connection.rollback()
+            raise
+        if cursor.rowcount != 1:
+            raise OperationConflictError(
+                "Operation is missing, changed, or is not in prepared status."
+            )
+        operation = self.get(operation_id)
+        if operation is None:
+            raise OperationConflictError("Operation disappeared after payload update.")
+        return operation
+
     def replace_succeeded_result(
         self,
         operation_id: str,

@@ -34,6 +34,15 @@ class ExternalActionOperationRepository(ABC):
         """Atomically change an operation from the expected lifecycle state."""
 
 
+    def replace_prepared_payload(
+        self,
+        operation_id: str,
+        expected_payload: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> ExternalActionOperation:
+        """Atomically upgrade a prepared intent before any provider call."""
+        raise NotImplementedError
+
     def replace_succeeded_result(
         self,
         operation_id: str,

@@ -1776,6 +1776,7 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
             application_id,
             artifact_content,
             artifact_sha256,
+            candidate_snapshot_sha256,
         ):
             result = dict(
                 super().submit(
@@ -1784,6 +1785,7 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
                     application_id,
                     artifact_content,
                     artifact_sha256,
+                    candidate_snapshot_sha256,
                 )
             )
             result["provider_debug_timestamp"] = CREATED
@@ -1808,6 +1810,7 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
         application_id="application-1",
         artifact_content=artifact,
         artifact_sha256=digest,
+        candidate_snapshot_sha256="b" * 64,
         human_approved=True,
     )
 
@@ -1816,6 +1819,7 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
         "application_id": "application-1",
         "provider_submission_id": "fake:application-1",
         "artifact_sha256": digest,
+        "candidate_snapshot_sha256": "b" * 64,
     }
     durable = operations.get("submission:normalized")
     assert durable is not None
