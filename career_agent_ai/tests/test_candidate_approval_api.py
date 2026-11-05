@@ -553,6 +553,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 "job_title": "Platform Engineer",
                 "company": "Sandbox GmbH",
                 "company_id": None,
+                "candidate_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "application_id": "application-1",
                 "application_version": 1,
                 "application_status": "saved",
@@ -778,6 +779,7 @@ def test_candidate_sandbox_browser_recovers_when_approval_is_unavailable():
         "job_title": "Platform Engineer",
         "company": "Sandbox GmbH",
         "company_id": None,
+        "candidate_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "application_id": "application-1",
         "application_version": 1,
         "application_status": "saved",
@@ -846,6 +848,7 @@ def test_candidate_sandbox_browser_preserves_prompt_when_recovery_is_unavailable
     details = {
         "job_id": "job-1", "job_title": "Platform Engineer",
         "company": "Sandbox GmbH", "company_id": None,
+        "candidate_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "application_id": "application-1", "application_version": 1,
         "application_status": "saved", "artifact_content": "Candidate application",
         "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
@@ -910,6 +913,7 @@ def test_candidate_sandbox_browser_refreshes_status_after_recovery_conflict():
     details = {
         "job_id": "job-1", "job_title": "Platform Engineer",
         "company": "Sandbox GmbH", "company_id": None,
+        "candidate_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "application_id": "application-1", "application_version": 1,
         "application_status": "saved", "artifact_content": "Candidate application",
         "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
@@ -1085,6 +1089,7 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
     details = {
         "job_id": "job-1", "job_title": "Platform Engineer",
         "company": "Sandbox GmbH", "company_id": None,
+        "candidate_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "application_id": "application-1", "application_version": 1,
         "application_status": "saved", "artifact_content": "Candidate application",
         "artifact_sha256": "f15e21a2bd1ceb3af20a4722073bbf1618403898240b124d8d33406015b8b03d",
@@ -1332,6 +1337,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "!approvalDetailsValid" in html
     assert "Number.isSafeInteger(value.application_version)" in html
     assert "/^[0-9a-f]{64}$/.test(value.artifact_sha256)" in html
+    assert "/^[0-9a-f]{64}$/.test(value.candidate_snapshot_sha256)" in html
     assert "value.company_id === null || normalizedApplicationText(value.company_id, 200)" in html
     assert "const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset']" in html
     assert "const approvalTextLimits" in html

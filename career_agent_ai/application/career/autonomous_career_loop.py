@@ -1087,6 +1087,10 @@ class AutonomousCareerLoop:
             raise RuntimeError(
                 "Application approval requires a complete, unmodified artifact."
             )
+        if not isinstance(state.selected_job_snapshot_sha256, str):
+            raise RuntimeError(
+                "Application approval requires a bound candidate snapshot."
+            )
 
         matches = self._applications.find(
             ApplicationQuery(
@@ -1154,6 +1158,7 @@ class AutonomousCareerLoop:
                 "job_title": state.selected_job_title,
                 "company": state.selected_company,
                 "company_id": state.selected_company_id,
+                "candidate_snapshot_sha256": state.selected_job_snapshot_sha256,
                 "application_id": state.application_id,
                 "application_version": tracked.version,
                 "application_status": tracked.status.value,
@@ -1179,6 +1184,17 @@ class AutonomousCareerLoop:
         artifact_digest = state.application_artifact_sha256
         if not isinstance(artifact_content, str) or not isinstance(artifact_digest, str):
             raise RuntimeError("Application submission artifact is incomplete.")
+        if (
+            approved.details.get("job_id") != state.selected_job_id
+            or approved.details.get("job_title") != state.selected_job_title
+            or approved.details.get("company") != state.selected_company
+            or approved.details.get("company_id") != state.selected_company_id
+            or approved.details.get("candidate_snapshot_sha256")
+            != state.selected_job_snapshot_sha256
+        ):
+            raise RuntimeError(
+                "Approved candidate snapshot is stale; refusing external submission."
+            )
         operation_id = self._application_submission_operation_id(state.application_id)
         if (
             application.status == JobApplicationStatus.APPLIED
@@ -1276,7 +1292,10 @@ class AutonomousCareerLoop:
                         "operation_id": operation_id,
                         "application_id": state.application_id,
                         "job_id": state.selected_job_id,
+                        "job_title": state.selected_job_title,
                         "company": state.selected_company,
+                        "company_id": state.selected_company_id,
+                        "candidate_snapshot_sha256": state.selected_job_snapshot_sha256,
                         "artifact_content": artifact_content,
                         "artifact_sha256": artifact_digest,
                         "instruction": (

@@ -27,6 +27,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
     CareerLoopState,
+    HumanActionEvent,
     HumanActionKind,
     candidate_snapshot_sha256,
 )
@@ -3768,6 +3769,113 @@ def test_legacy_candidate_snapshot_is_upgraded_with_digest(tmp_path):
         "Logistics Coordinator",
         "Acme Logistics",
         "company-1",
+    )
+    database.close()
+
+def test_application_approval_exposes_bound_candidate_snapshot(tmp_path):
+    database, loop, *_ = build_stack(
+        str(tmp_path / "approval-candidate-binding.sqlite"),
+        with_schedule=False,
+    )
+
+    result = loop.start(
+        request(with_schedule=False),
+        run_id="approval-candidate-binding",
+    )
+    state = loop._states.get("approval-candidate-binding")
+
+    assert result.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert result.human_action is not None
+    assert result.human_action.details["candidate_snapshot_sha256"] == (
+        state.selected_job_snapshot_sha256
+    )
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda details: details.update(job_title="Different title"),
+        lambda details: details.update(company="Different company"),
+        lambda details: details.update(company_id="different-company"),
+        lambda details: details.update(candidate_snapshot_sha256="0" * 64),
+    ],
+)
+def test_submission_rejects_stale_approved_candidate_snapshot(
+    tmp_path, mutation
+):
+    path = str(tmp_path / "stale-approved-candidate.sqlite")
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path,
+        with_schedule=False,
+    )
+    run_id = "stale-approved-candidate"
+    result = loop.start(request(with_schedule=False), run_id=run_id)
+    assert result.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    state = loop._states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    original = state.pending_human_action
+    details = dict(original.details)
+    mutation(details)
+    state.approved_human_action = HumanActionEvent(
+        kind=original.kind,
+        title=original.title,
+        details=details,
+    )
+    state.pending_human_action = None
+    state.phase = CareerLoopPhase.APPLICATION_SUBMIT
+    state.touch()
+    loop._states.save(state)
+
+    failed = loop.continue_run(run_id, user_id="user-1")
+
+    assert failed.phase == CareerLoopPhase.FAILED
+    assert failed.error == (
+        "RuntimeError: Approved candidate snapshot is stale; "
+        "refusing external submission."
+    )
+    assert submission_provider.calls == []
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.SAVED
+    database.close()
+
+@pytest.mark.parametrize(
+    ("action_field", "phase"),
+    [
+        ("pending_human_action", CareerLoopPhase.APPLICATION_APPROVAL),
+        ("approved_human_action", CareerLoopPhase.APPLICATION_SUBMIT),
+    ],
+)
+def test_legacy_application_approval_is_upgraded_with_candidate_digest(
+    tmp_path, action_field, phase
+):
+    database, loop, *_ = build_stack(
+        str(tmp_path / "legacy-approval-binding.sqlite"),
+        with_schedule=False,
+    )
+    loop.start(request(with_schedule=False), run_id="legacy-approval-binding")
+    payload = SQLiteCareerLoopRepository._serialize(
+        loop._states.get("legacy-approval-binding")
+    )
+    legacy_action = payload["pending_human_action"]
+    legacy_action["details"].pop("candidate_snapshot_sha256")
+    payload["serialization_version"] = 2
+    payload["phase"] = phase.value
+    payload["pending_human_action"] = (
+        legacy_action if action_field == "pending_human_action" else None
+    )
+    payload["approved_human_action"] = (
+        legacy_action if action_field == "approved_human_action" else None
+    )
+
+    restored = SQLiteCareerLoopRepository._deserialize(payload)
+    restored_action = getattr(restored, action_field)
+
+    assert restored_action is not None
+    assert restored_action.details["candidate_snapshot_sha256"] == (
+        restored.selected_job_snapshot_sha256
     )
     database.close()
 

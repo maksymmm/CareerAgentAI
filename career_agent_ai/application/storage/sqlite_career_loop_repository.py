@@ -24,7 +24,7 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 class SQLiteCareerLoopRepository:
     """Strict JSON, restart-safe persistence for one active career loop."""
 
-    SERIALIZATION_VERSION = 2
+    SERIALIZATION_VERSION = 3
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self._database = database
@@ -422,6 +422,41 @@ class SQLiteCareerLoopRepository:
             raise ValueError("Persisted candidate snapshot digest does not match.")
         return normalized_digest
 
+    @staticmethod
+    def _upgrade_legacy_application_action(
+        action: HumanActionEvent | None,
+        *,
+        serialization_version: int,
+        job_id: str | None,
+        job_title: str | None,
+        company: str | None,
+        company_id: str | None,
+        snapshot_digest: str | None,
+    ) -> HumanActionEvent | None:
+        if (
+            action is None
+            or action.kind != HumanActionKind.APPROVE_APPLICATION
+            or serialization_version >= SQLiteCareerLoopRepository.SERIALIZATION_VERSION
+        ):
+            return action
+        details = dict(action.details)
+        if details.get("candidate_snapshot_sha256") is not None:
+            return action
+        if (
+            snapshot_digest is None
+            or details.get("job_id") != job_id
+            or details.get("job_title") != job_title
+            or details.get("company") != company
+            or details.get("company_id") != company_id
+        ):
+            return action
+        details["candidate_snapshot_sha256"] = snapshot_digest
+        return HumanActionEvent(
+            kind=action.kind,
+            title=action.title,
+            details=details,
+        )
+
     @classmethod
     def _serialize(
         cls, state: CareerLoopState, *, version: int | None = None
@@ -481,7 +516,7 @@ class SQLiteCareerLoopRepository:
         if not isinstance(value, dict):
             raise ValueError("Persisted autonomous-loop payload must be an object.")
         serialization_version = value.get("serialization_version")
-        if serialization_version not in {1, cls.SERIALIZATION_VERSION}:
+        if serialization_version not in {1, 2, cls.SERIALIZATION_VERSION}:
             raise ValueError("Unsupported autonomous-loop serialization version.")
         try:
             request_data = value["request"]
@@ -534,6 +569,24 @@ class SQLiteCareerLoopRepository:
                 company_id=selected_company_id,
                 digest=value.get("selected_job_snapshot_sha256"),
                 allow_missing_digest=serialization_version == 1,
+            )
+            action = cls._upgrade_legacy_application_action(
+                action,
+                serialization_version=serialization_version,
+                job_id=selected_job_id,
+                job_title=selected_job_title,
+                company=selected_company,
+                company_id=selected_company_id,
+                snapshot_digest=snapshot_digest,
+            )
+            approved_action = cls._upgrade_legacy_application_action(
+                approved_action,
+                serialization_version=serialization_version,
+                job_id=selected_job_id,
+                job_title=selected_job_title,
+                company=selected_company,
+                company_id=selected_company_id,
+                snapshot_digest=snapshot_digest,
             )
             return CareerLoopState(
                 run_id=cls._identifier(value["run_id"], "run_id"),
