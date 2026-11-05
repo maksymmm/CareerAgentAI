@@ -102,6 +102,11 @@ provider job. Malformed containers, missing or duplicate candidates, injected ta
 entries, invalid non-selected metadata and score-order violations fail before durable
 state mutation or any approval/submission boundary.
 
+Candidate job identity and presentation fields are snapshotted before adaptive
+ranking. Any ranker-side mutation of a selected or non-selected job fails closed, and
+durable state is populated only from the validated snapshot rather than re-reading a
+mutable provider object.
+
 Candidate discovery validates provider-owned ranking scalars before the deterministic
 scorer sees them. Titles, descriptions, company/location text reject control characters
 and Unicode surrogates within explicit bounds, and remote flags must be booleans. A
