@@ -3662,3 +3662,43 @@ def test_request_rejects_message_subject_header_injection_before_loop_start():
             recipient="recruiter@example.test",
             message_subject="Approved\nBcc: attacker@example.test",
         )
+
+@pytest.mark.parametrize(
+    ("artifact_content", "artifact_digest"),
+    [
+        (None, None),
+        ("candidate artifact", "0" * 64),
+    ],
+)
+def test_application_prepare_rejects_invalid_artifact_before_draft_or_approval(
+    tmp_path, artifact_content, artifact_digest
+):
+    database, loop, applications, *_ = build_stack(
+        str(tmp_path / "invalid-approval-artifact.sqlite")
+    )
+    state = CareerLoopState(
+        run_id="invalid-approval-artifact",
+        request=request(with_schedule=False),
+        phase=CareerLoopPhase.APPLICATION_PREPARE,
+        selected_job_id="job-1",
+        selected_job_title="Logistics Coordinator",
+        selected_company="Acme Logistics",
+        selected_company_id="company-1",
+        application_artifact_content=artifact_content,
+        application_artifact_sha256=artifact_digest,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Application approval requires a complete, unmodified artifact",
+    ):
+        loop._prepare_application(state)
+
+    assert applications.find(
+        ApplicationQuery(user_id="user-1", job_id="job-1")
+    ) == []
+    assert state.application_id is None
+    assert state.pending_human_action is None
+    assert state.phase == CareerLoopPhase.APPLICATION_PREPARE
+    database.close()
+
