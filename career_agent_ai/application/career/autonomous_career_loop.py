@@ -767,6 +767,8 @@ class AutonomousCareerLoop:
             raise RuntimeError("Job discovery returned no rankable opportunities.")
         selection = ranked[0]
         selected = selection.job
+        if not any(selected is job for job in eligible_jobs):
+            raise RuntimeError("Job ranking selected an unvalidated opportunity.")
         job_id = getattr(selected, "job_id", None)
         title = getattr(selected, "title", None)
         company = getattr(selected, "company", None)
