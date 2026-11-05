@@ -854,6 +854,95 @@ def test_discovery_rejects_malformed_ranker_metadata_before_approval(
     database.close()
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_error"),
+    [
+        (
+            "malformed_container",
+            "RuntimeError: Job ranking returned a malformed result container.",
+        ),
+        (
+            "incomplete",
+            "RuntimeError: Job ranking returned an incomplete result set.",
+        ),
+        (
+            "duplicate",
+            "RuntimeError: Job ranking returned duplicate opportunities.",
+        ),
+        (
+            "unvalidated_tail",
+            "RuntimeError: Job ranking returned an unvalidated opportunity.",
+        ),
+        (
+            "unsorted",
+            "RuntimeError: Job ranking returned non-deterministically ordered results.",
+        ),
+        (
+            "malformed_tail",
+            "ValueError: ranker_reason contains forbidden control characters.",
+        ),
+    ],
+)
+def test_discovery_rejects_malformed_complete_ranker_results_before_approval(
+    tmp_path, mode, expected_error
+):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / f"malformed-ranker-results-{mode}.sqlite")
+    )
+    strong = Job.create(
+        job_id="ranked-strong", title="Logistics Coordinator",
+        company="Provider Company", location=Location("Germany", "Karlsruhe"),
+        description="Logistics coordination", created_at=START,
+    )
+    weak = Job.create(
+        job_id="ranked-weak", title="Night Shift Associate",
+        company="Provider Company", location=Location("Germany", "Karlsruhe"),
+        description="Warehouse operations", created_at=START,
+    )
+    foreign = Job.create(
+        job_id="ranked-foreign", title="Logistics Director",
+        company="Injected Company", location=Location("Germany", "Karlsruhe"),
+        description="Not returned by the provider", created_at=START,
+    )
+    original_ranker = loop._adaptive_job_ranker
+
+    def rank(user_id, jobs, job_filter):
+        ranked = original_ranker.rank(user_id, jobs, job_filter)
+        if mode == "malformed_container":
+            return list(ranked)
+        if mode == "incomplete":
+            return ranked[:1]
+        if mode == "duplicate":
+            return (ranked[0], ranked[0])
+        if mode == "unvalidated_tail":
+            injected = original_ranker.rank(
+                user_id, (foreign,), job_filter
+            )[0]
+            return (ranked[0], injected)
+        if mode == "unsorted":
+            return tuple(reversed(ranked))
+        object.__setattr__(ranked[1], "reason", "invalid\x00reason")
+        return ranked
+
+    loop._adaptive_job_ranker = SimpleNamespace(rank=rank)
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (strong, weak)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    failed = loop.start(
+        request(with_schedule=False), run_id=f"malformed-ranker-results-{mode}"
+    )
+
+    assert failed.phase == CareerLoopPhase.FAILED
+    assert failed.error == expected_error
+    assert applications.list("user-1") == ()
+    assert submission.calls == []
+    database.close()
+
+
 def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
     database, loop, applications, _, _, submission, *_ = build_stack(
         str(tmp_path / "oversized-provider-page.sqlite")
