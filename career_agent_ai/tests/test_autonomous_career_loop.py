@@ -1827,6 +1827,50 @@ def test_submission_provider_extras_are_not_persisted_in_external_action_result(
     assert "provider_debug_timestamp" not in durable.result
     database.close()
 
+def test_tracker_completion_rejects_mismatched_durable_submission_result(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "tracker-result-binding.sqlite")
+    run_id = "tracker-result-binding"
+    database, loop, applications, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    started = loop.start(
+        CareerLoopRequest(user_id="user-1", keyword="Logistics", candidate_profile=PROFILE),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    original_submit = loop._submission.submit
+
+    def mismatched_result(*args, **kwargs):
+        result = original_submit(*args, **kwargs)
+        assert result is not None
+        return {**result, "application_id": "another-application"}
+
+    monkeypatch.setattr(loop._submission, "submit", mismatched_result)
+    partial = loop.resume(run_id, approved=True, user_id="user-1")
+
+    assert partial.phase == CareerLoopPhase.APPLICATION_SUBMIT
+    assert partial.completed is False
+    assert "does not match the current tracker" in (partial.error or "")
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.SAVED
+    assert len(submission_provider.calls) == 1
+
+    monkeypatch.setattr(loop._submission, "submit", original_submit)
+    recovered = loop.continue_run(run_id, user_id="user-1")
+
+    assert recovered.completed is True
+    assert recovered.error is None
+    assert len(submission_provider.calls) == 1
+    tracked = applications.get(f"{run_id}:application")
+    assert tracked is not None
+    assert tracked.status == JobApplicationStatus.APPLIED
+    database.close()
+
+
 def test_tracker_completion_failure_after_durable_submit_remains_recoverable(
     tmp_path, monkeypatch
 ):
