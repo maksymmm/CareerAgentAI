@@ -9,6 +9,7 @@ from career_agent_ai.application.career.application_submission import (
     FakeApplicationSubmissionAdapter,
 )
 from career_agent_ai.application.external_actions import (
+    ExternalActionOperation,
     ExternalActionService,
     ExternalActionStatus,
 )
@@ -212,3 +213,119 @@ def test_non_text_provider_snapshot_digest_requires_reconciliation():
     assert result is None
     assert operation is not None
     assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+def test_submission_replay_rejects_tampered_durable_snapshot_evidence():
+    artifact = "Experienced logistics professional."
+    artifact_digest = sha256(artifact.encode("utf-8")).hexdigest()
+    snapshot_digest = sha256(b"approved-candidate-job-snapshot").hexdigest()
+    database = SQLiteDatabase()
+    operations = SQLiteExternalActionOperationRepository(database)
+    provider = FakeApplicationSubmissionAdapter()
+    external = ExternalActionService(
+        operations,
+        ApplicationSubmissionService.action_adapter(provider),
+    )
+    service = ApplicationSubmissionService(provider, external)
+
+    result = service.submit(
+        "submit:tampered-replay",
+        job_id="job-1",
+        application_id="application-1",
+        artifact_content=artifact,
+        artifact_sha256=artifact_digest,
+        candidate_snapshot_sha256=snapshot_digest,
+        human_approved=True,
+    )
+    assert result is not None
+    external.replace_succeeded_result(
+        "submit:tampered-replay",
+        {
+            **result,
+            "candidate_snapshot_sha256": sha256(b"substituted-snapshot").hexdigest(),
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="does not match its candidate snapshot",
+    ):
+        service.submit(
+            "submit:tampered-replay",
+            job_id="job-1",
+            application_id="application-1",
+            artifact_content=artifact,
+            artifact_sha256=artifact_digest,
+            candidate_snapshot_sha256=snapshot_digest,
+            human_approved=True,
+        )
+
+    assert provider.calls == [
+        ("submit:tampered-replay", "job-1", "application-1")
+    ]
+
+
+def test_legacy_replay_preserves_valid_historical_provider_extras():
+    artifact = "Experienced logistics professional."
+    artifact_digest = sha256(artifact.encode("utf-8")).hexdigest()
+    snapshot_digest = sha256(b"approved-candidate-job-snapshot").hexdigest()
+    database = SQLiteDatabase()
+    operations = SQLiteExternalActionOperationRepository(database)
+    provider = FakeApplicationSubmissionAdapter()
+    external = ExternalActionService(
+        operations,
+        ApplicationSubmissionService.action_adapter(provider),
+    )
+    service = ApplicationSubmissionService(provider, external)
+    operation_id = "submit:legacy-provider-extras"
+    operations.create(
+        ExternalActionOperation(
+            operation_id=operation_id,
+            action_type="application.submit",
+            payload={
+                "job_id": "job-1",
+                "application_id": "application-1",
+                "artifact_content": artifact,
+                "artifact_sha256": artifact_digest,
+            },
+        )
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.SUCCEEDED,
+        result={
+            "job_id": "job-1",
+            "application_id": "application-1",
+            "provider_submission_id": "legacy:application-1",
+            "artifact_sha256": artifact_digest,
+            "status": "submitted",
+        },
+    )
+
+    result = service.submit(
+        operation_id,
+        job_id="job-1",
+        application_id="application-1",
+        artifact_content=artifact,
+        artifact_sha256=artifact_digest,
+        candidate_snapshot_sha256=snapshot_digest,
+        human_approved=True,
+    )
+
+    assert result is not None
+    assert result["status"] == "submitted"
+    reconciled = service.resolve_reconciliation(
+        operation_id,
+        submitted=True,
+        provider_submission_id="legacy:application-1",
+    )
+    assert reconciled.status == ExternalActionStatus.SUCCEEDED
+    assert reconciled.result is not None
+    assert reconciled.result["status"] == "submitted"
+    assert provider.calls == []
