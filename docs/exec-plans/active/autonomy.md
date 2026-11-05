@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate ranker metadata integrity: relevance, adjustment, total score, evidence count
+and decision reason are now validated together before durable state mutation. Malformed,
+non-finite, inconsistent, negative or unbounded ranker output fails before application
+creation, approval or submission. Parameterized end-to-end regressions cover every field.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate ranking selection integrity: the adaptive ranker may select only an object
 from the validated and deduplicated provider set. Injected or stale ranker output now
 fails before durable application creation or approval. An end-to-end regression proves
