@@ -92,6 +92,11 @@ Approval-prompt and status reads are mutually exclusive with each other and reco
 closing the remaining current-run overlap before any authenticated fetch begins.
 the selected-run context cannot change while another workflow operation is unresolved.
 
+Candidate ranking validates the selected score components, evidence count and
+decision reason before any of them enter durable workflow state. Non-finite,
+inconsistent, wrongly typed, negative or unbounded ranker metadata fails closed before
+application creation, approval or submission.
+
 Candidate discovery validates provider-owned ranking scalars before the deterministic
 scorer sees them. Titles, descriptions, company/location text reject control characters
 and Unicode surrogates within explicit bounds, and remote flags must be booleans. A
