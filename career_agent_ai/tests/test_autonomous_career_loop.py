@@ -3841,3 +3841,41 @@ def test_submission_rejects_stale_approved_candidate_snapshot(
     assert tracked.status == JobApplicationStatus.SAVED
     database.close()
 
+@pytest.mark.parametrize(
+    ("action_field", "phase"),
+    [
+        ("pending_human_action", CareerLoopPhase.APPLICATION_APPROVAL),
+        ("approved_human_action", CareerLoopPhase.APPLICATION_SUBMIT),
+    ],
+)
+def test_legacy_application_approval_is_upgraded_with_candidate_digest(
+    tmp_path, action_field, phase
+):
+    database, loop, *_ = build_stack(
+        str(tmp_path / "legacy-approval-binding.sqlite"),
+        with_schedule=False,
+    )
+    loop.start(request(with_schedule=False), run_id="legacy-approval-binding")
+    payload = SQLiteCareerLoopRepository._serialize(
+        loop._states.get("legacy-approval-binding")
+    )
+    legacy_action = payload["pending_human_action"]
+    legacy_action["details"].pop("candidate_snapshot_sha256")
+    payload["serialization_version"] = 2
+    payload["phase"] = phase.value
+    payload["pending_human_action"] = (
+        legacy_action if action_field == "pending_human_action" else None
+    )
+    payload["approved_human_action"] = (
+        legacy_action if action_field == "approved_human_action" else None
+    )
+
+    restored = SQLiteCareerLoopRepository._deserialize(payload)
+    restored_action = getattr(restored, action_field)
+
+    assert restored_action is not None
+    assert restored_action.details["candidate_snapshot_sha256"] == (
+        restored.selected_job_snapshot_sha256
+    )
+    database.close()
+
