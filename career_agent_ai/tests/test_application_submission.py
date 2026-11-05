@@ -320,4 +320,12 @@ def test_legacy_replay_preserves_valid_historical_provider_extras():
 
     assert result is not None
     assert result["status"] == "submitted"
+    reconciled = service.resolve_reconciliation(
+        operation_id,
+        submitted=True,
+        provider_submission_id="legacy:application-1",
+    )
+    assert reconciled.status == ExternalActionStatus.SUCCEEDED
+    assert reconciled.result is not None
+    assert reconciled.result["status"] == "submitted"
     assert provider.calls == []
