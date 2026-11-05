@@ -777,6 +777,83 @@ def test_discovery_rejects_ranker_selection_outside_validated_jobs(tmp_path):
     database.close()
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        (
+            "relevance_score",
+            float("nan"),
+            "ValueError: ranker relevance_score is outside its durable boundary.",
+        ),
+        (
+            "outcome_adjustment",
+            True,
+            "TypeError: ranker outcome_adjustment must be numeric.",
+        ),
+        (
+            "score",
+            float("inf"),
+            "ValueError: ranker score is outside its durable boundary.",
+        ),
+        (
+            "score",
+            999.0,
+            "ValueError: ranker score is inconsistent with its components.",
+        ),
+        (
+            "evidence_count",
+            -1,
+            "ValueError: ranker evidence_count is outside its durable boundary.",
+        ),
+        (
+            "reason",
+            "invalid\x00reason",
+            "ValueError: ranker_reason contains forbidden control characters.",
+        ),
+        (
+            "reason",
+            " ",
+            "ValueError: ranker_reason must not be empty.",
+        ),
+    ],
+)
+def test_discovery_rejects_malformed_ranker_metadata_before_approval(
+    tmp_path, field, value, expected_error
+):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / f"malformed-ranker-{field}.sqlite")
+    )
+    job = Job.create(
+        job_id="validated-ranker-job", title="Logistics Coordinator",
+        company="Provider Company", location=Location("Germany", "Karlsruhe"),
+        description="Warehouse logistics coordination", created_at=START,
+    )
+    original_ranker = loop._adaptive_job_ranker
+
+    def rank(user_id, jobs, job_filter):
+        ranked = original_ranker.rank(user_id, jobs, job_filter)
+        object.__setattr__(ranked[0], field, value)
+        return ranked
+
+    loop._adaptive_job_ranker = SimpleNamespace(rank=rank)
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": (job,)}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    failed = loop.start(
+        request(with_schedule=False), run_id=f"malformed-ranker-{field}"
+    )
+
+    assert failed.phase == CareerLoopPhase.FAILED
+    assert failed.error == expected_error
+    assert applications.list("user-1") == ()
+    assert submission.calls == []
+    database.close()
+
+
 def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
     database, loop, applications, _, _, submission, *_ = build_stack(
         str(tmp_path / "oversized-provider-page.sqlite")
