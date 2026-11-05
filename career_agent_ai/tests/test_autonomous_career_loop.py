@@ -943,6 +943,63 @@ def test_discovery_rejects_malformed_complete_ranker_results_before_approval(
     database.close()
 
 
+@pytest.mark.parametrize(
+    ("target", "field", "value"),
+    [
+        ("selected", "job_id", "mutated-job-id"),
+        ("selected", "title", "Mutated Director"),
+        ("selected", "company", "Mutated Company"),
+        ("non_selected", "title", "Mutated Hidden Candidate"),
+    ],
+)
+def test_discovery_rejects_ranker_candidate_mutation_before_approval(
+    tmp_path, target, field, value
+):
+    database, loop, applications, _, _, submission, *_ = build_stack(
+        str(tmp_path / f"ranker-candidate-mutation-{target}-{field}.sqlite")
+    )
+    jobs = (
+        Job.create(
+            job_id="snapshot-strong", title="Logistics Coordinator",
+            company="Original Company", location=Location("Germany", "Karlsruhe"),
+            description="Logistics coordination", created_at=START,
+        ),
+        Job.create(
+            job_id="snapshot-weak", title="Night Shift Associate",
+            company="Original Company", location=Location("Germany", "Karlsruhe"),
+            description="Warehouse operations", created_at=START,
+        ),
+    )
+    original_ranker = loop._adaptive_job_ranker
+
+    def rank(user_id, candidates, job_filter):
+        ranked = original_ranker.rank(user_id, candidates, job_filter)
+        index = 0 if target == "selected" else 1
+        object.__setattr__(ranked[index].job, field, value)
+        return ranked
+
+    loop._adaptive_job_ranker = SimpleNamespace(rank=rank)
+    original_agents = loop._agents
+    loop._agents = SimpleNamespace(resolve=lambda name: (
+        SimpleNamespace(execute=lambda _: SimpleNamespace(
+            success=True, metadata={"jobs": jobs}
+        )) if name == "job_search" else original_agents.resolve(name)
+    ))
+
+    failed = loop.start(
+        request(with_schedule=False),
+        run_id=f"ranker-candidate-mutation-{target}-{field}",
+    )
+
+    assert failed.phase == CareerLoopPhase.FAILED
+    assert failed.error == (
+        "RuntimeError: Job ranking mutated a validated opportunity."
+    )
+    assert applications.list("user-1") == ()
+    assert submission.calls == []
+    database.close()
+
+
 def test_discovery_rejects_oversized_provider_page_before_approval(tmp_path):
     database, loop, applications, _, _, submission, *_ = build_stack(
         str(tmp_path / "oversized-provider-page.sqlite")
