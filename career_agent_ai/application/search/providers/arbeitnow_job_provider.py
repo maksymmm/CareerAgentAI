@@ -52,17 +52,7 @@ class ArbeitnowJobProvider(JobProvider):
             payload = self._fetch_page(page)
 
             for item in payload:
-                # A malformed upstream listing must not discard valid jobs
-                # from the same page or poison downstream candidate state.
-                if not all(
-                    isinstance(item.get(field), str) and item[field].strip()
-                    for field in ("slug", "title", "company_name", "url")
-                ):
-                    continue
-                try:
-                    job = self._to_job(item)
-                except (ValueError, TypeError, OverflowError):
-                    continue
+                job = self._to_job(item)
 
                 if normalized_query and not self._matches(
                     job,
