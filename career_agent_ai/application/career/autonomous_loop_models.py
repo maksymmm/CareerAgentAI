@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from hashlib import sha256
+import json
 import re
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -159,6 +161,21 @@ class CareerLoopRequest:
             )
 
 
+def candidate_snapshot_sha256(
+    job_id: str,
+    job_title: str,
+    company: str,
+    company_id: str | None,
+) -> str:
+    """Return an unambiguous digest binding one normalized candidate snapshot."""
+    payload = json.dumps(
+        [job_id, job_title, company, company_id],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class CareerLoopState:
     """Mutable durable execution state for one bounded autonomous cycle."""
@@ -170,6 +187,7 @@ class CareerLoopState:
     selected_job_title: str | None = None
     selected_company: str | None = None
     selected_company_id: str | None = None
+    selected_job_snapshot_sha256: str | None = None
     selected_job_relevance_score: float | None = None
     selected_job_outcome_adjustment: float | None = None
     selected_job_score: float | None = None

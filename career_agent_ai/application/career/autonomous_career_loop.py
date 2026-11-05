@@ -33,6 +33,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopState,
     HumanActionEvent,
     HumanActionKind,
+    candidate_snapshot_sha256,
     validate_loop_identifier,
 )
 from career_agent_ai.application.career.autonomous_loop_repository import (
@@ -788,6 +789,12 @@ class AutonomousCareerLoop:
         state.selected_job_title = selected_job_title
         state.selected_company = selected_company
         state.selected_company_id = selected_company_id
+        state.selected_job_snapshot_sha256 = candidate_snapshot_sha256(
+            selected_job_id,
+            selected_job_title,
+            selected_company,
+            selected_company_id,
+        )
         state.selected_job_relevance_score = relevance_score
         state.selected_job_outcome_adjustment = outcome_adjustment
         state.selected_job_score = score
