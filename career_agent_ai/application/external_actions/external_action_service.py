@@ -195,6 +195,17 @@ class ExternalActionService:
                 )
             raise
 
+    def replace_prepared_payload(
+        self,
+        operation_id: str,
+        expected_payload: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> ExternalActionOperation:
+        """Upgrade a prepared durable intent before it can reach the provider."""
+        return self._repository.replace_prepared_payload(
+            operation_id, expected_payload, payload
+        )
+
     def replace_succeeded_result(
         self,
         operation_id: str,
