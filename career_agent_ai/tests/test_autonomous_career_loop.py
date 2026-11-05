@@ -3832,7 +3832,8 @@ def test_submission_rejects_stale_approved_candidate_snapshot(
 
     assert failed.phase == CareerLoopPhase.FAILED
     assert failed.error == (
-        "Approved candidate snapshot is stale; refusing external submission."
+        "RuntimeError: Approved candidate snapshot is stale; "
+        "refusing external submission."
     )
     assert submission_provider.calls == []
     tracked = applications.get(f"{run_id}:application")
