@@ -1202,6 +1202,38 @@ class AutonomousCareerLoop:
             )
         return provider_submission_id
 
+    @staticmethod
+    def _require_matching_applied_receipt(
+        application: JobApplication,
+        operation_id: str,
+        provider_submission_id: str,
+        durable_payload: Mapping[str, Any],
+    ) -> None:
+        applied_events = tuple(
+            event
+            for event in application.timeline
+            if event.to_status == JobApplicationStatus.APPLIED
+            and event.operation_id == operation_id
+        )
+        if len(applied_events) != 1:
+            raise _RecoverableCareerLoopError(
+                "Applied tracker state has no unique submission timeline event."
+            )
+        metadata = dict(applied_events[0].metadata)
+        expected = {"provider_submission_id": provider_submission_id}
+        if "candidate_snapshot_sha256" in durable_payload:
+            if metadata != expected:
+                raise _RecoverableCareerLoopError(
+                    "Applied tracker receipt does not match the durable submission result."
+                )
+        elif (
+            "provider_submission_id" in metadata
+            and metadata.get("provider_submission_id") != provider_submission_id
+        ):
+            raise _RecoverableCareerLoopError(
+                "Legacy applied tracker receipt conflicts with durable submission evidence."
+            )
+
     def _submit_application(self, state: CareerLoopState) -> None:
         if state.application_id is None or state.selected_job_id is None:
             raise RuntimeError("Application submission state is incomplete.")
@@ -1254,8 +1286,14 @@ class AutonomousCareerLoop:
             )
             if replay is None:
                 raise RuntimeError("Confirmed application submission could not be replayed.")
-            self._require_matching_submission_result(
+            provider_submission_id = self._require_matching_submission_result(
                 state, replay, durable_operation.payload
+            )
+            self._require_matching_applied_receipt(
+                application,
+                operation_id,
+                provider_submission_id,
+                durable_operation.payload,
             )
             state.approved_human_action = None
             state.phase = CareerLoopPhase.MESSAGE_PREPARE
