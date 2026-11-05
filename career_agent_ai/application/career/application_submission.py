@@ -142,7 +142,7 @@ class _SubmissionActionAdapter:
                 "provider_submission_id",
                 maximum=1_000,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise AmbiguousExternalActionError(
                 "Application provider returned malformed submission data."
             ) from exc
@@ -218,14 +218,30 @@ class ApplicationSubmissionService:
             "candidate_snapshot_sha256": candidate_snapshot_sha256,
         }
         existing = self._external_actions.get(operation_id)
+        legacy_payload = dict(payload)
+        del legacy_payload["candidate_snapshot_sha256"]
+        legacy_intent = False
         if existing is not None:
-            if existing.action_type != "application.submit" or dict(existing.payload) != payload:
+            if existing.action_type != "application.submit":
                 raise ValueError("operation_id is already bound to another submission intent.")
+            existing_payload = dict(existing.payload)
+            legacy_intent = existing_payload == legacy_payload
+            if existing_payload != payload and not legacy_intent:
+                raise ValueError("operation_id is already bound to another submission intent.")
+            if legacy_intent and existing.status == ExternalActionStatus.SUCCEEDED:
+                return self._validated_legacy_result(existing, legacy_payload)
             if existing.status == ExternalActionStatus.FAILED and human_approved:
                 # Submission adapters only expose FAILED for outcomes that are known
                 # to have produced no provider-side effect, so the same stable
                 # idempotency key can be deliberately retried after approval.
                 existing = self._external_actions.reopen_failed(operation_id)
+            if legacy_intent and existing.status == ExternalActionStatus.PREPARED:
+                # A prepared operation has never reached the provider, so it is safe
+                # to bind the current approved snapshot using an atomic CAS update.
+                existing = self._external_actions.replace_prepared_payload(
+                    operation_id, legacy_payload, payload
+                )
+                legacy_intent = False
         else:
             self._external_actions.prepare(operation_id, "application.submit", payload)
         operation = self._external_actions.execute(
@@ -236,6 +252,41 @@ class ApplicationSubmissionService:
         if operation.result is None:
             raise ValueError("Successful application submission has no durable result.")
         return dict(operation.result)
+
+    @staticmethod
+    def _validated_legacy_result(
+        operation: ExternalActionOperation,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Replay a pre-upgrade success without inventing snapshot-binding evidence."""
+        if operation.result is None:
+            raise ValueError("Successful legacy submission has no durable result.")
+        result = dict(operation.result)
+        artifact_content, artifact_digest = _validated_artifact(
+            payload.get("artifact_content"), payload.get("artifact_sha256")
+        )
+        del artifact_content
+        if (
+            _provider_result_identifier(result.get("job_id"), "job_id")
+            != payload.get("job_id")
+            or _provider_result_identifier(
+                result.get("application_id"), "application_id"
+            )
+            != payload.get("application_id")
+            or _validated_sha256(result.get("artifact_sha256"), "artifact_sha256")
+            != artifact_digest
+        ):
+            raise ValueError("Legacy submission result does not match its durable intent.")
+        _provider_result_identifier(
+            result.get("provider_submission_id"),
+            "provider_submission_id",
+            maximum=1_000,
+        )
+        if "candidate_snapshot_sha256" in result:
+            raise ValueError(
+                "Legacy submission result unexpectedly claims snapshot-binding evidence."
+            )
+        return result
 
     def resolve_reconciliation(
         self,
@@ -295,19 +346,21 @@ class ApplicationSubmissionService:
                 "provider_submission_id",
                 maximum=1_000,
             )
+            result = {
+                "job_id": job_id,
+                "application_id": application_id,
+                "provider_submission_id": provider_id,
+                "artifact_sha256": artifact_digest,
+            }
+            if "candidate_snapshot_sha256" in payload:
+                result["candidate_snapshot_sha256"] = _validated_sha256(
+                    payload.get("candidate_snapshot_sha256"),
+                    "candidate_snapshot_sha256",
+                )
             return self._external_actions.resolve_reconciliation(
                 operation_id,
                 confirmed_succeeded=True,
-                result={
-                    "job_id": job_id,
-                    "application_id": application_id,
-                    "provider_submission_id": provider_id,
-                    "artifact_sha256": artifact_digest,
-                    "candidate_snapshot_sha256": _validated_sha256(
-                        payload.get("candidate_snapshot_sha256"),
-                        "candidate_snapshot_sha256",
-                    ),
-                },
+                result=result,
             )
         if provider_submission_id is not None:
             raise ValueError(
