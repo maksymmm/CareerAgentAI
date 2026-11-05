@@ -758,6 +758,9 @@ class AutonomousCareerLoop:
                 "Job discovery returned no unprogressed opportunities; "
                 "refusing duplicate submission."
             )
+        candidate_snapshots = {
+            id(job): self._candidate_job_snapshot(job) for job in eligible_jobs
+        }
         ranked = self._adaptive_job_ranker.rank(
             state.request.user_id,
             eligible_jobs,
@@ -772,31 +775,19 @@ class AutonomousCareerLoop:
                 evidence_count,
                 decision_reason,
             ),
-        ) = self._validate_ranker_results(ranked, eligible_jobs)
-        selected = selection.job
-        job_id = getattr(selected, "job_id", None)
-        title = getattr(selected, "title", None)
-        company = getattr(selected, "company", None)
-        company_id = getattr(company, "company_id", None)
-        if not isinstance(job_id, str) or not job_id.strip():
-            raise ValueError("Selected job has no stable identifier.")
-        state.selected_job_id = self._external_identifier(job_id, "job_id")
-        state.selected_job_title = self._external_text(
-            str(title or ""), "job_title", maximum=500, fallback="Unknown role"
+            (
+                selected_job_id,
+                selected_job_title,
+                selected_company,
+                selected_company_id,
+            ),
+        ) = self._validate_ranker_results(
+            ranked, eligible_jobs, candidate_snapshots
         )
-        state.selected_company = self._company_name(company)
-        state.selected_company_id = None
-        if isinstance(company_id, str) and company_id.strip():
-            try:
-                state.selected_company_id = self._external_identifier(
-                    company_id,
-                    "company_id",
-                )
-            except (TypeError, ValueError):
-                # Provider-owned company identifiers are optional metadata. A
-                # malformed value must not abort an otherwise valid candidate
-                # workflow or cross the durable aggregate boundary.
-                state.selected_company_id = None
+        state.selected_job_id = selected_job_id
+        state.selected_job_title = selected_job_title
+        state.selected_company = selected_company
+        state.selected_company_id = selected_company_id
         state.selected_job_relevance_score = relevance_score
         state.selected_job_outcome_adjustment = outcome_adjustment
         state.selected_job_score = score
@@ -805,10 +796,48 @@ class AutonomousCareerLoop:
         state.phase = CareerLoopPhase.DECISION
 
     @classmethod
+    def _candidate_job_snapshot(
+        cls, job: Any
+    ) -> tuple[str, str, str, str | None]:
+        """Return the exact normalized candidate fields allowed into state."""
+        job_id = cls._external_identifier(
+            getattr(job, "job_id", None), "job_id"
+        )
+        title = cls._external_text(
+            str(getattr(job, "title", None) or ""),
+            "job_title",
+            maximum=500,
+            fallback="Unknown role",
+        )
+        company = getattr(job, "company", None)
+        company_name = cls._company_name(company)
+        company_id = getattr(company, "company_id", None)
+        normalized_company_id = None
+        if isinstance(company_id, str) and company_id.strip():
+            try:
+                normalized_company_id = cls._external_identifier(
+                    company_id, "company_id"
+                )
+            except (TypeError, ValueError):
+                # Optional provider metadata must not abort a usable candidate
+                # or cross the durable boundary in malformed form.
+                normalized_company_id = None
+        return job_id, title, company_name, normalized_company_id
+
+    @classmethod
     def _validate_ranker_results(
-        cls, ranked: Any, eligible_jobs: tuple[Any, ...]
-    ) -> tuple[Any, tuple[float, float, float, int, str]]:
-        """Require one ordered, unique rank result for every validated job."""
+        cls,
+        ranked: Any,
+        eligible_jobs: tuple[Any, ...],
+        candidate_snapshots: Mapping[
+            int, tuple[str, str, str, str | None]
+        ],
+    ) -> tuple[
+        Any,
+        tuple[float, float, float, int, str],
+        tuple[str, str, str, str | None],
+    ]:
+        """Require complete rank results without candidate-object mutation."""
         if not isinstance(ranked, tuple):
             raise RuntimeError("Job ranking returned a malformed result container.")
         if not ranked:
@@ -833,6 +862,14 @@ class AutonomousCareerLoop:
             if object_identity in seen_job_objects:
                 raise RuntimeError("Job ranking returned duplicate opportunities.")
             seen_job_objects.add(object_identity)
+            expected_snapshot = candidate_snapshots.get(object_identity)
+            if (
+                expected_snapshot is None
+                or cls._candidate_job_snapshot(selected) != expected_snapshot
+            ):
+                raise RuntimeError(
+                    "Job ranking mutated a validated opportunity."
+                )
 
             metadata = cls._validate_ranker_selection(selection)
             current_score = metadata[2]
@@ -849,7 +886,8 @@ class AutonomousCareerLoop:
 
         if selected_metadata is None:
             raise RuntimeError("Job discovery returned no rankable opportunities.")
-        return ranked[0], selected_metadata
+        selected_snapshot = candidate_snapshots[id(ranked[0].job)]
+        return ranked[0], selected_metadata, selected_snapshot
 
     @classmethod
     def _validate_ranker_selection(
