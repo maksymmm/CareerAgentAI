@@ -266,7 +266,10 @@ def test_malformed_listing_does_not_discard_valid_sibling(monkeypatch):
     }
     payload = {
         "data": [
+            {**valid, "slug": "invalid-title", "title": ["Warehouse Operator"]},
             {**valid, "slug": "invalid-company", "company_name": []},
+            {**valid, "slug": "invalid-location", "location": {"city": "Karlsruhe"}},
+            {**valid, "slug": {"id": "invalid-slug"}},
             {**valid, "slug": "invalid-salary", "salary_min": 10**400},
             valid,
         ],
