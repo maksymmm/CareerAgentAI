@@ -3696,7 +3696,7 @@ def test_application_prepare_rejects_invalid_artifact_before_draft_or_approval(
 
     assert applications.find(
         ApplicationQuery(user_id="user-1", job_id="job-1")
-    ) == []
+    ) == ()
     assert state.application_id is None
     assert state.pending_human_action is None
     assert state.phase == CareerLoopPhase.APPLICATION_PREPARE
