@@ -2021,6 +2021,7 @@ def test_snapshot_bound_applied_replay_rejects_missing_provider_receipt(tmp_path
            WHERE application_id = ? AND to_status = ?""",
         (f"{run_id}:application", JobApplicationStatus.APPLIED.value),
     )
+    database.connection.commit()
     state = loop._states.get(run_id)
     assert state is not None
     state.phase = CareerLoopPhase.APPLICATION_SUBMIT
