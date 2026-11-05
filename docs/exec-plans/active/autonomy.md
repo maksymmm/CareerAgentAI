@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Candidate ranking selection integrity: the adaptive ranker may select only an object
+from the validated and deduplicated provider set. Injected or stale ranker output now
+fails before durable application creation or approval. An end-to-end regression proves
+no application and no submission are produced.
+Next: exact-head CI/review, then continue candidate/provider workflow acceptance.
+
 Candidate provider identity deduplication: stable job IDs are accepted once before
 adaptive ranking, preventing repeated upstream records from multiplying ranking inputs
 or durable draft candidates. An end-to-end regression proves the first valid record
