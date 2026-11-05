@@ -792,12 +792,66 @@ class AutonomousCareerLoop:
                 # malformed value must not abort an otherwise valid candidate
                 # workflow or cross the durable aggregate boundary.
                 state.selected_company_id = None
-        state.selected_job_relevance_score = selection.relevance_score
-        state.selected_job_outcome_adjustment = selection.outcome_adjustment
-        state.selected_job_score = selection.score
-        state.selected_job_evidence_count = selection.evidence_count
-        state.selected_job_decision_reason = selection.reason
+        (
+            relevance_score,
+            outcome_adjustment,
+            score,
+            evidence_count,
+            decision_reason,
+        ) = self._validate_ranker_selection(selection)
+        state.selected_job_relevance_score = relevance_score
+        state.selected_job_outcome_adjustment = outcome_adjustment
+        state.selected_job_score = score
+        state.selected_job_evidence_count = evidence_count
+        state.selected_job_decision_reason = decision_reason
         state.phase = CareerLoopPhase.DECISION
+
+    @classmethod
+    def _validate_ranker_selection(
+        cls, selection: Any
+    ) -> tuple[float, float, float, int, str]:
+        """Validate ranker-owned metadata before it reaches durable state."""
+        numeric: dict[str, float] = {}
+        for field in ("relevance_score", "outcome_adjustment", "score"):
+            value = getattr(selection, field, None)
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(`ranker ${field} must be numeric.`)
+            try:
+                normalized = float(value)
+            except OverflowError as exc:
+                raise ValueError(
+                    `ranker ${field} is outside its durable boundary.`
+                ) from exc
+            if not isfinite(normalized) or abs(normalized) > 1_000_000:
+                raise ValueError(
+                    `ranker ${field} is outside its durable boundary.`
+                )
+            numeric[field] = normalized
+
+        expected_score = numeric["relevance_score"] + numeric["outcome_adjustment"]
+        if abs(numeric["score"] - expected_score) > 1e-9:
+            raise ValueError("ranker score is inconsistent with its components.")
+
+        evidence_count = getattr(selection, "evidence_count", None)
+        if (
+            not isinstance(evidence_count, int)
+            or isinstance(evidence_count, bool)
+            or evidence_count < 0
+            or evidence_count > 1_000_000
+        ):
+            raise ValueError("ranker evidence_count is outside its durable boundary.")
+
+        reason = getattr(selection, "reason", None)
+        cls._validate_rankable_text(
+            reason, "ranker_reason", 1_000, required=True
+        )
+        return (
+            numeric["relevance_score"],
+            numeric["outcome_adjustment"],
+            numeric["score"],
+            evidence_count,
+            reason.strip(),
+        )
 
     @staticmethod
     def _has_next_search_page(
