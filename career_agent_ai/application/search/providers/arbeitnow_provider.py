@@ -431,7 +431,13 @@ class ArbeitnowProvider(JobProvider):
                 ):
                     continue
 
-                job = self._to_job(item)
+                company_name = item.get("company_name")
+                if company_name is not None and not isinstance(company_name, str):
+                    continue
+                try:
+                    job = self._to_job(item)
+                except (OverflowError, TypeError, ValueError):
+                    continue
 
                 if job is None:
                     continue

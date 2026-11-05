@@ -256,6 +256,34 @@ def test_arbeitnow_provider_empty_page(
     assert result == ()
 
 
+def test_malformed_listing_does_not_discard_valid_sibling(monkeypatch):
+    valid = {
+        "slug": "valid-warehouse-role",
+        "company_name": "Example",
+        "title": "Warehouse Operator",
+        "location": "Karlsruhe",
+        "description": "Warehouse operations",
+    }
+    payload = {
+        "data": [
+            {**valid, "slug": "invalid-company", "company_name": []},
+            {**valid, "slug": "invalid-salary", "salary_min": 10**400},
+            valid,
+        ],
+        "links": {"next": None},
+    }
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    result = ArbeitnowProvider(max_pages=1).search("")
+
+    assert tuple(job.job_id for job in result) == (
+        "arbeitnow:valid-warehouse-role",
+    )
+
+
 @pytest.mark.parametrize(
     ("minimum", "maximum"),
     [
