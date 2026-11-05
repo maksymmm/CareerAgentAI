@@ -362,10 +362,14 @@ class ApplicationSubmissionService:
                 if "candidate_snapshot_sha256" in payload
                 else None
             )
-            result = self._validated_result(
-                operation,
-                payload,
-                candidate_snapshot_sha256=candidate_digest,
+            result = (
+                self._validated_legacy_result(operation, payload)
+                if candidate_digest is None
+                else self._validated_result(
+                    operation,
+                    payload,
+                    candidate_snapshot_sha256=candidate_digest,
+                )
             )
             expected_provider = _provider_result_identifier(
                 provider_submission_id,
