@@ -1076,6 +1076,10 @@ class AutonomousCareerLoop:
     def _prepare_application(self, state: CareerLoopState) -> None:
         if state.selected_job_id is None:
             raise RuntimeError("Application preparation requires a selected job.")
+        if not self._artifact_is_consistent(state):
+            raise RuntimeError(
+                "Application approval requires a complete, unmodified artifact."
+            )
 
         matches = self._applications.find(
             ApplicationQuery(
