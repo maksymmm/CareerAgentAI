@@ -14,6 +14,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopState,
     HumanActionEvent,
     HumanActionKind,
+    candidate_snapshot_sha256,
 )
 from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopConflictError
 from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRanker
@@ -23,7 +24,7 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 class SQLiteCareerLoopRepository:
     """Strict JSON, restart-safe persistence for one active career loop."""
 
-    SERIALIZATION_VERSION = 1
+    SERIALIZATION_VERSION = 2
 
     def __init__(self, database: SQLiteDatabase) -> None:
         self._database = database
@@ -378,12 +379,63 @@ class SQLiteCareerLoopRepository:
             """
         )
         self._database.connection.commit()
+
+    @classmethod
+    def _validated_candidate_snapshot_digest(
+        cls,
+        *,
+        job_id: Any,
+        job_title: Any,
+        company: Any,
+        company_id: Any,
+        digest: Any,
+        allow_missing_digest: bool,
+    ) -> str | None:
+        normalized_job_id = cls._optional_text(job_id)
+        normalized_title = cls._optional_text(job_title)
+        normalized_company = cls._optional_text(company)
+        normalized_company_id = cls._optional_text(company_id)
+        normalized_digest = cls._optional_text(digest)
+        if normalized_job_id is None:
+            if any(
+                value is not None
+                for value in (
+                    normalized_title,
+                    normalized_company,
+                    normalized_company_id,
+                    normalized_digest,
+                )
+            ):
+                raise ValueError("Persisted candidate snapshot is incomplete.")
+            return None
+        if normalized_title is None or normalized_company is None:
+            raise ValueError("Persisted candidate snapshot is incomplete.")
+        expected = candidate_snapshot_sha256(
+            normalized_job_id,
+            normalized_title,
+            normalized_company,
+            normalized_company_id,
+        )
+        if normalized_digest is None and allow_missing_digest:
+            return expected
+        if normalized_digest != expected:
+            raise ValueError("Persisted candidate snapshot digest does not match.")
+        return normalized_digest
+
     @classmethod
     def _serialize(
         cls, state: CareerLoopState, *, version: int | None = None
     ) -> dict[str, Any]:
         action = state.pending_human_action
         approved_action = state.approved_human_action
+        snapshot_digest = cls._validated_candidate_snapshot_digest(
+            job_id=state.selected_job_id,
+            job_title=state.selected_job_title,
+            company=state.selected_company,
+            company_id=state.selected_company_id,
+            digest=state.selected_job_snapshot_sha256,
+            allow_missing_digest=True,
+        )
         return {
             "serialization_version": cls.SERIALIZATION_VERSION,
             "run_id": state.run_id,
@@ -404,6 +456,7 @@ class SQLiteCareerLoopRepository:
             "selected_job_title": state.selected_job_title,
             "selected_company": state.selected_company,
             "selected_company_id": state.selected_company_id,
+            "selected_job_snapshot_sha256": snapshot_digest,
             "selected_job_relevance_score": state.selected_job_relevance_score,
             "selected_job_outcome_adjustment": state.selected_job_outcome_adjustment,
             "selected_job_score": state.selected_job_score,
@@ -427,7 +480,8 @@ class SQLiteCareerLoopRepository:
     ) -> CareerLoopState:
         if not isinstance(value, dict):
             raise ValueError("Persisted autonomous-loop payload must be an object.")
-        if value.get("serialization_version") != cls.SERIALIZATION_VERSION:
+        serialization_version = value.get("serialization_version")
+        if serialization_version not in {1, cls.SERIALIZATION_VERSION}:
             raise ValueError("Unsupported autonomous-loop serialization version.")
         try:
             request_data = value["request"]
@@ -469,14 +523,27 @@ class SQLiteCareerLoopRepository:
                 evidence_count,
                 decision_reason,
             ) = cls._adaptive_snapshot(value)
+            selected_job_id = cls._optional_text(value.get("selected_job_id"))
+            selected_job_title = cls._optional_text(value.get("selected_job_title"))
+            selected_company = cls._optional_text(value.get("selected_company"))
+            selected_company_id = cls._optional_text(value.get("selected_company_id"))
+            snapshot_digest = cls._validated_candidate_snapshot_digest(
+                job_id=selected_job_id,
+                job_title=selected_job_title,
+                company=selected_company,
+                company_id=selected_company_id,
+                digest=value.get("selected_job_snapshot_sha256"),
+                allow_missing_digest=serialization_version == 1,
+            )
             return CareerLoopState(
                 run_id=cls._identifier(value["run_id"], "run_id"),
                 request=request,
                 phase=CareerLoopPhase(value["phase"]),
-                selected_job_id=cls._optional_text(value.get("selected_job_id")),
-                selected_job_title=cls._optional_text(value.get("selected_job_title")),
-                selected_company=cls._optional_text(value.get("selected_company")),
-                selected_company_id=cls._optional_text(value.get("selected_company_id")),
+                selected_job_id=selected_job_id,
+                selected_job_title=selected_job_title,
+                selected_company=selected_company,
+                selected_company_id=selected_company_id,
+                selected_job_snapshot_sha256=snapshot_digest,
                 selected_job_relevance_score=relevance_score,
                 selected_job_outcome_adjustment=outcome_adjustment,
                 selected_job_score=adaptive_score,
