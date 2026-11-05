@@ -807,7 +807,7 @@ def test_discovery_rejects_ranker_selection_outside_validated_jobs(tmp_path):
         ),
         (
             "reason",
-            "invalid\\x00reason",
+            "invalid\x00reason",
             "ValueError: ranker_reason contains forbidden control characters.",
         ),
         (
