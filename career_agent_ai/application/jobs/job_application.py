@@ -141,6 +141,7 @@ class JobApplication:
         operation_id: str | None = None,
         note: str = "",
         event_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> "JobApplication":
         """Return a new aggregate after a validated lifecycle transition."""
         if not isinstance(status, JobApplicationStatus):
@@ -152,6 +153,8 @@ class JobApplication:
             raise ValueError("Timeline event timestamp must be timezone-aware.")
         if timestamp < self.updated_at:
             raise ValueError("Timeline events cannot predate the latest application update.")
+        if metadata is not None and not isinstance(metadata, Mapping):
+            raise ValueError("metadata must be a mapping when provided.")
         event = ApplicationTimelineEvent(
             event_id=event_id or str(uuid4()),
             from_status=self.status,
@@ -159,6 +162,7 @@ class JobApplication:
             occurred_at=timestamp,
             operation_id=operation_id,
             note=note,
+            metadata={} if metadata is None else metadata,
         )
         normalized_operation_id = event.operation_id
         operation_ids = self.external_action_operation_ids

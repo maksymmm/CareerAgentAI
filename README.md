@@ -470,8 +470,11 @@ queries by candidate, job, company, status, and external-action operation ID.
 SQLite enforces duplicate prevention for candidate/job pairs and optimistic versions
 prevent stale writers from silently overwriting newer state. Application submission
 operations can be linked by their stable crash-safe external-action IDs without
-causing or repeating any external action. Persisted records use versioned, strict
-JSON for timeline metadata and are fully validated after restart; no unsafe
+causing or repeating any external action. A validated provider submission receipt is
+persisted as structured metadata on the same atomic `saved` → `applied` timeline
+transition, including after explicit reconciliation; legacy applied records remain
+unchanged rather than receiving invented evidence. Persisted records use versioned,
+strict JSON for timeline metadata and are fully validated after restart; no unsafe
 deserialization is used.
 
 ---

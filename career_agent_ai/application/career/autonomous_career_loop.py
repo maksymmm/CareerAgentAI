@@ -1172,7 +1172,7 @@ class AutonomousCareerLoop:
         state: CareerLoopState,
         result: Mapping[str, Any],
         durable_payload: Mapping[str, Any],
-    ) -> None:
+    ) -> str:
         expected = {
             "job_id": state.selected_job_id,
             "application_id": state.application_id,
@@ -1183,11 +1183,24 @@ class AutonomousCareerLoop:
             or "candidate_snapshot_sha256" in result
         ):
             expected["candidate_snapshot_sha256"] = state.selected_job_snapshot_sha256
-        if any(result.get(key) != value for key, value in expected.items()):
+        provider_submission_id = result.get("provider_submission_id")
+        provider_id_is_invalid = (
+            not isinstance(provider_submission_id, str)
+            or not provider_submission_id.strip()
+            or provider_submission_id != provider_submission_id.strip()
+            or len(provider_submission_id) > 1_000
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in provider_submission_id)
+            or any(0xD800 <= ord(ch) <= 0xDFFF for ch in provider_submission_id)
+        )
+        if (
+            any(result.get(key) != value for key, value in expected.items())
+            or provider_id_is_invalid
+        ):
             raise _RecoverableCareerLoopError(
                 "Durable application submission result does not match the current "
                 "tracker and candidate snapshot; tracker completion must be retried."
             )
+        return provider_submission_id
 
     def _submit_application(self, state: CareerLoopState) -> None:
         if state.application_id is None or state.selected_job_id is None:
@@ -1337,7 +1350,7 @@ class AutonomousCareerLoop:
                 return
             raise RuntimeError("Application submission did not reach a confirmed outcome.")
         durable_operation = self._submission.get_operation(operation_id)
-        self._require_matching_submission_result(
+        provider_submission_id = self._require_matching_submission_result(
             state,
             result,
             durable_operation.payload if durable_operation is not None else {},
@@ -1347,6 +1360,7 @@ class AutonomousCareerLoop:
             operation_id=operation_id,
             event_id=self._application_applied_event_id(state.application_id),
             note="Submitted by autonomous career loop after human approval.",
+            metadata={"provider_submission_id": provider_submission_id},
         )
         try:
             self._applications.complete_submission(
