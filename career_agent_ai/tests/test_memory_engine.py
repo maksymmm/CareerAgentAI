@@ -80,6 +80,32 @@ def test_snapshot():
     assert snapshot.size() == 1
 
 
+
+def test_snapshot_can_be_scoped_to_one_user():
+    engine = MemoryEngine()
+    engine.save(
+        MemoryRecord(
+            key="user-1:note",
+            value="private-one",
+            user_id="user-1",
+            memory_type="note",
+        )
+    )
+    engine.save(
+        MemoryRecord(
+            key="user-2:note",
+            value="private-two",
+            user_id="user-2",
+            memory_type="note",
+        )
+    )
+
+    snapshot = engine.snapshot(user_id="user-2")
+
+    assert snapshot.size() == 1
+    assert snapshot.get("user-2:note") == "private-two"
+    assert snapshot.contains("user-1:note") is False
+
 def test_clear():
     engine = MemoryEngine()
 
@@ -104,3 +130,61 @@ def test_memory_record_is_immutable():
 
     with pytest.raises(FrozenInstanceError):
         record.key = "c"
+
+def test_in_memory_engine_scopes_duplicate_keys_by_user():
+    engine = MemoryEngine()
+    first = MemoryRecord("goal", "engineer", user_id="u1")
+    second = MemoryRecord("goal", "designer", user_id="u2")
+    engine.save(first)
+    engine.save(second)
+
+    assert engine.get("goal", user_id="u1") == first
+    assert engine.get("goal", user_id="u2") == second
+    with pytest.raises(ValueError, match="multiple users"):
+        engine.get("goal")
+
+
+def test_memory_record_normalizes_identity_fields():
+    record = MemoryRecord(
+        key="  goal  ",
+        value="engineer",
+        user_id="  user-1  ",
+        memory_type="  preference  ",
+    )
+
+    assert record.key == "goal"
+    assert record.user_id == "user-1"
+    assert record.memory_type == "preference"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"key": 42},
+        {"user_id": 42},
+        {"memory_type": 42},
+    ],
+)
+def test_memory_record_rejects_non_text_identity_fields(kwargs):
+    values = {
+        "key": "goal",
+        "value": "engineer",
+        "user_id": "user-1",
+        "memory_type": "preference",
+    }
+    values.update(kwargs)
+
+    with pytest.raises(TypeError):
+        MemoryRecord(**values)
+
+
+def test_unscoped_snapshot_rejects_duplicate_keys_across_users():
+    engine = MemoryEngine()
+    engine.save(MemoryRecord(key="goal", value="engineer", user_id="u1"))
+    engine.save(MemoryRecord(key="goal", value="designer", user_id="u2"))
+
+    with pytest.raises(ValueError, match="multiple users"):
+        engine.snapshot()
+
+    assert engine.snapshot(user_id="u1").get("goal") == "engineer"
+    assert engine.snapshot(user_id="u2").get("goal") == "designer"
