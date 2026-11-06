@@ -303,14 +303,44 @@ def test_malformed_listing_does_not_discard_valid_sibling(monkeypatch):
         ("NaN", "50000"),
         ("Infinity", "50000"),
         ("-1", "50000"),
-        (60_000, 50_000),
     ],
 )
-def test_invalid_numeric_salary_is_dropped_without_losing_job(
+def test_invalid_explicit_salary_isolates_listing(
     monkeypatch,
     minimum,
     maximum,
 ):
+    valid = {
+        "slug": "valid-warehouse-role",
+        "company_name": "Valid Company",
+        "title": "Warehouse Operator",
+        "location": "Karlsruhe",
+        "description": "Warehouse operations",
+    }
+    payload = {
+        "data": [
+            {
+                **valid,
+                "slug": "invalid-salary-role",
+                "salary_min": minimum,
+                "salary_max": maximum,
+            },
+            valid,
+        ]
+    }
+    monkeypatch.setattr(
+        "career_agent_ai.application.search.providers.arbeitnow_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+
+    result = ArbeitnowProvider(max_pages=1).search("")
+
+    assert tuple(job.job_id for job in result) == (
+        "arbeitnow:valid-warehouse-role",
+    )
+
+
+def test_reversed_salary_bounds_drop_salary_without_losing_job(monkeypatch):
     payload = {
         "data": [
             {
@@ -319,8 +349,8 @@ def test_invalid_numeric_salary_is_dropped_without_losing_job(
                 "title": "Warehouse Operator",
                 "location": "Karlsruhe",
                 "description": "Warehouse operations",
-                "salary_min": minimum,
-                "salary_max": maximum,
+                "salary_min": 60_000,
+                "salary_max": 50_000,
             }
         ]
     }
@@ -333,7 +363,6 @@ def test_invalid_numeric_salary_is_dropped_without_losing_job(
 
     assert len(result) == 1
     assert result[0].salary is None
-
 
 @pytest.mark.parametrize(
     ("minimum", "maximum", "expected"),
