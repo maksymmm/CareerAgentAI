@@ -451,6 +451,19 @@ class ArbeitnowProvider(JobProvider):
                 ):
                     continue
 
+                job_types = item.get("job_types")
+                if job_types is not None and not (
+                    isinstance(job_types, str)
+                    or (
+                        isinstance(job_types, list)
+                        and all(
+                            isinstance(job_type, str)
+                            for job_type in job_types
+                        )
+                    )
+                ):
+                    continue
+
                 try:
                     job = self._to_job(item)
                 except (OverflowError, TypeError, ValueError):

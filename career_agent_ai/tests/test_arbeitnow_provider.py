@@ -273,6 +273,8 @@ def test_malformed_listing_does_not_discard_valid_sibling(monkeypatch):
             {**valid, "slug": "invalid-description", "description": {"html": "Warehouse operations"}},
             {**valid, "slug": "invalid-tags-container", "tags": "remote"},
             {**valid, "slug": "invalid-tag", "tags": [{"name": "remote"}]},
+            {**valid, "slug": "invalid-job-types-container", "job_types": {"type": "full-time"}},
+            {**valid, "slug": "invalid-job-type", "job_types": [{"type": "full-time"}]},
             {**valid, "slug": "invalid-salary", "salary_min": 10**400},
             valid,
         ],
