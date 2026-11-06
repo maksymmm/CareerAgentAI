@@ -464,6 +464,13 @@ class ArbeitnowProvider(JobProvider):
                 ):
                     continue
 
+                if any(
+                    item.get(field) is not None
+                    and self._number(item.get(field)) is None
+                    for field in ("salary_min", "salary_max")
+                ):
+                    continue
+
                 try:
                     job = self._to_job(item)
                 except (OverflowError, TypeError, ValueError):
@@ -1077,7 +1084,10 @@ class ArbeitnowProvider(JobProvider):
             value,
             (int, float),
         ):
-            number = float(value)
+            try:
+                number = float(value)
+            except OverflowError:
+                return None
             return number if math.isfinite(number) and number >= 0 else None
 
         text = str(value).strip()
