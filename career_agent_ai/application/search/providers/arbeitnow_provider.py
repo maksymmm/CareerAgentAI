@@ -434,9 +434,23 @@ class ArbeitnowProvider(JobProvider):
                 if any(
                     item.get(field) is not None
                     and not isinstance(item.get(field), str)
-                    for field in ("title", "company_name", "location", "slug")
+                    for field in (
+                        "title",
+                        "company_name",
+                        "location",
+                        "slug",
+                        "description",
+                    )
                 ):
                     continue
+
+                tags = item.get("tags")
+                if tags is not None and (
+                    not isinstance(tags, list)
+                    or any(not isinstance(tag, str) for tag in tags)
+                ):
+                    continue
+
                 try:
                     job = self._to_job(item)
                 except (OverflowError, TypeError, ValueError):
