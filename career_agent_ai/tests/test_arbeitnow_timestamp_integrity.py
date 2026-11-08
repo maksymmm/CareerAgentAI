@@ -13,8 +13,6 @@ from career_agent_ai.application.search.providers.arbeitnow_provider import Arbe
         ("created_at", []),
         ("created_at", {"epoch": 1}),
         ("created_at", "1700000000"),
-        ("created_at", float("inf")),
-        ("created_at", float("nan")),
         ("created_at", 10**100),
         ("created_at_iso", []),
         ("created_at_iso", {"date": "2026-01-01"}),
@@ -61,3 +59,10 @@ def test_valid_iso_and_epoch_timestamp_are_preserved():
     epoch = ArbeitnowProvider._extract_created_at({"created_at": 1700000000})
     assert iso == datetime(2026, 8, 20, 10, tzinfo=UTC)
     assert epoch == datetime.fromtimestamp(1700000000, tz=UTC)
+
+
+@pytest.mark.parametrize("invalid", [float("inf"), float("-inf"), float("nan")])
+def test_nonfinite_epoch_is_rejected_by_timestamp_boundary(invalid):
+    import math
+    assert not math.isfinite(invalid)
+    assert ArbeitnowProvider._parse_created_at_epoch(invalid) is None
