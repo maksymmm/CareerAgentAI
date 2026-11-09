@@ -163,6 +163,9 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
+            # Readiness must detect storage corruption after startup as well.
+            if database.connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise RuntimeError("candidate storage integrity check failed")
             _validate_loop_schema(database.connection)
         except Exception:
             return self._respond(
