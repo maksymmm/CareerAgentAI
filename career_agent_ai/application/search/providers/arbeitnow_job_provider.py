@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import UTC, datetime
 from html import unescape
@@ -285,14 +286,14 @@ class ArbeitnowJobProvider(JobProvider):
     def _created_at(
         value: Any,
     ) -> datetime | None:
-        if isinstance(
-            value,
-            (int, float),
-        ):
-            return datetime.fromtimestamp(
-                value,
-                tz=UTC,
-            )
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                timestamp = float(value)
+                if math.isfinite(timestamp):
+                    return datetime.fromtimestamp(timestamp, tz=UTC)
+            except (ValueError, OverflowError, OSError):
+                pass
+            return None
 
         if isinstance(value, str):
             try:
@@ -302,7 +303,7 @@ class ArbeitnowJobProvider(JobProvider):
                         "+00:00",
                     )
                 )
-            except ValueError:
+            except (ValueError, OverflowError):
                 return None
 
         return None
