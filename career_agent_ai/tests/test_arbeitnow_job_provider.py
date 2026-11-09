@@ -236,4 +236,4 @@ def test_legacy_provider_keeps_jobs_with_invalid_timestamps():
     ):
         jobs = ArbeitnowJobProvider(max_pages=1).search("warehouse")
     assert len(jobs) == len(bad_values)
-    assert all(job.created_at is None for job in jobs)
+    assert tuple(job.job_id for job in jobs) == tuple(\n        f"arbeitnow:role-{index}" for index in range(len(bad_values))\n    )
