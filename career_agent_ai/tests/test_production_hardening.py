@@ -469,7 +469,9 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         app.start(request())
 
 
-def test_candidate_http_approval_survives_restart_without_repeating_submission(\n    tmp_path, monkeypatch\n):
+def test_candidate_http_approval_survives_restart_without_repeating_submission(
+    tmp_path, monkeypatch
+):
     """Exercise the published HTTP journey over durable sandbox composition."""
     database_path = str(tmp_path / "candidate-restart.sqlite")
     environ = {
