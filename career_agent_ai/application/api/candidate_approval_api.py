@@ -105,7 +105,15 @@ class CandidateApprovalWSGIApp:
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
         path = str(environ.get("PATH_INFO", ""))
-        method = str(environ.get("REQUEST_METHOD", "GET")).upper()
+        # Missing or malformed WSGI methods must never become an implicit GET.
+        raw_method = environ.get("REQUEST_METHOD")
+        method = raw_method if isinstance(raw_method, str) else ""
+        if method not in {"GET", "POST"}:
+            return self._respond(
+                start_response, "405 Method Not Allowed",
+                {"error": "method_not_allowed"},
+                [("Allow", "GET, POST")],
+            )
         if path == "/sandbox/candidate":
             if method != "GET":
                 return self._respond(
