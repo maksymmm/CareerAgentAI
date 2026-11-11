@@ -198,6 +198,18 @@ def test_ci_smokes_read_only_candidate_container():
     assert '"/readyz"' in workflow
 
 
+def test_ci_retries_transient_playwright_system_dependency_installation():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    install = workflow.split("- name: Install test dependencies", 1)[1].split(
+        "- name: Run test suite", 1
+    )[0]
+
+    assert "for attempt in 1 2 3" in install
+    assert "python -m playwright install --with-deps chromium" in install
+    assert 'if [ "$attempt" -eq 3 ]' in install
+    assert 'sleep "$((attempt * 15))"' in install
+
+
 def test_ci_smokes_isolated_operator_before_publishing_evidence():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     smoke = workflow.split("- name: Smoke isolated operator service container", 1)[1].split(
