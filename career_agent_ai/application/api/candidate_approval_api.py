@@ -485,7 +485,7 @@ class CandidateApprovalWSGIApp:
                 raise ValueError("provider_submission_id must be text.")
             if (
                 not provider_submission_id
-                or len(provider_submission_id) > 200
+                or len(provider_submission_id) > 1_000
                 or provider_submission_id != provider_submission_id.strip()
                 or any(ord(ch) < 32 or ord(ch) == 127 for ch in provider_submission_id)
                 or any(0xD800 <= ord(ch) <= 0xDFFF for ch in provider_submission_id)
@@ -644,7 +644,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "state_version": {"type": "integer", "minimum": 0},
             "submitted": {"type": "boolean"},
             "provider_submission_id": {
-                "type": "string", "minLength": 1, "maxLength": 200,
+                "type": "string", "minLength": 1, "maxLength": 1_000,
                 "pattern": (
                     r"^(?![\s\S]*[\u0000-\u001F\u007F\uD800-\uDFFF])"
                     r"\S(?:[\s\S]*\S)?$"
@@ -701,6 +701,12 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                 "additionalProperties": False,
             },
         ]
+    }
+    approval_conflict_schema = {
+        "type": "object",
+        "required": ["error"],
+        "properties": {"error": {"const": "approval_conflict"}},
+        "additionalProperties": False,
     }
 
     def content(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -1037,6 +1043,12 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             }),
                         },
                         **common_responses,
+                        "409": {
+                            "description": (
+                                "Observed state is stale or another execution owns the run"
+                            ),
+                            "content": content(approval_conflict_schema),
+                        },
                         "405": {"description": "Only POST is allowed", "content": content(error_schema)},
                         "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
