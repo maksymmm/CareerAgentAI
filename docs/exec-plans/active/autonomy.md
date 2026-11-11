@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Message/interview reconciliation replay hardening: both provider-outcome resolvers
+accept an optional observed durable state version and reject invalid or stale versions
+before lease acquisition, durable mutation or provider retry. SQLite regressions create
+a second ambiguity and prove replaying the first negative observation cannot issue a
+third message or calendar provider call.
+Next: exact-head CI/review, then expose only snapshot-bound reconciliation contracts.
+
 Candidate live-readiness integrity: `/readyz` now performs a deadline-bounded SQLite
 `quick_check(1)` on every probe, in addition to startup validation and schema checks.
 Late storage corruption therefore removes the candidate service from readiness before
