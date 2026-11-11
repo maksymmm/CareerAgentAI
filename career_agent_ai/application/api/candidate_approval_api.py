@@ -108,7 +108,7 @@ class CandidateApprovalWSGIApp:
         # Missing or malformed WSGI methods must never become an implicit GET.
         raw_method = environ.get("REQUEST_METHOD")
         method = raw_method if isinstance(raw_method, str) else ""
-        if method not in {"GET", "POST"}:
+        if not method or not method.isascii() or not method.isalpha() or not method.isupper():
             return self._respond(
                 start_response, "405 Method Not Allowed",
                 {"error": "method_not_allowed"},

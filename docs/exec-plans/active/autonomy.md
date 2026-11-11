@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate workflow method integrity: missing, non-string, empty, non-ASCII,
+non-alphabetic and non-uppercase WSGI methods fail before authentication, storage or
+workflow access. Canonical unsupported verbs retain route-specific `Allow` responses,
+preventing a global method guard from weakening the documented HTTP contract. Fifty-
+three focused regressions cover every candidate workflow route and the existing status
+method boundary.
+Next: exact-head CI/review, then continue candidate workflow recovery hardening.
+
 Candidate ranking snapshot integrity: normalized job ID, title, company and optional
 company ID are captured before adaptive ranking. Any mutation of selected or non-selected
 candidate objects fails before state persistence, approval or submission, and durable
