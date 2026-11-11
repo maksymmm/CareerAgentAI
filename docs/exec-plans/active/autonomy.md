@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate HTTP restart acceptance: a real sandbox composition now exercises the
+published start, status, prompt and approval routes across two runtime restarts. SQLite
+must retain the owner-scoped run, the fake provider submission must complete once, and
+a replayed approval must fail without adding a second external-action operation. No
+network provider, production credential, calendar, message or real application is used.
+Next: exact-head CI/review, then continue candidate workflow recovery hardening.
+
 Candidate release base refresh: the immutable runtime base advances from Python
 3.12.15 to the official Python 3.12.16 slim-bookworm index digest after the trusted
 integration Grype database began reporting a fixed critical vulnerability. The scanner
