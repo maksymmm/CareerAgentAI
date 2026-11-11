@@ -50,6 +50,83 @@ class Loop:
         assert (run_id, user_id) == ("run-1", "candidate-1")
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
+    def resolve_application_reconciliation(
+        self, run_id, *, user_id, submitted, provider_submission_id=None,
+        expected_state_version=None,
+    ):
+        self.reconciliation = (
+            run_id, user_id, submitted, provider_submission_id, expected_state_version
+        )
+        return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+
+def test_application_reconciliation_binds_owner_and_verified_provider_outcome():
+    loop = Loop()
+    (status, headers), body = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+        body={"schema_version": 1, "state_version": 7, "submitted": True,
+              "provider_submission_id": "provider/confirmed=123"},
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == {"run_id": "run-1", "phase": "complete"}
+    assert loop.reconciliation == (
+        "run-1", "candidate-1", True, "provider/confirmed=123", 7
+    )
+
+
+@pytest.mark.parametrize("schema_version,state_version", [(1.0, 7), (1e0, 7.0)])
+def test_application_reconciliation_accepts_schema_valid_integer_forms(
+    schema_version, state_version
+):
+    loop = Loop()
+    (status, _), _ = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+        body={"schema_version": schema_version, "state_version": state_version,
+              "submitted": False},
+    )
+    assert status == "200 OK"
+    assert loop.reconciliation[-1] == 7
+
+
+@pytest.mark.parametrize("body", [
+    {"schema_version": 1, "state_version": 7, "submitted": True},
+    {"schema_version": 1, "state_version": 7, "submitted": False, "provider_submission_id": "invented"},
+    {"schema_version": 1, "state_version": 7, "submitted": False, "provider_submission_id": None},
+    {"schema_version": 1, "state_version": 7, "submitted": 1},
+    {"schema_version": True, "state_version": 7, "submitted": False},
+    {"schema_version": 1, "state_version": -1, "submitted": False},
+    {"schema_version": 1, "state_version": 7, "submitted": True, "provider_submission_id": "provider\n123"},
+    {"schema_version": 1, "state_version": 7, "submitted": False, "user_id": "candidate-1"},
+])
+def test_application_reconciliation_rejects_ambiguous_or_identity_bearing_body(body):
+    loop = Loop()
+    (status, _), response = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/application-reconciliation", body=body,
+    )
+    assert status == "400 Bad Request"
+    assert response["error"] == "invalid_request"
+    assert not hasattr(loop, "reconciliation")
+
+
+def test_application_reconciliation_contract_is_post_only_and_fail_closed():
+    route = "/v1/candidate/runs/{run_id}/application-reconciliation"
+    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert operation["security"] == [{"bearerAuth": []}]
+    assert schema["additionalProperties"] is False
+    assert schema["allOf"][0]["then"]["required"] == ["provider_submission_id"]
+    (status, headers), body = request(
+        app(Loop()), method="GET",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+    )
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "POST") in headers
+    assert body == {"error": "method_not_allowed"}
+
 
 def request(
     app,
