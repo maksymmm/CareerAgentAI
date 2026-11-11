@@ -76,15 +76,19 @@ def test_application_reconciliation_binds_owner_and_verified_provider_outcome():
     )
 
 
-@pytest.mark.parametrize("schema_version", [1.0, 1e0])
-def test_application_reconciliation_accepts_schema_valid_integer_forms(schema_version):
+@pytest.mark.parametrize("schema_version,state_version", [(1.0, 7), (1e0, 7.0)])
+def test_application_reconciliation_accepts_schema_valid_integer_forms(
+    schema_version, state_version
+):
     loop = Loop()
     (status, _), _ = request(
         app(loop), method="POST",
         path="/v1/candidate/runs/run-1/application-reconciliation",
-        body={"schema_version": schema_version, "state_version": 7, "submitted": False},
+        body={"schema_version": schema_version, "state_version": state_version,
+              "submitted": False},
     )
     assert status == "200 OK"
+    assert loop.reconciliation[-1] == 7
 
 
 @pytest.mark.parametrize("body", [
