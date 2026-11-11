@@ -60,6 +60,7 @@ class CandidateApprovalLoop(Protocol):
     def resolve_application_reconciliation(
         self, run_id: str, *, user_id: str, submitted: bool,
         provider_submission_id: str | None = None,
+        expected_state_version: int | None = None,
     ): ...
 
 
@@ -333,7 +334,8 @@ class CandidateApprovalWSGIApp:
                     )
                 try:
                     payload = self._read_json(environ)
-                    submitted, provider_submission_id = self._application_reconciliation(payload)
+                    (submitted, provider_submission_id,
+                     expected_state_version) = self._application_reconciliation(payload)
                 except (TypeError, ValueError, InvalidOperation) as exc:
                     return self._respond(
                         start_response, "400 Bad Request",
@@ -342,6 +344,7 @@ class CandidateApprovalWSGIApp:
                 result = self._loop.resolve_application_reconciliation(
                     run_id, user_id=user_id, submitted=submitted,
                     provider_submission_id=provider_submission_id,
+                    expected_state_version=expected_state_version,
                 )
                 return self._respond(
                     start_response, "200 OK",
@@ -451,24 +454,42 @@ class CandidateApprovalWSGIApp:
     @staticmethod
     def _application_reconciliation(
         payload: Mapping[str, Any],
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, int]:
         """Validate one independently observed application provider outcome."""
-        allowed = {"schema_version", "submitted", "provider_submission_id"}
-        if set(payload) - allowed or not {"schema_version", "submitted"} <= set(payload):
+        allowed = {
+            "schema_version", "state_version", "submitted", "provider_submission_id"
+        }
+        required = {"schema_version", "state_version", "submitted"}
+        if set(payload) - allowed or not required <= set(payload):
             raise ValueError("reconciliation body has unknown or missing fields.")
-        if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
             raise ValueError("schema_version must equal 1.")
+        state_version = payload["state_version"]
+        if type(state_version) is not int or state_version < 0:
+            raise ValueError("state_version must be a non-negative integer.")
         submitted = payload["submitted"]
         if type(submitted) is not bool:
             raise ValueError("submitted must be a boolean.")
-        provider_submission_id = payload.get("provider_submission_id")
         if submitted:
-            provider_submission_id = CandidateApprovalWSGIApp._strict_start_text(
-                provider_submission_id, "provider_submission_id", maximum=500
-            )
-        elif provider_submission_id is not None:
+            provider_submission_id = payload.get("provider_submission_id")
+            if not isinstance(provider_submission_id, str):
+                raise ValueError("provider_submission_id must be text.")
+            if (
+                not provider_submission_id
+                or len(provider_submission_id) > 200
+                or provider_submission_id != provider_submission_id.strip()
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in provider_submission_id)
+                or any(0xD800 <= ord(ch) <= 0xDFFF for ch in provider_submission_id)
+            ):
+                raise ValueError("provider_submission_id is malformed.")
+        elif "provider_submission_id" in payload:
             raise ValueError("provider_submission_id is forbidden when submitted is false.")
-        return submitted, provider_submission_id
+        else:
+            provider_submission_id = None
+        return submitted, provider_submission_id, state_version
 
     @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
@@ -611,13 +632,17 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
     }
     reconciliation_schema = {
         "type": "object",
-        "required": ["schema_version", "submitted"],
+        "required": ["schema_version", "state_version", "submitted"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
+            "state_version": {"type": "integer", "minimum": 0},
             "submitted": {"type": "boolean"},
             "provider_submission_id": {
-                "type": "string", "minLength": 1, "maxLength": 500,
-                "pattern": _STRICT_START_TEXT_PATTERN,
+                "type": "string", "minLength": 1, "maxLength": 200,
+                "pattern": (
+                    r"^(?![\s\S]*[\u0000-\u001F\u007F\uD800-\uDFFF])"
+                    r"\S(?:[\s\S]*\S)?$"
+                ),
             },
         },
         "additionalProperties": False,
