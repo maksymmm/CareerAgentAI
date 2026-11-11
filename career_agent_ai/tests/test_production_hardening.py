@@ -1926,6 +1926,45 @@ def test_candidate_service_readiness_rejects_corrupt_database(tmp_path):
     assert body == {"status": "unavailable"}
 
 
+def test_candidate_service_readiness_rechecks_integrity_after_startup(monkeypatch):
+    class Connection:
+        def execute(self, query):
+            assert query == "PRAGMA quick_check(1)"
+            return self
+
+        def fetchall(self):
+            return [("database disk image is malformed",)]
+
+    class Database:
+        connection = Connection()
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+    monkeypatch.setattr(
+        candidate_service.SQLiteDatabase,
+        "open_read_only",
+        lambda path: database,
+    )
+
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    app = CandidateServiceWSGIApp(DelegatedApp(), database_path="candidate.sqlite")
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert meta["headers"]["Cache-Control"] == "no-store"
+    assert body == {"status": "unavailable"}
+    assert database.closed is True
+
+
 def test_candidate_service_startup_rejects_corrupt_data_page(tmp_path):
 
     database_path = tmp_path / "corrupt-page.sqlite"
