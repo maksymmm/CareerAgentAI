@@ -18,8 +18,8 @@ def test_candidate_container_runs_non_root_with_safe_defaults():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert (
-        "FROM python:3.12.15-slim-bookworm@sha256:"
-        "34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258"
+        "FROM python:3.12.16-slim-bookworm@sha256:"
+        "935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df"
         in dockerfile
     )
     assert "USER 10001:10001" in dockerfile
