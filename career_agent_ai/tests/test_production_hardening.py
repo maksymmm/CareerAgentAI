@@ -469,7 +469,7 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         app.start(request())
 
 
-def test_candidate_http_approval_survives_restart_without_repeating_submission(tmp_path):
+def test_candidate_http_approval_survives_restart_without_repeating_submission(\n    tmp_path, monkeypatch\n):
     """Exercise the published HTTP journey over durable sandbox composition."""
     database_path = str(tmp_path / "candidate-restart.sqlite")
     environ = {
@@ -504,7 +504,20 @@ def test_candidate_http_approval_survives_restart_without_repeating_submission(t
         )
         return statuses[0], json.loads(b"".join(response))
 
-    resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
+    provider_calls = []
+    original_submit = runtime_composition.FakeApplicationSubmissionAdapter.submit
+
+    def track_submit(self, *args, **kwargs):
+        provider_calls.append(args)
+        return original_submit(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        runtime_composition.FakeApplicationSubmissionAdapter, "submit", track_submit
+    )
+    resolve_bearer = lambda token: {
+        "owner": "candidate-1",
+        "foreign": "candidate-2",
+    }.get(token)
     first = build_candidate_sandbox_app_from_env(
         resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
     )
@@ -530,10 +543,21 @@ def test_candidate_http_approval_survives_restart_without_repeating_submission(t
     )
     approval_path = f"/v1/candidate/runs/{run_id}/approval"
     status_path = f"/v1/candidate/runs/{run_id}/status"
-    assert call(second, status_path, token="foreign") == (
-        "401 Unauthorized",
-        {"error": "unauthorized"},
-    )
+    for path, method, body in (
+        (status_path, "GET", None),
+        (approval_path, "GET", None),
+        (approval_path, "POST", {
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": 1,
+            "action_fingerprint": "a" * 64,
+            "decision": "approve",
+        }),
+    ):
+        assert call(second, path, token="foreign", method=method, body=body) == (
+            "404 Not Found",
+            {"error": "not_found"},
+        )
     status, prompt = call(second, approval_path)
     assert status == "200 OK"
     assert prompt["run_id"] == run_id
@@ -549,6 +573,7 @@ def test_candidate_http_approval_survives_restart_without_repeating_submission(t
         "200 OK",
         {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value},
     )
+    assert len(provider_calls) == 1
     second.close()
 
     third = build_candidate_sandbox_app_from_env(
@@ -562,6 +587,7 @@ def test_candidate_http_approval_survives_restart_without_repeating_submission(t
         "409 Conflict",
         {"error": "approval_conflict"},
     )
+    assert len(provider_calls) == 1
     third.close()
 
     database = SQLiteDatabase(database_path)
