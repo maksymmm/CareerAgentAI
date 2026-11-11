@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate CI dependency resilience: the full browser gate now retries Playwright's
+system dependency installation three times with bounded backoff. Transient Ubuntu
+archive DNS failures no longer discard an otherwise review-ready candidate workflow
+change, while the third failure still exits closed before tests or merge. A workflow
+contract regression preserves the retry and terminal failure semantics.
+Next: exact-head CI/review, then continue candidate provider integration hardening.
+
 Candidate HTTP restart acceptance: a real sandbox composition now exercises the
 published start, status, prompt and approval routes across two runtime restarts. SQLite
 must retain the owner-scoped run, the fake provider submission must complete once, and
