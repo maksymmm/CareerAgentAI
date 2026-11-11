@@ -496,6 +496,10 @@ must derive it from the authenticated principal, never an untrusted request body
 The loop checks it against the durable request owner before exposing state, changing
 an approval, claiming a lease, or resolving a provider outcome. A foreign run and
 a missing run both raise the same `KeyError`.
+Message and interview reconciliation can additionally bind a verified provider
+observation to the durable state version shown to the caller. A stale negative
+observation is rejected before another provider attempt, preventing an old response
+retry from resolving a newer ambiguity.
 `CandidateApprovalWSGIApp` exposes the minimal prompt and strict approval submission
 at `GET`/`POST /v1/candidate/runs/{run_id}/approval`. Authentication is resolved before
 durable state access, foreign and missing runs share a tenant-hiding `404`, request

@@ -3356,6 +3356,115 @@ def test_ambiguous_interview_response_confirmed_no_effect_retries_same_operation
     database.close()
 
 
+def test_message_reconciliation_rejects_stale_observation_before_provider_retry(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "stale-message-reconciliation.sqlite")
+    run_id = "stale-message-reconciliation"
+    database, loop, _, _, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1", keyword="Logistics", candidate_profile=PROFILE,
+            sender="candidate@example.test", recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    )
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    attempts = {"count": 0}
+
+    def ambiguous_send(*args, **kwargs):
+        attempts["count"] += 1
+        raise RuntimeError("ambiguous message outcome")
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_send)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    assert attempts["count"] == 1
+    database.close()
+
+    database, loop, _, _, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    restarted_attempts = {"count": 0}
+
+    def ambiguous_after_restart(*args, **kwargs):
+        restarted_attempts["count"] += 1
+        raise RuntimeError("second ambiguous message outcome")
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_after_restart)
+    assert loop.resolve_message_reconciliation(
+        run_id, user_id="user-1", delivered=False,
+        expected_state_version=observed_version,
+    ).phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    assert restarted_attempts["count"] == 1
+
+    with pytest.raises(CareerLoopConflictError, match="state changed"):
+        loop.resolve_message_reconciliation(
+            run_id, user_id="user-1", delivered=False,
+            expected_state_version=observed_version,
+        )
+    assert restarted_attempts["count"] == 1
+    database.close()
+
+
+def test_interview_reconciliation_rejects_stale_observation_before_provider_retry(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "stale-interview-reconciliation.sqlite")
+    run_id = "stale-interview-reconciliation"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    loop.start(request(), run_id=run_id)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    attempts = {"count": 0}
+
+    def ambiguous_accept(*args, **kwargs):
+        attempts["count"] += 1
+        raise RuntimeError("ambiguous calendar outcome")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    assert attempts["count"] == 1
+    database.close()
+
+    database, loop, _, _, _, _, _, calendar_provider = build_stack(path)
+    restarted_attempts = {"count": 0}
+
+    def ambiguous_after_restart(*args, **kwargs):
+        restarted_attempts["count"] += 1
+        raise RuntimeError("second ambiguous calendar outcome")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_after_restart)
+    assert loop.resolve_interview_reconciliation(
+        run_id, user_id="user-1", completed=False,
+        expected_state_version=observed_version,
+    ).phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    assert restarted_attempts["count"] == 1
+
+    with pytest.raises(CareerLoopConflictError, match="state changed"):
+        loop.resolve_interview_reconciliation(
+            run_id, user_id="user-1", completed=False,
+            expected_state_version=observed_version,
+        )
+    assert restarted_attempts["count"] == 1
+    database.close()
+
+
+@pytest.mark.parametrize("expected", [True, -1, 3.0, "3"])
+def test_reconciliation_version_validation_rejects_non_integer_contract(expected):
+    state = SimpleNamespace(version=3)
+    with pytest.raises(ValueError, match="non-negative integer"):
+        AutonomousCareerLoop._validate_reconciliation_version(state, expected)
+
+
 def test_generic_decline_cannot_terminalize_application_reconciliation(
     tmp_path, monkeypatch
 ):
