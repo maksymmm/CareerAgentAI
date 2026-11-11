@@ -824,7 +824,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 payload["private"] = "private-status-secret"
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/runs/*/status", malformed_run_phase)
-            page.locator("#status").click()
+            with page.expect_response("**/v1/candidate/runs/*/status"):
+                page.locator("#status").click()
             page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
             assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
             assert "private-status-secret" not in page.locator("body").text_content()
@@ -834,7 +835,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
                 payload["terminal"] = not payload["terminal"]
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/runs/*/status", inconsistent_run_flags)
-            page.locator("#status").click()
+            with page.expect_response("**/v1/candidate/runs/*/status"):
+                page.locator("#status").click()
             page.locator("#result").get_by_text("Invalid status snapshot.", exact=False).wait_for()
             assert page.locator("#run-overview").text_content() == "Refresh status to load a snapshot."
             page.unroute("**/v1/candidate/runs/*/status")

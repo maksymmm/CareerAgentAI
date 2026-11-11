@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate status browser synchronization: intercepted malformed status responses now
+wait for the actual owner-scoped `/status` response before removing the Playwright
+route. Repeated invalid-state scenarios can no longer match stale result text and race
+an in-flight `route.fetch()`/`route.fulfill()`, keeping the full CI coverage gate
+deterministic without weakening candidate response validation.
+Next: exact-head CI/review, then continue candidate workflow recovery hardening.
+
 Candidate workflow method integrity: missing, non-string, empty, non-ASCII,
 non-alphabetic and non-uppercase WSGI methods fail before authentication, storage or
 workflow access. Canonical unsupported verbs retain route-specific `Allow` responses,
