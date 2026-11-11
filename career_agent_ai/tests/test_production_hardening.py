@@ -2018,6 +2018,52 @@ def test_candidate_service_readiness_interrupts_over_budget_integrity_scan(monke
     assert database.closed is True
 
 
+def test_candidate_service_readiness_rejects_late_integrity_success(monkeypatch):
+    class Connection:
+        handlers = []
+
+        def set_progress_handler(self, callback, steps):
+            self.handlers.append((callback, steps))
+
+        def execute(self, query):
+            assert query == "PRAGMA quick_check(1)"
+            return self
+
+        def fetchall(self):
+            return [("ok",)]
+
+    class Database:
+        connection = Connection()
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+    times = iter((100.0, 100.1))
+    monkeypatch.setattr(candidate_service, "monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        candidate_service.SQLiteDatabase,
+        "open_read_only",
+        lambda path: database,
+    )
+
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    app = CandidateServiceWSGIApp(DelegatedApp(), database_path="candidate.sqlite")
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
+    assert database.connection.handlers[-1] == (None, 0)
+    assert database.closed is True
+
+
 def test_candidate_service_startup_rejects_corrupt_data_page(tmp_path):
 
     database_path = tmp_path / "corrupt-page.sqlite"
