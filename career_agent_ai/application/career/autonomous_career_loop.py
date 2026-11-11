@@ -432,9 +432,11 @@ class AutonomousCareerLoop:
         *,
         user_id: str,
         delivered: bool,
+        expected_state_version: int | None = None,
     ) -> CareerLoopResult:
-        """Resolve a verified ambiguous recruiter/employer message outcome."""
+        """Resolve a verified message outcome bound to the observed state version."""
         state = self._owned_state(run_id, user_id)
+        self._validate_reconciliation_version(state, expected_state_version)
         action = state.pending_human_action
         if (
             state.phase != CareerLoopPhase.MESSAGE_RECONCILIATION
@@ -476,9 +478,11 @@ class AutonomousCareerLoop:
         user_id: str,
         completed: bool,
         provider_event_id: str | None = None,
+        expected_state_version: int | None = None,
     ) -> CareerLoopResult:
-        """Resolve a verified ambiguous interview/calendar response outcome."""
+        """Resolve a verified calendar outcome bound to the observed state version."""
         state = self._owned_state(run_id, user_id)
+        self._validate_reconciliation_version(state, expected_state_version)
         action = state.pending_human_action
         if (
             state.phase != CareerLoopPhase.INTERVIEW_RECONCILIATION
@@ -513,6 +517,20 @@ class AutonomousCareerLoop:
             except CareerLoopConflictError:
                 pass
         return self._continue(state)
+
+    @staticmethod
+    def _validate_reconciliation_version(
+        state: CareerLoopState, expected_state_version: int | None
+    ) -> None:
+        """Reject invalid or stale provider observations before durable mutation."""
+        if expected_state_version is None:
+            return
+        if type(expected_state_version) is not int or expected_state_version < 0:
+            raise ValueError("expected_state_version must be a non-negative integer.")
+        if state.version != expected_state_version:
+            raise CareerLoopConflictError(
+                "Career loop state changed before reconciliation."
+            )
 
     def get(self, run_id: str, *, user_id: str) -> CareerLoopResult:
         """Return a durable loop snapshot without executing work."""
