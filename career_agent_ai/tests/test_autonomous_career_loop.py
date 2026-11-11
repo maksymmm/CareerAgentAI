@@ -3519,7 +3519,9 @@ def test_application_reconciliation_rejects_stale_observation_before_provider_re
 
     monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
     first_gate = loop.resume(run_id, approved=True, user_id="user-1")
-    observed_version = loop.get(run_id, user_id="user-1").version
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
     assert first_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
 
     second_gate = loop.resolve_application_reconciliation(
