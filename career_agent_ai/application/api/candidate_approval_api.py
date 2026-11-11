@@ -468,7 +468,13 @@ class CandidateApprovalWSGIApp:
         ):
             raise ValueError("schema_version must equal 1.")
         state_version = payload["state_version"]
-        if type(state_version) is not int or state_version < 0:
+        if type(state_version) not in {int, float, Decimal}:
+            raise ValueError("state_version must be a non-negative integer.")
+        try:
+            normalized_state_version = int(state_version)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("state_version must be a non-negative integer.") from exc
+        if state_version != normalized_state_version or normalized_state_version < 0:
             raise ValueError("state_version must be a non-negative integer.")
         submitted = payload["submitted"]
         if type(submitted) is not bool:
@@ -489,7 +495,7 @@ class CandidateApprovalWSGIApp:
             raise ValueError("provider_submission_id is forbidden when submitted is false.")
         else:
             provider_submission_id = None
-        return submitted, provider_submission_id, state_version
+        return submitted, provider_submission_id, normalized_state_version
 
     @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
