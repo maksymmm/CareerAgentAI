@@ -6,6 +6,8 @@ Late storage corruption therefore removes the candidate service from readiness b
 new authenticated workflow traffic is accepted, while the read-only connection is
 always closed and the response remains fail-closed and non-disclosing. A SQLite
 progress handler interrupts scans that exceed the listener-safe execution budget.
+Readiness also rejects a successful result that completes after the deadline when
+SQLite performs slow page reads without invoking the VM progress callback.
 Next: exact-head CI/review, then continue candidate provider reconciliation hardening.
 
 Candidate CI dependency resilience: the full browser gate now retries Playwright's
