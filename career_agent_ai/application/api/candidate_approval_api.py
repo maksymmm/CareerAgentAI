@@ -57,6 +57,10 @@ class CandidateApprovalLoop(Protocol):
                              status: ScheduleStatus | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
+    def resolve_application_reconciliation(
+        self, run_id: str, *, user_id: str, submitted: bool,
+        provider_submission_id: str | None = None,
+    ): ...
 
 
 def start_owner_scoped_run(
@@ -134,7 +138,7 @@ class CandidateApprovalWSGIApp:
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
-            and parts[4] in {"approval", "continue", "status"}
+            and parts[4] in {"approval", "continue", "status", "application-reconciliation"}
         )
         if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
@@ -315,6 +319,34 @@ class CandidateApprovalWSGIApp:
                     "200 OK",
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
+            if parts[4] == "application-reconciliation":
+                if method != "POST":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    submitted, provider_submission_id = self._application_reconciliation(payload)
+                except (TypeError, ValueError, InvalidOperation) as exc:
+                    return self._respond(
+                        start_response, "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                result = self._loop.resolve_application_reconciliation(
+                    run_id, user_id=user_id, submitted=submitted,
+                    provider_submission_id=provider_submission_id,
+                )
+                return self._respond(
+                    start_response, "200 OK",
+                    {"run_id": result.run_id, "phase": result.phase.value},
+                )
             if method == "GET":
                 return self._respond(
                     start_response,
@@ -415,6 +447,28 @@ class CandidateApprovalWSGIApp:
         return request, CandidateApprovalWSGIApp._owner_scoped_run_id(
             request.user_id, run_id
         )
+
+    @staticmethod
+    def _application_reconciliation(
+        payload: Mapping[str, Any],
+    ) -> tuple[bool, str | None]:
+        """Validate one independently observed application provider outcome."""
+        allowed = {"schema_version", "submitted", "provider_submission_id"}
+        if set(payload) - allowed or not {"schema_version", "submitted"} <= set(payload):
+            raise ValueError("reconciliation body has unknown or missing fields.")
+        if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
+            raise ValueError("schema_version must equal 1.")
+        submitted = payload["submitted"]
+        if type(submitted) is not bool:
+            raise ValueError("submitted must be a boolean.")
+        provider_submission_id = payload.get("provider_submission_id")
+        if submitted:
+            provider_submission_id = CandidateApprovalWSGIApp._strict_start_text(
+                provider_submission_id, "provider_submission_id", maximum=500
+            )
+        elif provider_submission_id is not None:
+            raise ValueError("provider_submission_id is forbidden when submitted is false.")
+        return submitted, provider_submission_id
 
     @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
@@ -554,6 +608,24 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "decision": {"type": "string", "enum": ["approve", "decline"]},
         },
         "additionalProperties": False,
+    }
+    reconciliation_schema = {
+        "type": "object",
+        "required": ["schema_version", "submitted"],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "submitted": {"type": "boolean"},
+            "provider_submission_id": {
+                "type": "string", "minLength": 1, "maxLength": 500,
+                "pattern": _STRICT_START_TEXT_PATTERN,
+            },
+        },
+        "additionalProperties": False,
+        "allOf": [{
+            "if": {"properties": {"submitted": {"const": True}}},
+            "then": {"required": ["provider_submission_id"]},
+            "else": {"not": {"required": ["provider_submission_id"]}},
+        }],
     }
     start_schema = {
         "type": "object",
@@ -906,6 +978,36 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             ),
                             "content": content(recovery_conflict_schema),
                         },
+                    },
+                },
+            },
+            "/v1/candidate/runs/{run_id}/application-reconciliation": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {
+                        "type": "string", "minLength": 1, "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
+                }],
+                "post": {
+                    "operationId": "resolveCandidateApplicationReconciliation",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {"required": True, "content": content(reconciliation_schema)},
+                    "responses": {
+                        "200": {
+                            "description": "Provider-verified outcome persisted and loop continued",
+                            "content": content({
+                                "type": "object", "required": ["run_id", "phase"],
+                                "properties": {
+                                    "run_id": {"type": "string"},
+                                    "phase": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },
             },
