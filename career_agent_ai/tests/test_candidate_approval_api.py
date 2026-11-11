@@ -144,6 +144,37 @@ def test_application_reconciliation_contract_is_post_only_and_fail_closed():
     assert body == {"error": "method_not_allowed"}
 
 
+def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch, tmp_path):
+    from career_agent_ai.application.runtime import composition
+
+    observed = {}
+
+    class DurableLoop:
+        def resolve_application_reconciliation(self, run_id, **kwargs):
+            observed.update(run_id=run_id, **kwargs)
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs: DurableLoop())
+    runtime = composition.RuntimeCandidateApp(
+        database_path=str(tmp_path / "runtime.sqlite"), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    (status, _), body = request(
+        runtime, method="POST",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+        body={"schema_version": 1, "state_version": 7, "submitted": True,
+              "provider_submission_id": "provider-confirmed"},
+    )
+    runtime.close()
+
+    assert status == "200 OK"
+    assert body == {"run_id": "run-1", "phase": "complete"}
+    assert observed == {
+        "run_id": "run-1", "user_id": "candidate-1", "submitted": True,
+        "provider_submission_id": "provider-confirmed", "expected_state_version": 7,
+    }
+
+
 def request(
     app,
     *,

@@ -328,6 +328,30 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def resolve_application_reconciliation(
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        submitted: bool,
+        provider_submission_id: str | None = None,
+        expected_state_version: int | None = None,
+    ):
+        """Resolve one owner-scoped provider observation using request storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs
+            ).resolve_application_reconciliation(
+                run_id,
+                user_id=user_id,
+                submitted=submitted,
+                provider_submission_id=provider_submission_id,
+                expected_state_version=expected_state_version,
+            )
+        finally:
+            database.close()
+
 
 def build_candidate_sandbox_app_from_env(
     *,
