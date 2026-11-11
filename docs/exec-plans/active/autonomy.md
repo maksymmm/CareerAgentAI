@@ -1,10 +1,11 @@
 # Autonomous Implementation Plan
 
-Candidate live-readiness integrity: `/readyz` now performs a bounded SQLite
+Candidate live-readiness integrity: `/readyz` now performs a deadline-bounded SQLite
 `quick_check(1)` on every probe, in addition to startup validation and schema checks.
 Late storage corruption therefore removes the candidate service from readiness before
 new authenticated workflow traffic is accepted, while the read-only connection is
-always closed and the response remains fail-closed and non-disclosing.
+always closed and the response remains fail-closed and non-disclosing. A SQLite
+progress handler interrupts scans that exceed the listener-safe execution budget.
 Next: exact-head CI/review, then continue candidate provider reconciliation hardening.
 
 Candidate HTTP restart acceptance: a real sandbox composition now exercises the
