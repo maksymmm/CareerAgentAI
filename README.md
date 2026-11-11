@@ -510,6 +510,12 @@ The recovery endpoint maps only an explicit pending-human-action signal to
 unexpected runtime failures remain sanitized internal errors. Its OpenAPI `409`
 contract documents both `recovery_unavailable` and retryable `approval_conflict`
 payloads.
+An owner-scoped POST-only application reconciliation route accepts only a versioned,
+independently observed provider outcome. Confirmed submissions require the provider's
+submission identifier; confirmed non-submissions forbid one. Candidate identity always
+comes from bearer authentication, and the route reuses the durable resolver so restarts
+never repeat an ambiguous provider call. Each decision is bound to the displayed durable
+state version, so replaying an old observation cannot resolve a newer ambiguity.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery

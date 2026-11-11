@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Application reconciliation HTTP workflow: an authenticated owner-scoped POST route
+accepts only a strict versioned provider observation and delegates to the durable
+application resolver. Confirmed success requires a provider submission identifier;
+confirmed non-submission forbids one. The decision is bound to the observed state
+version, so a lost-response replay cannot resolve a newer ambiguity or call the
+provider again. OpenAPI, request-validation and SQLite replay regressions are included.
+Next: exact-head CI/review, then candidate UI for the reconciliation prompt.
+
 Message/interview reconciliation replay hardening: both provider-outcome resolvers
 accept an optional observed durable state version and reject invalid or stale versions
 before lease acquisition, durable mutation or provider retry. SQLite regressions create

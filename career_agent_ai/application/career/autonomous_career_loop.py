@@ -376,6 +376,7 @@ class AutonomousCareerLoop:
         user_id: str,
         submitted: bool,
         provider_submission_id: str | None = None,
+        expected_state_version: int | None = None,
     ) -> CareerLoopResult:
         """Resolve a provider-verified ambiguous application submission outcome.
 
@@ -385,6 +386,7 @@ class AutonomousCareerLoop:
         operation for retry under the already approved application intent.
         """
         state = self._owned_state(run_id, user_id)
+        self._validate_reconciliation_version(state, expected_state_version)
         action = state.pending_human_action
         if (
             state.phase != CareerLoopPhase.APPLICATION_RECONCILIATION

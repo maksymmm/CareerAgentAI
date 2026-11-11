@@ -3605,6 +3605,62 @@ def test_message_reconciliation_resolution_survives_snapshot_failure(
     database.close()
 
 
+def test_application_reconciliation_rejects_stale_observation_before_provider_retry(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "stale-application-reconciliation.sqlite")
+    database, loop, _, _, _, submission_provider, *_ = build_stack(
+        path, with_schedule=False
+    )
+    run_id = "stale-reconciliation"
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1", keyword="Logistics", candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    calls = {"count": 0}
+
+    def ambiguous_submit(*args, **kwargs):
+        calls["count"] += 1
+        raise RuntimeError("ambiguous provider outcome")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    first_gate = loop.resume(run_id, approved=True, user_id="user-1")
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    assert first_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert calls["count"] == 1
+    database.close()
+
+    database, loop, _, _, _, submission_provider, *_ = build_stack(
+        path, with_schedule=False
+    )
+    restarted_calls = {"count": 0}
+
+    def ambiguous_after_restart(*args, **kwargs):
+        restarted_calls["count"] += 1
+        raise RuntimeError("second ambiguous provider outcome")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_after_restart)
+
+    second_gate = loop.resolve_application_reconciliation(
+        run_id, user_id="user-1", submitted=False,
+        expected_state_version=observed_version,
+    )
+    assert second_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert restarted_calls["count"] == 1
+    with pytest.raises(CareerLoopConflictError, match="state changed"):
+        loop.resolve_application_reconciliation(
+            run_id, user_id="user-1", submitted=False,
+            expected_state_version=observed_version,
+        )
+    assert restarted_calls["count"] == 1
+    database.close()
+
+
 def test_definite_pre_submission_failure_is_recoverable_with_same_operation(tmp_path):
     path = str(tmp_path / "definite-submission-retry.sqlite")
     run_id = "definite-submission-retry"
