@@ -778,6 +778,10 @@ all probe responses disable modern and legacy caching with `Cache-Control: no-st
 and `Pragma: no-cache`. Probe requests require an explicit, exact `GET`
 WSGI method; missing, differently cased, non-string, and other methods receive `405`
 without opening candidate storage.
+Candidate workflow routes apply the same fail-closed parsing before authentication or
+workflow access. Canonical but unsupported HTTP verbs continue to the matched route's
+method gate so each `405` advertises its exact `Allow` contract instead of a generic
+service-wide method set.
 
 Coordinated schema changes use `SQLiteMigrationRunner`. Migration versions are
 ordered, transactionally applied, and recorded with immutable SHA-256 checksums.
