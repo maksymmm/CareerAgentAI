@@ -510,7 +510,8 @@ An owner-scoped POST-only application reconciliation route accepts only a versio
 independently observed provider outcome. Confirmed submissions require the provider's
 submission identifier; confirmed non-submissions forbid one. Candidate identity always
 comes from bearer authentication, and the route reuses the durable resolver so restarts
-never repeat an ambiguous provider call.
+never repeat an ambiguous provider call. Each decision is bound to the displayed durable
+state version, so replaying an old observation cannot resolve a newer ambiguity.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery
