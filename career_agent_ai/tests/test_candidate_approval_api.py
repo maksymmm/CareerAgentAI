@@ -91,6 +91,19 @@ def test_application_reconciliation_accepts_schema_valid_integer_forms(
     assert loop.reconciliation[-1] == 7
 
 
+def test_application_reconciliation_accepts_service_limit_provider_identifier():
+    loop = Loop()
+    provider_submission_id = "p" * 1_000
+    (status, _), _ = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+        body={"schema_version": 1, "state_version": 7, "submitted": True,
+              "provider_submission_id": provider_submission_id},
+    )
+    assert status == "200 OK"
+    assert loop.reconciliation[3] == provider_submission_id
+
+
 @pytest.mark.parametrize("body", [
     {"schema_version": 1, "state_version": 7, "submitted": True},
     {"schema_version": 1, "state_version": 7, "submitted": False, "provider_submission_id": "invented"},
@@ -119,6 +132,9 @@ def test_application_reconciliation_contract_is_post_only_and_fail_closed():
     assert operation["security"] == [{"bearerAuth": []}]
     assert schema["additionalProperties"] is False
     assert schema["allOf"][0]["then"]["required"] == ["provider_submission_id"]
+    assert schema["properties"]["provider_submission_id"]["maxLength"] == 1_000
+    conflict = operation["responses"]["409"]["content"]["application/json"]["schema"]
+    assert conflict["properties"]["error"]["const"] == "approval_conflict"
     (status, headers), body = request(
         app(Loop()), method="GET",
         path="/v1/candidate/runs/run-1/application-reconciliation",
