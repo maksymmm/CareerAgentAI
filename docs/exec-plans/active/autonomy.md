@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate release base refresh: the immutable runtime base advances from Python
+3.12.15 to the official Python 3.12.16 slim-bookworm index digest after the trusted
+integration Grype database began reporting a fixed critical vulnerability. The scanner
+policy remains fail-closed with no ignore rule or lowered severity; exact integration
+CI must rebuild, rescan and emit the complete release evidence bundle.
+Next: exact-head CI/review, then verify integration release evidence.
+
 Candidate status browser synchronization: intercepted malformed status responses now
 wait for the actual owner-scoped `/status` response before removing the Playwright
 route. Repeated invalid-state scenarios can no longer match stale result text and race
