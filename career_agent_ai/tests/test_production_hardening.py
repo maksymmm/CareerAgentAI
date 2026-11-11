@@ -1926,6 +1926,144 @@ def test_candidate_service_readiness_rejects_corrupt_database(tmp_path):
     assert body == {"status": "unavailable"}
 
 
+def test_candidate_service_readiness_rechecks_integrity_after_startup(monkeypatch):
+    class Connection:
+        def set_progress_handler(self, callback, steps):
+            pass
+
+        def execute(self, query):
+            assert query == "PRAGMA quick_check(1)"
+            return self
+
+        def fetchall(self):
+            return [("database disk image is malformed",)]
+
+    class Database:
+        connection = Connection()
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+    monkeypatch.setattr(
+        candidate_service.SQLiteDatabase,
+        "open_read_only",
+        lambda path: database,
+    )
+
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    app = CandidateServiceWSGIApp(DelegatedApp(), database_path="candidate.sqlite")
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert meta["headers"]["Cache-Control"] == "no-store"
+    assert body == {"status": "unavailable"}
+    assert database.closed is True
+
+
+def test_candidate_service_readiness_interrupts_over_budget_integrity_scan(monkeypatch):
+    class Connection:
+        def __init__(self):
+            self.handler = None
+            self.handlers = []
+
+        def set_progress_handler(self, callback, steps):
+            self.handler = callback
+            self.handlers.append((callback, steps))
+
+        def execute(self, query):
+            assert query == "PRAGMA quick_check(1)"
+            assert self.handler is not None
+            if self.handler():
+                raise sqlite3.OperationalError("interrupted")
+            raise AssertionError("over-budget scan must be interrupted")
+
+    class Database:
+        connection = Connection()
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+    times = iter((100.0, 100.1))
+    monkeypatch.setattr(candidate_service, "monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        candidate_service.SQLiteDatabase,
+        "open_read_only",
+        lambda path: database,
+    )
+
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    app = CandidateServiceWSGIApp(DelegatedApp(), database_path="candidate.sqlite")
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
+    assert database.connection.handlers[0][1] == 1_000
+    assert database.connection.handlers[-1] == (None, 0)
+    assert database.closed is True
+
+
+def test_candidate_service_readiness_rejects_late_integrity_success(monkeypatch):
+    class Connection:
+        handlers = []
+
+        def set_progress_handler(self, callback, steps):
+            self.handlers.append((callback, steps))
+
+        def execute(self, query):
+            assert query == "PRAGMA quick_check(1)"
+            return self
+
+        def fetchall(self):
+            return [("ok",)]
+
+    class Database:
+        connection = Connection()
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    database = Database()
+    times = iter((100.0, 100.1))
+    monkeypatch.setattr(candidate_service, "monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        candidate_service.SQLiteDatabase,
+        "open_read_only",
+        lambda path: database,
+    )
+
+    class DelegatedApp:
+        def __call__(self, environ, start_response):
+            raise AssertionError("probe must not reach the authenticated app")
+
+        def close(self):
+            pass
+
+    app = CandidateServiceWSGIApp(DelegatedApp(), database_path="candidate.sqlite")
+    meta, body = _wsgi_call(app, "/readyz")
+
+    assert meta["status"] == "503 Service Unavailable"
+    assert body == {"status": "unavailable"}
+    assert database.connection.handlers[-1] == (None, 0)
+    assert database.closed is True
+
+
 def test_candidate_service_startup_rejects_corrupt_data_page(tmp_path):
 
     database_path = tmp_path / "corrupt-page.sqlite"

@@ -8,6 +8,7 @@ import os
 import signal
 import socket
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Callable, Iterable, Mapping
 from wsgiref.simple_server import WSGIServer, make_server
 
@@ -20,6 +21,20 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 from .composition import RuntimeCandidateApp, build_candidate_sandbox_app_from_env
 from .config import RuntimeConfig
+
+
+_READINESS_INTEGRITY_BUDGET_SECONDS = 0.05
+
+
+def _bounded_integrity_check(connection: Any) -> bool:
+    """Check SQLite integrity without monopolizing the request listener."""
+    deadline = monotonic() + _READINESS_INTEGRITY_BUDGET_SECONDS
+    connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1_000)
+    try:
+        result = connection.execute("PRAGMA quick_check(1)").fetchall()
+        return result == [("ok",)] and monotonic() <= deadline
+    finally:
+        connection.set_progress_handler(None, 0)
 
 
 class _IPv6WSGIServer(WSGIServer):
@@ -163,6 +178,11 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
+            # A service can outlive startup validation. Recheck one bounded
+            # integrity error before advertising readiness so later corruption
+            # cannot leave the candidate workflow accepting traffic.
+            if not _bounded_integrity_check(database.connection):
+                raise RuntimeError("candidate storage integrity check failed")
             _validate_loop_schema(database.connection)
         except Exception:
             return self._respond(

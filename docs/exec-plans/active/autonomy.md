@@ -1,5 +1,15 @@
 # Autonomous Implementation Plan
 
+Candidate live-readiness integrity: `/readyz` now performs a deadline-bounded SQLite
+`quick_check(1)` on every probe, in addition to startup validation and schema checks.
+Late storage corruption therefore removes the candidate service from readiness before
+new authenticated workflow traffic is accepted, while the read-only connection is
+always closed and the response remains fail-closed and non-disclosing. A SQLite
+progress handler interrupts scans that exceed the listener-safe execution budget.
+Readiness also rejects a successful result that completes after the deadline when
+SQLite performs slow page reads without invoking the VM progress callback.
+Next: exact-head CI/review, then continue candidate provider reconciliation hardening.
+
 Candidate CI dependency resilience: the full browser gate now retries Playwright's
 system dependency installation three times with bounded backoff. Transient Ubuntu
 archive DNS failures no longer discard an otherwise review-ready candidate workflow
