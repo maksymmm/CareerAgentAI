@@ -3496,6 +3496,47 @@ def test_message_reconciliation_resolution_survives_snapshot_failure(
     database.close()
 
 
+def test_application_reconciliation_rejects_stale_observation_before_provider_retry(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "stale-application-reconciliation.sqlite")
+    database, loop, _, _, _, submission_provider, *_ = build_stack(
+        path, with_schedule=False
+    )
+    run_id = "stale-reconciliation"
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1", keyword="Logistics", candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    calls = {"count": 0}
+
+    def ambiguous_submit(*args, **kwargs):
+        calls["count"] += 1
+        raise RuntimeError("ambiguous provider outcome")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    first_gate = loop.resume(run_id, approved=True, user_id="user-1")
+    observed_version = loop.get(run_id, user_id="user-1").version
+    assert first_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+
+    second_gate = loop.resolve_application_reconciliation(
+        run_id, user_id="user-1", submitted=False,
+        expected_state_version=observed_version,
+    )
+    assert second_gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert calls["count"] == 2
+    with pytest.raises(CareerLoopConflictError, match="state changed"):
+        loop.resolve_application_reconciliation(
+            run_id, user_id="user-1", submitted=False,
+            expected_state_version=observed_version,
+        )
+    assert calls["count"] == 2
+    database.close()
+
+
 def test_definite_pre_submission_failure_is_recoverable_with_same_operation(tmp_path):
     path = str(tmp_path / "definite-submission-retry.sqlite")
     run_id = "definite-submission-retry"
