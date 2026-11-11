@@ -31,7 +31,8 @@ def _bounded_integrity_check(connection: Any) -> bool:
     deadline = monotonic() + _READINESS_INTEGRITY_BUDGET_SECONDS
     connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1_000)
     try:
-        return connection.execute("PRAGMA quick_check(1)").fetchall() == [("ok",)]
+        result = connection.execute("PRAGMA quick_check(1)").fetchall()
+        return result == [("ok",)] and monotonic() <= deadline
     finally:
         connection.set_progress_handler(None, 0)
 
