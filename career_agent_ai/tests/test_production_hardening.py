@@ -469,6 +469,113 @@ def test_candidate_sandbox_composes_durable_loop_and_no_io_adapters(tmp_path):
         app.start(request())
 
 
+def test_candidate_http_approval_survives_restart_without_repeating_submission(tmp_path):
+    """Exercise the published HTTP journey over durable sandbox composition."""
+    database_path = str(tmp_path / "candidate-restart.sqlite")
+    environ = {
+        "CAREER_AGENT_DB_PATH": database_path,
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+    }
+    jobs = (
+        Job.create(
+            job_id="restart-job",
+            title="Logistics Coordinator",
+            company=Company("restart-company", "Sandbox Logistics"),
+            location=Location("Germany", "Karlsruhe"),
+            description="logistics coordination",
+            created_at=NOW,
+        ),
+    )
+
+    def call(app, path, *, method="GET", token="owner", body=None):
+        encoded = b"" if body is None else json.dumps(body).encode("utf-8")
+        statuses = []
+        response = app(
+            {
+                "REQUEST_METHOD": method,
+                "PATH_INFO": path,
+                "HTTP_AUTHORIZATION": f"Bearer {token}",
+                "CONTENT_TYPE": "application/json",
+                "CONTENT_LENGTH": str(len(encoded)),
+                "wsgi.input": io.BytesIO(encoded),
+            },
+            lambda status, headers: statuses.append(status),
+        )
+        return statuses[0], json.loads(b"".join(response))
+
+    resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
+    first = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    status, started = call(
+        first,
+        "/v1/candidate/runs",
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": "restart-journey",
+            "keyword": "logistics",
+            "candidate_profile": PROFILE,
+            "location": "Karlsruhe",
+        },
+    )
+    assert status == "201 Created"
+    run_id = started["run_id"]
+    assert started["phase"] == CareerLoopPhase.APPLICATION_APPROVAL.value
+    first.close()
+
+    second = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    approval_path = f"/v1/candidate/runs/{run_id}/approval"
+    status_path = f"/v1/candidate/runs/{run_id}/status"
+    assert call(second, status_path, token="foreign") == (
+        "401 Unauthorized",
+        {"error": "unauthorized"},
+    )
+    status, prompt = call(second, approval_path)
+    assert status == "200 OK"
+    assert prompt["run_id"] == run_id
+    assert prompt["action_kind"] == "approve_application"
+    decision = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "state_version": prompt["state_version"],
+        "action_fingerprint": prompt["action_fingerprint"],
+        "decision": "approve",
+    }
+    assert call(second, approval_path, method="POST", body=decision) == (
+        "200 OK",
+        {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value},
+    )
+    second.close()
+
+    third = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    status, snapshot = call(third, status_path)
+    assert status == "200 OK"
+    assert snapshot["phase"] == CareerLoopPhase.COMPLETE.value
+    assert snapshot["terminal"] is True
+    assert call(third, approval_path, method="POST", body=decision) == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    third.close()
+
+    database = SQLiteDatabase(database_path)
+    try:
+        operations = database.connection.execute(
+            "SELECT action_type, status FROM external_action_operations"
+        ).fetchall()
+    finally:
+        database.close()
+    assert operations == [
+        ("application.submit", ExternalActionStatus.SUCCEEDED.value)
+    ]
+
+
 def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
