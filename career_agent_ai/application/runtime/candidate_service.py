@@ -163,6 +163,13 @@ class CandidateServiceWSGIApp:
         database = None
         try:
             database = SQLiteDatabase.open_read_only(self._database_path)
+            # A service can outlive startup validation. Recheck one bounded
+            # integrity error before advertising readiness so later corruption
+            # cannot leave the candidate workflow accepting traffic.
+            if database.connection.execute("PRAGMA quick_check(1)").fetchall() != [
+                ("ok",)
+            ]:
+                raise RuntimeError("candidate storage integrity check failed")
             _validate_loop_schema(database.connection)
         except Exception:
             return self._respond(
