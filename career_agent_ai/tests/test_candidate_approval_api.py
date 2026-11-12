@@ -1284,6 +1284,74 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
         server.server_close()
 
 
+def test_candidate_sandbox_browser_submits_versioned_application_reconciliation():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class ReconciliationLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.resolutions = []
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {"schema_version": 1, "run_id": run_id, "state_version": 7,
+                    "phase": "application_reconciliation", "waiting_for_human": True,
+                    "terminal": False}
+
+        def resolve_application_reconciliation(self, run_id, **kwargs):
+            self.resolutions.append((run_id, kwargs))
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = ReconciliationLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#reconciliation-state").get_by_text(
+                "Verify the provider outcome outside this sandbox", exact=False
+            ).wait_for()
+            assert not page.locator("#confirm-submitted").is_disabled()
+            page.locator("#provider-submission-id").fill("stale-provider-evidence")
+            page.locator("#run-id").fill("run-2")
+            assert page.locator("#provider-submission-id").input_value() == ""
+            assert page.locator("#provider-submission-id").is_disabled()
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#reconciliation-state").get_by_text(
+                "Verify the provider outcome outside this sandbox", exact=False
+            ).wait_for()
+            page.locator("#confirm-submitted").click()
+            page.locator("#result").get_by_text("A valid provider submission ID is required").wait_for()
+            assert loop.resolutions == []
+            page.locator("#provider-submission-id").fill("provider-confirmed-7")
+            page.locator("#confirm-submitted").click()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
+            assert page.locator("#provider-submission-id").input_value() == ""
+            assert page.locator("#confirm-submitted").is_disabled()
+            assert page.locator("#confirm-not-submitted").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert loop.resolutions == [("run-1", {
+        "user_id": "candidate-1", "submitted": True,
+        "provider_submission_id": "provider-confirmed-7", "expected_state_version": 7,
+    })]
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -1300,6 +1368,13 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "error.resultRequest === undefined || error.resultRequest === latestResultRequest" in html
     assert "action_fingerprint: approvalPrompt.action_fingerprint" in html
     assert "state_version: approvalPrompt.state_version" in html
+    assert 'id="reconciliation-panel"' in html
+    assert 'id="provider-submission-id"' in html
+    assert "state_version: observedVersion" in html
+    assert "if (submitted) request.provider_submission_id = providerSubmissionId" in html
+    assert "guarded(() => reconcileApplication(false))" in html
+    assert "snapshot.phase === 'application_reconciliation'" in html
+    assert "error.code === 'approval_conflict'" in html
     assert "if (decisionInFlight)" in html
     prompt_handler = html.index("byId('prompt').addEventListener")
     prompt_get = html.index("const loadedPrompt = await call", prompt_handler)

@@ -94,6 +94,18 @@ _HTML = r"""<!doctype html>
       <button id="decline" type="button" disabled>Decline displayed action</button>
     </div>
   </fieldset>
+  <fieldset id="reconciliation-panel" tabindex="-1" aria-busy="false">
+    <legend>Application submission reconciliation</legend>
+    <p id="reconciliation-state" role="status">Refresh a run in application reconciliation before recording independently verified provider evidence.</p>
+    <label>Provider submission ID
+      <input id="provider-submission-id" autocomplete="off" maxlength="1000" disabled>
+    </label>
+    <div class="actions">
+      <button id="confirm-submitted" type="button" disabled>Confirm provider submission</button>
+      <button id="confirm-not-submitted" type="button" disabled>Confirm no provider submission</button>
+    </div>
+    <p class="muted">Use only independently verified provider evidence. This action never performs a blind retry.</p>
+  </fieldset>
   <section aria-labelledby="overview-title">
     <h2 id="overview-title" tabindex="-1">Run overview</h2>
     <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
@@ -155,6 +167,8 @@ _HTML = r"""<!doctype html>
     let recoveryInFlight = false;
     let startInFlight = false;
     let statusInFlight = false;
+    let reconciliationInFlight = false;
+    let reconciliationAvailable = false;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -766,6 +780,23 @@ _HTML = r"""<!doctype html>
       activePromptLoadGeneration = null;
       byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
     }
+    function invalidateApplicationReconciliation(message =
+      'Refresh a run in application reconciliation before recording independently verified provider evidence.') {
+      reconciliationAvailable = false;
+      byId('reconciliation-state').textContent = message;
+      byId('provider-submission-id').value = '';
+      byId('provider-submission-id').disabled = true;
+      byId('confirm-submitted').disabled = true;
+      byId('confirm-not-submitted').disabled = true;
+    }
+    function enableApplicationReconciliation() {
+      reconciliationAvailable = true;
+      byId('reconciliation-state').textContent =
+        'Verify the provider outcome outside this sandbox, then record exactly one result for the displayed version.';
+      byId('provider-submission-id').disabled = false;
+      byId('confirm-submitted').disabled = false;
+      byId('confirm-not-submitted').disabled = false;
+    }
     function selectRun(runId, minimumVersion = null) {
       clearOverview();
       selectedRunVersion = minimumVersion;
@@ -773,6 +804,7 @@ _HTML = r"""<!doctype html>
       latestResultRequest += 1;
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
+      invalidateApplicationReconciliation();
     }
     async function call(path, options = {}, safeError = null) {
       clearOverview();
@@ -818,7 +850,7 @@ _HTML = r"""<!doctype html>
     }
     byId('start').addEventListener('click', () => guarded(async () => {
       if (startInFlight) throw new Error('A run start is already in progress.');
-      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       startInFlight = true;
@@ -859,6 +891,7 @@ _HTML = r"""<!doctype html>
       latestResultRequest += 1;
       latestStartRequest += 1;
       invalidateApprovalPrompt();
+      invalidateApplicationReconciliation();
       byId('result').textContent = 'Inputs changed. Reload the current state.';
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
@@ -874,7 +907,7 @@ _HTML = r"""<!doctype html>
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
       if (startInFlight) throw new Error('Wait for the run start to finish.');
-      if (promptInFlight || recoveryInFlight || decisionInFlight) throw new Error('Wait for the workflow action to finish.');
+      if (promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
       byId('status').disabled = true;
       byId('inspect-panel').setAttribute('aria-busy', 'true');
@@ -898,6 +931,11 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid status snapshot.');
         }
         selectedRunVersion = snapshot.state_version;
+        if (snapshot.phase === 'application_reconciliation' && snapshot.waiting_for_human) {
+          enableApplicationReconciliation();
+        } else {
+          invalidateApplicationReconciliation();
+        }
         if (approvalPrompt && (snapshot.state_version !== approvalPrompt.state_version ||
             approvalPhases[approvalPrompt.action_kind] !== snapshot.phase ||
             !snapshot.waiting_for_human)) {
@@ -913,6 +951,7 @@ _HTML = r"""<!doctype html>
         if (statusContextGeneration === inputContextGeneration &&
             runId === byId('run-id').value) {
           invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.');
+          invalidateApplicationReconciliation('Status could not be verified. Refresh run status.');
         }
         throw error;
       } finally {
@@ -928,6 +967,7 @@ _HTML = r"""<!doctype html>
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (recoveryInFlight) throw new Error('Recovery is already running.');
+      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       recoveryInFlight = true;
       byId('continue').disabled = true;
       byId('prompt').disabled = true;
@@ -970,6 +1010,7 @@ _HTML = r"""<!doctype html>
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (promptInFlight) throw new Error('An approval prompt is already loading.');
+      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       promptInFlight = true;
       invalidateApprovalPrompt('Loading approval prompt…');
       const promptGeneration = approvalPromptGeneration;
@@ -1037,6 +1078,7 @@ _HTML = r"""<!doctype html>
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
+      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       decisionInFlight = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
@@ -1075,6 +1117,58 @@ _HTML = r"""<!doctype html>
     }
     byId('approve').addEventListener('click', () => guarded(() => decide('approve')));
     byId('decline').addEventListener('click', () => guarded(() => decide('decline')));
+    const validProviderSubmissionId = value => {
+      if (typeof value !== 'string' || value.length < 1 || Array.from(value).length > 1000 ||
+          value !== value.trim() || /[\u0000-\u001f\u007f]/.test(value)) return false;
+      try { encodeURIComponent(value); } catch (error) { return false; }
+      return true;
+    };
+    async function reconcileApplication(submitted) {
+      if (!reconciliationAvailable || selectedRunVersion === null) {
+        throw new Error('Refresh the application reconciliation state first.');
+      }
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
+      const runId = byId('run-id').value;
+      const observedVersion = selectedRunVersion;
+      const providerSubmissionId = byId('provider-submission-id').value;
+      if (submitted && !validProviderSubmissionId(providerSubmissionId)) {
+        throw new Error('A valid provider submission ID is required.');
+      }
+      reconciliationInFlight = true;
+      byId('reconciliation-panel').setAttribute('aria-busy', 'true');
+      invalidateApplicationReconciliation('Recording verified provider evidence…');
+      try {
+        const request = {schema_version: 1, state_version: observedVersion, submitted};
+        if (submitted) request.provider_submission_id = providerSubmissionId;
+        const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
+          '/application-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(request)}, 'Application reconciliation request failed.');
+        if (!result || typeof result !== 'object' || Array.isArray(result) ||
+            Object.keys(result).length !== 2 || result.run_id !== runId ||
+            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+          throw new Error('Invalid application reconciliation response.');
+        }
+        show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
+        byId('provider-submission-id').value = '';
+        invalidateApprovalPrompt('Reconciliation finished. Load the current approval prompt.');
+        invalidateApplicationReconciliation('Reconciliation finished. Refresh run status.');
+      } catch (error) {
+        invalidateApplicationReconciliation(error.code === 'approval_conflict'
+          ? 'Run state changed. Refresh run status before reconciling.'
+          : 'Reconciliation result is uncertain. Refresh run status before retrying.');
+        throw error;
+      } finally {
+        reconciliationInFlight = false;
+        byId('reconciliation-panel').setAttribute('aria-busy', 'false');
+      }
+    }
+    byId('confirm-submitted').addEventListener('click', () =>
+      guarded(() => reconcileApplication(true)));
+    byId('confirm-not-submitted').addEventListener('click', () =>
+      guarded(() => reconcileApplication(false)));
   </script>
 </body>
 </html>
