@@ -519,7 +519,9 @@ state version, so replaying an old observation cannot resolve a newer ambiguity.
 The candidate sandbox exposes that route only after a fresh owned status snapshot confirms
 the application-reconciliation phase. It requires the provider identifier for confirmed
 success, disables the controls after every attempt, and requires a status refresh before
-retrying an uncertain or conflicting result.
+retrying an uncertain or conflicting result. Provider evidence is cleared when the observed
+reconciliation version advances, preventing evidence from one ambiguity being reused for a
+later retry.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery

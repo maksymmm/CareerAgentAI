@@ -1291,10 +1291,11 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
         def __init__(self):
             super().__init__()
             self.resolutions = []
+            self.status_version = 7
 
         def get_candidate_run_status(self, run_id, *, user_id):
             assert (run_id, user_id) == ("run-1", "candidate-1")
-            return {"schema_version": 1, "run_id": run_id, "state_version": 7,
+            return {"schema_version": 1, "run_id": run_id, "state_version": self.status_version,
                     "phase": "application_reconciliation", "waiting_for_human": True,
                     "terminal": False}
 
@@ -1322,6 +1323,11 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
             assert not page.locator("#confirm-submitted").is_disabled()
+            page.locator("#provider-submission-id").fill("version-7-evidence")
+            loop.status_version = 21
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("version 21").wait_for()
+            assert page.locator("#provider-submission-id").input_value() == ""
             page.locator("#provider-submission-id").fill("stale-provider-evidence")
             page.locator("#run-id").fill("run-2")
             assert page.locator("#provider-submission-id").input_value() == ""
@@ -1348,7 +1354,7 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
 
     assert loop.resolutions == [("run-1", {
         "user_id": "candidate-1", "submitted": True,
-        "provider_submission_id": "provider-confirmed-7", "expected_state_version": 7,
+        "provider_submission_id": "provider-confirmed-7", "expected_state_version": 21,
     })]
 
 
