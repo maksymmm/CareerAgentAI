@@ -522,6 +522,10 @@ success, disables the controls after every attempt, and requires a status refres
 retrying an uncertain or conflicting result. Provider evidence is cleared when the observed
 reconciliation version advances, preventing evidence from one ambiguity being reused for a
 later retry.
+Message delivery reconciliation is also exposed as an authenticated POST-only route.
+It accepts only a strict `delivered` observation plus the displayed durable state version,
+derives ownership from the bearer identity, and delegates through request-local production
+storage so a restart never turns an ambiguous send into a blind retry.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery

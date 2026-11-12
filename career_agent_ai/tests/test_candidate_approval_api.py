@@ -59,6 +59,14 @@ class Loop:
         )
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
+    def resolve_message_reconciliation(
+        self, run_id, *, user_id, delivered, expected_state_version=None,
+    ):
+        self.message_reconciliation_call = (
+            run_id, user_id, delivered, expected_state_version
+        )
+        return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
 
 def test_application_reconciliation_binds_owner_and_verified_provider_outcome():
     loop = Loop()
@@ -144,6 +152,48 @@ def test_application_reconciliation_contract_is_post_only_and_fail_closed():
     assert body == {"error": "method_not_allowed"}
 
 
+def test_message_reconciliation_binds_owner_and_observed_state_version():
+    loop = Loop()
+    (status, headers), body = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/message-reconciliation",
+        body={"schema_version": 1, "state_version": 11, "delivered": True},
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == {"run_id": "run-1", "phase": "complete"}
+    assert loop.message_reconciliation_call == ("run-1", "candidate-1", True, 11)
+
+
+@pytest.mark.parametrize("body", [
+    {"schema_version": 1, "state_version": 11},
+    {"schema_version": 1, "state_version": 11, "delivered": 1},
+    {"schema_version": True, "state_version": 11, "delivered": False},
+    {"schema_version": 1, "state_version": -1, "delivered": False},
+    {"schema_version": 1, "state_version": 11, "delivered": False, "user_id": "candidate-1"},
+])
+def test_message_reconciliation_rejects_ambiguous_or_identity_bearing_body(body):
+    loop = Loop()
+    (status, _), response = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/message-reconciliation", body=body,
+    )
+    assert status == "400 Bad Request"
+    assert response["error"] == "invalid_request"
+    assert not hasattr(loop, "message_reconciliation_call")
+
+
+def test_message_reconciliation_openapi_documents_conflict_and_strict_body():
+    route = "/v1/candidate/runs/{run_id}/message-reconciliation"
+    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert operation["security"] == [{"bearerAuth": []}]
+    assert schema["required"] == ["schema_version", "state_version", "delivered"]
+    assert schema["additionalProperties"] is False
+    conflict = operation["responses"]["409"]["content"]["application/json"]["schema"]
+    assert conflict["properties"]["error"]["const"] == "approval_conflict"
+
+
 def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch, tmp_path):
     from career_agent_ai.application.runtime import composition
 
@@ -172,6 +222,36 @@ def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch,
     assert observed == {
         "run_id": "run-1", "user_id": "candidate-1", "submitted": True,
         "provider_submission_id": "provider-confirmed", "expected_state_version": 7,
+    }
+
+
+def test_runtime_candidate_app_delegates_message_reconciliation(monkeypatch, tmp_path):
+    from career_agent_ai.application.runtime import composition
+
+    observed = {}
+
+    class DurableLoop:
+        def resolve_message_reconciliation(self, run_id, **kwargs):
+            observed.update(run_id=run_id, **kwargs)
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs: DurableLoop())
+    runtime = composition.RuntimeCandidateApp(
+        database_path=str(tmp_path / "runtime-message.sqlite"), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    (status, _), body = request(
+        runtime, method="POST",
+        path="/v1/candidate/runs/run-1/message-reconciliation",
+        body={"schema_version": 1, "state_version": 13, "delivered": False},
+    )
+    runtime.close()
+
+    assert status == "200 OK"
+    assert body == {"run_id": "run-1", "phase": "complete"}
+    assert observed == {
+        "run_id": "run-1", "user_id": "candidate-1", "delivered": False,
+        "expected_state_version": 13,
     }
 
 
