@@ -1478,6 +1478,7 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
 def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrently():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     status_started = Event()
+    list_started = Event()
     release_status = Event()
 
     class DelayedStatusLoop(Loop):
@@ -1495,6 +1496,7 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             assert kwargs == {
                 "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
             }
+            list_started.set()
             return {"schema_version": 1, "items": [], "next_after": None}
 
     class QuietHandler(WSGIRequestHandler):
@@ -1520,7 +1522,7 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             page.locator("#status").click()
             assert status_started.wait(timeout=5)
             page.locator("#list-runs").click()
-            page.locator("#list-state").get_by_text("0 runs on this page").wait_for()
+            assert list_started.wait(timeout=5)
             release_status.set()
             page.locator("#run-overview").get_by_text(
                 "Your decision is needed — application reconciliation (version 7). Run: run-1"
