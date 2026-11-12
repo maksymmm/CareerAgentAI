@@ -374,6 +374,22 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def resolve_interview_reconciliation(
+        self, run_id: str, *, user_id: str, completed: bool,
+        provider_event_id: str | None = None,
+        expected_state_version: int | None = None,
+    ):
+        """Resolve one owner-scoped calendar observation using request storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(database, self._jobs).resolve_interview_reconciliation(
+                run_id, user_id=user_id, completed=completed,
+                provider_event_id=provider_event_id,
+                expected_state_version=expected_state_version,
+            )
+        finally:
+            database.close()
+
 
 def build_candidate_sandbox_app_from_env(
     *,
