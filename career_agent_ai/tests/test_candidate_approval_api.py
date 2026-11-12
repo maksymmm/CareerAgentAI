@@ -1457,6 +1457,18 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
 
 def test_candidate_sandbox_browser_submits_versioned_application_reconciliation():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    details = {
+        "job_id": "job-1", "job_title": "Platform Engineer",
+        "company": "Sandbox GmbH", "company_id": None,
+        "candidate_snapshot_sha256": "a" * 64,
+        "application_id": "application-1", "application_version": 1,
+        "application_status": "saved", "artifact_content": "Candidate application",
+        "artifact_sha256": sha256(b"Candidate application").hexdigest(),
+    }
+    fingerprint = sha256(json.dumps(
+        {"kind": "approve_application", "title": "Approve application", "details": details},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
 
     class ReconciliationLoop(Loop):
         def __init__(self):
@@ -1469,6 +1481,15 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             return {"schema_version": 1, "run_id": run_id, "state_version": self.status_version,
                     "phase": "application_reconciliation", "waiting_for_human": True,
                     "terminal": False}
+
+        def get_candidate_approval_prompt(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return SimpleNamespace(to_dict=lambda: {
+                "schema_version": 1, "run_id": run_id, "state_version": 21,
+                "action_kind": "approve_application", "title": "Approve application",
+                "details": details, "action_fingerprint": fingerprint,
+                "allowed_decisions": ["approve", "decline"],
+            })
 
         def resolve_application_reconciliation(self, run_id, **kwargs):
             self.resolutions.append((run_id, kwargs))
@@ -1495,6 +1516,13 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             ).wait_for()
             assert not page.locator("#confirm-submitted").is_disabled()
             page.locator("#provider-submission-id").fill("version-7-evidence")
+            page.locator("#prompt").click()
+            page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.locator("#confirm-submitted").click()
+            page.locator("#result").get_by_text(
+                "Refresh the application reconciliation state first"
+            ).wait_for()
+            assert loop.resolutions == []
             loop.status_version = 21
             page.locator("#status").click()
             page.locator("#run-overview").get_by_text("version 21").wait_for()
@@ -1686,6 +1714,12 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert 'id="interview-reconciliation-panel"' in html
     assert 'id="provider-submission-id"' in html
     assert "state_version: observedVersion" in html
+    application_reconciliation = html[
+        html.index("async function reconcileApplication"):
+        html.index("async function reconcileMessage")
+    ]
+    assert "reconciliationVersion !== selectedRunVersion" in application_reconciliation
+    assert "const observedVersion = reconciliationVersion" in application_reconciliation
     assert "if (submitted) request.provider_submission_id = providerSubmissionId" in html
     assert "guarded(() => reconcileApplication(false))" in html
     assert "snapshot.phase === 'application_reconciliation'" in html
