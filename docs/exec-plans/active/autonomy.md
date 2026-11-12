@@ -1,11 +1,13 @@
 # Autonomous Implementation Plan
 
-Interview reconciliation HTTP workflow: an authenticated owner-scoped POST route accepts only a
-strict completed/no-effect observation bound to the displayed durable state version. Completed
-actions require validated provider event evidence; no-effect observations forbid it. Production
-runtime delegation uses request-local SQLite with guaranteed cleanup, and OpenAPI/request/runtime
-regressions prevent contract drift or test-only wiring. Next: exact-head CI/review, then candidate
-interview reconciliation controls.
+Interview reconciliation candidate workflow: an authenticated owner-scoped POST route accepts
+only a strict completed/no-effect observation bound to the displayed durable state version.
+Completed actions require validated provider event evidence; no-effect observations forbid it.
+Candidate sandbox controls require a fresh owned reconciliation snapshot, clear evidence whenever
+the version or run/token/session context changes, and fail closed after any attempt. Production
+runtime delegation uses request-local SQLite with guaranteed cleanup; OpenAPI, request, runtime,
+static, and browser regressions prevent contract drift or test-only wiring. Next: exact-head
+CI/review, then audit complete reconciliation parity for remaining workflow gaps.
 
 Message reconciliation candidate workflow: an authenticated owner-scoped POST route accepts
 only a strict delivered/no-effect observation bound to the displayed durable state version.
