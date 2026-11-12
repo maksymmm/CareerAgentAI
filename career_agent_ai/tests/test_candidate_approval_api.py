@@ -1521,7 +1521,7 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
             assert status_started.wait(timeout=5)
-            page.locator("#list-runs").click()
+            page.locator("#list-runs").dispatch_event("click")
             assert list_started.wait(timeout=5)
             release_status.set()
             page.locator("#run-overview").get_by_text(
