@@ -169,6 +169,7 @@ _HTML = r"""<!doctype html>
     let statusInFlight = false;
     let reconciliationInFlight = false;
     let reconciliationAvailable = false;
+    let reconciliationVersion = null;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -783,14 +784,17 @@ _HTML = r"""<!doctype html>
     function invalidateApplicationReconciliation(message =
       'Refresh a run in application reconciliation before recording independently verified provider evidence.') {
       reconciliationAvailable = false;
+      reconciliationVersion = null;
       byId('reconciliation-state').textContent = message;
       byId('provider-submission-id').value = '';
       byId('provider-submission-id').disabled = true;
       byId('confirm-submitted').disabled = true;
       byId('confirm-not-submitted').disabled = true;
     }
-    function enableApplicationReconciliation() {
+    function enableApplicationReconciliation(version) {
+      if (reconciliationVersion !== version) byId('provider-submission-id').value = '';
       reconciliationAvailable = true;
+      reconciliationVersion = version;
       byId('reconciliation-state').textContent =
         'Verify the provider outcome outside this sandbox, then record exactly one result for the displayed version.';
       byId('provider-submission-id').disabled = false;
@@ -932,7 +936,7 @@ _HTML = r"""<!doctype html>
         }
         selectedRunVersion = snapshot.state_version;
         if (snapshot.phase === 'application_reconciliation' && snapshot.waiting_for_human) {
-          enableApplicationReconciliation();
+          enableApplicationReconciliation(snapshot.state_version);
         } else {
           invalidateApplicationReconciliation();
         }
