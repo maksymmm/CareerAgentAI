@@ -5,7 +5,8 @@ from io import BytesIO
 import json
 import re
 from threading import Event, Thread
-from wsgiref.simple_server import WSGIRequestHandler, make_server
+from socketserver import ThreadingMixIn
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 import pytest
 from types import SimpleNamespace
@@ -1476,11 +1477,13 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
 
 def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrently():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    status_started = Event()
     release_status = Event()
 
     class DelayedStatusLoop(Loop):
         def get_candidate_run_status(self, run_id, *, user_id):
             assert (run_id, user_id) == ("run-1", "candidate-1")
+            status_started.set()
             assert release_status.wait(timeout=5)
             return {
                 "schema_version": 1, "run_id": run_id, "state_version": 7,
@@ -1498,8 +1501,12 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
         def log_message(self, format, *args):
             pass
 
+    class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
     server = make_server(
-        "127.0.0.1", 0, app(DelayedStatusLoop()), handler_class=QuietHandler
+        "127.0.0.1", 0, app(DelayedStatusLoop()),
+        server_class=ThreadedWSGIServer, handler_class=QuietHandler,
     )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1511,13 +1518,14 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             page.locator("#token").fill("valid")
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
+            assert status_started.wait(timeout=5)
             page.locator("#list-runs").click()
+            page.locator("#list-state").get_by_text("0 runs on this page").wait_for()
             release_status.set()
             page.locator("#run-overview").get_by_text(
                 "Your decision is needed — application reconciliation (version 7). Run: run-1"
             ).wait_for()
             assert not page.locator("#confirm-submitted").is_disabled()
-            page.locator("#list-state").get_by_text("0 runs on this page").wait_for()
             browser.close()
     finally:
         server.shutdown()
