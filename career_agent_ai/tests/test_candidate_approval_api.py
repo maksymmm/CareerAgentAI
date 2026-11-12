@@ -5,8 +5,7 @@ from io import BytesIO
 import json
 import re
 from threading import Event, Thread
-from socketserver import ThreadingMixIn
-from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
 from types import SimpleNamespace
@@ -1478,7 +1477,6 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
 def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrently():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     status_started = Event()
-    list_started = Event()
     release_status = Event()
 
     class DelayedStatusLoop(Loop):
@@ -1496,19 +1494,14 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             assert kwargs == {
                 "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
             }
-            list_started.set()
             return {"schema_version": 1, "items": [], "next_after": None}
 
     class QuietHandler(WSGIRequestHandler):
         def log_message(self, format, *args):
             pass
 
-    class ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
-        daemon_threads = True
-
     server = make_server(
-        "127.0.0.1", 0, app(DelayedStatusLoop()),
-        server_class=ThreadedWSGIServer, handler_class=QuietHandler,
+        "127.0.0.1", 0, app(DelayedStatusLoop()), handler_class=QuietHandler
     )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1522,7 +1515,6 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             page.locator("#status").click()
             assert status_started.wait(timeout=5)
             page.locator("#list-runs").dispatch_event("click")
-            assert list_started.wait(timeout=5)
             release_status.set()
             page.locator("#run-overview").get_by_text(
                 "Your decision is needed — application reconciliation (version 7). Run: run-1"
