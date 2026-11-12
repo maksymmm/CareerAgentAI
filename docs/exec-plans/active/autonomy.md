@@ -1,12 +1,19 @@
 # Autonomous Implementation Plan
 
+Candidate application reconciliation UI: the sandbox enables explicit submitted/no-effect
+controls only from a fresh owner-scoped reconciliation status snapshot and binds the POST
+to that snapshot's durable version. Confirmed success requires a validated provider ID;
+every success, conflict or uncertain result disables the controls until status is refreshed.
+A browser regression covers production HTTP wiring, invalid evidence and the exact versioned
+request. Next: exact-head CI/review, then message reconciliation HTTP/UI parity.
+
 Application reconciliation HTTP workflow: an authenticated owner-scoped POST route
 accepts only a strict versioned provider observation and delegates to the durable
 application resolver. Confirmed success requires a provider submission identifier;
 confirmed non-submission forbids one. The decision is bound to the observed state
 version, so a lost-response replay cannot resolve a newer ambiguity or call the
 provider again. OpenAPI, request-validation and SQLite replay regressions are included.
-Next: exact-head CI/review, then candidate UI for the reconciliation prompt.
+Completed by the candidate reconciliation UI entry above.
 
 Message/interview reconciliation replay hardening: both provider-outcome resolvers
 accept an optional observed durable state version and reject invalid or stale versions
