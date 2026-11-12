@@ -1205,7 +1205,8 @@ _HTML = r"""<!doctype html>
       return true;
     };
     async function reconcileApplication(submitted) {
-      if (!reconciliationAvailable || selectedRunVersion === null) {
+      if (!reconciliationAvailable || selectedRunVersion === null ||
+          reconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the application reconciliation state first.');
       }
       if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
@@ -1213,7 +1214,7 @@ _HTML = r"""<!doctype html>
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
       const runId = byId('run-id').value;
-      const observedVersion = selectedRunVersion;
+      const observedVersion = reconciliationVersion;
       const providerSubmissionId = byId('provider-submission-id').value;
       if (submitted && !validProviderSubmissionId(providerSubmissionId)) {
         throw new Error('A valid provider submission ID is required.');
