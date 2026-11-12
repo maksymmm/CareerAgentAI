@@ -67,6 +67,15 @@ class Loop:
         )
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
+    def resolve_interview_reconciliation(
+        self, run_id, *, user_id, completed, provider_event_id=None,
+        expected_state_version=None,
+    ):
+        self.interview_reconciliation_call = (
+            run_id, user_id, completed, provider_event_id, expected_state_version
+        )
+        return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
 
 def test_application_reconciliation_binds_owner_and_verified_provider_outcome():
     loop = Loop()
@@ -194,6 +203,57 @@ def test_message_reconciliation_openapi_documents_conflict_and_strict_body():
     assert conflict["properties"]["error"]["const"] == "approval_conflict"
 
 
+def test_interview_reconciliation_binds_owner_version_and_provider_evidence():
+    loop = Loop()
+    (status, _), body = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+        body={"schema_version": 1, "state_version": 17, "completed": True,
+              "provider_event_id": "calendar/event=confirmed"},
+    )
+    assert status == "200 OK"
+    assert body == {"run_id": "run-1", "phase": "complete"}
+    assert loop.interview_reconciliation_call == (
+        "run-1", "candidate-1", True, "calendar/event=confirmed", 17
+    )
+
+
+@pytest.mark.parametrize("body", [
+    {"schema_version": 1, "state_version": 17, "completed": True},
+    {"schema_version": 1, "state_version": 17, "completed": False,
+     "provider_event_id": "invented"},
+    {"schema_version": 1, "state_version": 17, "completed": 1},
+    {"schema_version": True, "state_version": 17, "completed": False},
+    {"schema_version": 1, "state_version": -1, "completed": False},
+    {"schema_version": 1, "state_version": 17, "completed": True,
+     "provider_event_id": "calendar\nevent"},
+    {"schema_version": 1, "state_version": 17, "completed": False,
+     "user_id": "candidate-1"},
+])
+def test_interview_reconciliation_rejects_ambiguous_or_identity_bearing_body(body):
+    loop = Loop()
+    (status, _), response = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/interview-reconciliation", body=body,
+    )
+    assert status == "400 Bad Request"
+    assert response["error"] == "invalid_request"
+    assert not hasattr(loop, "interview_reconciliation_call")
+
+
+def test_interview_reconciliation_openapi_is_strict_and_post_only():
+    route = "/v1/candidate/runs/{run_id}/interview-reconciliation"
+    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["allOf"][0]["then"]["required"] == ["provider_event_id"]
+    assert operation["responses"]["409"]["content"]["application/json"]["schema"]["properties"]["error"]["const"] == "approval_conflict"
+    (status, headers), _ = request(app(Loop()), method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation")
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "POST") in headers
+
+
 def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch, tmp_path):
     from career_agent_ai.application.runtime import composition
 
@@ -252,6 +312,37 @@ def test_runtime_candidate_app_delegates_message_reconciliation(monkeypatch, tmp
     assert observed == {
         "run_id": "run-1", "user_id": "candidate-1", "delivered": False,
         "expected_state_version": 13,
+    }
+
+
+def test_runtime_candidate_app_delegates_interview_reconciliation(monkeypatch, tmp_path):
+    from career_agent_ai.application.runtime import composition
+
+    observed = {}
+
+    class DurableLoop:
+        def resolve_interview_reconciliation(self, run_id, **kwargs):
+            observed.update(run_id=run_id, **kwargs)
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs: DurableLoop())
+    runtime = composition.RuntimeCandidateApp(
+        database_path=str(tmp_path / "runtime-interview.sqlite"), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    (status, _), body = request(
+        runtime, method="POST",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+        body={"schema_version": 1, "state_version": 19, "completed": True,
+              "provider_event_id": "calendar-confirmed"},
+    )
+    runtime.close()
+
+    assert status == "200 OK"
+    assert body == {"run_id": "run-1", "phase": "complete"}
+    assert observed == {
+        "run_id": "run-1", "user_id": "candidate-1", "completed": True,
+        "provider_event_id": "calendar-confirmed", "expected_state_version": 19,
     }
 
 

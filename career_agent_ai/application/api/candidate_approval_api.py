@@ -66,6 +66,11 @@ class CandidateApprovalLoop(Protocol):
         self, run_id: str, *, user_id: str, delivered: bool,
         expected_state_version: int | None = None,
     ): ...
+    def resolve_interview_reconciliation(
+        self, run_id: str, *, user_id: str, completed: bool,
+        provider_event_id: str | None = None,
+        expected_state_version: int | None = None,
+    ): ...
 
 
 def start_owner_scoped_run(
@@ -144,7 +149,7 @@ class CandidateApprovalWSGIApp:
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
             and parts[4] in {"approval", "continue", "status", "application-reconciliation",
-                             "message-reconciliation"}
+                             "message-reconciliation", "interview-reconciliation"}
         )
         if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
@@ -383,6 +388,36 @@ class CandidateApprovalWSGIApp:
                     start_response, "200 OK",
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
+            if parts[4] == "interview-reconciliation":
+                if method != "POST":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    (completed, provider_event_id,
+                     expected_state_version) = self._interview_reconciliation(payload)
+                except (TypeError, ValueError, InvalidOperation) as exc:
+                    return self._respond(
+                        start_response, "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                result = self._loop.resolve_interview_reconciliation(
+                    run_id, user_id=user_id, completed=completed,
+                    provider_event_id=provider_event_id,
+                    expected_state_version=expected_state_version,
+                )
+                return self._respond(
+                    start_response, "200 OK",
+                    {"run_id": result.run_id, "phase": result.phase.value},
+                )
             if method == "GET":
                 return self._respond(
                     start_response,
@@ -555,6 +590,50 @@ class CandidateApprovalWSGIApp:
         return delivered, normalized_state_version
 
     @staticmethod
+    def _interview_reconciliation(
+        payload: Mapping[str, Any],
+    ) -> tuple[bool, str | None, int]:
+        """Validate one independently observed calendar provider outcome."""
+        allowed = {"schema_version", "state_version", "completed", "provider_event_id"}
+        if not set(payload).issubset(allowed) or not {
+            "schema_version", "state_version", "completed"
+        }.issubset(payload):
+            raise ValueError("interview reconciliation body has unknown or missing fields.")
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
+            raise ValueError("schema_version must equal 1.")
+        state_version = payload["state_version"]
+        if type(state_version) not in {int, float, Decimal}:
+            raise ValueError("state_version must be a non-negative integer.")
+        try:
+            normalized_state_version = int(state_version)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("state_version must be a non-negative integer.") from exc
+        if state_version != normalized_state_version or normalized_state_version < 0:
+            raise ValueError("state_version must be a non-negative integer.")
+        completed = payload["completed"]
+        if type(completed) is not bool:
+            raise ValueError("completed must be a boolean.")
+        if completed:
+            provider_event_id = payload.get("provider_event_id")
+            if (
+                not isinstance(provider_event_id, str)
+                or not provider_event_id
+                or len(provider_event_id) > 1_000
+                or provider_event_id != provider_event_id.strip()
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in provider_event_id)
+                or any(0xD800 <= ord(ch) <= 0xDFFF for ch in provider_event_id)
+            ):
+                raise ValueError("provider_event_id is malformed.")
+        elif "provider_event_id" in payload:
+            raise ValueError("provider_event_id is forbidden when completed is false.")
+        else:
+            provider_event_id = None
+        return completed, provider_event_id, normalized_state_version
+
+    @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
         """Derive a generation-namespaced key outside the legacy input space."""
         material = f"{len(user_id)}:{user_id}{len(client_run_id)}:{client_run_id}"
@@ -724,6 +803,25 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "delivered": {"type": "boolean"},
         },
         "additionalProperties": False,
+    }
+    interview_reconciliation_schema = {
+        "type": "object",
+        "required": ["schema_version", "state_version", "completed"],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "state_version": {"type": "integer", "minimum": 0},
+            "completed": {"type": "boolean"},
+            "provider_event_id": {
+                "type": "string", "minLength": 1, "maxLength": 1_000,
+                "pattern": r"^(?![\s\S]*[\u0000-\u001F\u007F\uD800-\uDFFF])\S(?:[\s\S]*\S)?$",
+            },
+        },
+        "additionalProperties": False,
+        "allOf": [{
+            "if": {"properties": {"completed": {"const": True}}},
+            "then": {"required": ["provider_event_id"]},
+            "else": {"not": {"required": ["provider_event_id"]}},
+        }],
     }
     start_schema = {
         "type": "object",
@@ -1163,6 +1261,32 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "description": "Request body is not application/json",
                             "content": content(error_schema),
                         },
+                    },
+                },
+            },
+            "/v1/candidate/runs/{run_id}/interview-reconciliation": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 200,
+                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"},
+                }],
+                "post": {
+                    "operationId": "resolveCandidateInterviewReconciliation",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {"required": True,
+                                    "content": content(interview_reconciliation_schema)},
+                    "responses": {
+                        "200": {"description": "Provider-verified outcome persisted and loop continued",
+                                "content": content({"type": "object",
+                                    "required": ["run_id", "phase"],
+                                    "properties": {"run_id": {"type": "string"},
+                                                   "phase": {"type": "string"}},
+                                    "additionalProperties": False})},
+                        **common_responses,
+                        "409": {"description": "Observed state is stale or another execution owns the run",
+                                "content": content(approval_conflict_schema)},
+                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },
             },

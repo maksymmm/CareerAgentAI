@@ -530,6 +530,10 @@ The candidate sandbox enables delivered/no-delivery controls only after a fresh 
 snapshot confirms message reconciliation. The controls are bound to that snapshot version,
 disabled on every submission or input-context change, and require another status refresh after
 a conflict or uncertain response.
+Interview reconciliation is exposed through the same authenticated, owner-scoped boundary.
+Completed calendar actions require independently verified provider event evidence; confirmed
+non-completion forbids that evidence. Both outcomes are bound to the displayed durable version,
+and production composition closes its request-local SQLite connection after every attempt.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery
