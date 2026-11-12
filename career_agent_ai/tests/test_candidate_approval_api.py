@@ -1518,10 +1518,13 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#provider-submission-id").fill("version-7-evidence")
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve application").wait_for()
-            page.locator("#confirm-submitted").click()
-            page.locator("#result").get_by_text(
-                "Refresh the application reconciliation state first"
+            page.locator("#reconciliation-state").get_by_text(
+                "Run version changed. Refresh the application reconciliation state."
             ).wait_for()
+            assert page.locator("#provider-submission-id").input_value() == ""
+            assert page.locator("#provider-submission-id").is_disabled()
+            assert page.locator("#confirm-submitted").is_disabled()
+            assert page.locator("#confirm-not-submitted").is_disabled()
             assert loop.resolutions == []
             loop.status_version = 21
             page.locator("#status").click()
@@ -1720,6 +1723,16 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     ]
     assert "reconciliationVersion !== selectedRunVersion" in application_reconciliation
     assert "const observedVersion = reconciliationVersion" in application_reconciliation
+    version_invalidation = html[
+        html.index("function invalidateReconciliationForVersion"):
+        html.index("function selectRun")
+    ]
+    assert "reconciliationAvailable && reconciliationVersion !== version" in version_invalidation
+    assert "messageReconciliationAvailable && messageReconciliationVersion !== version" in version_invalidation
+    assert "interviewReconciliationAvailable && interviewReconciliationVersion !== version" in version_invalidation
+    assert "invalidateApplicationReconciliation(" in version_invalidation
+    assert "invalidateMessageReconciliation(" in version_invalidation
+    assert "invalidateInterviewReconciliation(" in version_invalidation
     assert "if (submitted) request.provider_submission_id = providerSubmissionId" in html
     assert "guarded(() => reconcileApplication(false))" in html
     assert "snapshot.phase === 'application_reconciliation'" in html
@@ -1918,6 +1931,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("selectedRunVersion = loadedPrompt.state_version", prompt_get) > html.index(
         "throw new Error(\'Invalid approval prompt. Load it again.\')", prompt_get
     )
+    assert html.index(
+        "invalidateReconciliationForVersion(selectedRunVersion)", prompt_get
+    ) > html.index("selectedRunVersion = loadedPrompt.state_version", prompt_get)
     assert html.index("if (startInFlight)", prompt_handler) < prompt_get
     assert html.index("if (recoveryInFlight)", prompt_handler) < prompt_get
     assert html.index("if (statusInFlight)", prompt_handler) < prompt_get
