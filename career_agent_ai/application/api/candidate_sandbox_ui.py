@@ -784,6 +784,7 @@ _HTML = r"""<!doctype html>
       'Refresh a run in application reconciliation before recording independently verified provider evidence.') {
       reconciliationAvailable = false;
       byId('reconciliation-state').textContent = message;
+      byId('provider-submission-id').value = '';
       byId('provider-submission-id').disabled = true;
       byId('confirm-submitted').disabled = true;
       byId('confirm-not-submitted').disabled = true;
