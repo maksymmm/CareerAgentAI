@@ -1593,6 +1593,78 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
     })]
 
 
+def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class ReconciliationLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.resolutions = []
+            self.status_version = 23
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {"schema_version": 1, "run_id": run_id,
+                    "state_version": self.status_version,
+                    "phase": "interview_reconciliation", "waiting_for_human": True,
+                    "terminal": False}
+
+        def resolve_interview_reconciliation(self, run_id, **kwargs):
+            self.resolutions.append((run_id, kwargs))
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = ReconciliationLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#interview-reconciliation-state").get_by_text(
+                "Verify the calendar provider outcome outside this sandbox", exact=False
+            ).wait_for()
+            page.locator("#provider-event-id").fill("version-23-evidence")
+            loop.status_version = 29
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("version 29").wait_for()
+            assert page.locator("#provider-event-id").input_value() == ""
+            page.locator("#provider-event-id").fill("stale-calendar-evidence")
+            page.locator("#token").fill("changed")
+            assert page.locator("#provider-event-id").input_value() == ""
+            assert page.locator("#confirm-calendar-completed").is_disabled()
+            page.locator("#token").fill("valid")
+            page.locator("#status").click()
+            page.locator("#confirm-calendar-completed").click()
+            page.locator("#result").get_by_text("A valid provider event ID is required").wait_for()
+            assert loop.resolutions == []
+            page.locator("#provider-event-id").fill("provider-event-confirmed")
+            page.locator("#confirm-calendar-completed").click()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
+            assert page.locator("#provider-event-id").input_value() == ""
+            assert page.locator("#confirm-calendar-completed").is_disabled()
+            assert page.locator("#confirm-calendar-not-completed").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert loop.resolutions == [("run-1", {
+        "user_id": "candidate-1", "completed": True,
+        "provider_event_id": "provider-event-confirmed",
+        "expected_state_version": 29,
+    })]
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -1611,6 +1683,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "state_version: approvalPrompt.state_version" in html
     assert 'id="reconciliation-panel"' in html
     assert 'id="message-reconciliation-panel"' in html
+    assert 'id="interview-reconciliation-panel"' in html
     assert 'id="provider-submission-id"' in html
     assert "state_version: observedVersion" in html
     assert "if (submitted) request.provider_submission_id = providerSubmissionId" in html
@@ -1618,6 +1691,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "snapshot.phase === 'application_reconciliation'" in html
     assert "snapshot.phase === 'message_reconciliation'" in html
     assert "guarded(() => reconcileMessage(false))" in html
+    assert "snapshot.phase === 'interview_reconciliation'" in html
+    assert "if (completed) request.provider_event_id = providerEventId" in html
+    assert "guarded(() => reconcileInterview(false))" in html
     assert "error.code === 'approval_conflict'" in html
     assert "if (decisionInFlight)" in html
     prompt_handler = html.index("byId('prompt').addEventListener")
