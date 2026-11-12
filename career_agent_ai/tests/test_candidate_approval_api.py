@@ -1322,6 +1322,15 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
             assert not page.locator("#confirm-submitted").is_disabled()
+            page.locator("#provider-submission-id").fill("stale-provider-evidence")
+            page.locator("#run-id").fill("run-2")
+            assert page.locator("#provider-submission-id").input_value() == ""
+            assert page.locator("#provider-submission-id").is_disabled()
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#reconciliation-state").get_by_text(
+                "Verify the provider outcome outside this sandbox", exact=False
+            ).wait_for()
             page.locator("#confirm-submitted").click()
             page.locator("#result").get_by_text("A valid provider submission ID is required").wait_for()
             assert loop.resolutions == []
