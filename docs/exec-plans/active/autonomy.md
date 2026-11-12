@@ -2,7 +2,8 @@
 
 Candidate application reconciliation UI: the sandbox enables explicit submitted/no-effect
 controls only from a fresh owner-scoped reconciliation status snapshot and binds the POST
-to that snapshot's durable version. Confirmed success requires a validated provider ID;
+to that snapshot's durable version. Provider evidence is cleared when that observed version
+advances, so evidence from one ambiguity cannot resolve a later retry. Confirmed success requires a validated provider ID;
 every success, conflict or uncertain result disables the controls until status is refreshed.
 A browser regression covers production HTTP wiring, invalid evidence and the exact versioned
 request. Next: exact-head CI/review, then message reconciliation HTTP/UI parity.
