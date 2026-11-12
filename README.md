@@ -516,6 +516,10 @@ submission identifier; confirmed non-submissions forbid one. Candidate identity 
 comes from bearer authentication, and the route reuses the durable resolver so restarts
 never repeat an ambiguous provider call. Each decision is bound to the displayed durable
 state version, so replaying an old observation cannot resolve a newer ambiguity.
+The candidate sandbox exposes that route only after a fresh owned status snapshot confirms
+the application-reconciliation phase. It requires the provider identifier for confirmed
+success, disables the controls after every attempt, and requires a status refresh before
+retrying an uncertain or conflicting result.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery
