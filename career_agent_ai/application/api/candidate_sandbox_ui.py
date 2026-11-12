@@ -115,6 +115,18 @@ _HTML = r"""<!doctype html>
     </div>
     <p class="muted">Verify the provider outcome outside this sandbox. This action records evidence and never performs a blind retry.</p>
   </fieldset>
+  <fieldset id="interview-reconciliation-panel" tabindex="-1" aria-busy="false">
+    <legend>Interview calendar reconciliation</legend>
+    <p id="interview-reconciliation-state" role="status">Refresh a run in interview reconciliation before recording independently verified calendar evidence.</p>
+    <label>Provider event ID
+      <input id="provider-event-id" autocomplete="off" maxlength="1000" disabled>
+    </label>
+    <div class="actions">
+      <button id="confirm-calendar-completed" type="button" disabled>Confirm calendar action</button>
+      <button id="confirm-calendar-not-completed" type="button" disabled>Confirm no calendar action</button>
+    </div>
+    <p class="muted">Use only independently verified calendar-provider evidence. This action never modifies a real calendar or performs a blind retry.</p>
+  </fieldset>
   <section aria-labelledby="overview-title">
     <h2 id="overview-title" tabindex="-1">Run overview</h2>
     <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
@@ -181,6 +193,8 @@ _HTML = r"""<!doctype html>
     let reconciliationVersion = null;
     let messageReconciliationAvailable = false;
     let messageReconciliationVersion = null;
+    let interviewReconciliationAvailable = false;
+    let interviewReconciliationVersion = null;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -828,6 +842,26 @@ _HTML = r"""<!doctype html>
       byId('confirm-delivered').disabled = false;
       byId('confirm-not-delivered').disabled = false;
     }
+    function invalidateInterviewReconciliation(message =
+      'Refresh a run in interview reconciliation before recording independently verified calendar evidence.') {
+      interviewReconciliationAvailable = false;
+      interviewReconciliationVersion = null;
+      byId('interview-reconciliation-state').textContent = message;
+      byId('provider-event-id').value = '';
+      byId('provider-event-id').disabled = true;
+      byId('confirm-calendar-completed').disabled = true;
+      byId('confirm-calendar-not-completed').disabled = true;
+    }
+    function enableInterviewReconciliation(version) {
+      if (interviewReconciliationVersion !== version) byId('provider-event-id').value = '';
+      interviewReconciliationAvailable = true;
+      interviewReconciliationVersion = version;
+      byId('interview-reconciliation-state').textContent =
+        'Verify the calendar provider outcome outside this sandbox, then record one result for the displayed version.';
+      byId('provider-event-id').disabled = false;
+      byId('confirm-calendar-completed').disabled = false;
+      byId('confirm-calendar-not-completed').disabled = false;
+    }
     function selectRun(runId, minimumVersion = null) {
       clearOverview();
       selectedRunVersion = minimumVersion;
@@ -837,6 +871,7 @@ _HTML = r"""<!doctype html>
       invalidateApprovalPrompt();
       invalidateApplicationReconciliation();
       invalidateMessageReconciliation();
+      invalidateInterviewReconciliation();
     }
     async function call(path, options = {}, safeError = null) {
       clearOverview();
@@ -925,6 +960,7 @@ _HTML = r"""<!doctype html>
       invalidateApprovalPrompt();
       invalidateApplicationReconciliation();
       invalidateMessageReconciliation();
+      invalidateInterviewReconciliation();
       byId('result').textContent = 'Inputs changed. Reload the current state.';
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
@@ -974,6 +1010,11 @@ _HTML = r"""<!doctype html>
         } else {
           invalidateMessageReconciliation();
         }
+        if (snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human) {
+          enableInterviewReconciliation(snapshot.state_version);
+        } else {
+          invalidateInterviewReconciliation();
+        }
         if (approvalPrompt && (snapshot.state_version !== approvalPrompt.state_version ||
             approvalPhases[approvalPrompt.action_kind] !== snapshot.phase ||
             !snapshot.waiting_for_human)) {
@@ -991,6 +1032,7 @@ _HTML = r"""<!doctype html>
           invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.');
           invalidateApplicationReconciliation('Status could not be verified. Refresh run status.');
           invalidateMessageReconciliation('Status could not be verified. Refresh run status.');
+          invalidateInterviewReconciliation('Status could not be verified. Refresh run status.');
         }
         throw error;
       } finally {
@@ -1249,6 +1291,52 @@ _HTML = r"""<!doctype html>
       guarded(() => reconcileMessage(true)));
     byId('confirm-not-delivered').addEventListener('click', () =>
       guarded(() => reconcileMessage(false)));
+    async function reconcileInterview(completed) {
+      if (!interviewReconciliationAvailable || selectedRunVersion === null ||
+          interviewReconciliationVersion !== selectedRunVersion) {
+        throw new Error('Refresh the interview reconciliation state first.');
+      }
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
+      const runId = byId('run-id').value;
+      const observedVersion = interviewReconciliationVersion;
+      const providerEventId = byId('provider-event-id').value;
+      if (completed && !validProviderSubmissionId(providerEventId)) {
+        throw new Error('A valid provider event ID is required.');
+      }
+      reconciliationInFlight = true;
+      byId('interview-reconciliation-panel').setAttribute('aria-busy', 'true');
+      invalidateInterviewReconciliation('Recording verified calendar-provider evidence…');
+      try {
+        const request = {schema_version: 1, state_version: observedVersion, completed};
+        if (completed) request.provider_event_id = providerEventId;
+        const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
+          '/interview-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(request)}, 'Interview reconciliation request failed.');
+        if (!result || typeof result !== 'object' || Array.isArray(result) ||
+            Object.keys(result).length !== 2 || result.run_id !== runId ||
+            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+          throw new Error('Invalid interview reconciliation response.');
+        }
+        show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
+        invalidateApprovalPrompt('Reconciliation finished. Load the current approval prompt.');
+        invalidateInterviewReconciliation('Reconciliation finished. Refresh run status.');
+      } catch (error) {
+        invalidateInterviewReconciliation(error.code === 'approval_conflict'
+          ? 'Run state changed. Refresh run status before reconciling.'
+          : 'Reconciliation result is uncertain. Refresh run status before retrying.');
+        throw error;
+      } finally {
+        reconciliationInFlight = false;
+        byId('interview-reconciliation-panel').setAttribute('aria-busy', 'false');
+      }
+    }
+    byId('confirm-calendar-completed').addEventListener('click', () =>
+      guarded(() => reconcileInterview(true)));
+    byId('confirm-calendar-not-completed').addEventListener('click', () =>
+      guarded(() => reconcileInterview(false)));
   </script>
 </body>
 </html>
