@@ -352,6 +352,28 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def resolve_message_reconciliation(
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        delivered: bool,
+        expected_state_version: int | None = None,
+    ):
+        """Resolve one owner-scoped message observation using request storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs
+            ).resolve_message_reconciliation(
+                run_id,
+                user_id=user_id,
+                delivered=delivered,
+                expected_state_version=expected_state_version,
+            )
+        finally:
+            database.close()
+
 
 def build_candidate_sandbox_app_from_env(
     *,
