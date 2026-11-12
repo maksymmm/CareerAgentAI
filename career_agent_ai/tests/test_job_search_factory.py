@@ -1,5 +1,17 @@
+import inspect
+from typing import get_type_hints
+
+import pytest
+
 from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.agents.job_search.job_search_agent import JobSearchAgent
+from career_agent_ai.application.jobs.job_filter import JobFilter
+from career_agent_ai.application.jobs.job_query import JobQuery
+from career_agent_ai.application.runtime import RuntimeConfig
+from career_agent_ai.application.search.providers.arbeitnow_provider import (
+    ArbeitnowProvider,
+)
+import career_agent_ai.application.runtime as runtime
 
 
 def test_factory_creates_job_search_agent():
@@ -7,3 +19,38 @@ def test_factory_creates_job_search_agent():
 
     assert isinstance(agent, JobSearchAgent)
     assert agent.id == "job_search"
+
+
+def test_factory_runtime_config_annotations_resolve_at_runtime():
+    create_hints = get_type_hints(AgentFactory.create)
+    job_search_hints = get_type_hints(AgentFactory._create_job_search_agent)
+
+    assert create_hints["runtime_config"] == RuntimeConfig | None
+    assert job_search_hints["runtime_config"] is RuntimeConfig
+
+
+def test_runtime_lazy_exports_remain_discoverable():
+    exported_names = set(runtime.__all__)
+    discovered_names = {name for name, _ in inspect.getmembers(runtime)}
+
+    assert exported_names <= set(dir(runtime))
+    assert exported_names <= discovered_names
+
+
+def test_factory_job_search_obeys_disabled_runtime_network_policy(monkeypatch):
+    calls = []
+
+    def record_search(self, query):
+        calls.append(query)
+        return ()
+
+    monkeypatch.setattr(ArbeitnowProvider, "search", record_search)
+    agent = AgentFactory.create(
+        "job_search",
+        runtime_config=RuntimeConfig.from_env({}),
+    )
+
+    with pytest.raises(PermissionError, match="Network providers are disabled"):
+        agent.search(JobQuery(filters=JobFilter(keyword="python")))
+
+    assert calls == []

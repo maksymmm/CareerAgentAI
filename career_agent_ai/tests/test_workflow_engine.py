@@ -126,3 +126,25 @@ def test_invalid_next_step_without_workflow():
 
     with pytest.raises(RuntimeError):
         engine.next_step()
+
+def test_restore_preserves_paused_workflow_state():
+    source = WorkflowEngine()
+    source.start(make_workflow())
+    source.pause()
+    paused = source.workflow
+    assert paused is not None
+
+    restored_engine = WorkflowEngine()
+    restored = restored_engine.restore(paused)
+
+    assert restored.status == WorkflowState.PAUSED
+    assert restored.current_step == 0
+    assert restored_engine.workflow == paused
+
+
+def test_restore_rejects_invalid_cursor():
+    invalid = make_workflow()
+    object.__setattr__(invalid, "current_step", 3)
+
+    with pytest.raises(ValueError, match="current_step"):
+        WorkflowEngine().restore(invalid)
