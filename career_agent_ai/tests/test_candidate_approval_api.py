@@ -1474,6 +1474,59 @@ def test_candidate_sandbox_browser_invalidates_prompt_after_status_failure():
         server.server_close()
 
 
+def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrently():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    status_started = Event()
+    release_status = Event()
+
+    class DelayedStatusLoop(Loop):
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            status_started.set()
+            assert release_status.wait(timeout=5)
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 7,
+                "phase": "application_reconciliation", "waiting_for_human": True,
+                "terminal": False,
+            }
+
+        def list_run_statuses(self, **kwargs):
+            assert kwargs == {
+                "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
+            }
+            return {"schema_version": 1, "items": [], "next_after": None}
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(DelayedStatusLoop()), handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            assert status_started.wait(timeout=5)
+            page.locator("#list-runs").dispatch_event("click")
+            release_status.set()
+            page.locator("#run-overview").get_by_text(
+                "Your decision is needed — application reconciliation (version 7). Run: run-1"
+            ).wait_for()
+            assert not page.locator("#confirm-submitted").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_browser_submits_versioned_application_reconciliation():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     details = {
@@ -1860,6 +1913,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("statusInFlight = true", status_handler) < status_get
     assert html.index("byId('status').disabled = true", status_handler) < status_get
     assert html.index("aria-busy', 'true'", status_handler) < status_get
+    status_validation = html.index("const statusFields", status_get)
+    assert html.index("statusContextGeneration !== inputContextGeneration", status_get) < status_validation
+    assert html.index("runId !== byId('run-id').value", status_get) < status_validation
     assert html.index("statusInFlight = false", status_get) > status_get
     assert html.index("byId('status').disabled = false", status_get) > status_get
     assert html.index("aria-busy', 'false'", status_get) > status_get

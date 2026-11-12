@@ -1002,10 +1002,10 @@ _HTML = r"""<!doctype html>
       clearOverview();
       const runId = byId('run-id').value;
       const statusContextGeneration = inputContextGeneration;
-      const requestNumber = latestResultRequest + 1;
       try {
         const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
-        if (requestNumber !== latestResultRequest) return;
+        if (statusContextGeneration !== inputContextGeneration ||
+            runId !== byId('run-id').value) return;
         const statusFields = ['schema_version', 'run_id', 'state_version', 'phase',
           'waiting_for_human', 'terminal'];
         if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
