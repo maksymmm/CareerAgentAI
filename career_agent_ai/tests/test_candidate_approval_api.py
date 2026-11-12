@@ -1154,6 +1154,14 @@ def test_candidate_sandbox_browser_preserves_prompt_when_recovery_is_unavailable
     ).encode("utf-8")).hexdigest()
 
     class PendingDecisionLoop(Loop):
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 3,
+                "phase": "application_reconciliation", "waiting_for_human": True,
+                "terminal": False,
+            }
+
         def get_candidate_approval_prompt(self, run_id, *, user_id):
             assert (run_id, user_id) == ("run-1", "candidate-1")
             return SimpleNamespace(to_dict=lambda: {
@@ -1183,8 +1191,13 @@ def test_candidate_sandbox_browser_preserves_prompt_when_recovery_is_unavailable
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
             page.locator("#token").fill("valid")
             page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#reconciliation-state").get_by_text(
+                "Verify the provider outcome outside this sandbox", exact=False
+            ).wait_for()
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve application").wait_for()
+            page.locator("#provider-submission-id").fill("stale-after-recovery")
             page.locator("#continue").click()
             page.locator("#result").get_by_text(
                 "Recovery is unavailable while a decision is pending"
@@ -1195,6 +1208,12 @@ def test_candidate_sandbox_browser_preserves_prompt_when_recovery_is_unavailable
             ).text_content()
             assert not page.locator("#approve").is_disabled()
             assert not page.locator("#decline").is_disabled()
+            assert page.locator("#provider-submission-id").input_value() == ""
+            assert page.locator("#provider-submission-id").is_disabled()
+            assert page.locator("#confirm-submitted").is_disabled()
+            assert page.locator("#reconciliation-state").text_content() == (
+                "Recovery may change workflow state. Refresh run status before reconciliation."
+            )
             assert "private pending action" not in page.locator("body").text_content()
             browser.close()
     finally:
@@ -1871,6 +1890,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("if (statusInFlight)", recovery_handler) < recovery_post
     assert html.index("recoveryInFlight = true", recovery_handler) < recovery_post
     assert html.index("byId('approve').disabled = true", recovery_handler) < recovery_post
+    assert html.index("invalidateAllReconciliation(", recovery_handler) < recovery_post
     assert "Recovery finished. Load the current approval prompt." in html[recovery_post:prompt_handler]
     assert "'Recovery request failed.'" in html[recovery_post:prompt_handler]
     assert "Object.keys(payload).length !== 2" in html[recovery_post:prompt_handler]
@@ -1947,6 +1967,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("if (startInFlight)", decision_start) < decision_post
     assert html.index("if (statusInFlight)", decision_start) < decision_post
     assert html.index("if (recoveryInFlight)", decision_start) < decision_post
+    assert html.index("invalidateAllReconciliation(", decision_start) < decision_post
     assert "encodeURIComponent(payload.run_id) + '/approval'" in html[decision_start:]
     assert "runPath(" not in html[decision_start:]
     assert "'Decision request failed.'" in html[decision_post:]
