@@ -1438,6 +1438,70 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
     })]
 
 
+def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class ReconciliationLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.resolutions = []
+            self.status_version = 13
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {"schema_version": 1, "run_id": run_id,
+                    "state_version": self.status_version,
+                    "phase": "message_reconciliation", "waiting_for_human": True,
+                    "terminal": False}
+
+        def resolve_message_reconciliation(self, run_id, **kwargs):
+            self.resolutions.append((run_id, kwargs))
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="track"))
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = ReconciliationLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#message-reconciliation-state").get_by_text(
+                "Verify the provider outcome outside this sandbox", exact=False
+            ).wait_for()
+            assert not page.locator("#confirm-delivered").is_disabled()
+            loop.status_version = 18
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("version 18").wait_for()
+            page.locator("#run-id").fill("run-2")
+            assert page.locator("#confirm-delivered").is_disabled()
+            assert page.locator("#confirm-not-delivered").is_disabled()
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#confirm-delivered").click()
+            page.locator("#result").get_by_text('"phase": "track"').wait_for()
+            assert page.locator("#confirm-delivered").is_disabled()
+            assert page.locator("#confirm-not-delivered").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert loop.resolutions == [("run-1", {
+        "user_id": "candidate-1", "delivered": True,
+        "expected_state_version": 18,
+    })]
+
+
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))
     html = body.decode("utf-8")
@@ -1455,11 +1519,14 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "action_fingerprint: approvalPrompt.action_fingerprint" in html
     assert "state_version: approvalPrompt.state_version" in html
     assert 'id="reconciliation-panel"' in html
+    assert 'id="message-reconciliation-panel"' in html
     assert 'id="provider-submission-id"' in html
     assert "state_version: observedVersion" in html
     assert "if (submitted) request.provider_submission_id = providerSubmissionId" in html
     assert "guarded(() => reconcileApplication(false))" in html
     assert "snapshot.phase === 'application_reconciliation'" in html
+    assert "snapshot.phase === 'message_reconciliation'" in html
+    assert "guarded(() => reconcileMessage(false))" in html
     assert "error.code === 'approval_conflict'" in html
     assert "if (decisionInFlight)" in html
     prompt_handler = html.index("byId('prompt').addEventListener")

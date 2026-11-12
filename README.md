@@ -526,6 +526,10 @@ Message delivery reconciliation is also exposed as an authenticated POST-only ro
 It accepts only a strict `delivered` observation plus the displayed durable state version,
 derives ownership from the bearer identity, and delegates through request-local production
 storage so a restart never turns an ambiguous send into a blind retry.
+The candidate sandbox enables delivered/no-delivery controls only after a fresh owned status
+snapshot confirms message reconciliation. The controls are bound to that snapshot version,
+disabled on every submission or input-context change, and require another status refresh after
+a conflict or uncertain response.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery
