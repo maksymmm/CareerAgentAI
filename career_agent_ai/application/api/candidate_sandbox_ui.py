@@ -106,6 +106,15 @@ _HTML = r"""<!doctype html>
     </div>
     <p class="muted">Use only independently verified provider evidence. This action never performs a blind retry.</p>
   </fieldset>
+  <fieldset id="message-reconciliation-panel" tabindex="-1" aria-busy="false">
+    <legend>Message delivery reconciliation</legend>
+    <p id="message-reconciliation-state" role="status">Refresh a run in message reconciliation before recording the independently verified delivery outcome.</p>
+    <div class="actions">
+      <button id="confirm-delivered" type="button" disabled>Confirm message delivered</button>
+      <button id="confirm-not-delivered" type="button" disabled>Confirm no message delivery</button>
+    </div>
+    <p class="muted">Verify the provider outcome outside this sandbox. This action records evidence and never performs a blind retry.</p>
+  </fieldset>
   <section aria-labelledby="overview-title">
     <h2 id="overview-title" tabindex="-1">Run overview</h2>
     <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
@@ -170,6 +179,8 @@ _HTML = r"""<!doctype html>
     let reconciliationInFlight = false;
     let reconciliationAvailable = false;
     let reconciliationVersion = null;
+    let messageReconciliationAvailable = false;
+    let messageReconciliationVersion = null;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -801,6 +812,22 @@ _HTML = r"""<!doctype html>
       byId('confirm-submitted').disabled = false;
       byId('confirm-not-submitted').disabled = false;
     }
+    function invalidateMessageReconciliation(message =
+      'Refresh a run in message reconciliation before recording the independently verified delivery outcome.') {
+      messageReconciliationAvailable = false;
+      messageReconciliationVersion = null;
+      byId('message-reconciliation-state').textContent = message;
+      byId('confirm-delivered').disabled = true;
+      byId('confirm-not-delivered').disabled = true;
+    }
+    function enableMessageReconciliation(version) {
+      messageReconciliationAvailable = true;
+      messageReconciliationVersion = version;
+      byId('message-reconciliation-state').textContent =
+        'Verify the provider outcome outside this sandbox, then record exactly one result for the displayed version.';
+      byId('confirm-delivered').disabled = false;
+      byId('confirm-not-delivered').disabled = false;
+    }
     function selectRun(runId, minimumVersion = null) {
       clearOverview();
       selectedRunVersion = minimumVersion;
@@ -809,6 +836,7 @@ _HTML = r"""<!doctype html>
       byId('run-id').value = runId;
       invalidateApprovalPrompt();
       invalidateApplicationReconciliation();
+      invalidateMessageReconciliation();
     }
     async function call(path, options = {}, safeError = null) {
       clearOverview();
@@ -896,6 +924,7 @@ _HTML = r"""<!doctype html>
       latestStartRequest += 1;
       invalidateApprovalPrompt();
       invalidateApplicationReconciliation();
+      invalidateMessageReconciliation();
       byId('result').textContent = 'Inputs changed. Reload the current state.';
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
@@ -940,6 +969,11 @@ _HTML = r"""<!doctype html>
         } else {
           invalidateApplicationReconciliation();
         }
+        if (snapshot.phase === 'message_reconciliation' && snapshot.waiting_for_human) {
+          enableMessageReconciliation(snapshot.state_version);
+        } else {
+          invalidateMessageReconciliation();
+        }
         if (approvalPrompt && (snapshot.state_version !== approvalPrompt.state_version ||
             approvalPhases[approvalPrompt.action_kind] !== snapshot.phase ||
             !snapshot.waiting_for_human)) {
@@ -956,6 +990,7 @@ _HTML = r"""<!doctype html>
             runId === byId('run-id').value) {
           invalidateApprovalPrompt('Status could not be verified. Load the current approval prompt.');
           invalidateApplicationReconciliation('Status could not be verified. Refresh run status.');
+          invalidateMessageReconciliation('Status could not be verified. Refresh run status.');
         }
         throw error;
       } finally {
@@ -1173,6 +1208,47 @@ _HTML = r"""<!doctype html>
       guarded(() => reconcileApplication(true)));
     byId('confirm-not-submitted').addEventListener('click', () =>
       guarded(() => reconcileApplication(false)));
+    async function reconcileMessage(delivered) {
+      if (!messageReconciliationAvailable || selectedRunVersion === null ||
+          messageReconciliationVersion !== selectedRunVersion) {
+        throw new Error('Refresh the message reconciliation state first.');
+      }
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
+      const runId = byId('run-id').value;
+      const observedVersion = messageReconciliationVersion;
+      reconciliationInFlight = true;
+      byId('message-reconciliation-panel').setAttribute('aria-busy', 'true');
+      invalidateMessageReconciliation('Recording verified provider outcome…');
+      try {
+        const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
+          '/message-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({schema_version: 1, state_version: observedVersion, delivered})},
+          'Message reconciliation request failed.');
+        if (!result || typeof result !== 'object' || Array.isArray(result) ||
+            Object.keys(result).length !== 2 || result.run_id !== runId ||
+            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+          throw new Error('Invalid message reconciliation response.');
+        }
+        show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
+        invalidateApprovalPrompt('Reconciliation finished. Load the current approval prompt.');
+        invalidateMessageReconciliation('Reconciliation finished. Refresh run status.');
+      } catch (error) {
+        invalidateMessageReconciliation(error.code === 'approval_conflict'
+          ? 'Run state changed. Refresh run status before reconciling.'
+          : 'Reconciliation result is uncertain. Refresh run status before retrying.');
+        throw error;
+      } finally {
+        reconciliationInFlight = false;
+        byId('message-reconciliation-panel').setAttribute('aria-busy', 'false');
+      }
+    }
+    byId('confirm-delivered').addEventListener('click', () =>
+      guarded(() => reconcileMessage(true)));
+    byId('confirm-not-delivered').addEventListener('click', () =>
+      guarded(() => reconcileMessage(false)));
   </script>
 </body>
 </html>
