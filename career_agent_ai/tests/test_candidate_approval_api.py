@@ -1527,6 +1527,57 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
         server.server_close()
 
 
+def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrently():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    start_entered = Event()
+    release_start = Event()
+
+    class DelayedStartLoop(Loop):
+        def start(self, request, *, run_id=None):
+            self.started = (request, run_id)
+            start_entered.set()
+            assert release_start.wait(timeout=5)
+            return SimpleNamespace(
+                run_id=run_id, phase=SimpleNamespace(value="application_approval")
+            )
+
+        def list_run_statuses(self, **kwargs):
+            assert kwargs == {
+                "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
+            }
+            return {"schema_version": 1, "items": [], "next_after": None}
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = DelayedStartLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#start-run-id").fill("concurrent-start")
+            page.locator("#keyword").fill("platform engineer")
+            page.locator("#profile").fill("Senior Python engineer")
+            page.locator("#start").click()
+            assert start_entered.wait(timeout=5)
+            page.locator("#list-runs").dispatch_event("click")
+            release_start.set()
+            page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
+            assert loop.started is not None
+            assert page.locator("#run-id").input_value() == loop.started[1]
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_candidate_sandbox_browser_submits_versioned_application_reconciliation():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     details = {
@@ -1844,13 +1895,13 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert html.index("byId('start').disabled = true", start_handler) < start_post
     assert html.index("aria-busy', 'true'", start_handler) < start_post
     assert html.index("const requestNumber = ++latestStartRequest", start_handler) < start_post
-    assert html.index("const resultRequest = latestResultRequest + 1", start_handler) < start_post
+    assert html.index("const startContextGeneration = inputContextGeneration", start_handler) < start_post
     assert html.index("const requestedRunId = byId('start-run-id').value", start_handler) < start_post
     assert "/^scoped-v2:[0-9a-f]{128}$/.test(payload.run_id)" in html[start_post:start_assignment]
     assert "!runPhases.includes(payload.phase)" in html[start_post:start_assignment]
     assert "Object.keys(payload).length !== 2" in html[start_post:start_assignment]
     assert "requestNumber === latestStartRequest" in html[start_post:start_assignment]
-    assert "resultRequest === latestResultRequest" in html[start_post:start_assignment]
+    assert "startContextGeneration === inputContextGeneration" in html[start_post:start_assignment]
     assert "'Run start request failed.'" in html[start_post:start_assignment]
     assert "show({status: 201, payload: {run_id: payload.run_id, phase: payload.phase}})" in html[
         start_post:start_assignment
