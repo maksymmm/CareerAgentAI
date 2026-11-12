@@ -862,6 +862,20 @@ _HTML = r"""<!doctype html>
       byId('confirm-calendar-completed').disabled = false;
       byId('confirm-calendar-not-completed').disabled = false;
     }
+    function invalidateReconciliationForVersion(version) {
+      if (reconciliationAvailable && reconciliationVersion !== version) {
+        invalidateApplicationReconciliation(
+          'Run version changed. Refresh the application reconciliation state.');
+      }
+      if (messageReconciliationAvailable && messageReconciliationVersion !== version) {
+        invalidateMessageReconciliation(
+          'Run version changed. Refresh the message reconciliation state.');
+      }
+      if (interviewReconciliationAvailable && interviewReconciliationVersion !== version) {
+        invalidateInterviewReconciliation(
+          'Run version changed. Refresh the interview reconciliation state.');
+      }
+    }
     function selectRun(runId, minimumVersion = null) {
       clearOverview();
       selectedRunVersion = minimumVersion;
@@ -1130,6 +1144,7 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid approval prompt. Load it again.');
         }
         selectedRunVersion = loadedPrompt.state_version;
+        invalidateReconciliationForVersion(selectedRunVersion);
         approvalPrompt = loadedPrompt;
         byId('action-title').textContent = loadedPrompt.title;
         byId('action-details').textContent = JSON.stringify(loadedPrompt.details, null, 2);
