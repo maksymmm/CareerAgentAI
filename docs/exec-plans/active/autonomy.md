@@ -1,5 +1,11 @@
 # Autonomous Implementation Plan
 
+Message reconciliation HTTP workflow: an authenticated owner-scoped POST route accepts only
+a strict delivered/no-effect observation bound to the displayed durable state version. The
+production request adapter opens and closes SQLite per request, while runtime and OpenAPI
+regressions prevent a test-only endpoint or contract drift. Next: exact-head CI/review, then
+candidate UI controls and interview reconciliation parity.
+
 Candidate application reconciliation UI: the sandbox enables explicit submitted/no-effect
 controls only from a fresh owner-scoped reconciliation status snapshot and binds the POST
 to that snapshot's durable version. Provider evidence is cleared when that observed version
