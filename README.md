@@ -534,6 +534,9 @@ Interview reconciliation is exposed through the same authenticated, owner-scoped
 Completed calendar actions require independently verified provider event evidence; confirmed
 non-completion forbids that evidence. Both outcomes are bound to the displayed durable version,
 and production composition closes its request-local SQLite connection after every attempt.
+The candidate sandbox enables those calendar controls only after a fresh owned reconciliation
+snapshot. Provider event evidence is cleared whenever the observed version or run/token/session
+context changes, and every outcome disables the controls until status is refreshed.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery
