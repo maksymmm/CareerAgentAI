@@ -876,6 +876,11 @@ _HTML = r"""<!doctype html>
           'Run version changed. Refresh the interview reconciliation state.');
       }
     }
+    function invalidateAllReconciliation(message) {
+      invalidateApplicationReconciliation(message);
+      invalidateMessageReconciliation(message);
+      invalidateInterviewReconciliation(message);
+    }
     function selectRun(runId, minimumVersion = null) {
       clearOverview();
       selectedRunVersion = minimumVersion;
@@ -1068,6 +1073,8 @@ _HTML = r"""<!doctype html>
       byId('prompt').disabled = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
+      invalidateAllReconciliation(
+        'Recovery may change workflow state. Refresh run status before reconciliation.');
       try {
         const runId = byId('run-id').value;
         const requestNumber = latestResultRequest + 1;
@@ -1185,6 +1192,8 @@ _HTML = r"""<!doctype html>
         action_fingerprint: approvalPrompt.action_fingerprint, decision};
       const requestNumber = latestResultRequest + 1;
       let completionMessage = 'Decision result is uncertain. Load the current approval prompt.';
+      invalidateAllReconciliation(
+        'Decision may change workflow state. Refresh run status before reconciliation.');
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)}, 'Decision request failed.');
