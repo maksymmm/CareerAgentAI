@@ -457,7 +457,7 @@ class CandidateApprovalWSGIApp:
                 start_response,
                 "405 Method Not Allowed",
                 {"error": "method_not_allowed"},
-                [("Allow", "GET, POST")],
+                [("Allow", "GET" if parts[4] == "status" else "GET, POST")],
             )
         except (KeyError, PermissionError):
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
