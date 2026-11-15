@@ -1500,8 +1500,17 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
         def log_message(self, format, *args):
             pass
 
+    # The default WSGI server is single-threaded: a deliberately blocked
+    # status request would also block the concurrent list request.
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIServer
+
+    class ConcurrentTestServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
     server = make_server(
-        "127.0.0.1", 0, app(DelayedStatusLoop()), handler_class=QuietHandler
+        "127.0.0.1", 0, app(DelayedStatusLoop()),
+        server_class=ConcurrentTestServer, handler_class=QuietHandler,
     )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1522,6 +1531,7 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             assert not page.locator("#confirm-submitted").is_disabled()
             browser.close()
     finally:
+        release_status.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
