@@ -1562,7 +1562,16 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             pass
 
     loop = DelayedStartLoop()
-    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIServer
+
+    class ConcurrentTestServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    server = make_server(
+        "127.0.0.1", 0, app(loop),
+        server_class=ConcurrentTestServer, handler_class=QuietHandler,
+    )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -1583,6 +1592,7 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             assert page.locator("#run-id").input_value() == loop.started[1]
             browser.close()
     finally:
+        release_start.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
