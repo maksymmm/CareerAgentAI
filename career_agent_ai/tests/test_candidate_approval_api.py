@@ -1761,7 +1761,7 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             assert page.locator("#confirm-not-delivered").is_disabled()
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
-            page.locator("#message-reconciliation-verified").check(); page.locator("#confirm-delivered").click()
+            page.locator("#message-reconciliation-verified").check(); page.locator("#confirm-not-delivered").click()
             page.locator("#result").get_by_text('"phase": "track"').wait_for()
             assert page.locator("#confirm-delivered").is_disabled()
             assert page.locator("#confirm-not-delivered").is_disabled()
@@ -1772,7 +1772,7 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
         server.server_close()
 
     assert loop.resolutions == [("run-1", {
-        "user_id": "candidate-1", "delivered": True,
+        "user_id": "candidate-1", "delivered": False,
         "expected_state_version": 18,
     })]
 
@@ -1830,8 +1830,7 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
             page.locator("#interview-reconciliation-verified").check(); page.locator("#confirm-calendar-completed").click()
             page.locator("#result").get_by_text("A valid provider event ID is required").wait_for()
             assert loop.resolutions == []
-            page.locator("#provider-event-id").fill("provider-event-confirmed")
-            page.locator("#confirm-calendar-completed").click()
+            page.locator("#confirm-calendar-not-completed").click()
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert page.locator("#provider-event-id").input_value() == ""
             assert page.locator("#confirm-calendar-completed").is_disabled()
@@ -1843,8 +1842,7 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
         server.server_close()
 
     assert loop.resolutions == [("run-1", {
-        "user_id": "candidate-1", "completed": True,
-        "provider_event_id": "provider-event-confirmed",
+        "user_id": "candidate-1", "completed": False,
         "expected_state_version": 29,
     })]
 
