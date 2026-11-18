@@ -518,7 +518,8 @@ never repeat an ambiguous provider call. Each decision is bound to the displayed
 state version, so replaying an old observation cannot resolve a newer ambiguity.
 The candidate sandbox exposes that route only after a fresh owned status snapshot confirms
 the application-reconciliation phase. It requires the provider identifier for confirmed
-success, disables the controls after every attempt, and requires a status refresh before
+success and an explicit attestation that the displayed-version outcome was independently
+verified, disables the controls after every attempt, and requires a status refresh before
 retrying an uncertain or conflicting result. Provider evidence is cleared when the observed
 reconciliation version advances, preventing evidence from one ambiguity being reused for a
 later retry.
@@ -528,7 +529,8 @@ derives ownership from the bearer identity, and delegates through request-local 
 storage so a restart never turns an ambiguous send into a blind retry.
 The candidate sandbox enables delivered/no-delivery controls only after a fresh owned status
 snapshot confirms message reconciliation. The controls are bound to that snapshot version,
-disabled on every submission or input-context change, and require another status refresh after
+require an explicit independent-verification attestation, are disabled on every submission or
+input-context change, and require another status refresh after
 a conflict or uncertain response.
 Interview reconciliation is exposed through the same authenticated, owner-scoped boundary.
 Completed calendar actions require independently verified provider event evidence; confirmed
@@ -536,7 +538,8 @@ non-completion forbids that evidence. Both outcomes are bound to the displayed d
 and production composition closes its request-local SQLite connection after every attempt.
 The candidate sandbox enables those calendar controls only after a fresh owned reconciliation
 snapshot. Provider event evidence is cleared whenever the observed version or run/token/session
-context changes, and every outcome disables the controls until status is refreshed.
+context changes, an explicit independent-verification attestation is required, and every outcome
+disables the controls until status is refreshed.
 All three reconciliation responses must also move strictly beyond their respective
 reconciliation gate. A syntactically valid response that rolls application, message or
 interview reconciliation back to an earlier phase, returns to the provider-action phase,
