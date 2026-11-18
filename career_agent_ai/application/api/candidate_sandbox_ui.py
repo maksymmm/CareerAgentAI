@@ -291,6 +291,8 @@ _HTML = r"""<!doctype html>
       }
       return Object.fromEntries(eventFields.map(key => [key, item[key]]));
     }
+    let eventVersionFloorId = null;
+    let eventVersionFloor = null;
     function clearEventDetail() {
       if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
       eventDetailTrigger = null;
@@ -302,12 +304,15 @@ _HTML = r"""<!doctype html>
     function clearEvents() {
       clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
       selectedEventId = null; selectedEventVersion = null;
+      eventVersionFloorId = null; eventVersionFloor = null;
       byId('list-events').disabled = false;
       byId('owned-events').setAttribute('aria-busy', 'false');
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
       byId('next-events').disabled = true;
     }
     async function loadEventDetail(identifier, minimumVersion, trigger) {
+      const versionFloor = eventVersionFloorId === identifier && eventVersionFloor !== null
+        ? Math.max(minimumVersion, eventVersionFloor) : minimumVersion;
       clearEventDetail();
       const generation = eventDetailGeneration;
       eventDetailTrigger = trigger;
@@ -320,11 +325,11 @@ _HTML = r"""<!doctype html>
         if (generation !== eventDetailGeneration) return;
         if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
         const snapshot = eventSnapshot(detail.event);
-        const versionFloor = selectedEventId === identifier && selectedEventVersion !== null
-          ? Math.max(minimumVersion, selectedEventVersion) : minimumVersion;
         if (snapshot.state_version < versionFloor) throw new Error('Stale event detail.');
         selectedEventId = identifier;
         selectedEventVersion = snapshot.state_version;
+        eventVersionFloorId = identifier;
+        eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
       } catch (error) {
