@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate no-effect reconciliation acceptance: browser regressions now exercise the explicit
+no-delivery and no-calendar-effect controls after version-bound verification attestation. The
+production HTTP boundary receives `delivered=false` and `completed=false` without invented
+provider evidence, then disables both outcome controls until a fresh status read. The test uses
+only the injected sandbox loop and performs no real message or calendar action.
+Next: exact-head CI/review, then add application no-effect retry acceptance through SQLite.
+
 Candidate reconciliation verification attestation: after a fresh application, message or
 interview reconciliation snapshot, both outcome buttons remain disabled until the candidate
 explicitly attests that the provider result was independently verified for the displayed run
