@@ -1675,6 +1675,23 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#confirm-submitted").click()
             page.locator("#result").get_by_text("A valid provider submission ID is required").wait_for()
             assert loop.resolutions == []
+            page.locator("#provider-submission-id").fill("rollback-response-evidence")
+            page.route(
+                "**/v1/candidate/runs/*/application-reconciliation",
+                lambda route: route.fulfill(status=200, json={
+                    "run_id": "run-1", "phase": "application_approval",
+                }),
+            )
+            page.locator("#confirm-submitted").click()
+            page.locator("#result").get_by_text(
+                "Invalid application reconciliation response.", exact=False
+            ).wait_for()
+            assert loop.resolutions == []
+            assert page.locator("#confirm-submitted").is_disabled()
+            assert page.locator("#confirm-not-submitted").is_disabled()
+            page.unroute("**/v1/candidate/runs/*/application-reconciliation")
+            page.locator("#status").click()
+            page.locator("#confirm-submitted:not([disabled])").wait_for()
             page.locator("#provider-submission-id").fill("provider-confirmed-7")
             page.locator("#confirm-submitted").click()
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
@@ -1870,12 +1887,26 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert 'id="interview-reconciliation-panel"' in html
     assert 'id="provider-submission-id"' in html
     assert "state_version: observedVersion" in html
+    assert "const reconciliationResultPhases = {" in html
+    assert "application: new Set(['application_submit', 'application_reconciliation'" in html
+    assert "message: new Set(['message_send', 'message_reconciliation', 'track'" in html
+    assert "interview: new Set(['interview_accept', 'interview_reconciliation', 'complete', 'failed'])" in html
+    assert "const validReconciliationResult = (result, runId, allowedPhases)" in html
+    assert "allowedPhases.has(result.phase)" in html
     application_reconciliation = html[
         html.index("async function reconcileApplication"):
         html.index("async function reconcileMessage")
     ]
     assert "reconciliationVersion !== selectedRunVersion" in application_reconciliation
     assert "const observedVersion = reconciliationVersion" in application_reconciliation
+    assert "reconciliationResultPhases.application" in application_reconciliation
+    message_reconciliation = html[
+        html.index("async function reconcileMessage"):
+        html.index("async function reconcileInterview")
+    ]
+    assert "reconciliationResultPhases.message" in message_reconciliation
+    interview_reconciliation = html[html.index("async function reconcileInterview"):]
+    assert "reconciliationResultPhases.interview" in interview_reconciliation
     version_invalidation = html[
         html.index("function invalidateReconciliationForVersion"):
         html.index("function selectRun")
