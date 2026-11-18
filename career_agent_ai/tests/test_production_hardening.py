@@ -1414,11 +1414,13 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert page.locator("#run-id").input_value() == durable_run_id
             page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()
+            run_overview = page.locator("#run-overview").text_content()
             page.locator("#list-applications").click()
             page.locator("#applications-state").get_by_text(
                 "1 application on this page. End of list. Read-only snapshots.",
                 exact=True,
             ).wait_for()
+            assert page.locator("#run-overview").text_content() == run_overview
             assert page.locator("#owned-applications li").count() == 1
             assert "applied" in page.locator("#owned-applications").text_content()
             assert "version 2" in page.locator("#owned-applications").text_content()
@@ -1430,6 +1432,7 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             )
             page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
+            assert page.locator("#run-overview").text_content() == run_overview
             detail = json.loads(page.locator("#application-detail").text_content())
             assert application_button.get_attribute("aria-label") == (
                 f"View application 1: {detail['application_id']}"
