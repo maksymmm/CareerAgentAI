@@ -833,8 +833,7 @@ _HTML = r"""<!doctype html>
       byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
     }
     function setReconciliationAttestation(id, enabled) {
-      const checkbox = byId(id); checkbox.checked = false; checkbox.disabled = !enabled;
-    }
+      const checkbox = byId(id); checkbox.checked = false; checkbox.disabled = !enabled; }
     function invalidateApplicationReconciliation(message =
       'Refresh a run in application reconciliation before recording independently verified provider evidence.') {
       reconciliationAvailable = false;
@@ -843,8 +842,7 @@ _HTML = r"""<!doctype html>
       byId('provider-submission-id').value = '';
       byId('provider-submission-id').disabled = true;
       setReconciliationAttestation('application-reconciliation-verified', false);
-      byId('confirm-submitted').disabled = true;
-      byId('confirm-not-submitted').disabled = true;
+      byId('confirm-submitted').disabled = true; byId('confirm-not-submitted').disabled = true;
     }
     function enableApplicationReconciliation(version) {
       if (reconciliationVersion !== version) byId('provider-submission-id').value = '';
@@ -863,8 +861,7 @@ _HTML = r"""<!doctype html>
       messageReconciliationVersion = null;
       byId('message-reconciliation-state').textContent = message;
       setReconciliationAttestation('message-reconciliation-verified', false);
-      byId('confirm-delivered').disabled = true;
-      byId('confirm-not-delivered').disabled = true;
+      byId('confirm-delivered').disabled = true; byId('confirm-not-delivered').disabled = true;
     }
     function enableMessageReconciliation(version) {
       messageReconciliationAvailable = true;
@@ -883,8 +880,7 @@ _HTML = r"""<!doctype html>
       byId('provider-event-id').value = '';
       byId('provider-event-id').disabled = true;
       setReconciliationAttestation('interview-reconciliation-verified', false);
-      byId('confirm-calendar-completed').disabled = true;
-      byId('confirm-calendar-not-completed').disabled = true;
+      byId('confirm-calendar-completed').disabled = true; byId('confirm-calendar-not-completed').disabled = true;
     }
     function enableInterviewReconciliation(version) {
       if (interviewReconciliationVersion !== version) byId('provider-event-id').value = '';
@@ -898,17 +894,12 @@ _HTML = r"""<!doctype html>
       byId('confirm-calendar-not-completed').disabled = true;
     }
     function bindReconciliationAttestation(id, available, buttons) {
-      byId(id).addEventListener('change', event => {
-        const enabled = available() && event.currentTarget.checked;
-        for (const button of buttons) byId(button).disabled = !enabled;
-      });
+      byId(id).addEventListener('change', event => { const enabled = available() && event.currentTarget.checked;
+        for (const button of buttons) byId(button).disabled = !enabled; });
     }
-    bindReconciliationAttestation('application-reconciliation-verified', () => reconciliationAvailable,
-      ['confirm-submitted', 'confirm-not-submitted']);
-    bindReconciliationAttestation('message-reconciliation-verified', () => messageReconciliationAvailable,
-      ['confirm-delivered', 'confirm-not-delivered']);
-    bindReconciliationAttestation('interview-reconciliation-verified', () => interviewReconciliationAvailable,
-      ['confirm-calendar-completed', 'confirm-calendar-not-completed']);
+    bindReconciliationAttestation('application-reconciliation-verified', () => reconciliationAvailable, ['confirm-submitted', 'confirm-not-submitted']);
+    bindReconciliationAttestation('message-reconciliation-verified', () => messageReconciliationAvailable, ['confirm-delivered', 'confirm-not-delivered']);
+    bindReconciliationAttestation('interview-reconciliation-verified', () => interviewReconciliationAvailable, ['confirm-calendar-completed', 'confirm-calendar-not-completed']);
     function invalidateReconciliationForVersion(version) {
       if (reconciliationAvailable && reconciliationVersion !== version) {
         invalidateApplicationReconciliation(
