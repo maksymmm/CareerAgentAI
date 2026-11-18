@@ -1415,6 +1415,16 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.locator("#run-id").input_value() == durable_run_id
             page.locator("#run-overview").get_by_text("Finished", exact=False).wait_for()
             run_overview = page.locator("#run-overview").text_content()
+            page.route(
+                "**/v1/candidate/applications?*",
+                lambda route: route.fulfill(status=503, json={"error": "unavailable"}),
+            )
+            page.locator("#list-applications").click()
+            page.locator("#result").get_by_text(
+                "Applications request failed.", exact=False
+            ).wait_for()
+            assert page.locator("#run-overview").text_content() == run_overview
+            page.unroute("**/v1/candidate/applications?*")
             page.locator("#list-applications").click()
             page.locator("#applications-state").get_by_text(
                 "1 application on this page. End of list. Read-only snapshots.",

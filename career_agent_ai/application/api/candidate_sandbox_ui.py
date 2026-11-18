@@ -372,7 +372,8 @@ _HTML = r"""<!doctype html>
           button.type = 'button'; button.textContent = 'View event';
           button.setAttribute('aria-label', 'View event ' + (index + 1) + ': ' + item.event_id);
           button.addEventListener('click', () => {
-            if (generation === eventsGeneration) guarded(() => loadEventDetail(item.event_id, item.state_version, button));
+            if (generation === eventsGeneration) guarded(
+              () => loadEventDetail(item.event_id, item.state_version, button), true);
           });
           row.append(button); byId('owned-events').append(row);
         }
@@ -392,14 +393,17 @@ _HTML = r"""<!doctype html>
         }
       }
     }
-    byId('list-events').addEventListener('click', () => guarded(() => loadEvents()));
+    byId('list-events').addEventListener('click', () => guarded(() => loadEvents(), true));
     byId('event-status').addEventListener('change', clearEvents);
     byId('next-events').addEventListener('click', () => guarded(() => {
       if (nextEventCursor !== null) return loadEvents(nextEventCursor);
-    }));
+    }, true));
     byId('token').addEventListener('input', clearEvents);
     const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
-    const show = (value) => { clearOverview(); byId('result').textContent = JSON.stringify(value, null, 2); };
+    const show = (value, preserveOverview = false) => {
+      if (!preserveOverview) clearOverview();
+      byId('result').textContent = JSON.stringify(value, null, 2);
+    };
     const runPath = (suffix) => '/v1/candidate/runs/' + encodeURIComponent(byId('run-id').value) + suffix;
     let applicationsGeneration = 0;
     let nextApplicationCursor = null;
@@ -526,7 +530,8 @@ _HTML = r"""<!doctype html>
         }
       }
     }
-    byId('load-application-history').addEventListener('click', () => guarded(loadApplicationHistory));
+    byId('load-application-history').addEventListener(
+      'click', () => guarded(loadApplicationHistory, true));
     function clearApplications() {
       clearApplicationDetail();
       applicationVersionFloorId = null;
@@ -602,7 +607,7 @@ _HTML = r"""<!doctype html>
           button.setAttribute('aria-label', 'View application ' + (index + 1) + ': ' + item.application_id);
           button.addEventListener('click', () => {
             if (generation === applicationsGeneration) guarded(() =>
-              loadApplicationDetail(item.application_id, item.state_version, button));
+              loadApplicationDetail(item.application_id, item.state_version, button), true);
           });
           row.append(button);
           byId('owned-applications').append(row);
@@ -627,10 +632,11 @@ _HTML = r"""<!doctype html>
         }
       }
     }
-    byId('list-applications').addEventListener('click', () => guarded(() => loadApplications()));
+    byId('list-applications').addEventListener(
+      'click', () => guarded(() => loadApplications(), true));
     byId('next-applications').addEventListener('click', () => guarded(() => {
       if (nextApplicationCursor !== null) return loadApplications(nextApplicationCursor);
-    }));
+    }, true));
     byId('application-status').addEventListener('change', clearApplications);
     byId('token').addEventListener('input', clearApplications);
     function clearRunList() {
@@ -806,10 +812,10 @@ _HTML = r"""<!doctype html>
         }
       }
     }
-    byId('list-runs').addEventListener('click', () => guarded(() => loadRunList()));
+    byId('list-runs').addEventListener('click', () => guarded(() => loadRunList(), true));
     byId('next-runs').addEventListener('click', () => guarded(() => {
       if (nextRunCursor !== null) return loadRunList(nextRunCursor);
-    }));
+    }, true));
     byId('run-phase').addEventListener('change', clearRunList);
     byId('token').addEventListener('input', clearRunList);
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
@@ -943,10 +949,10 @@ _HTML = r"""<!doctype html>
         throw error;
       }
     }
-    async function guarded(operation) {
+    async function guarded(operation, preserveOverview = false) {
       try { await operation(); } catch (error) {
         if (error.resultRequest === undefined || error.resultRequest === latestResultRequest) {
-          show({error: String(error.message || error)});
+          show({error: String(error.message || error)}, preserveOverview);
         }
       }
     }

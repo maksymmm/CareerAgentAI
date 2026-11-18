@@ -1845,6 +1845,12 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         in html
     )
     assert "if (!preserveOverview) clearOverview();" in html
+    assert "async function guarded(operation, preserveOverview = false)" in html
+    assert "show({error: String(error.message || error)}, preserveOverview)" in html
+    assert "guarded(() => loadEvents(), true)" in html
+    assert "guarded(loadApplicationHistory, true)" in html
+    assert "guarded(() => loadApplications(), true)" in html
+    assert "guarded(() => loadRunList(), true)" in html
     for safe_error in (
         "Event detail request failed.",
         "Schedule events request failed.",
@@ -1983,6 +1989,7 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     status_handler = html.index("byId('status').addEventListener")
     status_get = html.index("await call(runPath('/status'), {}, 'Status request failed.')", status_handler)
     assert "await call(runPath('/status'), {}, 'Status request failed.', true)" not in html
+    assert "byId('status').addEventListener('click', () => guarded(async () =>" in html
     assert html.index("if (statusInFlight)", status_handler) < status_get
     assert html.index("if (startInFlight)", status_handler) < status_get
     assert html.index("promptInFlight || recoveryInFlight || decisionInFlight", status_handler) < status_get
