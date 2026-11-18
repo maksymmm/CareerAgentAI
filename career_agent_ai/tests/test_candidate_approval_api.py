@@ -2152,7 +2152,11 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "items.length !== 25" not in event_loader
     assert "page.next_after !== items.at(-1).event_id" in event_loader
     event_detail_loader = html[html.index("async function loadEventDetail"):html.index("async function loadEvents")]
-    assert "Math.max(minimumVersion, selectedEventVersion)" in event_detail_loader
+    assert event_detail_loader.index("const versionFloor") < event_detail_loader.index("clearEventDetail()")
+    assert "eventVersionFloorId === identifier" in event_detail_loader
+    assert "Math.max(minimumVersion, eventVersionFloor)" in event_detail_loader
+    assert "eventVersionFloor = snapshot.state_version" in event_detail_loader
+    assert "eventVersionFloor = null" in html[html.index("function clearEvents"):html.index("async function loadEventDetail")]
     assert "snapshot.state_version < versionFloor" in event_detail_loader
     assert event_detail_loader.index("selectedEventVersion = snapshot.state_version") > event_detail_loader.index(
         "throw new Error('Stale event detail.')"
