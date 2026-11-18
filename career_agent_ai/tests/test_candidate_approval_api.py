@@ -2120,6 +2120,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     detail_loader = html[html.index("async function loadApplicationDetail"):html.index("async function loadApplicationHistory")]
     assert "Math.max(minimumVersion, selectedApplicationVersion)" in detail_loader
     assert detail_loader.index("const versionFloor") < detail_loader.index("clearApplicationDetail()")
+    assert "applicationVersionFloorId === applicationId" in detail_loader
+    assert "Math.max(minimumVersion, applicationVersionFloor)" in detail_loader
     assert "item.state_version < versionFloor" in detail_loader
     assert "loadApplicationDetail(item.application_id, item.state_version, button)" in application_loader
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
