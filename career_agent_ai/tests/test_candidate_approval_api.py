@@ -1510,11 +1510,16 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.route("**/v1/candidate/run-statuses?*", lambda route: route.fulfill(
+                status=200, json={
+                    "schema_version": 1, "items": [], "next_after": None,
+                }))
             page.locator("#token").fill("valid")
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
             assert status_started.wait(timeout=5)
-            page.locator("#list-runs").dispatch_event("click")
+            with page.expect_request("**/v1/candidate/run-statuses?*"):
+                page.locator("#list-runs").dispatch_event("click")
             release_status.set()
             page.locator("#run-overview").get_by_text(
                 "Your decision is needed — application reconciliation (version 7). Run: run-1"
@@ -1560,13 +1565,18 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.route("**/v1/candidate/run-statuses?*", lambda route: route.fulfill(
+                status=200, json={
+                    "schema_version": 1, "items": [], "next_after": None,
+                }))
             page.locator("#token").fill("valid")
             page.locator("#start-run-id").fill("concurrent-start")
             page.locator("#keyword").fill("platform engineer")
             page.locator("#profile").fill("Senior Python engineer")
             page.locator("#start").click()
             assert start_entered.wait(timeout=5)
-            page.locator("#list-runs").dispatch_event("click")
+            with page.expect_request("**/v1/candidate/run-statuses?*"):
+                page.locator("#list-runs").dispatch_event("click")
             release_start.set()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             assert loop.started is not None
