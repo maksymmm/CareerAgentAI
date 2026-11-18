@@ -1675,11 +1675,11 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#confirm-submitted").click()
             page.locator("#result").get_by_text("A valid provider submission ID is required").wait_for()
             assert loop.resolutions == []
-            page.locator("#provider-submission-id").fill("rollback-response-evidence")
+            page.locator("#provider-submission-id").fill("non-progress-response-evidence")
             page.route(
                 "**/v1/candidate/runs/*/application-reconciliation",
                 lambda route: route.fulfill(status=200, json={
-                    "run_id": "run-1", "phase": "application_approval",
+                    "run_id": "run-1", "phase": "application_reconciliation",
                 }),
             )
             page.locator("#confirm-submitted").click()
@@ -1888,9 +1888,27 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert 'id="provider-submission-id"' in html
     assert "state_version: observedVersion" in html
     assert "const reconciliationResultPhases = {" in html
-    assert "application: new Set(['application_submit', 'application_reconciliation'" in html
-    assert "message: new Set(['message_send', 'message_reconciliation', 'track'" in html
-    assert "interview: new Set(['interview_accept', 'interview_reconciliation', 'complete', 'failed'])" in html
+    assert "application: new Set(['message_prepare', 'message_approval'" in html
+    assert "message: new Set(['track'," in html
+    assert "interview: new Set(['complete', 'failed'])" in html
+    result_phases = html[
+        html.index("const reconciliationResultPhases = {"):
+        html.index("const validReconciliationResult =")
+    ]
+    application_phases = result_phases[
+        result_phases.index("application:"):result_phases.index("message:")
+    ]
+    message_phases = result_phases[
+        result_phases.index("message:"):result_phases.index("interview:")
+    ]
+    interview_phases = result_phases[result_phases.index("interview:"):]
+    for phase_set, non_progress_phases in (
+        (application_phases, ("application_submit", "application_reconciliation")),
+        (message_phases, ("message_send", "message_reconciliation")),
+        (interview_phases, ("interview_accept", "interview_reconciliation")),
+    ):
+        for non_progress_phase in non_progress_phases:
+            assert f"'{non_progress_phase}'" not in phase_set
     assert "const validReconciliationResult = (result, runId, allowedPhases)" in html
     assert "allowedPhases.has(result.phase)" in html
     application_reconciliation = html[

@@ -1252,14 +1252,13 @@ _HTML = r"""<!doctype html>
       return true;
     };
     const reconciliationResultPhases = {
-      application: new Set(['application_submit', 'application_reconciliation',
-        'message_prepare', 'message_approval', 'message_send', 'message_reconciliation',
-        'track', 'interview_coordination', 'interview_approval', 'interview_accept',
+      application: new Set(['message_prepare', 'message_approval', 'message_send',
+        'message_reconciliation', 'track', 'interview_coordination', 'interview_approval', 'interview_accept',
         'interview_reconciliation', 'complete', 'failed']),
-      message: new Set(['message_send', 'message_reconciliation', 'track',
+      message: new Set(['track',
         'interview_coordination', 'interview_approval', 'interview_accept',
         'interview_reconciliation', 'complete', 'failed']),
-      interview: new Set(['interview_accept', 'interview_reconciliation', 'complete', 'failed']),
+      interview: new Set(['complete', 'failed']),
     };
     const validReconciliationResult = (result, runId, allowedPhases) =>
       result && typeof result === 'object' && !Array.isArray(result) &&

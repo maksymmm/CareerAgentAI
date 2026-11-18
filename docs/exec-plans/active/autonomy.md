@@ -1,5 +1,14 @@
 # Autonomous Implementation Plan
 
+Candidate reconciliation strict progress: application, message and interview
+reconciliation responses are accepted only after they move beyond the corresponding
+reconciliation gate. A response that remains ambiguous at the same gate or returns to
+the provider-action phase can no longer be displayed as completed reconciliation; the UI
+fails closed and requires a fresh status read. Gate-scoped static contract assertions
+cover both non-progress phases for every action without excluding legitimate later phases,
+and Chromium intercepts a same-gate application response.
+Next: exact-head CI/review, then continue reconciliation recovery hardening.
+
 Candidate reconciliation response monotonicity: application, message and interview
 reconciliation responses are accepted only within the forward state-machine suffix for
 that action. A syntactically valid rollback phase can no longer be presented as a completed
