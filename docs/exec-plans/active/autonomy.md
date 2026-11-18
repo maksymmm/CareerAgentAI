@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate read-only error continuity: sanitized backend failures and rejected malformed
+responses from independent run, application, history and event browsing preserve the
+already verified run overview. The shared guarded error renderer now receives an explicit
+read-only policy from each collection/detail trigger; workflow-changing requests keep the
+default fail-closed clearing behavior. Static and Chromium regressions cover the policy
+boundary and an authenticated application-list failure.
+Next: exact-head CI/review, then continue candidate workflow recovery hardening.
+
 Candidate read-only overview continuity: after a verified owner-scoped status refresh,
 independent run, application, history and event browsing preserves the visible run phase,
 version and durable ID. Status-changing, consequential and context-changing operations
