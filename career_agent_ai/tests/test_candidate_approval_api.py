@@ -1673,8 +1673,7 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#reconciliation-state").get_by_text(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
-            page.locator("#application-reconciliation-verified").check()
-            page.locator("#confirm-submitted").click()
+            page.locator("#application-reconciliation-verified").check(); page.locator("#confirm-submitted").click()
             page.locator("#result").get_by_text("A valid provider submission ID is required").wait_for()
             assert loop.resolutions == []
             page.locator("#provider-submission-id").fill("non-progress-response-evidence")
@@ -1762,8 +1761,7 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             assert page.locator("#confirm-not-delivered").is_disabled()
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
-            page.locator("#message-reconciliation-verified").check()
-            page.locator("#confirm-delivered").click()
+            page.locator("#message-reconciliation-verified").check(); page.locator("#confirm-delivered").click()
             page.locator("#result").get_by_text('"phase": "track"').wait_for()
             assert page.locator("#confirm-delivered").is_disabled()
             assert page.locator("#confirm-not-delivered").is_disabled()
@@ -1829,8 +1827,7 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
             assert page.locator("#confirm-calendar-completed").is_disabled()
             page.locator("#token").fill("valid")
             page.locator("#status").click()
-            page.locator("#interview-reconciliation-verified").check()
-            page.locator("#confirm-calendar-completed").click()
+            page.locator("#interview-reconciliation-verified").check(); page.locator("#confirm-calendar-completed").click()
             page.locator("#result").get_by_text("A valid provider event ID is required").wait_for()
             assert loop.resolutions == []
             page.locator("#provider-event-id").fill("provider-event-confirmed")
