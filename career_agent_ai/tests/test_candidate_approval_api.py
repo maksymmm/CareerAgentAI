@@ -1478,6 +1478,7 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     status_started = Event()
     release_status = Event()
+    list_requested = Event()
 
     class DelayedStatusLoop(Loop):
         def get_candidate_run_status(self, run_id, *, user_id):
@@ -1510,11 +1511,18 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            def fulfill_owned_runs(route):
+                list_requested.set()
+                route.fulfill(status=200, json={
+                    "schema_version": 1, "items": [], "next_after": None,
+                })
+            page.route("**/v1/candidate/run-statuses?*", fulfill_owned_runs)
             page.locator("#token").fill("valid")
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
             assert status_started.wait(timeout=5)
             page.locator("#list-runs").dispatch_event("click")
+            assert list_requested.wait(timeout=5)
             release_status.set()
             page.locator("#run-overview").get_by_text(
                 "Your decision is needed — application reconciliation (version 7). Run: run-1"
@@ -1531,6 +1539,7 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     start_entered = Event()
     release_start = Event()
+    list_requested = Event()
 
     class DelayedStartLoop(Loop):
         def start(self, request, *, run_id=None):
@@ -1560,6 +1569,12 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            def fulfill_owned_runs(route):
+                list_requested.set()
+                route.fulfill(status=200, json={
+                    "schema_version": 1, "items": [], "next_after": None,
+                })
+            page.route("**/v1/candidate/run-statuses?*", fulfill_owned_runs)
             page.locator("#token").fill("valid")
             page.locator("#start-run-id").fill("concurrent-start")
             page.locator("#keyword").fill("platform engineer")
@@ -1567,6 +1582,7 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             page.locator("#start").click()
             assert start_entered.wait(timeout=5)
             page.locator("#list-runs").dispatch_event("click")
+            assert list_requested.wait(timeout=5)
             release_start.set()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             assert loop.started is not None
