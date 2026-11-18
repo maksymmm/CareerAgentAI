@@ -23,6 +23,7 @@ _HTML = r"""<!doctype html>
     input, textarea, button { box-sizing: border-box; font: inherit; padding: .55rem; width: 100%; }
     textarea { min-height: 7rem; }
     button { cursor: pointer; margin-top: .45rem; }
+    .attestation input { width: auto; }
     .actions { display: grid; gap: .6rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     @media (max-width: 32rem) { .actions { grid-template-columns: 1fr; } }
     .muted { opacity: .75; }
@@ -100,6 +101,9 @@ _HTML = r"""<!doctype html>
     <label>Provider submission ID
       <input id="provider-submission-id" autocomplete="off" maxlength="1000" disabled>
     </label>
+    <label class="attestation"><input id="application-reconciliation-verified" type="checkbox" disabled>
+      I independently verified this provider outcome for the displayed run version.
+    </label>
     <div class="actions">
       <button id="confirm-submitted" type="button" disabled>Confirm provider submission</button>
       <button id="confirm-not-submitted" type="button" disabled>Confirm no provider submission</button>
@@ -109,6 +113,9 @@ _HTML = r"""<!doctype html>
   <fieldset id="message-reconciliation-panel" tabindex="-1" aria-busy="false">
     <legend>Message delivery reconciliation</legend>
     <p id="message-reconciliation-state" role="status">Refresh a run in message reconciliation before recording the independently verified delivery outcome.</p>
+    <label class="attestation"><input id="message-reconciliation-verified" type="checkbox" disabled>
+      I independently verified this delivery outcome for the displayed run version.
+    </label>
     <div class="actions">
       <button id="confirm-delivered" type="button" disabled>Confirm message delivered</button>
       <button id="confirm-not-delivered" type="button" disabled>Confirm no message delivery</button>
@@ -120,6 +127,9 @@ _HTML = r"""<!doctype html>
     <p id="interview-reconciliation-state" role="status">Refresh a run in interview reconciliation before recording independently verified calendar evidence.</p>
     <label>Provider event ID
       <input id="provider-event-id" autocomplete="off" maxlength="1000" disabled>
+    </label>
+    <label class="attestation"><input id="interview-reconciliation-verified" type="checkbox" disabled>
+      I independently verified this calendar outcome for the displayed run version.
     </label>
     <div class="actions">
       <button id="confirm-calendar-completed" type="button" disabled>Confirm calendar action</button>
@@ -835,6 +845,8 @@ _HTML = r"""<!doctype html>
       byId('reconciliation-state').textContent = message;
       byId('provider-submission-id').value = '';
       byId('provider-submission-id').disabled = true;
+      byId('application-reconciliation-verified').checked = false;
+      byId('application-reconciliation-verified').disabled = true;
       byId('confirm-submitted').disabled = true;
       byId('confirm-not-submitted').disabled = true;
     }
@@ -845,14 +857,18 @@ _HTML = r"""<!doctype html>
       byId('reconciliation-state').textContent =
         'Verify the provider outcome outside this sandbox, then record exactly one result for the displayed version.';
       byId('provider-submission-id').disabled = false;
-      byId('confirm-submitted').disabled = false;
-      byId('confirm-not-submitted').disabled = false;
+      byId('application-reconciliation-verified').checked = false;
+      byId('application-reconciliation-verified').disabled = false;
+      byId('confirm-submitted').disabled = true;
+      byId('confirm-not-submitted').disabled = true;
     }
     function invalidateMessageReconciliation(message =
       'Refresh a run in message reconciliation before recording the independently verified delivery outcome.') {
       messageReconciliationAvailable = false;
       messageReconciliationVersion = null;
       byId('message-reconciliation-state').textContent = message;
+      byId('message-reconciliation-verified').checked = false;
+      byId('message-reconciliation-verified').disabled = true;
       byId('confirm-delivered').disabled = true;
       byId('confirm-not-delivered').disabled = true;
     }
@@ -861,8 +877,10 @@ _HTML = r"""<!doctype html>
       messageReconciliationVersion = version;
       byId('message-reconciliation-state').textContent =
         'Verify the provider outcome outside this sandbox, then record exactly one result for the displayed version.';
-      byId('confirm-delivered').disabled = false;
-      byId('confirm-not-delivered').disabled = false;
+      byId('message-reconciliation-verified').checked = false;
+      byId('message-reconciliation-verified').disabled = false;
+      byId('confirm-delivered').disabled = true;
+      byId('confirm-not-delivered').disabled = true;
     }
     function invalidateInterviewReconciliation(message =
       'Refresh a run in interview reconciliation before recording independently verified calendar evidence.') {
@@ -871,6 +889,8 @@ _HTML = r"""<!doctype html>
       byId('interview-reconciliation-state').textContent = message;
       byId('provider-event-id').value = '';
       byId('provider-event-id').disabled = true;
+      byId('interview-reconciliation-verified').checked = false;
+      byId('interview-reconciliation-verified').disabled = true;
       byId('confirm-calendar-completed').disabled = true;
       byId('confirm-calendar-not-completed').disabled = true;
     }
@@ -881,9 +901,26 @@ _HTML = r"""<!doctype html>
       byId('interview-reconciliation-state').textContent =
         'Verify the calendar provider outcome outside this sandbox, then record one result for the displayed version.';
       byId('provider-event-id').disabled = false;
-      byId('confirm-calendar-completed').disabled = false;
-      byId('confirm-calendar-not-completed').disabled = false;
+      byId('interview-reconciliation-verified').checked = false;
+      byId('interview-reconciliation-verified').disabled = false;
+      byId('confirm-calendar-completed').disabled = true;
+      byId('confirm-calendar-not-completed').disabled = true;
     }
+    byId('application-reconciliation-verified').addEventListener('change', event => {
+      const enabled = reconciliationAvailable && event.currentTarget.checked;
+      byId('confirm-submitted').disabled = !enabled;
+      byId('confirm-not-submitted').disabled = !enabled;
+    });
+    byId('message-reconciliation-verified').addEventListener('change', event => {
+      const enabled = messageReconciliationAvailable && event.currentTarget.checked;
+      byId('confirm-delivered').disabled = !enabled;
+      byId('confirm-not-delivered').disabled = !enabled;
+    });
+    byId('interview-reconciliation-verified').addEventListener('change', event => {
+      const enabled = interviewReconciliationAvailable && event.currentTarget.checked;
+      byId('confirm-calendar-completed').disabled = !enabled;
+      byId('confirm-calendar-not-completed').disabled = !enabled;
+    });
     function invalidateReconciliationForVersion(version) {
       if (reconciliationAvailable && reconciliationVersion !== version) {
         invalidateApplicationReconciliation(
