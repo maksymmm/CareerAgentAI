@@ -1551,6 +1551,15 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             page.locator("#application-history-state").get_by_text("Load history again to retry.").wait_for()
             assert page.locator("#application-history").text_content() == ""
             page.locator("#owned-applications button").click()
+            page.locator("#application-detail-state").get_by_text(
+                "Select the application again to retry."
+            ).wait_for()
+            assert page.locator("#application-detail").text_content() == ""
+            page.locator("#list-applications").click()
+            page.locator("#applications-state").get_by_text(
+                "1 application on this page. End of list. Read-only snapshots.", exact=True
+            ).wait_for()
+            page.locator("#owned-applications button").click()
             page.locator("#application-detail-state").get_by_text("Read-only application detail.").wait_for()
             def expanded_history(route):
                 payload = route.fetch().json()
