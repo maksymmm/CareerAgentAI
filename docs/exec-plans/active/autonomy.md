@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate reconciliation response monotonicity: application, message and interview
+reconciliation responses are accepted only within the forward state-machine suffix for
+that action. A syntactically valid rollback phase can no longer be presented as a completed
+provider observation; the UI fails closed, disables evidence controls and requires fresh
+status. Shared validation, static contract assertions and a Chromium regression cover an
+intercepted rollback without invoking the provider resolver.
+Next: exact-head CI/review, then continue reconciliation recovery hardening.
+
 Candidate read-only error continuity: sanitized backend failures and rejected malformed
 responses from independent run, application, history and event browsing preserve the
 already verified run overview. The shared guarded error renderer now receives an explicit
