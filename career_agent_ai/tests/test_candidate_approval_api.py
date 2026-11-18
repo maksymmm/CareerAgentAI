@@ -1843,6 +1843,7 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
 
     assert loop.resolutions == [("run-1", {
         "user_id": "candidate-1", "completed": False,
+        "provider_event_id": None,
         "expected_state_version": 29,
     })]
 
