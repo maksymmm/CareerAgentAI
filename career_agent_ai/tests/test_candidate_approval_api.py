@@ -1909,8 +1909,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         "interview-reconciliation-verified",
     ):
         assert f'id="{attestation_id}" type="checkbox" disabled' in html
-        assert f"byId('{attestation_id}').checked = false" in html
-        assert f"byId('{attestation_id}').addEventListener('change'" in html
+        assert f"setReconciliationAttestation('{attestation_id}', false)" in html
+        assert f"setReconciliationAttestation('{attestation_id}', true)" in html
+        assert f"bindReconciliationAttestation('{attestation_id}'" in html
     assert "state_version: observedVersion" in html
     assert "const reconciliationResultPhases = {" in html
     assert "application: new Set(['message_prepare', 'message_approval'" in html
