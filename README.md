@@ -599,8 +599,11 @@ Run pages require strictly ascending unique IDs beyond the requested cursor. A n
 cursor must equal the last ID of a full page; malformed or replayed pages clear rows
 and retain only the attempted cursor for explicit retry.
 The run overview summarizes an authenticated status snapshot as waiting for a decision,
-in progress, or finished, with its phase, version and durable ID. It is cleared on
-context changes or other results and never substitutes for an approval prompt. Decisions copy
+in progress, or finished, with its phase, version and durable ID. Independent read-only
+run, application, history and event browsing preserves that visible snapshot so
+version-bound reconciliation controls retain their displayed evidence. The overview is
+cleared on context changes and status-changing or consequential requests, and never
+substitutes for an approval prompt. Decisions copy
 the prompt's run ID, state version, and action fingerprint back to the strict API, so
 the interface cannot silently approve a changed or stale action. The page is served
 with `no-store`, anti-sniffing, no-referrer, and restrictive content-security headers.
