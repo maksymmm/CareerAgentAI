@@ -402,6 +402,8 @@ _HTML = r"""<!doctype html>
     let applicationDetailTrigger = null;
     let selectedApplicationId = null;
     let selectedApplicationVersion = null;
+    let applicationVersionFloorId = null;
+    let applicationVersionFloor = null;
     let applicationHistoryGeneration = 0;
     function clearApplicationHistory() {
       applicationHistoryGeneration += 1;
@@ -422,9 +424,9 @@ _HTML = r"""<!doctype html>
       byId('application-detail-state').textContent = '';
     }
     async function loadApplicationDetail(applicationId, minimumVersion, trigger) {
-      const versionFloor = selectedApplicationId === applicationId &&
-        selectedApplicationVersion !== null
-        ? Math.max(minimumVersion, selectedApplicationVersion) : minimumVersion;
+      const versionFloor = applicationVersionFloorId === applicationId &&
+        applicationVersionFloor !== null
+        ? Math.max(minimumVersion, applicationVersionFloor) : minimumVersion;
       clearApplicationDetail();
       const generation = applicationDetailGeneration;
       applicationDetailTrigger = trigger;
@@ -453,6 +455,8 @@ _HTML = r"""<!doctype html>
         byId('application-detail-state').textContent = 'Read-only application detail.';
         selectedApplicationId = applicationId;
         selectedApplicationVersion = item.state_version;
+        applicationVersionFloorId = applicationId;
+        applicationVersionFloor = item.state_version;
         byId('load-application-history').disabled = false;
       } catch (error) {
         if (generation === applicationDetailGeneration) {
@@ -496,6 +500,8 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid application history.');
         }
         selectedApplicationVersion = history.state_version;
+        applicationVersionFloorId = applicationId;
+        applicationVersionFloor = history.state_version;
         const snapshot = {schema_version: 1, application_id: applicationId, state_version: history.state_version,
           items: history.items.map(item => ({sequence: item.sequence, from_status: item.from_status,
             to_status: item.to_status, occurred_at: item.occurred_at}))};
@@ -518,6 +524,8 @@ _HTML = r"""<!doctype html>
     byId('load-application-history').addEventListener('click', () => guarded(loadApplicationHistory));
     function clearApplications() {
       clearApplicationDetail();
+      applicationVersionFloorId = null;
+      applicationVersionFloor = null;
       applicationsGeneration += 1;
       nextApplicationCursor = null;
       byId('list-applications').disabled = false;
