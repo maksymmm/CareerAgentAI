@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate reconciliation verification attestation: after a fresh application, message or
+interview reconciliation snapshot, both outcome buttons remain disabled until the candidate
+explicitly attests that the provider result was independently verified for the displayed run
+version. Attestation is gate-specific and is cleared and disabled after every attempt or any
+version, run, token or session invalidation. Static contract checks and Chromium coverage span
+all three gates without contacting a real provider.
+Next: exact-head CI/review, then exercise negative/no-effect retry acceptance end to end.
+
 Candidate reconciliation strict progress: application, message and interview
 reconciliation responses are accepted only after they move beyond the corresponding
 reconciliation gate. A response that remains ambiguous at the same gate or returns to

@@ -1524,7 +1524,7 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
             page.locator("#run-overview").get_by_text(
                 "Your decision is needed — application reconciliation (version 7). Run: run-1"
             ).wait_for()
-            assert not page.locator("#confirm-submitted").is_disabled()
+            assert page.locator("#confirm-submitted").is_disabled()
             browser.close()
     finally:
         server.shutdown()
@@ -1647,7 +1647,8 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#reconciliation-state").get_by_text(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
-            assert not page.locator("#confirm-submitted").is_disabled()
+            assert page.locator("#confirm-submitted").is_disabled()
+            page.locator("#application-reconciliation-verified").check()
             page.locator("#provider-submission-id").fill("version-7-evidence")
             page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve application").wait_for()
@@ -1672,7 +1673,7 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#reconciliation-state").get_by_text(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
-            page.locator("#confirm-submitted").click()
+            page.locator("#application-reconciliation-verified").check(); page.locator("#confirm-submitted").click()
             page.locator("#result").get_by_text("A valid provider submission ID is required").wait_for()
             assert loop.resolutions == []
             page.locator("#provider-submission-id").fill("non-progress-response-evidence")
@@ -1691,6 +1692,7 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             assert page.locator("#confirm-not-submitted").is_disabled()
             page.unroute("**/v1/candidate/runs/*/application-reconciliation")
             page.locator("#status").click()
+            page.locator("#application-reconciliation-verified").check()
             page.locator("#confirm-submitted:not([disabled])").wait_for()
             page.locator("#provider-submission-id").fill("provider-confirmed-7")
             page.locator("#confirm-submitted").click()
@@ -1749,7 +1751,8 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             page.locator("#message-reconciliation-state").get_by_text(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
-            assert not page.locator("#confirm-delivered").is_disabled()
+            assert page.locator("#confirm-delivered").is_disabled()
+            page.locator("#message-reconciliation-verified").check()
             loop.status_version = 18
             page.locator("#status").click()
             page.locator("#run-overview").get_by_text("version 18").wait_for()
@@ -1758,7 +1761,7 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             assert page.locator("#confirm-not-delivered").is_disabled()
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
-            page.locator("#confirm-delivered").click()
+            page.locator("#message-reconciliation-verified").check(); page.locator("#confirm-delivered").click()
             page.locator("#result").get_by_text('"phase": "track"').wait_for()
             assert page.locator("#confirm-delivered").is_disabled()
             assert page.locator("#confirm-not-delivered").is_disabled()
@@ -1824,7 +1827,7 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
             assert page.locator("#confirm-calendar-completed").is_disabled()
             page.locator("#token").fill("valid")
             page.locator("#status").click()
-            page.locator("#confirm-calendar-completed").click()
+            page.locator("#interview-reconciliation-verified").check(); page.locator("#confirm-calendar-completed").click()
             page.locator("#result").get_by_text("A valid provider event ID is required").wait_for()
             assert loop.resolutions == []
             page.locator("#provider-event-id").fill("provider-event-confirmed")
@@ -1886,6 +1889,15 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert 'id="message-reconciliation-panel"' in html
     assert 'id="interview-reconciliation-panel"' in html
     assert 'id="provider-submission-id"' in html
+    for attestation_id in (
+        "application-reconciliation-verified",
+        "message-reconciliation-verified",
+        "interview-reconciliation-verified",
+    ):
+        assert f'id="{attestation_id}" type="checkbox" disabled' in html
+        assert f"setReconciliationAttestation('{attestation_id}', false)" in html
+        assert f"setReconciliationAttestation('{attestation_id}', true)" in html
+        assert f"bindReconciliationAttestation('{attestation_id}'" in html
     assert "state_version: observedVersion" in html
     assert "const reconciliationResultPhases = {" in html
     assert "application: new Set(['message_prepare', 'message_approval'" in html
