@@ -537,6 +537,10 @@ and production composition closes its request-local SQLite connection after ever
 The candidate sandbox enables those calendar controls only after a fresh owned reconciliation
 snapshot. Provider event evidence is cleared whenever the observed version or run/token/session
 context changes, and every outcome disables the controls until status is refreshed.
+All three reconciliation responses must also move forward within their respective
+state-machine suffix. A syntactically valid response that rolls application, message or
+interview reconciliation back to an earlier phase is treated as uncertain, disables the
+controls and requires a fresh status read instead of being presented as success.
 The sandbox treats a recovery `approval_conflict` as a known durable-state advance:
 it clears any stale approval snapshot, keeps decision controls disabled, suppresses
 private backend text, and directs the candidate to refresh run status. Unknown recovery

@@ -1251,6 +1251,20 @@ _HTML = r"""<!doctype html>
       try { encodeURIComponent(value); } catch (error) { return false; }
       return true;
     };
+    const reconciliationResultPhases = {
+      application: new Set(['application_submit', 'application_reconciliation',
+        'message_prepare', 'message_approval', 'message_send', 'message_reconciliation',
+        'track', 'interview_coordination', 'interview_approval', 'interview_accept',
+        'interview_reconciliation', 'complete', 'failed']),
+      message: new Set(['message_send', 'message_reconciliation', 'track',
+        'interview_coordination', 'interview_approval', 'interview_accept',
+        'interview_reconciliation', 'complete', 'failed']),
+      interview: new Set(['interview_accept', 'interview_reconciliation', 'complete', 'failed']),
+    };
+    const validReconciliationResult = (result, runId, allowedPhases) =>
+      result && typeof result === 'object' && !Array.isArray(result) &&
+      Object.keys(result).length === 2 && result.run_id === runId &&
+      Object.hasOwn(result, 'phase') && allowedPhases.has(result.phase);
     async function reconcileApplication(submitted) {
       if (!reconciliationAvailable || selectedRunVersion === null ||
           reconciliationVersion !== selectedRunVersion) {
@@ -1275,9 +1289,8 @@ _HTML = r"""<!doctype html>
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
           '/application-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(request)}, 'Application reconciliation request failed.');
-        if (!result || typeof result !== 'object' || Array.isArray(result) ||
-            Object.keys(result).length !== 2 || result.run_id !== runId ||
-            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+        if (!validReconciliationResult(
+            result, runId, reconciliationResultPhases.application)) {
           throw new Error('Invalid application reconciliation response.');
         }
         show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
@@ -1317,9 +1330,8 @@ _HTML = r"""<!doctype html>
           '/message-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({schema_version: 1, state_version: observedVersion, delivered})},
           'Message reconciliation request failed.');
-        if (!result || typeof result !== 'object' || Array.isArray(result) ||
-            Object.keys(result).length !== 2 || result.run_id !== runId ||
-            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+        if (!validReconciliationResult(
+            result, runId, reconciliationResultPhases.message)) {
           throw new Error('Invalid message reconciliation response.');
         }
         show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
@@ -1363,9 +1375,8 @@ _HTML = r"""<!doctype html>
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
           '/interview-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(request)}, 'Interview reconciliation request failed.');
-        if (!result || typeof result !== 'object' || Array.isArray(result) ||
-            Object.keys(result).length !== 2 || result.run_id !== runId ||
-            !Object.hasOwn(result, 'phase') || !runPhases.includes(result.phase)) {
+        if (!validReconciliationResult(
+            result, runId, reconciliationResultPhases.interview)) {
           throw new Error('Invalid interview reconciliation response.');
         }
         show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
