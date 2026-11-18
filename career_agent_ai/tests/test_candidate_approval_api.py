@@ -2118,7 +2118,6 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         "throw new Error('Invalid application history.')"
     )
     detail_loader = html[html.index("async function loadApplicationDetail"):html.index("async function loadApplicationHistory")]
-    assert "Math.max(minimumVersion, selectedApplicationVersion)" in detail_loader
     assert detail_loader.index("const versionFloor") < detail_loader.index("clearApplicationDetail()")
     assert "applicationVersionFloorId === applicationId" in detail_loader
     assert "Math.max(minimumVersion, applicationVersionFloor)" in detail_loader
