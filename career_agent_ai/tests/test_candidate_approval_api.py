@@ -1895,12 +1895,20 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
         html.index("const reconciliationResultPhases = {"):
         html.index("const validReconciliationResult =")
     ]
-    for non_progress_phase in (
-        "application_submit", "application_reconciliation",
-        "message_send", "message_reconciliation",
-        "interview_accept", "interview_reconciliation",
+    application_phases = result_phases[
+        result_phases.index("application:"):result_phases.index("message:")
+    ]
+    message_phases = result_phases[
+        result_phases.index("message:"):result_phases.index("interview:")
+    ]
+    interview_phases = result_phases[result_phases.index("interview:"):]
+    for phase_set, non_progress_phases in (
+        (application_phases, ("application_submit", "application_reconciliation")),
+        (message_phases, ("message_send", "message_reconciliation")),
+        (interview_phases, ("interview_accept", "interview_reconciliation")),
     ):
-        assert f"'{non_progress_phase}'" not in result_phases
+        for non_progress_phase in non_progress_phases:
+            assert f"'{non_progress_phase}'" not in phase_set
     assert "const validReconciliationResult = (result, runId, allowedPhases)" in html
     assert "allowedPhases.has(result.phase)" in html
     application_reconciliation = html[
