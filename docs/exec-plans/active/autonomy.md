@@ -1,5 +1,13 @@
 # Autonomous Implementation Plan
 
+Candidate read-only overview continuity: after a verified owner-scoped status refresh,
+independent run, application, history and event browsing preserves the visible run phase,
+version and durable ID. Status-changing, consequential and context-changing operations
+still clear it, so reconciliation evidence remains visible without weakening stale-state
+invalidation. Static and Chromium regressions cover both the request classification and
+the end-to-end application browsing path.
+Next: exact-head CI/review, then continue candidate workflow recovery hardening.
+
 Interview reconciliation candidate workflow: an authenticated owner-scoped POST route accepts
 only a strict completed/no-effect observation bound to the displayed durable state version.
 Completed actions require validated provider event evidence; no-effect observations forbid it.
