@@ -422,6 +422,9 @@ _HTML = r"""<!doctype html>
       byId('application-detail-state').textContent = '';
     }
     async function loadApplicationDetail(applicationId, minimumVersion, trigger) {
+      const versionFloor = selectedApplicationId === applicationId &&
+        selectedApplicationVersion !== null
+        ? Math.max(minimumVersion, selectedApplicationVersion) : minimumVersion;
       clearApplicationDetail();
       const generation = applicationDetailGeneration;
       applicationDetailTrigger = trigger;
@@ -439,7 +442,7 @@ _HTML = r"""<!doctype html>
             typeof item.company_id !== 'string' || Array.from(item.company_id).length > 200 ||
             !['saved', 'applied', 'interview', 'offer', 'rejected', 'withdrawn'].includes(item.status) ||
             !Number.isSafeInteger(item.state_version) || item.state_version < 1 ||
-            item.state_version < minimumVersion ||
+            item.state_version < versionFloor ||
             !['created_at', 'updated_at'].every(key => typeof item[key] === 'string' &&
               item[key].length <= 64 && Number.isFinite(Date.parse(item[key])))) {
           throw new Error('Invalid application detail.');
