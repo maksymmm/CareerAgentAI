@@ -1,5 +1,12 @@
 # Autonomous Implementation Plan
 
+Candidate application no-effect restart acceptance: production sandbox composition now
+forces the first fake submission into an ambiguous outcome, restarts against the same SQLite
+database, posts a version-bound `submitted=false` observation through HTTP and proves exactly
+one safe retry reuses the original operation ID. The durable operation finishes succeeded and
+no real application, credential or network provider is used.
+Next: exact-head CI/review, then extend restart acceptance to message/calendar no-effect paths.
+
 Candidate no-effect reconciliation acceptance: browser regressions now exercise the explicit
 no-delivery and no-calendar-effect controls after version-bound verification attestation. The
 production HTTP boundary receives `delivered=false` and `completed=false` without invented
