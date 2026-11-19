@@ -540,6 +540,8 @@ The candidate sandbox enables those calendar controls only after a fresh owned r
 snapshot. Provider event evidence is cleared whenever the observed version or run/token/session
 context changes, an explicit independent-verification attestation is required, and every outcome
 disables the controls until status is refreshed.
+Browser acceptance covers the negative message and calendar outcomes explicitly: each request
+binds `false` to the displayed version and omits provider evidence rather than inventing a receipt.
 All three reconciliation responses must also move strictly beyond their respective
 reconciliation gate. A syntactically valid response that rolls application, message or
 interview reconciliation back to an earlier phase, returns to the provider-action phase,
