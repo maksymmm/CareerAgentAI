@@ -635,6 +635,9 @@ restart, and durable status recovery path in a fresh headless Chromium session a
 the sandbox-gated SQLite composition. The browser test verifies that the only persisted
 external action is one successful application submission with a `fake:` provider ID;
 messaging and calendar actions are not exercised, so it cannot perform external actions.
+Production-composition acceptance also forces an application submission into an ambiguous
+outcome, restarts the request-local SQLite runtime, records a version-bound no-effect
+observation through HTTP, and proves exactly one retry reuses the same fake operation ID.
 
 The sandbox now has a deployable standard-library HTTP entrypoint:
 `python -m career_agent_ai.application.runtime.candidate_service`. Startup validates an
