@@ -885,6 +885,181 @@ def test_candidate_http_message_no_effect_retries_once_after_restart(
     ]
 
 
+def test_candidate_http_calendar_no_effect_retries_once_after_restart(
+    tmp_path, monkeypatch
+):
+    """Recover an ambiguous fake calendar acceptance after a runtime restart."""
+    from career_agent_ai.application.scheduling.models import (
+        ScheduleEvent,
+        ScheduleEventType,
+        ScheduleStatus,
+    )
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import (
+        SQLiteSchedulingRepository,
+    )
+
+    database_path = str(tmp_path / "candidate-calendar-no-effect-restart.sqlite")
+    environ = {
+        "CAREER_AGENT_DB_PATH": database_path,
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+    }
+    jobs = (
+        Job.create(
+            job_id="calendar-no-effect-job",
+            title="Logistics Coordinator",
+            company=Company("calendar-no-effect-company", "Sandbox Logistics"),
+            location=Location("Germany", "Karlsruhe"),
+            description="logistics coordination",
+            created_at=NOW,
+        ),
+    )
+
+    def call(app, path, *, method="GET", body=None):
+        encoded = b"" if body is None else json.dumps(body).encode("utf-8")
+        statuses = []
+        response = app(
+            {
+                "REQUEST_METHOD": method,
+                "PATH_INFO": path,
+                "HTTP_AUTHORIZATION": "Bearer owner",
+                "CONTENT_TYPE": "application/json",
+                "CONTENT_LENGTH": str(len(encoded)),
+                "wsgi.input": io.BytesIO(encoded),
+            },
+            lambda status, headers: statuses.append(status),
+        )
+        return statuses[0], json.loads(b"".join(response))
+
+    attempts = []
+    original_accept = runtime_composition.FakeCalendarAdapter.accept
+
+    def ambiguous_once(self, *args, **kwargs):
+        attempts.append((args, kwargs))
+        if len(attempts) == 1:
+            raise RuntimeError("sandbox calendar outcome unknown")
+        return original_accept(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        runtime_composition.FakeCalendarAdapter, "accept", ambiguous_once
+    )
+    resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
+    first = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    event_id = "calendar-no-effect-event"
+    started = first.start(
+        CareerLoopRequest(
+            user_id="candidate-1",
+            keyword="logistics",
+            candidate_profile=PROFILE,
+            location="Karlsruhe",
+            schedule_event_id=event_id,
+        ),
+        run_id="calendar-no-effect-restart",
+    )
+    run_id = started.run_id
+    database = SQLiteDatabase(database_path)
+    try:
+        SQLiteSchedulingRepository(database).create(
+            ScheduleEvent(
+                event_id=event_id,
+                candidate_id="candidate-1",
+                employer_name="Sandbox Logistics",
+                event_type=ScheduleEventType.INTERVIEW,
+                location="Karlsruhe",
+                start_at=NOW + timedelta(days=2),
+                end_at=NOW + timedelta(days=2, hours=1),
+                timezone_name="Europe/Berlin",
+                application_id=f"{run_id}:application",
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+    finally:
+        database.close()
+
+    approval_path = f"/v1/candidate/runs/{run_id}/approval"
+    status, application_prompt = call(first, approval_path)
+    assert status == "200 OK"
+    status, application_approved = call(
+        first,
+        approval_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": application_prompt["state_version"],
+            "action_fingerprint": application_prompt["action_fingerprint"],
+            "decision": "approve",
+        },
+    )
+    assert status == "200 OK"
+    assert application_approved == {
+        "run_id": run_id,
+        "phase": CareerLoopPhase.INTERVIEW_APPROVAL.value,
+    }
+    status, interview_prompt = call(first, approval_path)
+    assert status == "200 OK"
+    status, ambiguous = call(
+        first,
+        approval_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": interview_prompt["state_version"],
+            "action_fingerprint": interview_prompt["action_fingerprint"],
+            "decision": "approve",
+        },
+    )
+    assert status == "200 OK"
+    assert ambiguous == {
+        "run_id": run_id,
+        "phase": CareerLoopPhase.INTERVIEW_RECONCILIATION.value,
+    }
+    assert len(attempts) == 1
+    first.close()
+
+    second = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    status_path = f"/v1/candidate/runs/{run_id}/status"
+    status, snapshot = call(second, status_path)
+    assert status == "200 OK"
+    assert snapshot["phase"] == CareerLoopPhase.INTERVIEW_RECONCILIATION.value
+    reconciliation_path = f"/v1/candidate/runs/{run_id}/interview-reconciliation"
+    assert call(
+        second,
+        reconciliation_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "state_version": snapshot["state_version"],
+            "completed": False,
+        },
+    ) == ("200 OK", {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value})
+    assert len(attempts) == 2
+    assert attempts[0][0][0] == attempts[1][0][0]
+    second.close()
+
+    database = SQLiteDatabase(database_path)
+    try:
+        operations = database.connection.execute(
+            "SELECT action_type, status FROM external_action_operations "
+            "ORDER BY action_type"
+        ).fetchall()
+        event = SQLiteSchedulingRepository(database).get(event_id)
+    finally:
+        database.close()
+    assert operations == [
+        ("application.submit", ExternalActionStatus.SUCCEEDED.value),
+        ("calendar.accept", ExternalActionStatus.SUCCEEDED.value),
+    ]
+    assert event.status == ScheduleStatus.ACCEPTED
+    assert event.provider_event_id == f"fake-{event_id}"
+
+
 def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
