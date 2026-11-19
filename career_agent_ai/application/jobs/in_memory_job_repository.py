@@ -34,7 +34,7 @@ class InMemoryJobRepository(JobRepository):
 
             if keyword:
                 title_match = keyword in job.title.lower()
-                company_match = keyword in job.company.name.lower()
+                company_match = keyword in self._company_name(job.company).lower()
                 description_match = (
                     keyword in job.description.lower()
                     if job.description
@@ -57,7 +57,7 @@ class InMemoryJobRepository(JobRepository):
                     continue
 
             if company:
-                if company not in job.company.name.lower():
+                if company not in self._company_name(job.company).lower():
                     continue
 
             if filters.employment_type is not None:
@@ -80,6 +80,12 @@ class InMemoryJobRepository(JobRepository):
             page=query.page,
             page_size=query.page_size,
         )
+
+    @staticmethod
+    def _company_name(value) -> str:
+        """Return a stable display name for structured or plain-string companies."""
+        name = getattr(value, "name", None)
+        return name if isinstance(name, str) else str(value or "")
 
     def clear(self) -> None:
         self._jobs.clear()

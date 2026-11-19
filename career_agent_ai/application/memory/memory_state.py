@@ -5,7 +5,7 @@ from enum import StrEnum
 
 class MemoryState(StrEnum):
     """
-    Lifecycle state of the in-memory repository.
+    Lifecycle state of the memory engine.
     """
 
     EMPTY = "Empty"

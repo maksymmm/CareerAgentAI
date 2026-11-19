@@ -1,0 +1,8 @@
+# Project-level Codex configuration.
+# Loaded only when this repository is trusted by the local Codex client.
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
