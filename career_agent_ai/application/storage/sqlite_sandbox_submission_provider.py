@@ -48,6 +48,12 @@ _NO_EFFECT_OUTCOMES = frozenset(
 )
 _SCHEMA = (
     """
+    CREATE TABLE IF NOT EXISTS sandbox_submission_intents (
+        idempotency_key TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS sandbox_submission_attempts (
         idempotency_key TEXT NOT NULL,
         attempt_no INTEGER NOT NULL CHECK(attempt_no >= 1),
@@ -148,6 +154,7 @@ class SQLiteSandboxSubmissionProvider:
         connection = self._database.connection
         self._begin(connection)
         try:
+            self._bind_intent(operation_id, fingerprint)
             existing = self._load(operation_id)
             if existing is not None:
                 result = self._replay(existing, fingerprint)
@@ -244,6 +251,24 @@ class SQLiteSandboxSubmissionProvider:
             "WHERE idempotency_key = ?",
             (operation_id,),
         ).fetchone()
+
+    def _bind_intent(self, operation_id: str, fingerprint: str) -> None:
+        row = self._database.connection.execute(
+            "SELECT fingerprint FROM sandbox_submission_intents "
+            "WHERE idempotency_key = ?",
+            (operation_id,),
+        ).fetchone()
+        if row is None:
+            self._database.connection.execute(
+                "INSERT INTO sandbox_submission_intents(idempotency_key, fingerprint) "
+                "VALUES (?, ?)",
+                (operation_id, fingerprint),
+            )
+            return
+        if row[0] != fingerprint:
+            raise PreSubmissionError(
+                "Sandbox idempotency key was reused with a different submission intent."
+            )
 
     def _replay(
         self, row: tuple[Any, ...], fingerprint: str

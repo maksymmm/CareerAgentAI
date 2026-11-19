@@ -300,8 +300,10 @@ credential configuration is included.
 
 The candidate sandbox composes a durable application-submission provider
 (`SQLiteSandboxSubmissionProvider`) instead of an in-memory fake. Its SQLite sandbox ledger
-(`sandbox_submission_ledger`, `sandbox_submission_attempts`) records every provider-side effect
-and attempt, so effects survive request and process restarts. The ledger enforces one effect per
+(`sandbox_submission_intents`, `sandbox_submission_ledger`,
+`sandbox_submission_attempts`) records every accepted intent, provider-side effect and attempt,
+so all three survive request and process restarts. The intent is bound to the idempotency key on
+the first valid attempt even when no effect occurs. The ledger enforces one effect per
 idempotency key and per application; a replay of the same key and intent returns the stored
 result without a second effect, and a reused key with a different intent is rejected. Outcomes
 are scripted deterministically through the injectable `sandbox_outcome_plan` argument of

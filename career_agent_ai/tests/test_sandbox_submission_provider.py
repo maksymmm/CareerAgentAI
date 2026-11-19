@@ -196,6 +196,40 @@ def test_same_key_with_different_intent_is_rejected_without_effect(path):
     stack.close()
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    [OUTCOME.NO_EFFECT, OUTCOME.RETRYABLE_NO_EFFECT, OUTCOME.INTERRUPTED_BEFORE_EFFECT],
+)
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ("job-2", "application-1", DIGEST, SNAPSHOT),
+        ("job-1", "application-2", DIGEST, SNAPSHOT),
+        ("job-1", "application-1", "c" * 64, SNAPSHOT),
+        ("job-1", "application-1", DIGEST, "d" * 64),
+    ],
+)
+def test_no_effect_attempt_binds_key_to_intent_across_restart(path, outcome, changed):
+    first = Stack(path, scripted_outcomes({OP: [outcome]}))
+    with pytest.raises((PreSubmissionError, ConnectionError)):
+        first.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
+    assert first.provider.attempts(OP) == (outcome,)
+    assert first.provider.ledger_entries() == ()
+    first.close()
+
+    restarted = Stack(path)
+    with pytest.raises(PreSubmissionError, match="different submission intent"):
+        restarted.provider.submit(OP, *changed[:2], CONTENT, *changed[2:])
+    assert restarted.provider.attempts(OP) == (outcome,)
+    assert restarted.provider.ledger_entries() == ()
+    result = restarted.provider.submit(
+        OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+    )
+    assert result["provider_submission_id"] == "fake:application-1"
+    assert restarted.provider.attempts(OP) == (outcome, OUTCOME.SUCCESS)
+    restarted.close()
+
+
 def test_second_key_for_same_application_cannot_create_a_second_effect(path):
     stack = Stack(path)
     stack.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
@@ -269,7 +303,11 @@ def test_ledger_schema_is_additive_and_idempotent(path):
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )
     }
-    assert {"sandbox_submission_ledger", "sandbox_submission_attempts"} <= names
+    assert {
+        "sandbox_submission_intents",
+        "sandbox_submission_ledger",
+        "sandbox_submission_attempts",
+    } <= names
     assert "external_action_operations" in names
 
 
