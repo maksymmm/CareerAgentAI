@@ -15,6 +15,7 @@ Provider-side invariants (enforced by SQL constraints, not only by Python):
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from enum import Enum
@@ -356,7 +357,14 @@ class SQLiteSandboxSubmissionProvider:
 
 
 def _fingerprint(*parts: str) -> str:
-    return sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+    if not all(isinstance(part, str) for part in parts):
+        raise TypeError("Sandbox intent fingerprint fields must be strings.")
+    encoded = json.dumps(
+        parts,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 def _entry(row: tuple[Any, ...]) -> SandboxLedgerEntry:

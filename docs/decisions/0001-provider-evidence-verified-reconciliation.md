@@ -67,7 +67,9 @@ prefers a stuck run to a duplicate application. External actions stay disabled
    concurrent connections (writes serialize on `BEGIN IMMEDIATE`).
 4. The first valid provider attempt durably binds the key to its intent fingerprint, including
    attempts that produce no effect. Replaying the same key and intent can retry or return the
-   stored result; a reused key with a different intent is rejected before another attempt.
+   stored result; a reused key with a different intent is rejected before another attempt. The
+   fingerprint hashes a canonical JSON tuple, so identifier text cannot collide by containing a
+   field delimiter.
 5. Recovery of an `in_progress` action reconciles it and never re-invokes the provider.
 6. Evidence verification (this ADR) stops an operator claim from reopening an operation whose
    effect exists.

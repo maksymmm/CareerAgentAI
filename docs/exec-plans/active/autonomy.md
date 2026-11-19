@@ -6,7 +6,7 @@ Durable sandbox application provider: the candidate sandbox replaces the per-req
 submission fake with a SQLite-ledger provider whose outcomes (success, no effect, retryable no
 effect, interruption before effect, timeout after effect, evidence mismatch) are scripted by an
 injected plan. Regressions cover exactly-once provider effects across restart and reconciliation,
-concurrent same-key submissions, durable key/intent conflicts even after a no-effect restart,
+concurrent same-key submissions, collision-safe durable key/intent conflicts even after a no-effect restart,
 definitive no-effect followed by a same-intent approved attempt, and the production-composition
 HTTP path with owner, token and state-version rejection. Reconciliation verifies the provider ID
 and complete intent against durable evidence. No endpoint or OpenAPI change. Next: exact-head

@@ -230,6 +230,24 @@ def test_no_effect_attempt_binds_key_to_intent_across_restart(path, outcome, cha
     restarted.close()
 
 
+def test_intent_fingerprint_encoding_rejects_separator_collision_across_restart(path):
+    first = Stack(path, always(OUTCOME.NO_EFFECT))
+    with pytest.raises(PreSubmissionError):
+        first.provider.submit(
+            OP, "job\x1fpart", "app", CONTENT, DIGEST, SNAPSHOT
+        )
+    first.close()
+
+    restarted = Stack(path)
+    with pytest.raises(PreSubmissionError, match="different submission intent"):
+        restarted.provider.submit(
+            OP, "job", "part\x1fapp", CONTENT, DIGEST, SNAPSHOT
+        )
+    assert restarted.provider.attempts(OP) == (OUTCOME.NO_EFFECT,)
+    assert restarted.provider.ledger_entries() == ()
+    restarted.close()
+
+
 def test_second_key_for_same_application_cannot_create_a_second_effect(path):
     stack = Stack(path)
     stack.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
