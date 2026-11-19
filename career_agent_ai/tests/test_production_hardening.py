@@ -507,14 +507,14 @@ def test_candidate_http_approval_survives_restart_without_repeating_submission(
         return statuses[0], json.loads(b"".join(response))
 
     provider_calls = []
-    original_submit = runtime_composition.FakeApplicationSubmissionAdapter.submit
+    original_submit = runtime_composition.SQLiteSandboxSubmissionProvider.submit
 
     def track_submit(self, *args, **kwargs):
         provider_calls.append(args)
         return original_submit(self, *args, **kwargs)
 
     monkeypatch.setattr(
-        runtime_composition.FakeApplicationSubmissionAdapter, "submit", track_submit
+        runtime_composition.SQLiteSandboxSubmissionProvider, "submit", track_submit
     )
     resolve_bearer = lambda token: {
         "owner": "candidate-1",
@@ -642,7 +642,7 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         return statuses[0], json.loads(b"".join(response))
 
     attempts = []
-    original_submit = runtime_composition.FakeApplicationSubmissionAdapter.submit
+    original_submit = runtime_composition.SQLiteSandboxSubmissionProvider.submit
 
     def ambiguous_once(self, *args, **kwargs):
         attempts.append((args, kwargs))
@@ -651,7 +651,7 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         return original_submit(self, *args, **kwargs)
 
     monkeypatch.setattr(
-        runtime_composition.FakeApplicationSubmissionAdapter, "submit", ambiguous_once
+        runtime_composition.SQLiteSandboxSubmissionProvider, "submit", ambiguous_once
     )
     resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
     first = build_candidate_sandbox_app_from_env(
