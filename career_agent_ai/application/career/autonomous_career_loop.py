@@ -59,7 +59,11 @@ from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRank
 from career_agent_ai.application.jobs.job_filter import JobFilter
 from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
 from career_agent_ai.application.observability.structured_logging import redact_text
-from career_agent_ai.application.scheduling import ScheduleStatus, SchedulingService
+from career_agent_ai.application.scheduling import (
+    CalendarReconciliationEvidenceError,
+    ScheduleStatus,
+    SchedulingService,
+)
 
 
 _MAX_DERIVED_IDENTIFIER_LENGTH = 200
@@ -515,11 +519,16 @@ class AutonomousCareerLoop:
             lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
         try:
-            self._scheduling.resolve_reconciliation(
-                operation_id,
-                completed=completed,
-                provider_event_id=provider_event_id,
-            )
+            try:
+                self._scheduling.resolve_reconciliation(
+                    operation_id,
+                    completed=completed,
+                    provider_event_id=provider_event_id,
+                )
+            except CalendarReconciliationEvidenceError as exc:
+                raise CareerLoopConflictError(
+                    "Provider evidence does not support the claimed outcome."
+                ) from exc
             state.pending_human_action = None
             state.last_error = None
             state.phase = CareerLoopPhase.INTERVIEW_ACCEPT

@@ -67,6 +67,9 @@ from career_agent_ai.application.storage.sqlite_sandbox_submission_provider impo
 from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
     SQLiteSandboxCommunicationProvider,
 )
+from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SQLiteSandboxCalendarProvider,
+)
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
 from career_agent_ai.application.storage.sqlite_operational_probe import (
     SQLiteOperationalProbe,
@@ -509,7 +512,7 @@ def _build_candidate_loop(
         require_provider_evidence=True,
     )
     scheduling_repository = SQLiteSchedulingRepository(database)
-    calendar_adapter = FakeCalendarAdapter()
+    calendar_adapter = SQLiteSandboxCalendarProvider(database)
     scheduling = SchedulingService(
         scheduling_repository,
         calendar_adapter,
@@ -517,6 +520,7 @@ def _build_candidate_loop(
             operations,
             SchedulingService.action_adapter(calendar_adapter, scheduling_repository),
         ),
+        require_provider_evidence=True,
     )
     return AutonomousCareerLoop(
         agent_factory=factory,

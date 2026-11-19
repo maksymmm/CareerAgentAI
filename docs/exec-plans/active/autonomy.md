@@ -1,6 +1,6 @@
 # Autonomous Implementation Plan
 
-Provider-evidence-verified application and message reconciliation (ADR 0001/0002): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed, preventing an invalid state or stale WAL snapshot from reopening an operation. Message delivery now uses a restart-safe SQLite sandbox mailbox with exactly-once idempotency. Interview reconciliation still requires equivalent hardening. Next: exact-head CI/review, then add provider evidence to interview/calendar reconciliation.
+Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
 
 Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory
 submission fake with a SQLite-ledger provider whose outcomes (success, no effect, retryable no
