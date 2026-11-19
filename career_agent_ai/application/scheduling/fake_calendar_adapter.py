@@ -32,6 +32,7 @@ class FakeCalendarAdapter:
                 status=ScheduleStatus.ACCEPTED,
                 provider_event_id=event.provider_event_id or f"fake-{event.event_id}",
             ),
+            source_event=event,
         )
 
     def decline(self, operation_id: str, event: ScheduleEvent) -> ScheduleEvent:
@@ -44,6 +45,7 @@ class FakeCalendarAdapter:
                 status=ScheduleStatus.DECLINED,
                 provider_event_id=event.provider_event_id or f"fake-{event.event_id}",
             ),
+            source_event=event,
         )
 
     def reschedule(
@@ -66,11 +68,24 @@ class FakeCalendarAdapter:
                 timezone_name=timezone_name,
                 provider_event_id=event.provider_event_id or f"fake-{event.event_id}",
             ),
+            source_event=event,
+            intent_arguments=(
+                start_at.isoformat(),
+                None if end_at is None else end_at.isoformat(),
+                timezone_name,
+            ),
         )
 
     def _deliver(
-        self, action: str, operation_id: str, delivered: ScheduleEvent
+        self,
+        action: str,
+        operation_id: str,
+        delivered: ScheduleEvent,
+        *,
+        source_event: ScheduleEvent | None = None,
+        intent_arguments: tuple[object, ...] = (),
     ) -> ScheduleEvent:
+        del source_event, intent_arguments
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         existing = self._operations.get(operation_id)
         if existing is not None:

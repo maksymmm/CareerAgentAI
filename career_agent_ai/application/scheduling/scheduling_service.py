@@ -636,6 +636,13 @@ class SchedulingService:
                 "Calendar provider evidence conflicts with the approved action."
             )
         if (
+            current.provider_event_id is not None
+            and delivered.provider_event_id != current.provider_event_id
+        ):
+            raise CalendarReconciliationEvidenceError(
+                "Calendar provider evidence conflicts with the existing provider event ID."
+            )
+        if (
             claimed_provider_event_id is not None
             and claimed_provider_event_id != delivered.provider_event_id
         ):

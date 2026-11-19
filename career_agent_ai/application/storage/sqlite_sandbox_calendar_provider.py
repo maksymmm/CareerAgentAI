@@ -67,13 +67,26 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
         connection.commit()
 
     def _deliver(
-        self, action: str, operation_id: str, delivered: ScheduleEvent
+        self,
+        action: str,
+        operation_id: str,
+        delivered: ScheduleEvent,
+        *,
+        source_event: ScheduleEvent | None = None,
+        intent_arguments: tuple[object, ...] = (),
     ) -> ScheduleEvent:
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
+        if source_event is None:
+            raise PreCalendarActionError("Sandbox calendar source intent is missing.")
         event_json = self._encode_event(delivered)
         fingerprint = sha256(
             json.dumps(
-                [action, json.loads(event_json)],
+                [
+                    action,
+                    json.loads(self._encode_event(source_event)),
+                    intent_arguments,
+                    json.loads(event_json),
+                ],
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,

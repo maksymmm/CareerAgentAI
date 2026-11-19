@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -142,3 +143,59 @@ def test_calendar_provider_confirms_absence_and_rejects_nested_lookup(tmp_path):
     with pytest.raises(PreCalendarActionError, match="inside a transaction"):
         provider.verify_calendar_action("decline:evidence")
     database.connection.rollback()
+
+
+def test_no_effect_binds_reschedule_source_intent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(
+        database,
+        lambda _key, attempt: (
+            SandboxCalendarOutcome.NO_EFFECT
+            if attempt == 1
+            else SandboxCalendarOutcome.SUCCESS
+        ),
+    )
+    source = _event()
+    target = source.start_at + timedelta(days=1)
+    with pytest.raises(PreCalendarActionError, match="no calendar effect"):
+        provider.reschedule(
+            "reschedule:evidence", source, target, None, "Europe/Berlin"
+        )
+    changed_source = replace(
+        source,
+        start_at=source.start_at + timedelta(hours=2),
+        end_at=source.end_at + timedelta(hours=2),
+    )
+    with pytest.raises(PreCalendarActionError, match="different calendar intent"):
+        provider.reschedule(
+            "reschedule:evidence", changed_source, target, None, "Europe/Berlin"
+        )
+    assert provider.effect_count("reschedule:evidence") == 0
+
+
+def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    service, provider, operations = _stack(
+        database,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    source = replace(_event(), provider_event_id="provider-existing")
+    service.add_event(source)
+    assert service.accept(
+        "accept:evidence", source.event_id, human_approved=True
+    ) is None
+    row = database.connection.execute(
+        "SELECT event_json FROM sandbox_calendar_effects WHERE operation_id = ?",
+        ("accept:evidence",),
+    ).fetchone()
+    corrupted = json.loads(row[0])
+    corrupted["provider_event_id"] = "provider-other"
+    database.connection.execute(
+        "UPDATE sandbox_calendar_effects SET event_json = ? WHERE operation_id = ?",
+        (json.dumps(corrupted), "accept:evidence"),
+    )
+    database.connection.commit()
+
+    with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
+        service.resolve_reconciliation("accept:evidence", completed=True)
+    assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
