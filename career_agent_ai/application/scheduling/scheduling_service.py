@@ -12,7 +12,13 @@ from career_agent_ai.application.external_actions import (
     ExternalActionStatus,
 )
 
-from .calendar_adapter import CalendarAdapter, PreCalendarActionError
+from .calendar_adapter import (
+    CalendarAdapter,
+    CalendarEvidence,
+    CalendarEvidenceState,
+    CalendarReconciliationEvidenceError,
+    PreCalendarActionError,
+)
 from .models import (
     HumanScheduleView,
     ScheduleEvent,
@@ -337,10 +343,18 @@ class SchedulingService:
         repository: SchedulingRepository,
         provider: CalendarAdapter,
         external_actions: ExternalActionService,
+        *,
+        require_provider_evidence: bool = False,
     ) -> None:
+        if not isinstance(require_provider_evidence, bool):
+            raise TypeError("require_provider_evidence must be a boolean.")
+        verifier = getattr(provider, "verify_calendar_action", None)
+        if require_provider_evidence and not callable(verifier):
+            raise TypeError("Provider does not support calendar evidence verification.")
         self._repository = repository
         self._provider = provider
         self._external_actions = external_actions
+        self._verifier = verifier if require_provider_evidence else None
 
     @staticmethod
     def action_adapter(
@@ -449,6 +463,9 @@ class SchedulingService:
             str(operation.payload.get("event_id", "")), "event_id"
         )
         current = self.get_event(event_id)
+        provider_event_id = self._verify_provider_evidence(
+            operation, current, completed, provider_event_id
+        )
         if not completed:
             if provider_event_id is not None:
                 raise ValueError(
@@ -534,6 +551,98 @@ class SchedulingService:
                 "event_snapshot": _serialize_schedule_event(current),
             },
         )
+
+    def _verify_provider_evidence(
+        self,
+        operation: ExternalActionOperation,
+        current: ScheduleEvent,
+        completed: bool,
+        claimed_provider_event_id: str | None,
+    ) -> str | None:
+        if self._verifier is None:
+            return claimed_provider_event_id
+        try:
+            evidence = self._verifier(operation.operation_id)
+        except Exception as exc:
+            raise CalendarReconciliationEvidenceError(
+                "Calendar provider evidence lookup failed."
+            ) from exc
+        if not isinstance(evidence, CalendarEvidence):
+            raise CalendarReconciliationEvidenceError(
+                "Calendar provider evidence is malformed."
+            )
+        if evidence.state == CalendarEvidenceState.UNKNOWN:
+            raise CalendarReconciliationEvidenceError(
+                "Calendar provider evidence is inconclusive."
+            )
+        if not completed:
+            if evidence.state != CalendarEvidenceState.ABSENT_CONFIRMED:
+                raise CalendarReconciliationEvidenceError(
+                    "Provider has not confirmed that no calendar effect occurred."
+                )
+            return None
+        if evidence.state != CalendarEvidenceState.PRESENT or evidence.event is None:
+            raise CalendarReconciliationEvidenceError(
+                "Provider holds no evidence of the calendar action."
+            )
+        delivered = evidence.event
+        immutable_current = (
+            current.event_id, current.candidate_id, current.employer_name,
+            current.event_type, current.location, current.application_id,
+            current.created_at,
+        )
+        immutable_delivered = (
+            delivered.event_id, delivered.candidate_id, delivered.employer_name,
+            delivered.event_type, delivered.location, delivered.application_id,
+            delivered.created_at,
+        )
+        if immutable_delivered != immutable_current:
+            raise CalendarReconciliationEvidenceError(
+                "Calendar provider evidence conflicts with the prepared event."
+            )
+        action_type = operation.action_type
+        if action_type == "calendar.accept":
+            expected_status = ScheduleStatus.ACCEPTED
+            expected_start, expected_end, expected_timezone = (
+                _CalendarActionAdapter._prepared_source_slot(operation.payload)
+            )
+        elif action_type == "calendar.decline":
+            expected_status = ScheduleStatus.DECLINED
+            expected_start, expected_end, expected_timezone = (
+                _CalendarActionAdapter._prepared_source_slot(operation.payload)
+            )
+        else:
+            expected_status = ScheduleStatus.RESCHEDULE_REQUESTED
+            expected_start = normalize_aware_datetime(
+                datetime.fromisoformat(str(operation.payload["start_at"])), "start_at"
+            )
+            raw_end = operation.payload.get("end_at")
+            expected_end = (
+                None if raw_end is None else normalize_aware_datetime(
+                    datetime.fromisoformat(str(raw_end)), "end_at"
+                )
+            )
+            expected_timezone = validate_timezone_name(
+                str(operation.payload["timezone_name"])
+            )
+        if (
+            delivered.status != expected_status
+            or delivered.start_at != expected_start
+            or delivered.end_at != expected_end
+            or delivered.timezone_name != expected_timezone
+            or delivered.provider_event_id is None
+        ):
+            raise CalendarReconciliationEvidenceError(
+                "Calendar provider evidence conflicts with the approved action."
+            )
+        if (
+            claimed_provider_event_id is not None
+            and claimed_provider_event_id != delivered.provider_event_id
+        ):
+            raise CalendarReconciliationEvidenceError(
+                "Claimed provider event ID does not match provider evidence."
+            )
+        return delivered.provider_event_id
 
     def accept(
         self, operation_id: str, event_id: str, *, human_approved: bool

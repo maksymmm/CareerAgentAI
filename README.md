@@ -333,6 +333,14 @@ are unchanged.
 
 ## Scheduling and Interview Coordination
 
+Candidate sandbox calendar actions use a durable SQLite provider ledger rather than
+process-local state. Accept, decline, and reschedule intents are bound to their stable
+operation IDs and replay with at most one simulated provider effect across restart.
+Ambiguous reconciliation is evidence-verified: completion requires the exact approved
+event/status/slot and provider event ID, while a no-effect claim requires authoritative
+absence under a SQLite writer lock. The provider is dry-run only and never contacts or
+modifies a real calendar.
+
 The candidate sandbox offers Clear this tab's session: it removes the bearer token,
 profile/start inputs and all loaded run/application/event data, invalidates pending
 reads/starts and disables approval prompts without making a network request. This is
