@@ -856,7 +856,23 @@ def test_candidate_http_message_no_effect_retries_once_after_restart(
     status, snapshot = call(second, status_path)
     assert status == "200 OK"
     assert snapshot["phase"] == CareerLoopPhase.MESSAGE_RECONCILIATION.value
+    assert snapshot["state_version"] > message_prompt["state_version"]
     reconciliation_path = f"/v1/candidate/runs/{run_id}/message-reconciliation"
+    assert call(
+        second,
+        reconciliation_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "state_version": message_prompt["state_version"],
+            "delivered": False,
+        },
+    ) == ("409 Conflict", {"error": "approval_conflict"})
+    assert len(attempts) == 1
+    status, unchanged = call(second, status_path)
+    assert status == "200 OK"
+    assert unchanged["phase"] == CareerLoopPhase.MESSAGE_RECONCILIATION.value
+    assert unchanged["state_version"] == snapshot["state_version"]
     assert call(
         second,
         reconciliation_path,
