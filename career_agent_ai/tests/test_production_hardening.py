@@ -701,7 +701,23 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
     status, snapshot = call(second, status_path)
     assert status == "200 OK"
     assert snapshot["phase"] == CareerLoopPhase.APPLICATION_RECONCILIATION.value
+    assert snapshot["state_version"] > prompt["state_version"]
     reconciliation_path = f"/v1/candidate/runs/{run_id}/application-reconciliation"
+    assert call(
+        second,
+        reconciliation_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "state_version": prompt["state_version"],
+            "submitted": False,
+        },
+    ) == ("409 Conflict", {"error": "approval_conflict"})
+    assert len(attempts) == 1
+    status, unchanged = call(second, status_path)
+    assert status == "200 OK"
+    assert unchanged["phase"] == CareerLoopPhase.APPLICATION_RECONCILIATION.value
+    assert unchanged["state_version"] == snapshot["state_version"]
     assert call(
         second,
         reconciliation_path,
