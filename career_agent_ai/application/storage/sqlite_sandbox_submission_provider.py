@@ -207,6 +207,10 @@ class SQLiteSandboxSubmissionProvider:
         in-flight submit, so a pending effect can never be observed as absent.
         """
         connection = self._database.connection
+        if connection.in_transaction:
+            raise PreSubmissionError(
+                "Sandbox evidence cannot be verified inside an existing transaction."
+            )
         self._begin(connection)
         try:
             row = self._load(operation_id)

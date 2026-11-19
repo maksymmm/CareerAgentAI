@@ -167,6 +167,10 @@ def test_failed_or_malformed_lookup_rejects_claims(path, provider_cls, claim):
 
 
 def test_evidence_model_and_service_flags_are_validated(path):
+    with pytest.raises(TypeError, match="EvidenceState"):
+        SubmissionEvidence(None)
+    with pytest.raises(TypeError, match="EvidenceState"):
+        SubmissionEvidence("absent_confirmed")
     with pytest.raises(ValueError):
         SubmissionEvidence(EvidenceState.PRESENT, job_id="j")
     with pytest.raises(ValueError):
@@ -322,6 +326,23 @@ def test_evidence_lookup_under_busy_lock_fails_closed(path):
     stack.service.resolve_reconciliation(OP, submitted=True, provider_submission_id=PID)
     assert stack.status() == ExternalActionStatus.SUCCEEDED
     stack.close()
+
+
+def test_evidence_lookup_rejects_an_existing_stale_read_transaction(path):
+    reader = Stack(path, evidence=True)
+    reader.database.connection.execute("PRAGMA journal_mode = WAL")
+    reader.database.connection.execute("BEGIN")
+    assert reader.provider.observe(OP) is None
+
+    writer = Stack(path, evidence=True)
+    assert writer.service.submit(OP, **_submit_kwargs())["provider_submission_id"] == PID
+    writer.close()
+
+    with pytest.raises(PreSubmissionError, match="existing transaction"):
+        reader.provider.verify_submission(OP)
+    reader.database.connection.rollback()
+    assert reader.provider.verify_submission(OP).state == EvidenceState.PRESENT
+    reader.close()
 
 
 def test_provider_busy_error_is_reported_as_pre_submission_error(path):

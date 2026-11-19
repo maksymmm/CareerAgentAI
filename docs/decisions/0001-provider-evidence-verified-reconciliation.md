@@ -43,7 +43,11 @@ are unchanged.
 The sandbox ledger commits the attempt and its effect in one transaction, so a missing row is
 authoritative: `ABSENT_CONFIRMED`. The lookup takes the SQLite writer lock first, which
 serializes it with any in-flight submit, so a pending effect cannot be read as absent. Failure
-to take the lock is reported as `UNKNOWN`-equivalent (lookup error, fail closed).
+to take the lock is reported as `UNKNOWN`-equivalent (lookup error, fail closed). Verification
+also rejects a connection that already has an open transaction: reusing its potentially stale
+read snapshot would not acquire the promised writer lock. Evidence objects accept only the
+closed `EvidenceState` enum, and a negative claim requires the explicit `ABSENT_CONFIRMED`
+member rather than merely any state other than `PRESENT`.
 
 ### Future real-provider adapters
 

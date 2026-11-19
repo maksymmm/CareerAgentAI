@@ -99,6 +99,8 @@ class SubmissionEvidence:
     candidate_snapshot_sha256: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.state, EvidenceState):
+            raise TypeError("state must be an EvidenceState.")
         fields = (
             self.job_id,
             self.application_id,
@@ -519,9 +521,9 @@ class ApplicationSubmissionService:
         if evidence.state == EvidenceState.UNKNOWN:
             raise ReconciliationEvidenceError("Provider evidence is inconclusive.")
         if not submitted:
-            if evidence.state == EvidenceState.PRESENT:
+            if evidence.state != EvidenceState.ABSENT_CONFIRMED:
                 raise ReconciliationEvidenceError(
-                    "Provider holds a submission; it cannot be reconciled as not submitted."
+                    "Provider has not confirmed that no submission occurred."
                 )
             return
         if evidence.state != EvidenceState.PRESENT:
