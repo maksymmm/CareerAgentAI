@@ -298,6 +298,19 @@ The included fake provider is deterministic, in-memory, and dry-run only. It per
 no network I/O and needs no credentials. No production communication provider or
 credential configuration is included.
 
+The candidate sandbox composes a durable application-submission provider
+(`SQLiteSandboxSubmissionProvider`) instead of an in-memory fake. Its SQLite sandbox ledger
+(`sandbox_submission_ledger`, `sandbox_submission_attempts`) records every provider-side effect
+and attempt, so effects survive request and process restarts. The ledger enforces one effect per
+idempotency key and per application; a replay of the same key and intent returns the stored
+result without a second effect, and a reused key with a different intent is rejected. Outcomes
+are scripted deterministically through the injectable `sandbox_outcome_plan` argument of
+`build_candidate_sandbox_app_from_env` (success, no effect, retryable no effect, connection
+interruption before the effect, timeout after the effect, evidence mismatch); the default plan
+always succeeds. The provider performs no network I/O, adds no HTTP endpoint or OpenAPI change,
+and creates only additive tables (`CREATE TABLE IF NOT EXISTS`), so older binaries ignore them
+and rollback needs no schema action.
+
 ---
 
 ## Scheduling and Interview Coordination

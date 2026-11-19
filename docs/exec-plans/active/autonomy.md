@@ -1,5 +1,14 @@
 # Autonomous Implementation Plan
 
+Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory
+submission fake with a SQLite-ledger provider whose outcomes (success, no effect, retryable no
+effect, interruption before effect, timeout after effect, evidence mismatch) are scripted by an
+injected plan. Regressions cover exactly-once provider effects across restart and reconciliation,
+concurrent same-key submissions, key/intent conflicts, definitive no-effect followed by a new
+approved attempt, and the production-composition HTTP path with owner, token and state-version
+rejection. No endpoint or OpenAPI change. Remaining gap: reconciliation does not yet verify the
+operator-supplied provider_submission_id against provider evidence. Next: exact-head CI/review.
+
 Candidate application no-effect restart acceptance: production sandbox composition now
 forces the first fake submission into an ambiguous outcome, restarts against the same SQLite
 database, posts a version-bound `submitted=false` observation through HTTP and proves exactly

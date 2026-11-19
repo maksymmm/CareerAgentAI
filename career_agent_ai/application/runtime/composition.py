@@ -21,7 +21,6 @@ from career_agent_ai.application.agents.resume.resume_agent import ResumeAgent
 from career_agent_ai.application.career import (
     ApplicationSubmissionService,
     AutonomousCareerLoop,
-    FakeApplicationSubmissionAdapter,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
@@ -61,6 +60,10 @@ from career_agent_ai.application.storage.sqlite_communication_repository import 
     SQLiteCommunicationRepository,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_sandbox_submission_provider import (
+    SandboxOutcomePlan,
+    SQLiteSandboxSubmissionProvider,
+)
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
 from career_agent_ai.application.storage.sqlite_operational_probe import (
     SQLiteOperationalProbe,
@@ -121,10 +124,12 @@ class RuntimeCandidateApp:
         database_path: str,
         jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
+        sandbox_outcome_plan: SandboxOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._resolve_bearer = resolve_bearer
+        self._sandbox_outcome_plan = sandbox_outcome_plan
         self._closed = False
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
@@ -132,7 +137,9 @@ class RuntimeCandidateApp:
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         app = CandidateApprovalWSGIApp(
-            _RequestCandidateLoop(self._database_path, self._jobs),
+            _RequestCandidateLoop(
+                self._database_path, self._jobs, self._sandbox_outcome_plan
+            ),
             resolve_bearer=self._resolve_bearer,
         )
         return app(environ, start_response)
@@ -151,7 +158,9 @@ class RuntimeCandidateApp:
                 raise ValueError("run_id must match the published identifier pattern.")
         database = SQLiteDatabase(self._database_path)
         try:
-            loop = _build_candidate_loop(database, self._jobs)
+            loop = _build_candidate_loop(
+                database, self._jobs, self._sandbox_outcome_plan
+            )
             if run_id is None:
                 return loop.start(request)
             return start_owner_scoped_run(loop, request, client_run_id=run_id)
@@ -226,9 +235,15 @@ class RuntimeCandidateApp:
 class _RequestCandidateLoop:
     """Open durable storage only after the API authenticates and routes a request."""
 
-    def __init__(self, database_path: str, jobs: tuple[Job, ...]) -> None:
+    def __init__(
+        self,
+        database_path: str,
+        jobs: tuple[Job, ...],
+        outcome_plan: SandboxOutcomePlan | None = None,
+    ) -> None:
         self._database_path = database_path
         self._jobs = jobs
+        self._outcome_plan = outcome_plan
 
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's event without writable storage or calendar I/O."""
@@ -272,7 +287,9 @@ class _RequestCandidateLoop:
         """Start one authenticated sandbox run using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(database, self._jobs).start(
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).start(
                 request, run_id=run_id
             )
         finally:
@@ -284,7 +301,9 @@ class _RequestCandidateLoop:
         """Replay an owned legacy start using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(database, self._jobs).replay_existing_start(
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).replay_existing_start(
                 request, run_id=run_id, user_id=user_id
             )
         finally:
@@ -303,7 +322,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs
+                database, self._jobs, self._outcome_plan
             ).get_candidate_approval_prompt(run_id, user_id=user_id)
         finally:
             database.close()
@@ -313,7 +332,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs
+                database, self._jobs, self._outcome_plan
             ).resume_candidate_submission(user_id=user_id, submission=submission)
         finally:
             database.close()
@@ -322,7 +341,9 @@ class _RequestCandidateLoop:
         """Recover one owner-scoped non-human phase using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(database, self._jobs).continue_run(
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).continue_run(
                 run_id, user_id=user_id
             )
         finally:
@@ -341,7 +362,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs
+                database, self._jobs, self._outcome_plan
             ).resolve_application_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -364,7 +385,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs
+                database, self._jobs, self._outcome_plan
             ).resolve_message_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -382,7 +403,9 @@ class _RequestCandidateLoop:
         """Resolve one owner-scoped calendar observation using request storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(database, self._jobs).resolve_interview_reconciliation(
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).resolve_interview_reconciliation(
                 run_id, user_id=user_id, completed=completed,
                 provider_event_id=provider_event_id,
                 expected_state_version=expected_state_version,
@@ -396,6 +419,7 @@ def build_candidate_sandbox_app_from_env(
     resolve_bearer: Callable[[str], str | None],
     jobs: Iterable[Job] = (),
     environ: Mapping[str, str] | None = None,
+    sandbox_outcome_plan: SandboxOutcomePlan | None = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
     config = validate_candidate_sandbox_environment(environ)
@@ -410,13 +434,14 @@ def build_candidate_sandbox_app_from_env(
     try:
         if database.is_memory:
             raise ValueError("Candidate sandbox requires durable SQLite storage.")
-        _build_candidate_loop(database, configured_jobs)
+        _build_candidate_loop(database, configured_jobs, sandbox_outcome_plan)
     finally:
         database.close()
     return RuntimeCandidateApp(
         database_path=config.database_path,
         jobs=configured_jobs,
         resolve_bearer=resolve_bearer,
+        sandbox_outcome_plan=sandbox_outcome_plan,
     )
 
 
@@ -443,7 +468,9 @@ def validate_candidate_sandbox_environment(
 
 
 def _build_candidate_loop(
-    database: SQLiteDatabase, jobs: tuple[Job, ...]
+    database: SQLiteDatabase,
+    jobs: tuple[Job, ...],
+    outcome_plan: SandboxOutcomePlan | None = None,
 ) -> AutonomousCareerLoop:
     """Build one loop whose repositories share a request-owned connection."""
     job_repository = InMemoryJobRepository()
@@ -456,7 +483,7 @@ def _build_candidate_loop(
     factory = AgentFactory(registry, search_service=search)
     applications = SQLiteJobApplicationRepository(database)
     operations = SQLiteExternalActionOperationRepository(database)
-    submission_adapter = FakeApplicationSubmissionAdapter()
+    submission_adapter = SQLiteSandboxSubmissionProvider(database, outcome_plan)
     submission = ApplicationSubmissionService(
         submission_adapter,
         ExternalActionService(
