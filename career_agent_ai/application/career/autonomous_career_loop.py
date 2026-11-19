@@ -16,6 +16,7 @@ from uuid import uuid4
 from career_agent_ai.application.agents.agent_factory import AgentFactory
 from career_agent_ai.application.brain.agent_context import AgentContext
 from career_agent_ai.application.career.application_submission import (
+    ReconciliationEvidenceError,
     ApplicationSubmissionService,
 )
 from career_agent_ai.application.career.approval_contract import (
@@ -411,11 +412,16 @@ class AutonomousCareerLoop:
             lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
         try:
-            self._submission.resolve_reconciliation(
-                operation_id,
-                submitted=submitted,
-                provider_submission_id=provider_submission_id,
-            )
+            try:
+                self._submission.resolve_reconciliation(
+                    operation_id,
+                    submitted=submitted,
+                    provider_submission_id=provider_submission_id,
+                )
+            except ReconciliationEvidenceError as exc:
+                raise CareerLoopConflictError(
+                    "Provider evidence does not support the claimed outcome."
+                ) from exc
             state.pending_human_action = None
             state.last_error = None
             state.phase = CareerLoopPhase.APPLICATION_SUBMIT

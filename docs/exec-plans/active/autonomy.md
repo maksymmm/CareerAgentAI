@@ -1,5 +1,7 @@
 # Autonomous Implementation Plan
 
+Provider-evidence-verified reconciliation (ADR 0001): submitted claims require matching durable ledger evidence; not-submitted claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed, preventing an invalid state or stale WAL snapshot from reopening an operation. Message and interview reconciliation still require equivalent hardening.
+
 Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory
 submission fake with a SQLite-ledger provider whose outcomes (success, no effect, retryable no
 effect, interruption before effect, timeout after effect, evidence mismatch) are scripted by an

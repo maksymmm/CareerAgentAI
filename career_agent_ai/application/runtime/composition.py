@@ -490,6 +490,7 @@ def _build_candidate_loop(
             operations,
             ApplicationSubmissionService.action_adapter(submission_adapter),
         ),
+        require_provider_evidence=True,
     )
     communication_repository = SQLiteCommunicationRepository(database)
     communication_adapter = FakeCommunicationAdapter()

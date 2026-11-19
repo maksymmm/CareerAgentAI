@@ -3,8 +3,12 @@
 from .application_submission import (
     ApplicationSubmissionAdapter,
     ApplicationSubmissionService,
+    EvidenceState,
     FakeApplicationSubmissionAdapter,
     PreSubmissionError,
+    ReconciliationEvidenceError,
+    SubmissionEvidence,
+    VerifiableSubmissionProvider,
 )
 from .approval_contract import (
     ApprovalDecision,
@@ -52,6 +56,10 @@ __all__ = [
     "HumanActionKind",
     "HumanActionRequiredError",
     "PreSubmissionError",
+    "ReconciliationEvidenceError",
+    "EvidenceState",
+    "SubmissionEvidence",
+    "VerifiableSubmissionProvider",
     "build_candidate_approval_prompt",
     "validate_candidate_approval_submission",
 ]
