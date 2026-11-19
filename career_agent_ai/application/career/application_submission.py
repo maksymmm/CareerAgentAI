@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha256
 from typing import Any, Mapping, Protocol
 
@@ -64,6 +66,58 @@ def _provider_result_identifier(
 
 class PreSubmissionError(RuntimeError):
     """Signal that submission failed before any external effect was attempted."""
+
+
+class ReconciliationEvidenceError(RuntimeError):
+    """Provider evidence is missing, inconclusive, or contradicts a claimed outcome."""
+
+
+class EvidenceState(str, Enum):
+    """What a provider lookup can conclude about one idempotency key.
+
+    ``ABSENT_CONFIRMED`` is evidence of absence and may only be reported by a provider
+    whose lookup is authoritative for that key (the sandbox ledger commits an effect
+    atomically with its record). A lookup that merely finds nothing, is eventually
+    consistent, or failed must report ``UNKNOWN``: absence of a record is then not
+    evidence that no external effect occurred.
+    """
+
+    PRESENT = "present"
+    ABSENT_CONFIRMED = "absent_confirmed"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SubmissionEvidence:
+    """Provider-side evidence for one submission idempotency key."""
+
+    state: EvidenceState
+    job_id: str | None = None
+    application_id: str | None = None
+    provider_submission_id: str | None = None
+    artifact_sha256: str | None = None
+    candidate_snapshot_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        fields = (
+            self.job_id,
+            self.application_id,
+            self.provider_submission_id,
+            self.artifact_sha256,
+            self.candidate_snapshot_sha256,
+        )
+        if self.state == EvidenceState.PRESENT:
+            if any(not isinstance(value, str) or not value for value in fields):
+                raise ValueError("Present evidence must carry every identity field.")
+        elif any(value is not None for value in fields):
+            raise ValueError("Absent or unknown evidence must not carry identity fields.")
+
+
+class VerifiableSubmissionProvider(Protocol):
+    """Optional provider capability: look up durable evidence by idempotency key."""
+
+    def verify_submission(self, operation_id: str) -> SubmissionEvidence:
+        """Return evidence for operation_id without causing any provider effect."""
 
 
 class ApplicationSubmissionAdapter(Protocol):
@@ -173,9 +227,22 @@ class ApplicationSubmissionService:
         self,
         provider: ApplicationSubmissionAdapter,
         external_actions: ExternalActionService,
+        *,
+        require_provider_evidence: bool = False,
     ) -> None:
+        """Bind a provider; optionally require provider evidence for reconciliation.
+
+        With ``require_provider_evidence`` an ambiguous outcome can be resolved only
+        against the provider's own evidence, never on an operator's claim alone.
+        """
+        if not isinstance(require_provider_evidence, bool):
+            raise TypeError("require_provider_evidence must be a boolean.")
+        verifier = getattr(provider, "verify_submission", None)
+        if require_provider_evidence and not callable(verifier):
+            raise TypeError("Provider must implement verify_submission for evidence checks.")
         self._provider = provider
         self._external_actions = external_actions
+        self._verifier = verifier if require_provider_evidence else None
 
     @staticmethod
     def action_adapter(provider: ApplicationSubmissionAdapter) -> _SubmissionActionAdapter:
@@ -389,6 +456,9 @@ class ApplicationSubmissionService:
             return operation
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Application submission is not awaiting reconciliation.")
+        self._verify_provider_evidence(
+            operation_id, operation.payload, submitted, provider_submission_id
+        )
         if submitted:
             payload = dict(operation.payload)
             artifact_content, artifact_digest = _validated_artifact(
@@ -429,6 +499,46 @@ class ApplicationSubmissionService:
             operation_id,
             confirmed_succeeded=False,
         )
+
+    def _verify_provider_evidence(
+        self,
+        operation_id: str,
+        payload: Mapping[str, Any],
+        submitted: bool,
+        claimed_provider_id: str | None,
+    ) -> None:
+        """Fail closed unless provider evidence confirms the claimed outcome exactly."""
+        if self._verifier is None:
+            return
+        try:
+            evidence = self._verifier(operation_id)
+        except Exception as exc:
+            raise ReconciliationEvidenceError("Provider evidence lookup failed.") from exc
+        if not isinstance(evidence, SubmissionEvidence):
+            raise ReconciliationEvidenceError("Provider evidence is malformed.")
+        if evidence.state == EvidenceState.UNKNOWN:
+            raise ReconciliationEvidenceError("Provider evidence is inconclusive.")
+        if not submitted:
+            if evidence.state == EvidenceState.PRESENT:
+                raise ReconciliationEvidenceError(
+                    "Provider holds a submission; it cannot be reconciled as not submitted."
+                )
+            return
+        if evidence.state != EvidenceState.PRESENT:
+            raise ReconciliationEvidenceError("Provider holds no evidence of a submission.")
+        expected = {
+            "job_id": evidence.job_id,
+            "application_id": evidence.application_id,
+            "artifact_sha256": evidence.artifact_sha256,
+        }
+        if "candidate_snapshot_sha256" in payload:
+            expected["candidate_snapshot_sha256"] = evidence.candidate_snapshot_sha256
+        if any(payload.get(key) != value for key, value in expected.items()):
+            raise ReconciliationEvidenceError("Provider evidence conflicts with the intent.")
+        if claimed_provider_id != evidence.provider_submission_id:
+            raise ReconciliationEvidenceError(
+                "Claimed provider submission ID does not match provider evidence."
+            )
 
     @staticmethod
     def _identifier(value: str, field: str) -> str:

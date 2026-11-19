@@ -311,6 +311,14 @@ always succeeds. The provider performs no network I/O, adds no HTTP endpoint or 
 and creates only additive tables (`CREATE TABLE IF NOT EXISTS`), so older binaries ignore them
 and rollback needs no schema action.
 
+Ambiguous submission outcomes are reconciled against provider evidence, not an operator's claim
+alone (see `docs/decisions/0001-provider-evidence-verified-reconciliation.md`). A "submitted"
+observation must match the ledger's provider submission ID, application, job and digests; a
+"not submitted" observation is accepted only when the provider confirms absence. Inconclusive or
+failed lookups are rejected. Rejections reuse the documented `409 approval_conflict` response and
+change no state, so the endpoint, authentication, owner isolation and `state_version` contract
+are unchanged.
+
 ---
 
 ## Scheduling and Interview Coordination

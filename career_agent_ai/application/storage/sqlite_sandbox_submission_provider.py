@@ -21,7 +21,11 @@ from enum import Enum
 from hashlib import sha256
 from typing import Any, Callable, Iterable, Mapping
 
-from career_agent_ai.application.career.application_submission import PreSubmissionError
+from career_agent_ai.application.career.application_submission import (
+    EvidenceState,
+    PreSubmissionError,
+    SubmissionEvidence,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -195,10 +199,40 @@ class SQLiteSandboxSubmissionProvider:
         ).fetchall()
         return tuple(SandboxOutcome(row[0]) for row in rows)
 
+    def verify_submission(self, operation_id: str) -> SubmissionEvidence:
+        """Return authoritative evidence for one key under the writer lock.
+
+        The sandbox commits the attempt and its effect atomically, so a missing row is
+        evidence of absence. Taking the writer lock first serializes this read with any
+        in-flight submit, so a pending effect can never be observed as absent.
+        """
+        connection = self._database.connection
+        self._begin(connection)
+        try:
+            row = self._load(operation_id)
+        finally:
+            connection.rollback()
+        if row is None:
+            return SubmissionEvidence(EvidenceState.ABSENT_CONFIRMED)
+        return SubmissionEvidence(
+            EvidenceState.PRESENT,
+            job_id=row[2],
+            application_id=row[3],
+            provider_submission_id=row[6],
+            artifact_sha256=row[4],
+            candidate_snapshot_sha256=row[5],
+        )
+
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
-        if not connection.in_transaction:
+        if connection.in_transaction:
+            return
+        try:
             connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise PreSubmissionError(
+                "Sandbox provider is busy; nothing was attempted."
+            ) from exc
 
     def _load(self, operation_id: str) -> tuple[Any, ...] | None:
         return self._database.connection.execute(

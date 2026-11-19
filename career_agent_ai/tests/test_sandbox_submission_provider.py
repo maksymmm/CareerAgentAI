@@ -59,15 +59,18 @@ def _submit_kwargs(**overrides):
 class Stack:
     """One 'process': fresh connection, provider, and service over a shared file."""
 
-    def __init__(self, path, plan=None):
+    def __init__(self, path, plan=None, *, evidence=False, provider_cls=None):
         self.database = SQLiteDatabase(str(path))
-        self.provider = SQLiteSandboxSubmissionProvider(self.database, plan)
+        self.provider = (provider_cls or SQLiteSandboxSubmissionProvider)(
+            self.database, plan
+        )
         self.service = ApplicationSubmissionService(
             self.provider,
             ExternalActionService(
                 SQLiteExternalActionOperationRepository(self.database),
                 ApplicationSubmissionService.action_adapter(self.provider),
             ),
+            require_provider_evidence=evidence,
         )
 
     def status(self, operation_id=OP):
@@ -426,22 +429,80 @@ def test_http_interrupted_before_effect_reconciles_not_submitted_and_retries_onc
     second.app.close()
 
 
-def test_http_wrong_not_submitted_claim_cannot_duplicate_provider_effect(path):
-    http = Http(path, _first_attempt(OUTCOME.TIMEOUT_AFTER_EFFECT))
-    run_id, _ = http.start_and_approve()
-    _, snapshot = http.call(f"/v1/candidate/runs/{run_id}/status")
-    status, resolved = http.call(
+def _reconcile(http, run_id, snapshot, **claim):
+    return http.call(
         f"/v1/candidate/runs/{run_id}/application-reconciliation",
         method="POST",
-        body={
-            "schema_version": 1,
-            "state_version": snapshot["state_version"],
-            "submitted": False,
-        },
+        body={"schema_version": 1, "state_version": snapshot["state_version"], **claim},
+    )
+
+
+def test_http_wrong_not_submitted_claim_is_rejected_by_provider_evidence(path):
+    http = Http(path, _first_attempt(OUTCOME.TIMEOUT_AFTER_EFFECT))
+    run_id, _ = http.start_and_approve()
+    _, before = http.call(f"/v1/candidate/runs/{run_id}/status")
+    assert _reconcile(http, run_id, before, submitted=False) == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    _, after = http.call(f"/v1/candidate/runs/{run_id}/status")
+    assert after == before  # state, version and phase are untouched
+    assert len(http.ledger()) == 1 and http.ledger()[0].replays == 0
+    # The execution lease was released: the correct claim still succeeds.
+    evidence = http.ledger()[0]
+    status, resolved = _reconcile(
+        http, run_id, after, submitted=True,
+        provider_submission_id=evidence.provider_submission_id,
     )
     assert (status, resolved["phase"]) == ("200 OK", "complete")
-    entries = http.ledger()
-    assert len(entries) == 1 and entries[0].replays == 1
+    assert len(http.ledger()) == 1 and http.ledger()[0].replays == 0
+    http.app.close()
+
+
+def test_http_wrong_or_foreign_provider_id_is_rejected_without_state_change(path):
+    http = Http(path, _first_attempt(OUTCOME.TIMEOUT_AFTER_EFFECT))
+    run_id, _ = http.start_and_approve()
+    _, before = http.call(f"/v1/candidate/runs/{run_id}/status")
+    for claimed in ("fake:other-application", "provider-guess", "x" * 1000):
+        assert _reconcile(
+            http, run_id, before, submitted=True, provider_submission_id=claimed
+        ) == ("409 Conflict", {"error": "approval_conflict"})
+    assert http.call(f"/v1/candidate/runs/{run_id}/status")[1] == before
+    assert len(http.ledger()) == 1
+    http.app.close()
+
+
+def test_http_submitted_claim_without_provider_record_is_rejected_then_no_effect_retry_works(
+    path,
+):
+    http = Http(path, _first_attempt(OUTCOME.INTERRUPTED_BEFORE_EFFECT))
+    run_id, _ = http.start_and_approve()
+    _, before = http.call(f"/v1/candidate/runs/{run_id}/status")
+    assert _reconcile(
+        http, run_id, before, submitted=True, provider_submission_id="fake:invented"
+    ) == ("409 Conflict", {"error": "approval_conflict"})
+    assert http.ledger() == ()
+    status, resolved = _reconcile(http, run_id, before, submitted=False)
+    assert (status, resolved["phase"]) == ("200 OK", "complete")
+    assert len(http.ledger()) == 1
+    http.app.close()
+
+
+def test_http_foreign_owner_cannot_reconcile_even_with_correct_evidence(path):
+    http = Http(path, _first_attempt(OUTCOME.TIMEOUT_AFTER_EFFECT))
+    run_id, _ = http.start_and_approve()
+    _, before = http.call(f"/v1/candidate/runs/{run_id}/status")
+    evidence = http.ledger()[0]
+    route = f"/v1/candidate/runs/{run_id}/application-reconciliation"
+    body = {
+        "schema_version": 1,
+        "state_version": before["state_version"],
+        "submitted": True,
+        "provider_submission_id": evidence.provider_submission_id,
+    }
+    assert http.call(route, method="POST", token="foreign", body=body)[0] == "404 Not Found"
+    assert http.call(route, method="POST", token=None, body=body)[0] == "401 Unauthorized"
+    assert http.call(f"/v1/candidate/runs/{run_id}/status")[1] == before
     http.app.close()
 
 
