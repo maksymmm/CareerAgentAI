@@ -12,7 +12,13 @@ from career_agent_ai.application.external_actions import (
     ExternalActionStatus,
 )
 
-from .communication_adapter import CommunicationAdapter, PreDeliveryCommunicationError
+from .communication_adapter import (
+    CommunicationAdapter,
+    CommunicationReconciliationEvidenceError,
+    DeliveryEvidence,
+    DeliveryEvidenceState,
+    PreDeliveryCommunicationError,
+)
 from .communication_repository import CommunicationRepository
 from .models import CommunicationMessage, MessageDirection, validate_identifier
 
@@ -94,10 +100,18 @@ class CommunicationService:
         repository: CommunicationRepository,
         provider: CommunicationAdapter,
         external_actions: ExternalActionService,
+        *,
+        require_provider_evidence: bool = False,
     ) -> None:
+        if not isinstance(require_provider_evidence, bool):
+            raise TypeError("require_provider_evidence must be a boolean.")
+        verifier = getattr(provider, "verify_delivery", None)
+        if require_provider_evidence and not callable(verifier):
+            raise TypeError("Provider does not support delivery evidence verification.")
         self._repository = repository
         self._provider = provider
         self._external_actions = external_actions
+        self._verifier = verifier if require_provider_evidence else None
 
     @staticmethod
     def action_adapter(
@@ -192,6 +206,7 @@ class CommunicationService:
             return operation
         if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
             raise ValueError("Communication operation is not awaiting reconciliation.")
+        self._verify_provider_evidence(operation_id, message, delivered)
         if delivered:
             outbound = replace(message, direction=MessageDirection.OUTBOUND)
             persisted = self._repository.save(outbound)
@@ -211,6 +226,40 @@ class CommunicationService:
             operation_id,
             confirmed_succeeded=False,
         )
+
+    def _verify_provider_evidence(
+        self,
+        operation_id: str,
+        message: CommunicationMessage,
+        delivered: bool,
+    ) -> None:
+        if self._verifier is None:
+            return
+        try:
+            evidence = self._verifier(operation_id)
+        except Exception as exc:
+            raise CommunicationReconciliationEvidenceError(
+                "Provider evidence lookup failed."
+            ) from exc
+        if not isinstance(evidence, DeliveryEvidence):
+            raise CommunicationReconciliationEvidenceError(
+                "Provider delivery evidence is malformed."
+            )
+        if evidence.state == DeliveryEvidenceState.UNKNOWN:
+            raise CommunicationReconciliationEvidenceError(
+                "Provider delivery evidence is inconclusive."
+            )
+        if not delivered:
+            if evidence.state != DeliveryEvidenceState.ABSENT_CONFIRMED:
+                raise CommunicationReconciliationEvidenceError(
+                    "Provider has not confirmed that no delivery occurred."
+                )
+            return
+        expected = replace(message, direction=MessageDirection.OUTBOUND)
+        if evidence.state != DeliveryEvidenceState.PRESENT or evidence.message != expected:
+            raise CommunicationReconciliationEvidenceError(
+                "Provider evidence does not match the prepared message intent."
+            )
 
     def send(
         self, operation_id: str, message_id: str, *, human_approved: bool

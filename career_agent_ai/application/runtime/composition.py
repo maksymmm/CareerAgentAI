@@ -64,6 +64,9 @@ from career_agent_ai.application.storage.sqlite_sandbox_submission_provider impo
     SandboxOutcomePlan,
     SQLiteSandboxSubmissionProvider,
 )
+from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
+    SQLiteSandboxCommunicationProvider,
+)
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
 from career_agent_ai.application.storage.sqlite_operational_probe import (
     SQLiteOperationalProbe,
@@ -493,7 +496,7 @@ def _build_candidate_loop(
         require_provider_evidence=True,
     )
     communication_repository = SQLiteCommunicationRepository(database)
-    communication_adapter = FakeCommunicationAdapter()
+    communication_adapter = SQLiteSandboxCommunicationProvider(database)
     communication = CommunicationService(
         communication_repository,
         communication_adapter,
@@ -503,6 +506,7 @@ def _build_candidate_loop(
                 communication_adapter, communication_repository
             ),
         ),
+        require_provider_evidence=True,
     )
     scheduling_repository = SQLiteSchedulingRepository(database)
     calendar_adapter = FakeCalendarAdapter()

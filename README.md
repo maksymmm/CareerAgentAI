@@ -294,9 +294,16 @@ legacy ISO timestamps are safely backfilled during repository initialization. Me
 text validation also rejects lone Unicode surrogate code points before any adapter or
 SQLite boundary is reached.
 
-The included fake provider is deterministic, in-memory, and dry-run only. It performs
-no network I/O and needs no credentials. No production communication provider or
-credential configuration is included.
+The included fake provider is deterministic, in-memory, and dry-run only. Candidate
+sandbox composition instead uses a SQLite-backed sandbox mailbox. Its intent,
+attempt, message, and delivery ledgers survive request/process restarts, bind each
+operation ID to one canonical message intent, and enforce at most one simulated
+delivery. Ambiguous delivery reconciliation is fail-closed: `delivered=true` requires
+the exact outbound provider message, while `delivered=false` requires authoritative
+absence under a SQLite writer lock. A timeout after the effect therefore cannot be
+reopened into a duplicate send, and an interruption before the effect can be safely
+reopened and retried. Neither provider performs network I/O or needs credentials; no
+production communication provider or credential configuration is included.
 
 The candidate sandbox composes a durable application-submission provider
 (`SQLiteSandboxSubmissionProvider`) instead of an in-memory fake. Its SQLite sandbox ledger

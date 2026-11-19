@@ -42,6 +42,7 @@ from career_agent_ai.application.career.autonomous_loop_repository import (
     CareerLoopRepository,
 )
 from career_agent_ai.application.communication import (
+    CommunicationReconciliationEvidenceError,
     CommunicationMessage,
     CommunicationService,
     MessageDirection,
@@ -463,10 +464,15 @@ class AutonomousCareerLoop:
             lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
         try:
-            self._communication.resolve_reconciliation(
-                operation_id,
-                delivered=delivered,
-            )
+            try:
+                self._communication.resolve_reconciliation(
+                    operation_id,
+                    delivered=delivered,
+                )
+            except CommunicationReconciliationEvidenceError as exc:
+                raise CareerLoopConflictError(
+                    "Provider evidence does not support the claimed outcome."
+                ) from exc
             state.pending_human_action = None
             state.last_error = None
             state.phase = CareerLoopPhase.MESSAGE_SEND
