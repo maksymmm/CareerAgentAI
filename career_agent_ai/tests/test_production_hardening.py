@@ -604,6 +604,128 @@ def test_candidate_http_approval_survives_restart_without_repeating_submission(
     ]
 
 
+def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
+    tmp_path, monkeypatch
+):
+    """Exercise version-bound no-effect recovery through production composition."""
+    database_path = str(tmp_path / "candidate-no-effect-restart.sqlite")
+    environ = {
+        "CAREER_AGENT_DB_PATH": database_path,
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+    }
+    jobs = (
+        Job.create(
+            job_id="no-effect-job",
+            title="Logistics Coordinator",
+            company=Company("no-effect-company", "Sandbox Logistics"),
+            location=Location("Germany", "Karlsruhe"),
+            description="logistics coordination",
+            created_at=NOW,
+        ),
+    )
+
+    def call(app, path, *, method="GET", body=None):
+        encoded = b"" if body is None else json.dumps(body).encode("utf-8")
+        statuses = []
+        response = app(
+            {
+                "REQUEST_METHOD": method,
+                "PATH_INFO": path,
+                "HTTP_AUTHORIZATION": "Bearer owner",
+                "CONTENT_TYPE": "application/json",
+                "CONTENT_LENGTH": str(len(encoded)),
+                "wsgi.input": io.BytesIO(encoded),
+            },
+            lambda status, headers: statuses.append(status),
+        )
+        return statuses[0], json.loads(b"".join(response))
+
+    attempts = []
+    original_submit = runtime_composition.FakeApplicationSubmissionAdapter.submit
+
+    def ambiguous_once(self, *args, **kwargs):
+        attempts.append((args, kwargs))
+        if len(attempts) == 1:
+            raise RuntimeError("sandbox outcome unknown")
+        return original_submit(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        runtime_composition.FakeApplicationSubmissionAdapter, "submit", ambiguous_once
+    )
+    resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
+    first = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    status, started = call(
+        first,
+        "/v1/candidate/runs",
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": "no-effect-restart",
+            "keyword": "logistics",
+            "candidate_profile": PROFILE,
+            "location": "Karlsruhe",
+        },
+    )
+    assert status == "201 Created"
+    run_id = started["run_id"]
+    approval_path = f"/v1/candidate/runs/{run_id}/approval"
+    status, prompt = call(first, approval_path)
+    assert status == "200 OK"
+    status, ambiguous = call(
+        first,
+        approval_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": prompt["state_version"],
+            "action_fingerprint": prompt["action_fingerprint"],
+            "decision": "approve",
+        },
+    )
+    assert status == "200 OK"
+    assert ambiguous == {
+        "run_id": run_id,
+        "phase": CareerLoopPhase.APPLICATION_RECONCILIATION.value,
+    }
+    assert len(attempts) == 1
+    first.close()
+
+    second = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+    )
+    status_path = f"/v1/candidate/runs/{run_id}/status"
+    status, snapshot = call(second, status_path)
+    assert status == "200 OK"
+    assert snapshot["phase"] == CareerLoopPhase.APPLICATION_RECONCILIATION.value
+    reconciliation_path = f"/v1/candidate/runs/{run_id}/application-reconciliation"
+    assert call(
+        second,
+        reconciliation_path,
+        method="POST",
+        body={
+            "schema_version": 1,
+            "state_version": snapshot["state_version"],
+            "submitted": False,
+        },
+    ) == ("200 OK", {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value})
+    assert len(attempts) == 2
+    assert attempts[0][0][0] == attempts[1][0][0]
+    second.close()
+
+    database = SQLiteDatabase(database_path)
+    try:
+        operations = database.connection.execute(
+            "SELECT operation_id, status FROM external_action_operations"
+        ).fetchall()
+    finally:
+        database.close()
+    assert operations == [(attempts[0][0][0], ExternalActionStatus.SUCCEEDED.value)]
+
+
 def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
