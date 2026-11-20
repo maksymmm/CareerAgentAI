@@ -329,6 +329,12 @@ failed lookups are rejected. Rejections reuse the documented `409 approval_confl
 change no state, so the endpoint, authentication, owner isolation and `state_version` contract
 are unchanged.
 
+The message and calendar sandbox providers add the same protections (ADR 0004): a message cannot
+be delivered twice under different operation keys and an `event_id` is bound to one candidate and
+application, so a duplicate response decision or a takeover is a definitive no-effect.
+`SandboxProviderPlans` lets the composition script submission, communication and calendar
+outcomes deterministically; all default to success and no network provider is enabled.
+
 ---
 
 ## Scheduling and Interview Coordination
