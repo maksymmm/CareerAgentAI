@@ -64,6 +64,13 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                 replays INTEGER NOT NULL DEFAULT 0
             )"""
         )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS sandbox_calendar_events (
+                event_id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL,
+                application_id TEXT, status TEXT NOT NULL,
+                operation_id TEXT NOT NULL
+            )"""
+        )
         connection.commit()
 
     def _deliver(
@@ -125,6 +132,7 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                 )
                 connection.commit()
                 return self._decode_event(effect[1])
+            self._guard_event_identity(action, delivered)
             attempt = connection.execute(
                 "SELECT COUNT(*) FROM sandbox_calendar_attempts WHERE operation_id = ?",
                 (operation_id,),
@@ -151,6 +159,19 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                 "INSERT INTO sandbox_calendar_effects "
                 "(operation_id, fingerprint, action, event_json) VALUES (?, ?, ?, ?)",
                 (operation_id, fingerprint, action, event_json),
+            )
+            connection.execute(
+                "INSERT INTO sandbox_calendar_events "
+                "(event_id, candidate_id, application_id, status, operation_id) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET "
+                "status = excluded.status, operation_id = excluded.operation_id",
+                (
+                    delivered.event_id,
+                    delivered.candidate_id,
+                    delivered.application_id,
+                    delivered.status.value,
+                    operation_id,
+                ),
             )
             connection.commit()
         except Exception:
@@ -186,6 +207,29 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                 (operation_id,),
             ).fetchone()[0]
         )
+
+    def _guard_event_identity(self, action: str, delivered: ScheduleEvent) -> None:
+        """Reject effects that would duplicate or hijack a provider-side event.
+
+        An event_id is bound to one candidate and application. A second response
+        decision is a duplicate unless the provider event was rescheduled in between.
+        """
+        row = self._database.connection.execute(
+            "SELECT candidate_id, application_id, status FROM sandbox_calendar_events "
+            "WHERE event_id = ?",
+            (delivered.event_id,),
+        ).fetchone()
+        if row is None:
+            return
+        if row[0] != delivered.candidate_id or row[1] != delivered.application_id:
+            raise PreCalendarActionError(
+                "Sandbox calendar event belongs to a different candidate or application."
+            )
+        decided = {ScheduleStatus.ACCEPTED.value, ScheduleStatus.DECLINED.value}
+        if action in {"accept", "decline"} and row[2] in decided:
+            raise PreCalendarActionError(
+                "Sandbox calendar event already holds a response decision."
+            )
 
     def _begin(self) -> None:
         try:

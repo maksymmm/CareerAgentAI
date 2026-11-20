@@ -65,9 +65,11 @@ from career_agent_ai.application.storage.sqlite_sandbox_submission_provider impo
     SQLiteSandboxSubmissionProvider,
 )
 from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
+    SandboxCommunicationOutcomePlan,
     SQLiteSandboxCommunicationProvider,
 )
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SandboxCalendarOutcomePlan,
     SQLiteSandboxCalendarProvider,
 )
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
@@ -121,6 +123,25 @@ class RuntimeOperationalApp:
         self.close()
 
 
+@dataclass(frozen=True)
+class SandboxProviderPlans:
+    """Deterministic scripted outcomes for each sandbox provider (all default to success)."""
+
+    submission: SandboxOutcomePlan | None = None
+    communication: SandboxCommunicationOutcomePlan | None = None
+    calendar: SandboxCalendarOutcomePlan | None = None
+
+
+SandboxPlanConfig = SandboxOutcomePlan | SandboxProviderPlans | None
+"""A bare submission plan (backward compatible) or the full per-provider plans."""
+
+
+def _resolve_plans(config: SandboxPlanConfig) -> SandboxProviderPlans:
+    if isinstance(config, SandboxProviderPlans):
+        return config
+    return SandboxProviderPlans(submission=config)
+
+
 class RuntimeCandidateApp:
     """Create request-local candidate loops over one durable SQLite database."""
 
@@ -130,7 +151,7 @@ class RuntimeCandidateApp:
         database_path: str,
         jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
-        sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+        sandbox_outcome_plan: SandboxPlanConfig = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
@@ -245,7 +266,7 @@ class _RequestCandidateLoop:
         self,
         database_path: str,
         jobs: tuple[Job, ...],
-        outcome_plan: SandboxOutcomePlan | None = None,
+        outcome_plan: SandboxPlanConfig = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
@@ -425,7 +446,7 @@ def build_candidate_sandbox_app_from_env(
     resolve_bearer: Callable[[str], str | None],
     jobs: Iterable[Job] = (),
     environ: Mapping[str, str] | None = None,
-    sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+    sandbox_outcome_plan: SandboxPlanConfig = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
     config = validate_candidate_sandbox_environment(environ)
@@ -476,7 +497,7 @@ def validate_candidate_sandbox_environment(
 def _build_candidate_loop(
     database: SQLiteDatabase,
     jobs: tuple[Job, ...],
-    outcome_plan: SandboxOutcomePlan | None = None,
+    outcome_plan: SandboxPlanConfig = None,
 ) -> AutonomousCareerLoop:
     """Build one loop whose repositories share a request-owned connection."""
     job_repository = InMemoryJobRepository()
@@ -489,7 +510,8 @@ def _build_candidate_loop(
     factory = AgentFactory(registry, search_service=search)
     applications = SQLiteJobApplicationRepository(database)
     operations = SQLiteExternalActionOperationRepository(database)
-    submission_adapter = SQLiteSandboxSubmissionProvider(database, outcome_plan)
+    plans = _resolve_plans(outcome_plan)
+    submission_adapter = SQLiteSandboxSubmissionProvider(database, plans.submission)
     submission = ApplicationSubmissionService(
         submission_adapter,
         ExternalActionService(
@@ -499,7 +521,9 @@ def _build_candidate_loop(
         require_provider_evidence=True,
     )
     communication_repository = SQLiteCommunicationRepository(database)
-    communication_adapter = SQLiteSandboxCommunicationProvider(database)
+    communication_adapter = SQLiteSandboxCommunicationProvider(
+        database, plans.communication
+    )
     communication = CommunicationService(
         communication_repository,
         communication_adapter,
@@ -512,7 +536,7 @@ def _build_candidate_loop(
         require_provider_evidence=True,
     )
     scheduling_repository = SQLiteSchedulingRepository(database)
-    calendar_adapter = SQLiteSandboxCalendarProvider(database)
+    calendar_adapter = SQLiteSandboxCalendarProvider(database, plans.calendar)
     scheduling = SchedulingService(
         scheduling_repository,
         calendar_adapter,
