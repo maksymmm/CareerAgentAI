@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.jobs.job_filter import JobFilter
 from career_agent_ai.application.jobs.job_relevance_scorer import (
@@ -74,10 +76,9 @@ class JobRanker:
 
         if maximum is not None:
             try:
-                score += (
-                    float(maximum)
-                    / 100000.0
-                )
+                numeric_maximum = float(maximum)
+                if math.isfinite(numeric_maximum):
+                    score += numeric_maximum / 100000.0
             except (
                 TypeError,
                 ValueError,
@@ -128,7 +129,8 @@ class JobRanker:
             return 0.0
 
         try:
-            return float(maximum)
+            numeric_maximum = float(maximum)
+            return numeric_maximum if math.isfinite(numeric_maximum) else 0.0
         except (
             TypeError,
             ValueError,
