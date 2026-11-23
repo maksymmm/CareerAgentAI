@@ -455,6 +455,7 @@ _HTML = r"""<!doctype html>
         if (result.outcome === 'reconciliation_required') {
           pendingDecline = {schema_version: 1, event_id: identifier,
             state_version: version, decision: 'decline'};
+          byId('decline-confirmed').checked = false;
           byId('decline-reconciliation-panel').disabled = false;
           byId('decline-reconciliation-verified').disabled = false;
           byId('decline-reconciliation-state').textContent =
