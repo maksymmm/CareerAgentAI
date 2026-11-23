@@ -1610,3 +1610,18 @@ nullable key from an open-ended event's prepared intent and prove the retry fail
 closed without a provider effect, while a present explicit null remains safely
 retryable after confirmed no-effect evidence. Next: exact-head full CI and Codex
 code/security review, then continue candidate interview acceptance workflow.
+
+
+Candidate decline post-event-commit recovery: pending lookup now recovers a detached
+ambiguous decline only when exactly one strict deterministic calendar.decline ledger
+row has a complete source snapshot and the owned event is the exact declined target at
+source_version + 1. This covers a provider effect and local event transition that
+committed before the external-action success status was durable, including a process
+loss before the operation could be classified as reconciliation-required. An
+in-progress row is promoted with compare-and-swap only after the exact target event
+is observed. Provider evidence remains mandatory before reporting completion; the
+provider is never replayed. HTTP/SQLite regressions cover both partial-commit windows
+and reject a detached operation whose event transition did not commit.
+Next: exact-head full CI/coverage and Codex code/security review; then integrate the
+decline workflow only after all findings are resolved, while continuing candidate
+acceptance and reschedule recovery hardening.

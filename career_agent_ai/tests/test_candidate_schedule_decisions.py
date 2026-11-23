@@ -23,7 +23,13 @@ from career_agent_ai.application.scheduling import (
     ScheduleStatus,
     SchedulingService,
 )
+from career_agent_ai.application.external_actions.external_action_operation import (
+    ExternalActionStatus,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_external_action_repository import (
+    SQLiteExternalActionOperationRepository,
+)
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import SandboxCalendarOutcome
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
 
@@ -882,3 +888,124 @@ def test_open_ended_decline_retry_accepts_explicit_null_end_snapshot(tmp_path):
     assert result["outcome"] == "completed"
     assert result["event"]["status"] == "declined"
     assert _effect_count(path) == 1
+
+
+@pytest.mark.parametrize("leave_in_progress", [False, True])
+def test_pending_recovers_decline_after_event_commit_before_operation_completion(
+    tmp_path, monkeypatch, leave_in_progress
+):
+    path = tmp_path / "decline-event-committed-operation-pending.sqlite"
+    _seed(path, _event())
+    original_transition = SQLiteExternalActionOperationRepository.transition
+
+    def interrupt_operation_completion(
+        repository, operation_id, expected_status, status, **kwargs
+    ):
+        if (
+            expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.SUCCEEDED
+        ):
+            raise sqlite3.OperationalError("simulated terminal status write failure")
+        if (
+            leave_in_progress
+            and expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.RECONCILIATION_REQUIRED
+        ):
+            raise sqlite3.OperationalError("simulated process loss before classification")
+        return original_transition(
+            repository, operation_id, expected_status, status, **kwargs
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            SQLiteExternalActionOperationRepository,
+            "transition",
+            interrupt_operation_completion,
+        )
+        first_status, first_result = Candidate(path).decline()
+
+    assert first_status == (
+        "503 Service Unavailable" if leave_in_progress else "202 Accepted"
+    )
+    if not leave_in_progress:
+        assert first_result["outcome"] == "reconciliation_required"
+    committed_event = _stored_event(path)
+    assert committed_event.status == ScheduleStatus.DECLINED
+    assert committed_event.version == 2
+
+    connection = sqlite3.connect(path)
+    try:
+        active_operation_id = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        operation_id, operation_status = connection.execute(
+            "SELECT operation_id, status FROM external_action_operations"
+        ).fetchone()
+        assert active_operation_id is None
+        assert operation_id == CandidateScheduleDeclineWSGIApp._operation_id(
+            OWNER, EVENT_ID, 1
+        )
+        assert operation_status == (
+            ExternalActionStatus.IN_PROGRESS.value
+            if leave_in_progress
+            else ExternalActionStatus.RECONCILIATION_REQUIRED.value
+        )
+    finally:
+        connection.close()
+    assert _effect_count(path) == 1
+
+    restarted = Candidate(path)
+    pending_status, pending = restarted.pending()
+    assert pending_status == "200 OK"
+    assert pending == {
+        "schema_version": 1,
+        "outcome": "pending",
+        "event_id": EVENT_ID,
+        "state_version": 1,
+    }
+
+    connection = sqlite3.connect(path)
+    try:
+        recovered_status = connection.execute(
+            "SELECT status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+        assert recovered_status == ExternalActionStatus.RECONCILIATION_REQUIRED.value
+    finally:
+        connection.close()
+
+    reconciled_status, reconciled = restarted.reconcile(True)
+    assert reconciled_status == "200 OK"
+    assert reconciled["outcome"] == "completed"
+    assert reconciled["event"]["status"] == "declined"
+    assert reconciled["event"]["state_version"] == 2
+    assert _effect_count(path) == 1
+
+
+def test_pending_rejects_detached_ambiguous_decline_before_event_transition(tmp_path):
+    path = tmp_path / "decline-detached-before-event-commit.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert candidate.decline()[0] == "202 Accepted"
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "UPDATE scheduling_events SET active_action_operation_id = NULL "
+            "WHERE event_id = ?",
+            (EVENT_ID,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert Candidate(path).pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _stored_event(path).status == ScheduleStatus.PROPOSED
+    assert _effect_count(path) == 0

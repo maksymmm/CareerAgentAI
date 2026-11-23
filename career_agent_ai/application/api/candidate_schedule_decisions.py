@@ -230,6 +230,127 @@ class CandidateScheduleDeclineWSGIApp:
         return active_operation_id
 
     @classmethod
+    def _require_detached_completed_action_binding(
+        cls,
+        connection,
+        pending_ids: tuple[str, ...],
+        user_id: str,
+        event_id: str,
+        event_version: int,
+        event_start_at: str,
+        event_end_at: str | None,
+        event_timezone_name: str,
+        event_status: str,
+    ) -> bool:
+        """Recover a pointer-free action only after its exact event transition committed."""
+        if len(pending_ids) != 1:
+            raise SchedulingOperationConflict(
+                "A detached ambiguous decline is missing or not unique."
+            )
+        operation_id = pending_ids[0]
+        row = connection.execute(
+            """
+            SELECT action_type, payload_json, status
+            FROM external_action_operations
+            WHERE operation_id = ?
+            """,
+            (operation_id,),
+        ).fetchone()
+        if (
+            row is None
+            or row[0] != "calendar.decline"
+            or row[2] not in {
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+            }
+        ):
+            raise SchedulingOperationConflict(
+                "A detached ambiguous decline is not in a recoverable state."
+            )
+
+        def object_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Persisted operation payload contains duplicate members.")
+                result[key] = value
+            return result
+
+        def reject_constant(_value):
+            raise ValueError("Persisted operation payload contains a non-finite number.")
+
+        try:
+            payload = json.loads(
+                row[1],
+                object_pairs_hook=object_pairs,
+                parse_constant=reject_constant,
+            )
+            if not isinstance(payload, dict):
+                raise ValueError("Persisted operation payload must be an object.")
+            candidate_id = validate_schedule_identifier(
+                payload.get("candidate_id"), "candidate_id"
+            )
+            stored_event_id = validate_schedule_identifier(
+                payload.get("event_id"), "event_id"
+            )
+            source_version = payload.get("event_version")
+            required_snapshot_fields = {
+                "event_start_at",
+                "event_end_at",
+                "event_timezone_name",
+                "event_status",
+            }
+            if (
+                candidate_id != payload.get("candidate_id")
+                or stored_event_id != payload.get("event_id")
+                or candidate_id != user_id
+                or stored_event_id != event_id
+                or type(source_version) is not int
+                or not 1 <= source_version <= _MAX_STATE_VERSION
+                or operation_id != cls._operation_id(
+                    candidate_id, stored_event_id, source_version
+                )
+                or not required_snapshot_fields.issubset(payload)
+            ):
+                raise ValueError("Detached decline identity or snapshot is incomplete.")
+            source_start_at = payload["event_start_at"]
+            source_end_at = payload["event_end_at"]
+            source_timezone_name = payload["event_timezone_name"]
+            source_status = payload["event_status"]
+            if (
+                not isinstance(source_start_at, str)
+                or (
+                    source_end_at is not None
+                    and not isinstance(source_end_at, str)
+                )
+                or not isinstance(source_timezone_name, str)
+                or source_status not in {
+                    ScheduleStatus.PROPOSED.value,
+                    ScheduleStatus.RESCHEDULE_REQUESTED.value,
+                }
+            ):
+                raise ValueError("Detached decline source snapshot is malformed.")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SchedulingOperationConflict(
+                "A detached ambiguous decline has an unmatchable payload."
+            ) from exc
+
+        target_already_applied = (
+            source_version < _MAX_STATE_VERSION
+            and type(event_version) is int
+            and event_version == source_version + 1
+            and event_status == ScheduleStatus.DECLINED.value
+            and source_start_at == event_start_at
+            and source_end_at == event_end_at
+            and source_timezone_name == event_timezone_name
+        )
+        if not target_already_applied:
+            raise SchedulingOperationConflict(
+                "A detached ambiguous decline does not match a committed event transition."
+            )
+        return True
+
+    @classmethod
     def _require_active_action_binding(
         cls,
         connection,
@@ -245,11 +366,19 @@ class CandidateScheduleDeclineWSGIApp:
     ) -> bool:
         """Validate the active ledger row and report whether it is still ambiguous."""
         if active_operation_id is None:
-            if pending_ids:
-                raise SchedulingOperationConflict(
-                    "An ambiguous decline is not referenced by the event's active action."
-                )
-            return False
+            if not pending_ids:
+                return False
+            return cls._require_detached_completed_action_binding(
+                connection,
+                pending_ids,
+                user_id,
+                event_id,
+                event_version,
+                event_start_at,
+                event_end_at,
+                event_timezone_name,
+                event_status,
+            )
         try:
             normalized = validate_schedule_identifier(
                 active_operation_id, "active_action_operation_id"
@@ -691,8 +820,11 @@ class CandidateScheduleDeclineWSGIApp:
                     ExternalActionStatus.IN_PROGRESS,
                     ExternalActionStatus.RECONCILIATION_REQUIRED,
                     error=(
-                        "Process restarted while the calendar provider action was in "
-                        "progress; provider evidence is required before retry."
+                        "The declined event is committed but operation completion is "
+                        "ambiguous; provider evidence is required before retry."
+                        if active_operation_id is None
+                        else "Process restarted while the calendar provider action was "
+                        "in progress; provider evidence is required before retry."
                     ),
                 )
             if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
