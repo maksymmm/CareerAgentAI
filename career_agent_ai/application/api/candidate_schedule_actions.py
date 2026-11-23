@@ -921,6 +921,15 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
             "timezone_name": {"type": "string", "minLength": 1, "maxLength": 100},
         },
     }
+    pending_active_response = {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_version", "outcome", "event_id"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "outcome": {"const": "in_progress"},
+            "event_id": event_properties["event_id"],
+        },
+    }
     no_effect_response = {
         "type": "object", "additionalProperties": False,
         "required": ["schema_version", "outcome", "event"],
@@ -945,9 +954,14 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
                 }],
                 "responses": {
                     "200": {
-                        "description": "Allowlisted pending reschedule intent restored from durable storage; interrupted in-progress actions are marked for reconciliation without provider execution",
+                        "description": "No pending reschedule or an evidence-gated reconciliation intent restored from durable storage",
                         "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                         "content": json_content({"oneOf": [pending_none_response, pending_intent_response]}),
+                    },
+                    "202": {
+                        "description": "A recent provider request is still in progress; no recovery mutation is performed",
+                        "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                        "content": json_content(pending_active_response),
                     },
                     "400": {"description": "Invalid event query", "content": json_content(error_schema)},
                     "401": {"description": "Authentication required", "content": json_content(error_schema)},
