@@ -405,7 +405,7 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
             page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
             page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
             page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
-            assert not page.locator("#reschedule-panel").is_disabled()
+            assert not page.locator("#reschedule-start").is_disabled()
 
             page.locator("#reschedule-start").fill(START)
             page.locator("#reschedule-end").fill(END)
@@ -414,7 +414,8 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "Provider outcome is uncertain"
             ).wait_for()
-            assert page.locator("#reschedule-panel").is_disabled()
+            assert page.locator("#reschedule-start").is_disabled()
+            assert page.locator("#request-reschedule").is_disabled()
             assert page.locator("#confirm-reschedule-completed").is_disabled()
             assert page.locator("#confirm-reschedule-no-effect").is_disabled()
 
