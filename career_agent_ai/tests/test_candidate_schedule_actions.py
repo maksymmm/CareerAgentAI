@@ -209,6 +209,30 @@ def _stored_event(path):
         database.close()
 
 
+def test_duplicate_reschedule_post_preserves_fresh_in_progress_operation(tmp_path):
+    path = tmp_path / "duplicate-live-reschedule.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    status, result = candidate.reschedule()
+
+    assert status == "202 Accepted"
+    assert result == {
+        "schema_version": 1,
+        "outcome": "in_progress",
+        "event_id": EVENT_ID,
+    }
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.IN_PROGRESS
+    finally:
+        database.close()
+    assert _effect_count(path) == 0
+    candidate.close()
+
+
 def test_candidate_can_reschedule_owned_interview_and_replay_after_restart(tmp_path):
     path = tmp_path / "candidate-reschedule.sqlite"
     _seed(path, _event())
@@ -683,6 +707,11 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     assert "202" in pending_get["responses"]
     active_schema = pending_get["responses"]["202"]["content"]["application/json"]["schema"]
     assert active_schema["properties"]["outcome"]["const"] == "in_progress"
+    reschedule_post = document["paths"][CandidateScheduleActionWSGIApp.RESCHEDULE_PATH]["post"]
+    post_active_schemas = reschedule_post["responses"]["202"]["content"]["application/json"]["schema"]["oneOf"]
+    assert {
+        schema["properties"]["outcome"]["const"] for schema in post_active_schemas
+    } == {"in_progress", "reconciliation_required"}
 
     html = candidate_sandbox_html().decode("utf-8")
     for identifier in (
@@ -694,6 +723,7 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
         assert identifier in html
     assert "['none', 'pending', 'in_progress'].includes(pending.outcome)" in html
     assert "A sandbox reschedule is still in progress." in html
+    assert "result.outcome === 'in_progress'" in html
     assert "No real calendar is contacted" in html
 
 
@@ -727,16 +757,77 @@ def test_candidate_sandbox_browser_disables_actions_while_reschedule_is_live(tmp
                 "The current sandbox request is active", exact=False
             ).wait_for()
 
-            assert page.locator("#reschedule-panel").is_disabled()
+            assert page.locator("#reschedule-panel").get_attribute("disabled") is not None
             assert page.locator("#reschedule-start").is_disabled()
             assert page.locator("#reschedule-end").is_disabled()
             assert page.locator("#reschedule-timezone").is_disabled()
             assert page.locator("#request-reschedule").is_disabled()
-            assert page.locator("#reschedule-reconciliation-panel").is_disabled()
+            assert page.locator("#reschedule-reconciliation-panel").get_attribute("disabled") is not None
             assert page.locator("#reschedule-reconciliation-verified").is_disabled()
             assert page.locator("#confirm-reschedule-completed").is_disabled()
             assert page.locator("#confirm-reschedule-no-effect").is_disabled()
             assert _effect_count(path) == 0
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        candidate.close()
+
+
+def test_candidate_sandbox_browser_disables_duplicate_post_while_reschedule_is_live(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-duplicate-live-reschedule.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, candidate.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
+
+            page.locator("#reschedule-start").fill(START)
+            page.locator("#reschedule-end").fill(END)
+            page.locator("#reschedule-timezone").fill(ZONE)
+            operation_id = _seed_pending_operation(path)
+            page.locator("#request-reschedule").click()
+            page.locator("#reschedule-state").get_by_text(
+                "The current sandbox request is active", exact=False
+            ).wait_for()
+
+            assert page.locator("#reschedule-panel").get_attribute("disabled") is not None
+            assert page.locator("#reschedule-start").is_disabled()
+            assert page.locator("#reschedule-end").is_disabled()
+            assert page.locator("#reschedule-timezone").is_disabled()
+            assert page.locator("#request-reschedule").is_disabled()
+            assert page.locator("#reschedule-reconciliation-panel").get_attribute("disabled") is not None
+            assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            assert _effect_count(path) == 0
+
+            database = SQLiteDatabase(str(path))
+            try:
+                operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+                assert operation.status == ExternalActionStatus.IN_PROGRESS
+            finally:
+                database.close()
             browser.close()
     finally:
         server.shutdown()

@@ -1585,6 +1585,26 @@ _HTML = r"""<!doctype html>
         }, 'Sandbox reschedule request failed.', true);
         if (generation !== rescheduleGeneration) return;
         if (!result || result.schema_version !== 1) throw new Error('Invalid reschedule response.');
+        if (result.outcome === 'in_progress') {
+          if (Object.keys(result).length !== 3 || result.event_id !== request.event_id) {
+            throw new Error('Active reschedule response is not bound to the selected event.');
+          }
+          pendingReschedule = null;
+          byId('reschedule-start').disabled = true;
+          byId('reschedule-end').disabled = true;
+          byId('reschedule-timezone').disabled = true;
+          byId('reschedule-panel').disabled = true;
+          byId('reschedule-reconciliation-panel').disabled = true;
+          byId('reschedule-reconciliation-verified').checked = false;
+          byId('reschedule-reconciliation-verified').disabled = true;
+          byId('confirm-reschedule-completed').disabled = true;
+          byId('confirm-reschedule-no-effect').disabled = true;
+          byId('reschedule-reconciliation-state').textContent =
+            'A sandbox reschedule is still in progress. Refresh this event after the current request finishes.';
+          byId('reschedule-state').textContent =
+            'The current sandbox request is active. Do not submit another target or attest an outcome.';
+          return;
+        }
         if (result.outcome === 'reconciliation_required') {
           if (result.event_id !== request.event_id || result.state_version !== request.state_version) {
             throw new Error('Reschedule reconciliation is not bound to the selected event version.');

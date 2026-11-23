@@ -753,7 +753,7 @@ class SchedulingService:
             if existing.status == ExternalActionStatus.FAILED and human_approved:
                 _CalendarActionAdapter._validate_prepared_source(event, existing.payload)
                 self._external_actions.reopen_failed(operation_id)
-            return self._execute(operation_id, human_approved)
+            return self._execute(operation_id, human_approved, recover_in_progress=False)
         if event.status not in {
             ScheduleStatus.PROPOSED,
             ScheduleStatus.ACCEPTED,
@@ -783,7 +783,7 @@ class SchedulingService:
             "timezone_name": target_timezone,
         }
         self._external_actions.prepare(operation_id, "calendar.reschedule", payload)
-        return self._execute(operation_id, human_approved)
+        return self._execute(operation_id, human_approved, recover_in_progress=False)
 
     @staticmethod
     def _validate_human_approval(value: bool) -> None:
@@ -839,10 +839,16 @@ class SchedulingService:
                 )
 
     def _execute(
-        self, operation_id: str, human_approved: bool
+        self,
+        operation_id: str,
+        human_approved: bool,
+        *,
+        recover_in_progress: bool = True,
     ) -> ScheduleEvent | None:
         operation = self._external_actions.execute(
-            operation_id, human_approved=human_approved
+            operation_id,
+            human_approved=human_approved,
+            recover_in_progress=recover_in_progress,
         )
         if operation.status != ExternalActionStatus.SUCCEEDED:
             return None

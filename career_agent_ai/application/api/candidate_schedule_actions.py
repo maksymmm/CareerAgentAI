@@ -470,6 +470,16 @@ class CandidateScheduleActionWSGIApp:
             operation = service.get_operation(operation_id)
             if operation is None:
                 raise RuntimeError("Reschedule intent was not persisted.")
+            if operation.status == ExternalActionStatus.IN_PROGRESS:
+                return self._respond(
+                    start_response,
+                    "202 Accepted",
+                    {
+                        "schema_version": 1,
+                        "outcome": "in_progress",
+                        "event_id": event_id,
+                    },
+                )
             if operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED:
                 return self._respond(
                     start_response,
@@ -981,9 +991,9 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
                     "200": {"description": "Sandbox reschedule completed or definitively had no effect",
                             "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                             "content": json_content({"oneOf": [completed_response, no_effect_response]})},
-                    "202": {"description": "Provider outcome is ambiguous and requires reconciliation",
+                    "202": {"description": "The request is already active or the provider outcome is ambiguous",
                             "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
-                            "content": json_content(pending_response)},
+                            "content": json_content({"oneOf": [pending_response, pending_active_response]})},
                     **common,
                     "409": {"description": "Stale state, scheduling conflict or provider conflict",
                             "content": json_content(error_schema)},
