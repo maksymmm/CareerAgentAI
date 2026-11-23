@@ -1605,7 +1605,8 @@ review before integration.
 Candidate decline retry snapshot integrity: a PREPARED decline may be retried only when
 all source snapshot keys are durably present, including an explicit nullable
 `event_end_at`. This prevents a missing end field from being interpreted as a valid
-open-ended event after no-effect reconciliation. HTTP/SQLite regression removes the
-nullable key from an open-ended event's prepared intent and proves the retry fails
-closed without a provider effect. Next: exact-head full CI and Codex code/security
-review, then continue candidate interview acceptance workflow.
+open-ended event after no-effect reconciliation. HTTP/SQLite regressions remove the
+nullable key from an open-ended event's prepared intent and prove the retry fails
+closed without a provider effect, while a present explicit null remains safely
+retryable after confirmed no-effect evidence. Next: exact-head full CI and Codex
+code/security review, then continue candidate interview acceptance workflow.
