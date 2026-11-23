@@ -356,6 +356,7 @@ _HTML = r"""<!doctype html>
       byId('next-events').disabled = true;
     }
     async function loadEventDetail(identifier, minimumVersion, trigger) {
+      if (rescheduleInFlight) throw new Error('Wait for the current reschedule request to finish.');
       const versionFloor = eventVersionFloorId === identifier && eventVersionFloor !== null
         ? Math.max(minimumVersion, eventVersionFloor) : minimumVersion;
       clearEventDetail();
@@ -400,6 +401,7 @@ _HTML = r"""<!doctype html>
       }
     }
     async function loadEvents(after = null) {
+      if (rescheduleInFlight) throw new Error('Wait for the current reschedule request to finish.');
       clearEvents();
       const generation = eventsGeneration;
       const selectedStatus = byId('event-status').value;
@@ -1469,6 +1471,10 @@ _HTML = r"""<!doctype html>
     });
     async function submitReschedule() {
       if (rescheduleInFlight) throw new Error('A reschedule request is already in progress.');
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight ||
+          decisionInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
       if (pendingReschedule !== null) throw new Error('Reconcile the uncertain reschedule before another action.');
       if (selectedEventId === null || selectedEventVersion === null ||
           byId('reschedule-panel').disabled) {
@@ -1548,19 +1554,22 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         rescheduleInFlight = false;
-        if (generation === rescheduleGeneration) {
-          byId('reschedule-panel').setAttribute('aria-busy', 'false');
-          byId('request-reschedule').disabled =
-            selectedEventId === null || byId('reschedule-panel').disabled || pendingReschedule !== null;
-          const enabled = pendingReschedule !== null &&
-            byId('reschedule-reconciliation-verified').checked === true;
-          byId('confirm-reschedule-completed').disabled = !enabled;
-          byId('confirm-reschedule-no-effect').disabled = !enabled;
-        }
+        byId('reschedule-panel').setAttribute('aria-busy', 'false');
+        byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
+        byId('request-reschedule').disabled =
+          selectedEventId === null || byId('reschedule-panel').disabled || pendingReschedule !== null;
+        const enabled = pendingReschedule !== null &&
+          byId('reschedule-reconciliation-verified').checked === true;
+        byId('confirm-reschedule-completed').disabled = !enabled;
+        byId('confirm-reschedule-no-effect').disabled = !enabled;
       }
     }
     async function reconcileReschedule(completed) {
       if (rescheduleInFlight) throw new Error('A reschedule operation is already in progress.');
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight ||
+          decisionInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
       if (pendingReschedule === null ||
           byId('reschedule-reconciliation-verified').checked !== true) {
         throw new Error('Independently verify the exact provider outcome before reconciliation.');
@@ -1574,8 +1583,11 @@ _HTML = r"""<!doctype html>
       try {
         const result = await call('/v1/candidate/schedule-event/reschedule-reconciliation', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({...request, decision: undefined, completed,
-            independently_verified: true})
+          body: JSON.stringify({
+            schema_version: 1, event_id: request.event_id, state_version: request.state_version,
+            start_at: request.start_at, end_at: request.end_at,
+            timezone_name: request.timezone_name, completed, independently_verified: true
+          })
         }, 'Sandbox reschedule reconciliation failed.', true);
         if (generation !== rescheduleGeneration) return;
         if (!result || result.schema_version !== 1 ||
@@ -1616,11 +1628,14 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         rescheduleInFlight = false;
-        if (generation === rescheduleGeneration) {
-          byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
-          byId('request-reschedule').disabled =
-            selectedEventId === null || byId('reschedule-panel').disabled || pendingReschedule !== null;
-        }
+        byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
+        byId('reschedule-panel').setAttribute('aria-busy', 'false');
+        byId('request-reschedule').disabled =
+          selectedEventId === null || byId('reschedule-panel').disabled || pendingReschedule !== null;
+        const enabled = pendingReschedule !== null &&
+          byId('reschedule-reconciliation-verified').checked === true;
+        byId('confirm-reschedule-completed').disabled = !enabled;
+        byId('confirm-reschedule-no-effect').disabled = !enabled;
       }
     }
     byId('request-reschedule').addEventListener('click', () =>
