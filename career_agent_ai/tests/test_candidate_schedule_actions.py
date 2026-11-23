@@ -87,13 +87,13 @@ class Candidate:
         )
 
     def call(self, route, *, token="owner-token", method="POST", body=None, raw=None,
-             content_type="application/json"):
+             content_type="application/json", query=""):
         encoded = raw if raw is not None else json.dumps(body).encode("utf-8")
         statuses = []
         environ = {
             "REQUEST_METHOD": method,
             "PATH_INFO": route,
-            "QUERY_STRING": "",
+            "QUERY_STRING": query,
             "CONTENT_TYPE": content_type,
             "CONTENT_LENGTH": str(len(encoded)),
             "wsgi.input": io.BytesIO(encoded),
@@ -107,6 +107,13 @@ class Candidate:
         return self.call(
             CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
             body=_body() if body is None else body,
+        )
+
+    def pending(self, event_id=EVENT_ID, *, token="owner-token", query=None):
+        encoded_query = query if query is not None else "event_id=" + event_id
+        return self.call(
+            CandidateScheduleActionWSGIApp.PENDING_PATH,
+            token=token, method="GET", body={}, query=encoded_query,
         )
 
     def reconcile(self, completed, body=None, *, verified=True):
@@ -366,6 +373,109 @@ def test_authentication_precedes_missing_storage_access(tmp_path):
     assert not path.exists()
 
 
+
+def test_pending_reschedule_intent_is_restored_after_restart_without_provider_retry(tmp_path):
+    path = tmp_path / "pending-recovery.sqlite"
+    _seed(path, _event())
+    first = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    status, result = first.reschedule()
+    assert status == "202 Accepted"
+    assert result["outcome"] == "reconciliation_required"
+    assert _effect_count(path) == 1
+    first.close()
+
+    restarted = Candidate(path)
+    status, pending = restarted.pending()
+    assert status == "200 OK"
+    assert pending == {
+        "schema_version": 1,
+        "outcome": "pending",
+        "event_id": EVENT_ID,
+        "state_version": 1,
+        "start_at": START,
+        "end_at": END,
+        "timezone_name": ZONE,
+    }
+    assert _effect_count(path) == 1
+    recovered_request = _body(
+        state_version=pending["state_version"],
+        start_at=pending["start_at"],
+        end_at=pending["end_at"],
+        timezone_name=pending["timezone_name"],
+    )
+    status, reconciled = restarted.reconcile(True, body=recovered_request)
+    assert status == "200 OK" and reconciled["outcome"] == "completed"
+    assert reconciled["event"]["state_version"] == 2
+    assert _effect_count(path) == 1
+    restarted.close()
+
+
+def test_pending_reschedule_lookup_is_owner_scoped_and_returns_none_when_absent(tmp_path):
+    path = tmp_path / "pending-owner.sqlite"
+    _seed(path, _event(), _event("foreign-interview", candidate_id="candidate-2"))
+    candidate = Candidate(path)
+    assert candidate.pending() == (
+        "200 OK",
+        {"schema_version": 1, "outcome": "none", "event_id": EVENT_ID},
+    )
+    assert candidate.pending("foreign-interview") == (
+        "404 Not Found", {"error": "not_found"}
+    )
+    assert candidate.pending(token="other-token") == (
+        "401 Unauthorized", {"error": "unauthorized"}
+    )
+    candidate.close()
+
+
+def test_pending_reschedule_query_is_strict_and_authentication_precedes_storage(tmp_path):
+    missing = tmp_path / "pending-missing.sqlite"
+    app = CandidateScheduleActionWSGIApp(
+        database_path=str(missing), resolve_bearer=lambda _token: None
+    )
+    statuses = []
+    payload = b"".join(app({
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": CandidateScheduleActionWSGIApp.PENDING_PATH,
+        "QUERY_STRING": "event_id=" + EVENT_ID,
+        "CONTENT_LENGTH": "0",
+        "wsgi.input": io.BytesIO(b""),
+    }, lambda status, headers: statuses.append(status)))
+    assert statuses == ["401 Unauthorized"]
+    assert json.loads(payload) == {"error": "unauthorized"}
+    assert not missing.exists()
+
+    path = tmp_path / "pending-query.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+    assert candidate.pending(query="event_id=" + EVENT_ID + "&event_id=" + EVENT_ID) == (
+        "400 Bad Request", {"error": "invalid_request"}
+    )
+    assert candidate.pending(query="event_id=%ZZ") == (
+        "400 Bad Request", {"error": "invalid_request"}
+    )
+    candidate.close()
+
+
+def test_extreme_decimal_exponent_parse_failure_is_a_sanitized_bad_request(tmp_path):
+    path = tmp_path / "extreme-decimal-parse.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+    raw = (
+        '{"schema_version":1,"event_id":"' + EVENT_ID + '",'
+        '"state_version":1e' + "9" * 60 + ','
+        '"start_at":"' + START + '","end_at":"' + END + '",'
+        '"timezone_name":"' + ZONE + '","decision":"approve"}'
+    ).encode("utf-8")
+    status, result = candidate.call(
+        CandidateScheduleActionWSGIApp.RESCHEDULE_PATH, raw=raw
+    )
+    assert (status, result) == ("400 Bad Request", {"error": "invalid_request"})
+    assert _effect_count(path) == 0
+    candidate.close()
+
+
 def test_methods_content_type_and_no_store_contract(tmp_path):
     path = tmp_path / "method.sqlite"
     _seed(path, _event())
@@ -423,7 +533,11 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
     from wsgiref.simple_server import WSGIRequestHandler, make_server
 
     path = tmp_path / "candidate-browser-reschedule.sqlite"
-    _seed(path, _event())
+    _seed(
+        path,
+        _event(),
+        _event("interview-reschedule-2", start_at=datetime(2026, 12, 3, 9, 0, tzinfo=timezone.utc)),
+    )
     candidate = Candidate(
         path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
     )
@@ -458,6 +572,34 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
             assert page.locator("#request-reschedule").is_disabled()
             assert page.locator("#confirm-reschedule-completed").is_disabled()
             assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            assert not page.locator("#reschedule-reconciliation-verified").is_disabled()
+
+            # Switching events clears memory state; selecting the original event
+            # restores its exact pending slot from the durable operation ledger.
+            page.get_by_role("button", name="View event 2: interview-reschedule-2").click()
+            page.locator("#event-detail").get_by_text('"event_id": "interview-reschedule-2"').wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage"
+            ).wait_for()
+            assert page.locator("#reschedule-start").input_value() == START
+            assert page.locator("#reschedule-end").input_value() == END
+            assert page.locator("#reschedule-timezone").input_value() == ZONE
+            assert not page.locator("#reschedule-reconciliation-verified").is_checked()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+
+            # Reload restores the target again, but never the previous attestation.
+            page.reload()
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage"
+            ).wait_for()
+            assert page.locator("#reschedule-start").input_value() == START
+            assert not page.locator("#reschedule-reconciliation-verified").is_checked()
 
             page.locator("#reschedule-reconciliation-verified").check()
             page.locator("#confirm-reschedule-no-effect").click()
