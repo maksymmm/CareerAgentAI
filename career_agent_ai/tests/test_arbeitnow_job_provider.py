@@ -210,3 +210,32 @@ def test_arbeitnow_provider_empty_query_returns_all():
         result = provider.search("")
 
     assert len(result) == 2
+
+def test_legacy_provider_keeps_jobs_with_invalid_timestamps():
+    """Malformed provider metadata must not discard otherwise usable opportunities."""
+    bad_values = [float("nan"), float("inf"), float("-inf"), 10**100,
+                  True, "not-a-date", "999999-01-01T00:00:00Z"]
+    payload = {"data": [
+        {
+            "slug": f"role-{index}",
+            "company_name": "Example GmbH",
+            "title": "Warehouse Coordinator",
+            "description": "Logistics warehouse",
+            "remote": False,
+            "url": f"https://example.com/jobs/{index}",
+            "location": "Berlin",
+            "tags": [],
+            "job_types": ["Full Time"],
+            "created_at": bad,
+        }
+        for index, bad in enumerate(bad_values)
+    ]}
+    with patch(
+        "career_agent_ai.application.search.providers.arbeitnow_job_provider.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    ):
+        jobs = ArbeitnowJobProvider(max_pages=1).search("warehouse")
+    assert len(jobs) == len(bad_values)
+    assert tuple(job.job_id for job in jobs) == tuple(
+        f"arbeitnow:role-{index}" for index in range(len(bad_values))
+    )
