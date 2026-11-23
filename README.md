@@ -392,8 +392,13 @@ Foreign/missing events share one failure before deserialization. Trusted callers
 must supply authenticated identity. Authenticated GET
 `/v1/candidate/schedule-event?event_id=...` exposes this read-only snapshot using
 bearer-derived ownership, strict single ASCII event identity, identical foreign/missing
-404, sanitized backend errors, no-store and OpenAPI. No calendar action is enabled;
-candidate event discovery/UI remain follow-up work.
+404, sanitized backend errors, no-store and OpenAPI. The candidate dashboard now supports an explicit, owner- and state-version-bound
+decline for proposed or reschedule-requested events. The decline is persisted as a
+deterministic `calendar.decline` operation and executed only by the SQLite sandbox
+calendar provider. A read-only pending-intent lookup restores ambiguous declines after
+restart; independently attested provider evidence is required to reconcile completion
+or no effect. Empty recovery reads do not initialize schemas or mutate the database.
+No real calendar is contacted.
 UTC offsets use `±HH:MM`, with `:SS` retained for historical IANA offsets; local
 dates/times and offsets reconstruct the exact UTC instant, including microseconds.
 
