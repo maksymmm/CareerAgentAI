@@ -1,3 +1,19 @@
+Relevance boundary follow-up: hyphens are separators between complete technology
+identifiers and location tokens, while letters, digits, underscore, plus, hash and
+period remain part of identifier boundaries. Java matches Java-based and New matches
+New-York, but Java still does not match JavaScript-based. Parameterized title/description
+and location regressions cover both positive and negative cases. Exact-head CI and
+Codex review are required before the relevance PR can merge.
+
+Candidate relevance false-positive and salary integrity regression:
+keyword/title/description matching now uses true Unicode-aware token boundaries
+without treating the literal letter "w" as a word-class escape. This prevents Java
+from matching JavaScript, Python from matching Pythonista, and city prefixes from
+receiving partial location credit, while preserving identifiers such as C++, C#,
+.NET and Node.js. Non-finite and malformed salary bounds remain unknown. Focused
+regressions cover negative and positive boundary cases. Exact-head CI and Codex review
+are required before the existing relevance PR can merge.
+
 # Autonomous Implementation Plan
 
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.

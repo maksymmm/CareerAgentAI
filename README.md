@@ -177,6 +177,13 @@ The job-search layer provides:
 - relevance scoring
 - explicit sorting
 
+Deterministic keyword relevance uses identifier-aware token boundaries: a requested
+skill such as Java does not match JavaScript, Python does not match Pythonista, and a
+city prefix does not count as a city match. Technology identifiers that contain
+meaningful punctuation (C++, C#, .NET and Node.js) remain matchable as complete
+tokens. Non-finite or malformed salary bounds are treated as unknown rather than
+contributing a misleading salary score.
+
 An optional `AdaptiveJobRanker` can refine that relevance ordering from the
 authenticated candidate's own durable application outcomes. Employer-level interview
 and offer evidence raises a score, while direct rejection evidence lowers it. The
