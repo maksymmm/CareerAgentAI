@@ -229,17 +229,22 @@ class CandidateScheduleDeclineWSGIApp:
                 )
         return active_operation_id
 
-    @staticmethod
+    @classmethod
     def _require_active_action_binding(
-        active_operation_id: str | None, pending_ids: tuple[str, ...]
-    ) -> None:
-        """Require the event pointer and its sole ambiguous ledger row to agree."""
+        cls,
+        connection,
+        active_operation_id: str | None,
+        pending_ids: tuple[str, ...],
+        user_id: str,
+        event_id: str,
+    ) -> bool:
+        """Validate the active ledger row and report whether it is still ambiguous."""
         if active_operation_id is None:
             if pending_ids:
                 raise SchedulingOperationConflict(
                     "An ambiguous decline is not referenced by the event's active action."
                 )
-            return
+            return False
         try:
             normalized = validate_schedule_identifier(
                 active_operation_id, "active_action_operation_id"
@@ -248,10 +253,86 @@ class CandidateScheduleDeclineWSGIApp:
             raise SchedulingOperationConflict(
                 "Scheduling event has an invalid active-action pointer."
             ) from exc
-        if normalized != active_operation_id or pending_ids != (active_operation_id,):
+        if normalized != active_operation_id:
             raise SchedulingOperationConflict(
-                "The event's active action does not match its ambiguous decline ledger row."
+                "Scheduling event has a noncanonical active-action pointer."
             )
+
+        row = connection.execute(
+            """
+            SELECT action_type, payload_json, status
+            FROM external_action_operations
+            WHERE operation_id = ?
+            """,
+            (active_operation_id,),
+        ).fetchone()
+        if row is None or row[0] != "calendar.decline":
+            raise SchedulingOperationConflict(
+                "The event's active decline operation is missing or has a different action."
+            )
+
+        def object_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Persisted operation payload contains duplicate members.")
+                result[key] = value
+            return result
+
+        def reject_constant(_value):
+            raise ValueError("Persisted operation payload contains a non-finite number.")
+
+        try:
+            payload = json.loads(
+                row[1],
+                object_pairs_hook=object_pairs,
+                parse_constant=reject_constant,
+            )
+            if not isinstance(payload, dict):
+                raise ValueError("Persisted operation payload must be an object.")
+            candidate_id = validate_schedule_identifier(
+                payload.get("candidate_id"), "candidate_id"
+            )
+            stored_event_id = validate_schedule_identifier(
+                payload.get("event_id"), "event_id"
+            )
+            state_version = payload.get("event_version")
+            if (
+                candidate_id != payload.get("candidate_id")
+                or stored_event_id != payload.get("event_id")
+                or candidate_id != user_id
+                or stored_event_id != event_id
+                or type(state_version) is not int
+                or not 1 <= state_version <= _MAX_STATE_VERSION
+                or active_operation_id != cls._operation_id(
+                    candidate_id, stored_event_id, state_version
+                )
+            ):
+                raise ValueError("Active decline operation identity is inconsistent.")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SchedulingOperationConflict(
+                "The event's active decline operation has an unmatchable payload."
+            ) from exc
+
+        status = row[2]
+        if status in {
+            ExternalActionStatus.IN_PROGRESS.value,
+            ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+        }:
+            if pending_ids != (active_operation_id,):
+                raise SchedulingOperationConflict(
+                    "The event's active action does not match its ambiguous decline row."
+                )
+            return True
+        if status == ExternalActionStatus.PREPARED.value:
+            if pending_ids:
+                raise SchedulingOperationConflict(
+                    "A prepared decline conflicts with another ambiguous ledger row."
+                )
+            return False
+        raise SchedulingOperationConflict(
+            "The event points to a decline operation in a non-recoverable state."
+        )
 
     def _decline(
         self, start_response, user_id: str, request: Mapping[str, Any]
@@ -268,6 +349,11 @@ class CandidateScheduleDeclineWSGIApp:
                 database.connection, user_id, event_id
             )
             operation = service.get_operation(operation_id)
+            active_statuses = {
+                ExternalActionStatus.PREPARED,
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+            }
             ambiguous_statuses = {
                 ExternalActionStatus.IN_PROGRESS,
                 ExternalActionStatus.RECONCILIATION_REQUIRED,
@@ -275,7 +361,7 @@ class CandidateScheduleDeclineWSGIApp:
             if active_operation_id is not None and (
                 active_operation_id != operation_id
                 or operation is None
-                or operation.status not in ambiguous_statuses
+                or operation.status not in active_statuses
             ):
                 raise SchedulingOperationConflict(
                     "The event is already bound to a different or missing active action."
@@ -502,7 +588,10 @@ class CandidateScheduleDeclineWSGIApp:
             ).fetchone()
             active_operation_id = event_row[16]
             if operation_table is None:
-                self._require_active_action_binding(active_operation_id, ())
+                if active_operation_id is not None:
+                    raise SchedulingOperationConflict(
+                        "The event has an active action but its operation ledger is missing."
+                    )
                 return self._respond(
                     start_response,
                     "200 OK",
@@ -511,8 +600,14 @@ class CandidateScheduleDeclineWSGIApp:
             pending_ids = self._pending_operation_ids(
                 read_database.connection, user_id, event_id
             )
-            self._require_active_action_binding(active_operation_id, pending_ids)
-            if not pending_ids:
+            has_pending = self._require_active_action_binding(
+                read_database.connection,
+                active_operation_id,
+                pending_ids,
+                user_id,
+                event_id,
+            )
+            if not has_pending:
                 return self._respond(
                     start_response,
                     "200 OK",
@@ -530,7 +625,19 @@ class CandidateScheduleDeclineWSGIApp:
                 database.connection, user_id, event_id
             )
             pending_ids = self._pending_operation_ids(database.connection, user_id, event_id)
-            self._require_active_action_binding(active_operation_id, pending_ids)
+            has_pending = self._require_active_action_binding(
+                database.connection,
+                active_operation_id,
+                pending_ids,
+                user_id,
+                event_id,
+            )
+            if not has_pending:
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"schema_version": 1, "outcome": "none", "event_id": event_id},
+                )
             pending = tuple(operations.get(operation_id) for operation_id in pending_ids)
             if any(operation is None for operation in pending):
                 raise ValueError("Pending decline operation disappeared.")
