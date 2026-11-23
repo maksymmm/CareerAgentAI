@@ -8,9 +8,10 @@ import re
 import sqlite3
 from dataclasses import asdict
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Any, Callable, Iterable, Mapping
+from urllib.parse import parse_qsl
 
 from career_agent_ai.application.external_actions import (
     ExternalActionService,
@@ -54,9 +55,10 @@ _INSTANT = re.compile(
 class CandidateScheduleActionWSGIApp:
     """Expose one human-approved reschedule workflow using only a SQLite sandbox provider."""
 
+    PENDING_PATH = "/v1/candidate/schedule-event/reschedule-pending"
     RESCHEDULE_PATH = "/v1/candidate/schedule-event/reschedule"
     RECONCILIATION_PATH = "/v1/candidate/schedule-event/reschedule-reconciliation"
-    ROUTES = frozenset({RESCHEDULE_PATH, RECONCILIATION_PATH})
+    ROUTES = frozenset({PENDING_PATH, RESCHEDULE_PATH, RECONCILIATION_PATH})
     MAX_BODY_BYTES = 16_384
 
     def __init__(
@@ -82,6 +84,7 @@ class CandidateScheduleActionWSGIApp:
         path = environ.get("PATH_INFO")
         if path not in self.ROUTES:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
+        required_method = "GET" if path == self.PENDING_PATH else "POST"
         raw_method = environ.get("REQUEST_METHOD")
         if (
             not isinstance(raw_method, str)
@@ -89,13 +92,13 @@ class CandidateScheduleActionWSGIApp:
             or not raw_method.isascii()
             or not raw_method.isalpha()
             or raw_method != raw_method.upper()
-            or raw_method != "POST"
+            or raw_method != required_method
         ):
             return self._respond(
                 start_response,
                 "405 Method Not Allowed",
                 {"error": "method_not_allowed"},
-                [("Allow", "POST")],
+                [("Allow", required_method)],
             )
 
         authorization = environ.get("HTTP_AUTHORIZATION", "")
@@ -126,25 +129,30 @@ class CandidateScheduleActionWSGIApp:
                 [("WWW-Authenticate", "Bearer")],
             )
 
-        media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
-        if media_type.strip().casefold() != "application/json":
-            return self._respond(
-                start_response, "415 Unsupported Media Type",
-                {"error": "unsupported_media_type"},
-            )
         try:
-            payload = self._read_json(environ)
-            request = (
-                self._reschedule_request(payload)
-                if path == self.RESCHEDULE_PATH
-                else self._reconciliation_request(payload)
-            )
+            if path == self.PENDING_PATH:
+                request = self._pending_request(environ)
+            else:
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                payload = self._read_json(environ)
+                request = (
+                    self._reschedule_request(payload)
+                    if path == self.RESCHEDULE_PATH
+                    else self._reconciliation_request(payload)
+                )
         except (TypeError, ValueError, KeyError, OverflowError):
             return self._respond(
                 start_response, "400 Bad Request", {"error": "invalid_request"}
             )
 
         try:
+            if path == self.PENDING_PATH:
+                return self._pending(start_response, user_id, request)
             if path == self.RESCHEDULE_PATH:
                 return self._reschedule(start_response, user_id, request)
             return self._reconcile(start_response, user_id, request)
@@ -179,6 +187,100 @@ class CandidateScheduleActionWSGIApp:
                 start_response, "500 Internal Server Error", {"error": "internal_error"}
             )
 
+    @classmethod
+    def _pending_request(cls, environ: Mapping[str, Any]) -> dict[str, str]:
+        """Parse one bounded event identifier from the authenticated GET query."""
+        query = environ.get("QUERY_STRING", "")
+        if (
+            not isinstance(query, str)
+            or len(query) > 1000
+            or re.search(r"%(?![0-9A-Fa-f]{2})", query)
+        ):
+            raise ValueError("Pending lookup query is invalid.")
+        pairs = parse_qsl(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=1,
+            errors="strict",
+        )
+        if len(pairs) != 1 or pairs[0][0] != "event_id":
+            raise ValueError("Exactly one event_id query parameter is required.")
+        event_id = validate_schedule_identifier(pairs[0][1], "event_id")
+        if event_id != pairs[0][1]:
+            raise ValueError("event_id must be canonical.")
+        return {"event_id": event_id}
+
+    def _pending(
+        self, start_response, user_id: str, request: Mapping[str, str]
+    ) -> Iterable[bytes]:
+        """Restore one owned ambiguous reschedule intent without provider execution."""
+        event_id = request["event_id"]
+        database, repository, _service, operations = self._open_stack()
+        try:
+            event = repository.get(event_id)
+            if event is None or event.candidate_id != user_id:
+                raise KeyError("not_found")
+            pending = operations.find_pending_for_event("calendar.reschedule", event_id)
+            if not pending:
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"schema_version": 1, "outcome": "none", "event_id": event_id},
+                )
+            if len(pending) != 1:
+                raise SchedulingOperationConflict(
+                    "More than one ambiguous reschedule is bound to this event."
+                )
+            operation = pending[0]
+            payload = operation.payload
+            raw_version = payload.get("event_version")
+            if type(raw_version) is not int or not 1 <= raw_version <= _MAX_STATE_VERSION:
+                raise ValueError("Persisted reschedule source version is invalid.")
+            state_version = raw_version
+            start_at = self._instant(payload.get("start_at"), "start_at")
+            raw_end = payload.get("end_at")
+            end_at = None if raw_end is None else self._instant(raw_end, "end_at")
+            raw_timezone = payload.get("timezone_name")
+            timezone_name = validate_timezone_name(raw_timezone)
+            if timezone_name != raw_timezone or (end_at is not None and end_at <= start_at):
+                raise ValueError("Persisted reschedule target is invalid.")
+            if (
+                operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED
+                or operation.action_type != "calendar.reschedule"
+                or payload.get("event_id") != event_id
+                or event.version != state_version
+                or payload.get("event_start_at") != event.start_at.isoformat()
+                or payload.get("event_end_at")
+                    != (None if event.end_at is None else event.end_at.isoformat())
+                or payload.get("event_timezone_name") != event.timezone_name
+                or payload.get("event_status") != event.status.value
+            ):
+                raise ValueError("Persisted reschedule source no longer matches the event.")
+            self._require_matching_operation(
+                operation, event_id, state_version, start_at, end_at, timezone_name
+            )
+            expected_operation_id = self._operation_id(
+                user_id, event_id, state_version, start_at, end_at, timezone_name
+            )
+            if operation.operation_id != expected_operation_id:
+                raise ValueError("Persisted reschedule operation identity is invalid.")
+            return self._respond(
+                start_response,
+                "200 OK",
+                {
+                    "schema_version": 1,
+                    "outcome": "pending",
+                    "event_id": event_id,
+                    "state_version": state_version,
+                    "start_at": start_at.isoformat(),
+                    "end_at": None if end_at is None else end_at.isoformat(),
+                    "timezone_name": timezone_name,
+                },
+            )
+        finally:
+            database.close()
+
     def _reschedule(
         self, start_response, user_id: str, request: Mapping[str, Any]
     ) -> Iterable[bytes]:
@@ -190,7 +292,7 @@ class CandidateScheduleActionWSGIApp:
         operation_id = self._operation_id(
             user_id, event_id, state_version, start_at, end_at, timezone_name
         )
-        database, repository, service = self._open_stack()
+        database, repository, service, _operations = self._open_stack()
         try:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
@@ -272,7 +374,7 @@ class CandidateScheduleActionWSGIApp:
         operation_id = self._operation_id(
             user_id, event_id, state_version, start_at, end_at, timezone_name
         )
-        database, repository, service = self._open_stack()
+        database, repository, service, _operations = self._open_stack()
         try:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
@@ -323,7 +425,7 @@ class CandidateScheduleActionWSGIApp:
                 ),
                 require_provider_evidence=True,
             )
-            return database, repository, service
+            return database, repository, service, operations
         except Exception:
             database.close()
             raise
@@ -518,7 +620,7 @@ class CandidateScheduleActionWSGIApp:
                 parse_int=Decimal,
                 parse_float=Decimal,
             )
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, InvalidOperation) as exc:
             raise ValueError("Request body must be UTF-8 JSON.") from exc
         if not isinstance(payload, Mapping):
             raise ValueError("Request body must be a JSON object.")
@@ -642,6 +744,31 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
         "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"],
     }
     no_effect_event_properties["state_version"] = {"type": "integer", "minimum": 1}
+    pending_none_response = {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_version", "outcome", "event_id"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "outcome": {"const": "none"},
+            "event_id": event_properties["event_id"],
+        },
+    }
+    pending_intent_response = {
+        "type": "object", "additionalProperties": False,
+        "required": [
+            "schema_version", "outcome", "event_id", "state_version",
+            "start_at", "end_at", "timezone_name",
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "outcome": {"const": "pending"},
+            "event_id": event_properties["event_id"],
+            "state_version": {"type": "integer", "minimum": 1},
+            "start_at": {"type": "string", "format": "date-time"},
+            "end_at": {"type": ["string", "null"], "format": "date-time"},
+            "timezone_name": {"type": "string", "minLength": 1, "maxLength": 100},
+        },
+    }
     no_effect_response = {
         "type": "object", "additionalProperties": False,
         "required": ["schema_version", "outcome", "event"],
@@ -656,6 +783,29 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
         },
     }
     return {
+        CandidateScheduleActionWSGIApp.PENDING_PATH: {
+            "get": {
+                "operationId": "getCandidatePendingInterviewReschedule",
+                "security": [{"bearerAuth": []}],
+                "parameters": [{
+                    "name": "event_id", "in": "query", "required": True,
+                    "schema": event_properties["event_id"],
+                }],
+                "responses": {
+                    "200": {
+                        "description": "Allowlisted pending reschedule intent restored from durable storage",
+                        "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                        "content": json_content({"oneOf": [pending_none_response, pending_intent_response]}),
+                    },
+                    "400": {"description": "Invalid event query", "content": json_content(error_schema)},
+                    "401": {"description": "Authentication required", "content": json_content(error_schema)},
+                    "404": {"description": "Missing or foreign event", "content": json_content(error_schema)},
+                    "405": {"description": "Only GET is allowed", "content": json_content(error_schema)},
+                    "409": {"description": "Pending durable intent is ambiguous or inconsistent", "content": json_content(error_schema)},
+                    "503": {"description": "Durable storage is unavailable", "content": json_content(error_schema)},
+                },
+            },
+        },
         CandidateScheduleActionWSGIApp.RESCHEDULE_PATH: {
             "post": {
                 "operationId": "requestCandidateInterviewReschedule",
