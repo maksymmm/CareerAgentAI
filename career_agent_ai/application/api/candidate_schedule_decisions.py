@@ -677,7 +677,7 @@ def candidate_schedule_decision_openapi_paths() -> dict[str, Any]:
             "employer_name": {"type": "string"},
             "event_type": {"type": "string"},
             "location": {"type": "string"},
-            "status": {"const": "declined"},
+            "status": {"enum": ["proposed", "reschedule_requested", "declined"]},
             "state_version": {"type": "integer", "minimum": 2},
             "start_at": {"type": "string", "format": "date-time"},
             "end_at": {"type": ["string", "null"], "format": "date-time"},
