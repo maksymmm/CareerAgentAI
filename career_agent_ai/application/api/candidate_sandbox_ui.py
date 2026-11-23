@@ -340,6 +340,10 @@ _HTML = r"""<!doctype html>
       byId('confirm-reschedule-completed').disabled = true;
       byId('confirm-reschedule-no-effect').disabled = true;
       byId('request-reschedule').disabled = true;
+      byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
+      byId('reschedule-start').disabled = false;
+      byId('reschedule-end').disabled = false;
+      byId('reschedule-timezone').disabled = false;
       byId('reschedule-state').textContent = 'Select an owned proposed or accepted event to request a new time.';
       byId('reschedule-reconciliation-state').textContent = 'No reschedule is awaiting reconciliation.';
       byId('event-detail').setAttribute('aria-busy', 'false');
@@ -381,6 +385,10 @@ _HTML = r"""<!doctype html>
         byId('reschedule-start').value = snapshot.start_at;
         byId('reschedule-end').value = snapshot.end_at || '';
         byId('reschedule-timezone').value = snapshot.timezone_name;
+        byId('reschedule-start').disabled = false;
+        byId('reschedule-end').disabled = false;
+        byId('reschedule-timezone').disabled = false;
+        byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
         const reschedulable = ['proposed', 'accepted', 'reschedule_requested'].includes(snapshot.status);
         byId('reschedule-panel').disabled = !reschedulable;
         byId('request-reschedule').disabled = !reschedulable || rescheduleInFlight;
@@ -1537,6 +1545,10 @@ _HTML = r"""<!doctype html>
           byId('reschedule-start').value = snapshot.start_at;
           byId('reschedule-end').value = snapshot.end_at || '';
           byId('reschedule-timezone').value = snapshot.timezone_name;
+          byId('reschedule-start').disabled = false;
+          byId('reschedule-end').disabled = false;
+          byId('reschedule-timezone').disabled = false;
+          byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
           byId('reschedule-state').textContent =
             'Sandbox reschedule completed. Reload the event list to refresh its row.';
         } else {
@@ -1614,6 +1626,10 @@ _HTML = r"""<!doctype html>
           byId('reschedule-state').textContent =
             'Provider evidence confirmed the sandbox reschedule. Reload the event list to refresh its row.';
         } else {
+          byId('reschedule-start').disabled = true;
+          byId('reschedule-end').disabled = true;
+          byId('reschedule-timezone').disabled = true;
+          byId('request-reschedule').textContent = 'Retry same approved slot';
           byId('reschedule-state').textContent =
             'Provider evidence confirmed no calendar change. Retry only the same approved slot.';
         }
