@@ -1,3 +1,7 @@
+Candidate reschedule durable recovery: authenticated event-scoped GET lookup restores the exact ambiguous calendar.reschedule intent from the SQLite operation ledger after browser reload or event switching. The response is allowlisted and bound to the owned event, source state version, immutable source snapshot, deterministic operation ID, and target slot; zero or multiple pending intents fail closed. Browser regressions prove the target is restored while the independent attestation is reset and disabled until the candidate explicitly re-verifies. The schedule action parser also converts Decimal InvalidOperation into sanitized HTTP 400. No provider call occurs during lookup.
+
+Next: exact-head full CI/coverage and Codex code/security review; then reconcile the stacked PR with the candidate reschedule workflow.
+
 Candidate reschedule input-bound hardening: parse both JSON integer and decimal
 number tokens as bounded `Decimal` values, then validate candidate schedule
 state versions as finite integral values in SQLite's signed 64-bit range before any
