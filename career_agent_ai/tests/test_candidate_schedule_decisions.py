@@ -746,3 +746,63 @@ def test_pending_decline_scan_uses_composite_index_without_temporary_sort(tmp_pa
     details = tuple(str(row[3]) for row in plan)
     assert any("idx_external_actions_type_status" in detail for detail in details)
     assert not any("TEMP B-TREE" in detail.upper() for detail in details)
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "remove_field"),
+    [
+        ("event_start_at", None, True),
+        ("event_end_at", None, True),
+        ("event_timezone_name", "Invalid/Timezone", False),
+        ("event_status", "accepted", False),
+    ],
+)
+def test_pending_prepared_decline_rejects_malformed_source_snapshot(
+    tmp_path, field, replacement, remove_field
+):
+    path = tmp_path / "decline-prepared-source-corrupt.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert candidate.decline()[0] == "202 Accepted"
+    assert candidate.pending()[1]["outcome"] == "pending"
+    assert candidate.reconcile(False)[1]["outcome"] == "no_effect"
+
+    connection = sqlite3.connect(path)
+    try:
+        operation_id = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        assert operation_id
+        row = connection.execute(
+            "SELECT payload_json, status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        assert row is not None
+        payload_json, status = row
+        assert status == "prepared"
+        payload = json.loads(payload_json)
+        if remove_field:
+            payload.pop(field, None)
+        else:
+            payload[field] = replacement
+        connection.execute(
+            "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+            (json.dumps(payload, separators=(",", ":")), operation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert restarted.decline() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 0
