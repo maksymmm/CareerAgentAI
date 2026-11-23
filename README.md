@@ -357,7 +357,7 @@ Candidate sandbox My interviews and events loads owned event pages, supports
 next-page/retry and View event detail, and renders allowlisted text-only snapshots
 including exact UTC/local times and both offsets. Page loads/token edits invalidate
 pending details; token edits clear all schedule state. Malformed responses and raw
-backend errors never enter the result pane. No calendar action controls are added.
+backend errors never enter the result pane. Schedule detail remains read-only except for the separately gated candidate decision controls described below.
 Sparse owner/status projections may carry a valid next cursor; the cursor must still
 identify the final visible event and event IDs must advance strictly without duplicates.
 The browser verifies the IANA zone's local date/time at both UTC instants. Unknown
@@ -368,8 +368,9 @@ Authenticated `GET /v1/candidate/schedule-events?limit=25&after=...` exposes own
 ID-keyset pages with strict bounded query validation, bearer-derived ownership,
 no-store, sanitized errors and OpenAPI. It uses existing read-only storage, cannot
 create a database or execute work, and never loads private calendar identifiers.
-The collection's `after` is a range cursor, not an ownership credential. Read-only
-candidate UI discovery/detail is the next delivery unit.
+The collection's `after` is a range cursor, not an ownership credential. The candidate
+dashboard consumes these owner-scoped snapshots; consequential decisions remain in
+separate explicitly approved workflows.
 
 The collection also accepts an optional validated `status` filter (`proposed`,
 `accepted`, `declined`, `reschedule_requested`, or `cancelled`). Filtering remains
@@ -398,7 +399,7 @@ deterministic `calendar.decline` operation and executed only by the SQLite sandb
 calendar provider. A read-only pending-intent lookup restores ambiguous declines after
 restart; independently attested provider evidence is required to reconcile completion
 or no effect. Empty recovery reads do not initialize schemas or mutate the database.
-No real calendar is contacted.
+No real calendar is contacted. The decline endpoint carries the candidate-approved source version into `SchedulingService`; a concurrent event advance is rejected before intent preparation, and the repository claim remains the final compare-and-swap guard. Each ambiguous decline payload records its candidate identity, and recovery recomputes the deterministic operation ID from candidate, event and source version before filtering rows. The scan uses the composite action/status index with a row limit and no unbounded sort.
 UTC offsets use `±HH:MM`, with `:SS` retained for historical IANA offsets; local
 dates/times and offsets reconstruct the exact UTC instant, including microseconds.
 

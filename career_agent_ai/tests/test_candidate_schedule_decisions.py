@@ -17,7 +17,12 @@ from career_agent_ai.application.api import (
 )
 from career_agent_ai.application.api.candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.runtime.composition import build_candidate_sandbox_app_from_env
-from career_agent_ai.application.scheduling import ScheduleEvent, ScheduleEventType, ScheduleStatus
+from career_agent_ai.application.scheduling import (
+    ScheduleEvent,
+    ScheduleEventType,
+    ScheduleStatus,
+    SchedulingService,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import SandboxCalendarOutcome
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
@@ -464,3 +469,138 @@ def test_pending_decline_fails_closed_on_unmatchable_ambiguous_payload(
     assert status == "409 Conflict"
     assert result == {"error": "approval_conflict"}
     assert _effect_count(path) == 1
+
+
+def test_decline_rejects_concurrent_version_advance_before_intent_or_provider(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "decline-concurrent-version.sqlite"
+    _seed(path, _event())
+    original_get_event = SchedulingService.get_event
+    advanced = False
+
+    def concurrent_writer(service, event_id):
+        nonlocal advanced
+        if not advanced:
+            advanced = True
+            connection = sqlite3.connect(path)
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE scheduling_events
+                    SET status = ?, version = version + 1, updated_at = ?
+                    WHERE event_id = ? AND version = ?
+                    """,
+                    (
+                        ScheduleStatus.RESCHEDULE_REQUESTED.value,
+                        datetime.now(timezone.utc).isoformat(),
+                        event_id,
+                        1,
+                    ),
+                )
+                assert cursor.rowcount == 1
+                connection.commit()
+            finally:
+                connection.close()
+        return original_get_event(service, event_id)
+
+    monkeypatch.setattr(SchedulingService, "get_event", concurrent_writer)
+    candidate = Candidate(path)
+    status, result = candidate.decline()
+
+    assert advanced
+    assert status == "409 Conflict"
+    assert result == {"error": "approval_conflict"}
+    assert _effect_count(path) == 0
+    connection = sqlite3.connect(path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM external_action_operations"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+    event = _stored_event(path)
+    assert event.version == 2
+    assert event.status == ScheduleStatus.RESCHEDULE_REQUESTED
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value"),
+    [
+        ("event_id", "another-valid-event"),
+        ("candidate_id", "candidate-2"),
+        ("event_version", 2),
+    ],
+)
+def test_pending_decline_rejects_operation_identity_tampering_before_filtering(
+    tmp_path, field, tampered_value
+):
+    path = tmp_path / "decline-operation-identity-tamper.sqlite"
+    _seed(path, _event())
+    first = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    assert first.decline()[0] == "202 Accepted"
+
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            """
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = 'calendar.decline'
+            """
+        ).fetchone()
+        assert row is not None
+        operation_id, payload_json = row
+        payload = json.loads(payload_json)
+        payload[field] = tampered_value
+        connection.execute(
+            "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+            (json.dumps(payload, separators=(",", ":")), operation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 1
+
+
+def test_pending_decline_scan_uses_composite_index_without_temporary_sort(tmp_path):
+    path = tmp_path / "decline-pending-query-plan.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    assert candidate.decline()[0] == "202 Accepted"
+
+    connection = sqlite3.connect(path)
+    try:
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = ?
+              AND status IN (?, ?)
+            LIMIT 1001
+            """,
+            (
+                "calendar.decline",
+                "in_progress",
+                "reconciliation_required",
+            ),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    details = tuple(str(row[3]) for row in plan)
+    assert any("idx_external_actions_type_status" in detail for detail in details)
+    assert not any("TEMP B-TREE" in detail.upper() for detail in details)

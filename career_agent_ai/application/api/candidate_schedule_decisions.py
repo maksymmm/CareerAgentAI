@@ -213,7 +213,7 @@ class CandidateScheduleDeclineWSGIApp:
                 raise KeyError("not_found")
             operation = service.get_operation(operation_id)
             if operation is not None:
-                self._require_matching_operation(operation, event_id, state_version)
+                self._require_matching_operation(operation, user_id, event_id, state_version)
                 self._require_event_matches_intent(event, operation.payload, state_version)
                 if operation.status in {
                     ExternalActionStatus.IN_PROGRESS,
@@ -237,7 +237,12 @@ class CandidateScheduleDeclineWSGIApp:
                     start_response, "409 Conflict", {"error": "approval_conflict"}
                 )
 
-            service.decline(operation_id, event_id, human_approved=True)
+            service.decline(
+                operation_id,
+                event_id,
+                human_approved=True,
+                expected_version=state_version,
+            )
             operation = service.get_operation(operation_id)
             if operation is None:
                 raise RuntimeError("Decline intent was not persisted.")
@@ -303,7 +308,7 @@ class CandidateScheduleDeclineWSGIApp:
             operation = service.get_operation(operation_id)
             if operation is None:
                 raise KeyError("not_found")
-            self._require_matching_operation(operation, event_id, state_version)
+            self._require_matching_operation(operation, user_id, event_id, state_version)
             self._require_event_matches_intent(event, operation.payload, state_version)
             service.resolve_reconciliation(operation_id, completed=completed)
             return self._respond(
@@ -318,16 +323,15 @@ class CandidateScheduleDeclineWSGIApp:
         finally:
             database.close()
 
-    @staticmethod
-    def _pending_operation_ids(connection, event_id: str) -> tuple[str, ...]:
-        """Scan ambiguous decline rows with bounded, fail-closed payload validation."""
+    @classmethod
+    def _pending_operation_ids(cls, connection, user_id: str, event_id: str) -> tuple[str, ...]:
+        """Verify every ambiguous row's identity before filtering, with bounded indexed work."""
         rows = connection.execute(
             """
             SELECT operation_id, payload_json
             FROM external_action_operations
             WHERE action_type = ?
               AND status IN (?, ?)
-            ORDER BY created_at DESC, operation_id ASC
             LIMIT 1001
             """,
             (
@@ -368,11 +372,29 @@ class CandidateScheduleDeclineWSGIApp:
                 )
                 if normalized_event_id != raw_event_id:
                     raise ValueError("Persisted operation event identity is not canonical.")
+                raw_candidate_id = payload.get("candidate_id")
+                candidate_id = validate_schedule_identifier(
+                    raw_candidate_id, "candidate_id"
+                )
+                if candidate_id != raw_candidate_id:
+                    raise ValueError("Persisted operation candidate identity is not canonical.")
+                state_version = payload.get("event_version")
+                if type(state_version) is not int or not 1 <= state_version <= _MAX_STATE_VERSION:
+                    raise ValueError("Persisted operation source version is invalid.")
+                expected_operation_id = cls._operation_id(
+                    candidate_id, normalized_event_id, state_version
+                )
+                if operation_id != expected_operation_id:
+                    raise ValueError("Persisted operation identity does not match its payload.")
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise SchedulingOperationConflict(
                     "An ambiguous calendar operation has an unmatchable payload."
                 ) from exc
             if normalized_event_id == event_id:
+                if candidate_id != user_id:
+                    raise SchedulingOperationConflict(
+                        "An ambiguous decline has a conflicting candidate owner."
+                    )
                 matches.append(operation_id)
                 if len(matches) > 1:
                     raise SchedulingOperationConflict(
@@ -411,7 +433,7 @@ class CandidateScheduleDeclineWSGIApp:
                     {"schema_version": 1, "outcome": "none", "event_id": event_id},
                 )
             pending_ids = self._pending_operation_ids(
-                read_database.connection, event_id
+                read_database.connection, user_id, event_id
             )
             if not pending_ids:
                 return self._respond(
@@ -427,7 +449,7 @@ class CandidateScheduleDeclineWSGIApp:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
-            pending_ids = self._pending_operation_ids(database.connection, event_id)
+            pending_ids = self._pending_operation_ids(database.connection, user_id, event_id)
             pending = tuple(operations.get(operation_id) for operation_id in pending_ids)
             if any(operation is None for operation in pending):
                 raise ValueError("Pending decline operation disappeared.")
@@ -459,7 +481,7 @@ class CandidateScheduleDeclineWSGIApp:
             if type(raw_version) is not int or not 1 <= raw_version <= _MAX_STATE_VERSION:
                 raise ValueError("Persisted decline source version is invalid.")
             state_version = raw_version
-            self._require_matching_operation(operation, event_id, state_version)
+            self._require_matching_operation(operation, user_id, event_id, state_version)
             self._require_event_matches_intent(event, payload, state_version)
             expected_operation_id = self._operation_id(user_id, event_id, state_version)
             if operation.operation_id != expected_operation_id:
@@ -478,10 +500,13 @@ class CandidateScheduleDeclineWSGIApp:
             database.close()
 
     @staticmethod
-    def _require_matching_operation(operation, event_id: str, state_version: int) -> None:
+    def _require_matching_operation(
+        operation, user_id: str, event_id: str, state_version: int
+    ) -> None:
         payload = operation.payload
         if (
             operation.action_type != "calendar.decline"
+            or payload.get("candidate_id") != user_id
             or payload.get("event_id") != event_id
             or payload.get("event_version") != state_version
         ):

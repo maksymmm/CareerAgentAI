@@ -18,17 +18,17 @@ are required before the existing relevance PR can merge.
 
 Candidate interview decline workflow: the authenticated candidate dashboard now
 allows an explicit decline only for owned proposed or reschedule-requested events.
-The server binds the decision to the event's durable state version and a deterministic
-operation ID, persists intent before using the SQLite sandbox calendar provider, and
-replays the same intent idempotently. Ambiguous results survive restart and require a
-fresh independent provider attestation; pending reads are owner-scoped and read-only
-when no ambiguous operation exists. Malformed or unmatchable ledger payloads fail
-closed under a bounded scan. HTTP, SQLite restart, no-effect retry, timeout-after-effect,
-OpenAPI and Chromium regressions cover the workflow. Exact-head CI passed 1851 tests
-at 90.47% before the malformed-ledger follow-up; the updated head must repeat the full
-gate and obtain clean Codex code/security review.
-Next: exact-head CI/review, then audit acceptance/decline parity and concurrent
-candidate calendar actions without enabling real calendar providers.
+The server binds the decision to the candidate-approved source version inside
+`SchedulingService`, persists candidate identity with the source snapshot, and retains
+the repository compare-and-swap claim as the final race guard. Pending recovery verifies
+each ambiguous row's candidate/event/version tuple against its deterministic operation
+ID before filtering; the query uses the composite action/status index with a row limit
+and no temporary sort. HTTP/SQLite restart regressions now cover a concurrent reschedule
+between approval validation and service execution, payload identity tampering, and the
+SQLite query plan. Exact-head CI and clean Codex code/security review are required for
+this follow-up before integration.
+Next: exact-head CI/review, then audit candidate accept/decline concurrency parity
+without enabling real calendar providers.
 
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
 
