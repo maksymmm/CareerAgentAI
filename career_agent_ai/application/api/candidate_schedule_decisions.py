@@ -200,6 +200,59 @@ class CandidateScheduleDeclineWSGIApp:
             database.close()
             raise
 
+    @staticmethod
+    def _active_action_id(connection, user_id: str, event_id: str) -> str | None:
+        """Read and validate the event's durable active-action pointer."""
+        row = connection.execute(
+            """
+            SELECT active_action_operation_id
+            FROM scheduling_events
+            WHERE event_id = ? AND candidate_id = ?
+            """,
+            (event_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError("not_found")
+        active_operation_id = row[0]
+        if active_operation_id is not None:
+            try:
+                normalized = validate_schedule_identifier(
+                    active_operation_id, "active_action_operation_id"
+                )
+            except (TypeError, ValueError) as exc:
+                raise SchedulingOperationConflict(
+                    "Scheduling event has an invalid active-action pointer."
+                ) from exc
+            if normalized != active_operation_id:
+                raise SchedulingOperationConflict(
+                    "Scheduling event has a noncanonical active-action pointer."
+                )
+        return active_operation_id
+
+    @staticmethod
+    def _require_active_action_binding(
+        active_operation_id: str | None, pending_ids: tuple[str, ...]
+    ) -> None:
+        """Require the event pointer and its sole ambiguous ledger row to agree."""
+        if active_operation_id is None:
+            if pending_ids:
+                raise SchedulingOperationConflict(
+                    "An ambiguous decline is not referenced by the event's active action."
+                )
+            return
+        try:
+            normalized = validate_schedule_identifier(
+                active_operation_id, "active_action_operation_id"
+            )
+        except (TypeError, ValueError) as exc:
+            raise SchedulingOperationConflict(
+                "Scheduling event has an invalid active-action pointer."
+            ) from exc
+        if normalized != active_operation_id or pending_ids != (active_operation_id,):
+            raise SchedulingOperationConflict(
+                "The event's active action does not match its ambiguous decline ledger row."
+            )
+
     def _decline(
         self, start_response, user_id: str, request: Mapping[str, Any]
     ) -> Iterable[bytes]:
@@ -211,7 +264,28 @@ class CandidateScheduleDeclineWSGIApp:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
+            active_operation_id = self._active_action_id(
+                database.connection, user_id, event_id
+            )
             operation = service.get_operation(operation_id)
+            ambiguous_statuses = {
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+            }
+            if active_operation_id is not None and (
+                active_operation_id != operation_id
+                or operation is None
+                or operation.status not in ambiguous_statuses
+            ):
+                raise SchedulingOperationConflict(
+                    "The event is already bound to a different or missing active action."
+                )
+            if active_operation_id is None and (
+                operation is not None and operation.status in ambiguous_statuses
+            ):
+                raise SchedulingOperationConflict(
+                    "An ambiguous decline is missing its event active-action pointer."
+                )
             if operation is not None:
                 self._require_matching_operation(operation, user_id, event_id, state_version)
                 self._require_event_matches_intent(event, operation.payload, state_version)
@@ -414,7 +488,7 @@ class CandidateScheduleDeclineWSGIApp:
                 SELECT event_id, candidate_id, employer_name, event_type, location,
                        start_at, start_epoch_us, end_at, end_epoch_us, timezone_name,
                        status, provider_event_id, application_id, version,
-                       created_at, updated_at
+                       created_at, updated_at, active_action_operation_id
                 FROM scheduling_events
                 WHERE event_id = ? AND candidate_id = ?
                 """,
@@ -426,7 +500,9 @@ class CandidateScheduleDeclineWSGIApp:
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' "
                 "AND name = 'external_action_operations'"
             ).fetchone()
+            active_operation_id = event_row[16]
             if operation_table is None:
+                self._require_active_action_binding(active_operation_id, ())
                 return self._respond(
                     start_response,
                     "200 OK",
@@ -435,6 +511,7 @@ class CandidateScheduleDeclineWSGIApp:
             pending_ids = self._pending_operation_ids(
                 read_database.connection, user_id, event_id
             )
+            self._require_active_action_binding(active_operation_id, pending_ids)
             if not pending_ids:
                 return self._respond(
                     start_response,
@@ -449,7 +526,11 @@ class CandidateScheduleDeclineWSGIApp:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
+            active_operation_id = self._active_action_id(
+                database.connection, user_id, event_id
+            )
             pending_ids = self._pending_operation_ids(database.connection, user_id, event_id)
+            self._require_active_action_binding(active_operation_id, pending_ids)
             pending = tuple(operations.get(operation_id) for operation_id in pending_ids)
             if any(operation is None for operation in pending):
                 raise ValueError("Pending decline operation disappeared.")
