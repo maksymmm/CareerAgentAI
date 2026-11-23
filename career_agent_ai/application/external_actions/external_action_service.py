@@ -6,7 +6,10 @@ from typing import Any, Mapping, Protocol
 from career_agent_ai.application.observability.structured_logging import redact_text
 
 from .external_action_operation import ExternalActionOperation, ExternalActionStatus
-from .external_action_repository import ExternalActionOperationRepository
+from .external_action_repository import (
+    ExternalActionOperationRepository,
+    OperationConflictError,
+)
 
 
 class AmbiguousExternalActionError(RuntimeError):
@@ -63,12 +66,17 @@ class ExternalActionService:
         operation_id: str,
         *,
         human_approved: bool,
+        recover_in_progress: bool = True,
     ) -> ExternalActionOperation:
         """Execute a prepared action once after explicit human approval.
 
-        An operation already left in ``in_progress`` is ambiguous: it is moved to
-        ``reconciliation_required`` and the adapter is deliberately not called.
+        By default, an existing ``in_progress`` operation is classified as
+        ambiguous. Idempotent reschedule submissions may set
+        ``recover_in_progress=False`` so a duplicate request observes the live
+        operation instead of invalidating the original provider call.
         """
+        if not isinstance(recover_in_progress, bool):
+            raise TypeError("recover_in_progress must be a boolean.")
         operation = self._require_operation(operation_id)
         if operation.status in {
             ExternalActionStatus.SUCCEEDED,
@@ -77,6 +85,8 @@ class ExternalActionService:
         }:
             return operation
         if operation.status == ExternalActionStatus.IN_PROGRESS:
+            if not recover_in_progress:
+                return operation
             return self._repository.transition(
                 operation.operation_id,
                 ExternalActionStatus.IN_PROGRESS,
@@ -96,11 +106,24 @@ class ExternalActionService:
                     "Consequential external actions are disabled by runtime policy."
                 )
 
-        operation = self._repository.transition(
-            operation.operation_id,
-            ExternalActionStatus.PREPARED,
-            ExternalActionStatus.IN_PROGRESS,
-        )
+        try:
+            operation = self._repository.transition(
+                operation.operation_id,
+                ExternalActionStatus.PREPARED,
+                ExternalActionStatus.IN_PROGRESS,
+            )
+        except OperationConflictError:
+            if recover_in_progress:
+                raise
+            current = self._repository.get(operation.operation_id)
+            if current is None or current.status not in {
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.SUCCEEDED,
+                ExternalActionStatus.FAILED,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+            }:
+                raise
+            return current
         try:
             result = self._adapter.execute(
                 operation.operation_id,

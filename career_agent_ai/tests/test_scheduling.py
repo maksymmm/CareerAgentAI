@@ -14,6 +14,9 @@ from career_agent_ai.application.external_actions import (
     ExternalActionService,
     ExternalActionStatus,
 )
+from career_agent_ai.application.external_actions.external_action_repository import (
+    OperationConflictError,
+)
 from career_agent_ai.application.scheduling import (
     FakeCalendarAdapter,
     ScheduleEvent,
@@ -707,6 +710,108 @@ def test_concurrent_competing_actions_only_one_reaches_provider(tmp_path):
 
 
 
+
+
+def test_duplicate_reschedule_while_provider_call_is_live_does_not_reconcile_it(tmp_path):
+    path = str(tmp_path / "duplicate-live-reschedule.sqlite")
+    entered = Event()
+    release = Event()
+
+    class BlockingProvider(FakeCalendarAdapter):
+        def reschedule(self, operation_id, value, start_at, end_at, timezone_name):
+            entered.set()
+            assert release.wait(timeout=5)
+            return super().reschedule(
+                operation_id, value, start_at, end_at, timezone_name
+            )
+
+    provider = BlockingProvider()
+    setup_db = SQLiteDatabase(path)
+    setup, _, _, _ = stack(setup_db, provider)
+    setup.add_event(event(status=ScheduleStatus.ACCEPTED))
+    setup_db.close()
+    target_start = BASE_START + timedelta(days=2)
+    target_end = target_start + timedelta(hours=1)
+
+    def execute():
+        worker_db = SQLiteDatabase(path)
+        worker, _, _, _ = stack(worker_db, provider)
+        try:
+            return worker.reschedule(
+                "reschedule:duplicate",
+                "event-1",
+                start_at=target_start,
+                end_at=target_end,
+                timezone_name="Europe/Berlin",
+                human_approved=True,
+            )
+        finally:
+            worker_db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(execute)
+        assert entered.wait(timeout=5)
+        duplicate = executor.submit(execute)
+        assert duplicate.result(timeout=5) is None
+
+        verification_db = SQLiteDatabase(path)
+        _, _, operations, _ = stack(verification_db, provider)
+        assert operations.get("reschedule:duplicate").status == ExternalActionStatus.IN_PROGRESS
+        verification_db.close()
+
+        release.set()
+        completed = first.result(timeout=5)
+
+    assert completed is not None
+    assert completed.status == ScheduleStatus.RESCHEDULE_REQUESTED
+    assert provider.calls == [("reschedule", "reschedule:duplicate")]
+
+
+def test_reschedule_claim_race_returns_live_operation_without_provider_replay():
+    database = SQLiteDatabase()
+    schedules = SQLiteSchedulingRepository(database)
+    provider = FakeCalendarAdapter()
+
+    class RacingOperationsRepository(SQLiteExternalActionOperationRepository):
+        simulated_claim = False
+
+        def transition(self, operation_id, expected_status, status, *, result=None, error=None):
+            if (
+                operation_id == "reschedule:claim-race"
+                and expected_status == ExternalActionStatus.PREPARED
+                and status == ExternalActionStatus.IN_PROGRESS
+                and not self.simulated_claim
+            ):
+                self.simulated_claim = True
+                super().transition(
+                    operation_id, expected_status, status, result=result, error=error
+                )
+                raise OperationConflictError("Another request won the execution claim.")
+            return super().transition(
+                operation_id, expected_status, status, result=result, error=error
+            )
+
+    operations = RacingOperationsRepository(database)
+    external = ExternalActionService(
+        operations, SchedulingService.action_adapter(provider, schedules)
+    )
+    service = SchedulingService(schedules, provider, external)
+    service.add_event(event(status=ScheduleStatus.ACCEPTED))
+    target_start = BASE_START + timedelta(days=2)
+
+    result = service.reschedule(
+        "reschedule:claim-race",
+        "event-1",
+        start_at=target_start,
+        end_at=target_start + timedelta(hours=1),
+        timezone_name="Europe/Berlin",
+        human_approved=True,
+    )
+
+    assert result is None
+    assert operations.get("reschedule:claim-race").status == ExternalActionStatus.IN_PROGRESS
+    assert provider.calls == []
+    database.close()
 
 
 def test_reschedule_claim_reserves_current_and_target_slots():

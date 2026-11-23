@@ -180,6 +180,19 @@ def _seed_pending_operation(path, *, start_at=START, end_at=END, final_status=No
     return operation_id
 
 
+def _mark_operation_stale(path, operation_id, *, age=timedelta(minutes=10)):
+    connection = sqlite3.connect(path)
+    try:
+        stale_at = (datetime.now(timezone.utc) - age).isoformat()
+        connection.execute(
+            "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+            (stale_at, operation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def _effect_count(path):
     connection = sqlite3.connect(path)
     try:
@@ -194,6 +207,30 @@ def _stored_event(path):
         return SQLiteSchedulingRepository(database).get(EVENT_ID)
     finally:
         database.close()
+
+
+def test_duplicate_reschedule_post_preserves_fresh_in_progress_operation(tmp_path):
+    path = tmp_path / "duplicate-live-reschedule.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    status, result = candidate.reschedule()
+
+    assert status == "202 Accepted"
+    assert result == {
+        "schema_version": 1,
+        "outcome": "in_progress",
+        "event_id": EVENT_ID,
+    }
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.IN_PROGRESS
+    finally:
+        database.close()
+    assert _effect_count(path) == 0
+    candidate.close()
 
 
 def test_candidate_can_reschedule_owned_interview_and_replay_after_restart(tmp_path):
@@ -463,10 +500,35 @@ def test_pending_reschedule_intent_is_restored_after_restart_without_provider_re
     restarted.close()
 
 
+def test_pending_lookup_keeps_fresh_in_progress_operation_active_without_reconciliation(tmp_path):
+    path = tmp_path / "pending-live-in-progress.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    status, pending = candidate.pending()
+    assert status == "202 Accepted"
+    assert pending == {
+        "schema_version": 1,
+        "outcome": "in_progress",
+        "event_id": EVENT_ID,
+    }
+    assert _effect_count(path) == 0
+
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.IN_PROGRESS
+    finally:
+        database.close()
+    candidate.close()
+
+
 def test_pending_lookup_recovers_stranded_in_progress_operation_without_provider_retry(tmp_path):
     path = tmp_path / "pending-in-progress.sqlite"
     _seed(path, _event())
     operation_id = _seed_pending_operation(path)
+    _mark_operation_stale(path, operation_id)
     candidate = Candidate(path)
 
     status, pending = candidate.pending()
@@ -495,6 +557,7 @@ def test_pending_lookup_recovers_operation_after_event_commit_before_operation_c
     )
     _seed(path, target_event)
     operation_id = _seed_pending_operation(path)
+    _mark_operation_stale(path, operation_id)
     candidate = Candidate(path)
 
     status, pending = candidate.pending()
@@ -640,6 +703,15 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     reconciliation = document["paths"][CandidateScheduleActionWSGIApp.RECONCILIATION_PATH]["post"]
     reconciliation_schema = reconciliation["requestBody"]["content"]["application/json"]["schema"]
     assert reconciliation_schema["properties"]["independently_verified"]["const"] is True
+    pending_get = document["paths"][CandidateScheduleActionWSGIApp.PENDING_PATH]["get"]
+    assert "202" in pending_get["responses"]
+    active_schema = pending_get["responses"]["202"]["content"]["application/json"]["schema"]
+    assert active_schema["properties"]["outcome"]["const"] == "in_progress"
+    reschedule_post = document["paths"][CandidateScheduleActionWSGIApp.RESCHEDULE_PATH]["post"]
+    post_active_schemas = reschedule_post["responses"]["202"]["content"]["application/json"]["schema"]["oneOf"]
+    assert {
+        schema["properties"]["outcome"]["const"] for schema in post_active_schemas
+    } == {"in_progress", "reconciliation_required"}
 
     html = candidate_sandbox_html().decode("utf-8")
     for identifier in (
@@ -649,7 +721,119 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
         "/v1/candidate/schedule-event/reschedule-reconciliation",
     ):
         assert identifier in html
+    assert "['none', 'pending', 'in_progress'].includes(pending.outcome)" in html
+    assert "A sandbox reschedule is still in progress." in html
+    assert "result.outcome === 'in_progress'" in html
     assert "No real calendar is contacted" in html
+
+
+def test_candidate_sandbox_browser_disables_actions_while_reschedule_is_live(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-live-reschedule.sqlite"
+    _seed(path, _event())
+    _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, candidate.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#reschedule-state").get_by_text(
+                "The current sandbox request is active", exact=False
+            ).wait_for()
+
+            assert page.locator("#reschedule-panel").get_attribute("disabled") is not None
+            assert page.locator("#reschedule-start").is_disabled()
+            assert page.locator("#reschedule-end").is_disabled()
+            assert page.locator("#reschedule-timezone").is_disabled()
+            assert page.locator("#request-reschedule").is_disabled()
+            assert page.locator("#reschedule-reconciliation-panel").get_attribute("disabled") is not None
+            assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            assert _effect_count(path) == 0
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        candidate.close()
+
+
+def test_candidate_sandbox_browser_disables_duplicate_post_while_reschedule_is_live(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-duplicate-live-reschedule.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, candidate.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
+
+            page.locator("#reschedule-start").fill(START)
+            page.locator("#reschedule-end").fill(END)
+            page.locator("#reschedule-timezone").fill(ZONE)
+            operation_id = _seed_pending_operation(path)
+            page.locator("#request-reschedule").click()
+            page.locator("#reschedule-state").get_by_text(
+                "The current sandbox request is active", exact=False
+            ).wait_for()
+
+            assert page.locator("#reschedule-panel").get_attribute("disabled") is not None
+            assert page.locator("#reschedule-start").is_disabled()
+            assert page.locator("#reschedule-end").is_disabled()
+            assert page.locator("#reschedule-timezone").is_disabled()
+            assert page.locator("#request-reschedule").is_disabled()
+            assert page.locator("#reschedule-reconciliation-panel").get_attribute("disabled") is not None
+            assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            assert _effect_count(path) == 0
+
+            database = SQLiteDatabase(str(path))
+            try:
+                operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+                assert operation.status == ExternalActionStatus.IN_PROGRESS
+            finally:
+                database.close()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        candidate.close()
 
 
 def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_reschedule(tmp_path):
