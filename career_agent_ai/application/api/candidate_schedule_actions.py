@@ -17,6 +17,9 @@ from career_agent_ai.application.external_actions import (
     ExternalActionService,
     ExternalActionStatus,
 )
+from career_agent_ai.application.external_actions.external_action_repository import (
+    OperationConflictError,
+)
 from career_agent_ai.application.scheduling import (
     CalendarReconciliationEvidenceError,
     ScheduleEvent,
@@ -170,7 +173,7 @@ class CandidateScheduleActionWSGIApp:
             return self._respond(
                 start_response, "409 Conflict", {"error": "schedule_conflict"}
             )
-        except SchedulingOperationConflict:
+        except (SchedulingOperationConflict, OperationConflictError):
             return self._respond(
                 start_response, "409 Conflict", {"error": "approval_conflict"}
             )
@@ -233,6 +236,18 @@ class CandidateScheduleActionWSGIApp:
                     "More than one ambiguous reschedule is bound to this event."
                 )
             operation = pending[0]
+            if operation.status == ExternalActionStatus.IN_PROGRESS:
+                operation = operations.transition(
+                    operation.operation_id,
+                    ExternalActionStatus.IN_PROGRESS,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED,
+                    error=(
+                        "Process restarted while the calendar provider action was in "
+                        "progress; provider evidence is required before retry."
+                    ),
+                )
+            if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+                raise ValueError("Pending reschedule is not in a recoverable state.")
             payload = operation.payload
             raw_version = payload.get("event_version")
             if type(raw_version) is not int or not 1 <= raw_version <= _MAX_STATE_VERSION:
@@ -793,7 +808,7 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
                 }],
                 "responses": {
                     "200": {
-                        "description": "Allowlisted pending reschedule intent restored from durable storage",
+                        "description": "Allowlisted pending reschedule intent restored from durable storage; interrupted in-progress actions are marked for reconciliation without provider execution",
                         "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                         "content": json_content({"oneOf": [pending_none_response, pending_intent_response]}),
                     },
