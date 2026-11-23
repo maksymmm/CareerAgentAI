@@ -42,6 +42,7 @@ def _event(
     *,
     status=ScheduleStatus.PROPOSED,
     version=1,
+    open_ended=False,
 ):
     start = datetime(2026, 12, 8, 9, 0, tzinfo=timezone.utc)
     return ScheduleEvent(
@@ -51,7 +52,7 @@ def _event(
         event_type=ScheduleEventType.INTERVIEW,
         location="Sandbox video room",
         start_at=start,
-        end_at=start + timedelta(hours=1),
+        end_at=None if open_ended else start + timedelta(hours=1),
         timezone_name="Europe/Berlin",
         status=status,
         provider_event_id="fake-" + event_id,
@@ -801,6 +802,48 @@ def test_pending_prepared_decline_rejects_malformed_source_snapshot(
         "409 Conflict",
         {"error": "approval_conflict"},
     )
+    assert restarted.decline() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 0
+
+def test_decline_retry_rejects_missing_nullable_end_snapshot_for_open_ended_event(tmp_path):
+    path = tmp_path / "decline-open-ended-source-corrupt.sqlite"
+    _seed(path, _event(open_ended=True))
+    candidate = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert candidate.decline()[0] == "202 Accepted"
+    assert candidate.reconcile(False)[1]["outcome"] == "no_effect"
+
+    connection = sqlite3.connect(path)
+    try:
+        operation_id = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        assert operation_id
+        row = connection.execute(
+            "SELECT payload_json, status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        assert row is not None
+        payload_json, status = row
+        assert status == "prepared"
+        payload = json.loads(payload_json)
+        assert payload["event_end_at"] is None
+        payload.pop("event_end_at")
+        connection.execute(
+            "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+            (json.dumps(payload, separators=(",", ":")), operation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
     assert restarted.decline() == (
         "409 Conflict",
         {"error": "approval_conflict"},
