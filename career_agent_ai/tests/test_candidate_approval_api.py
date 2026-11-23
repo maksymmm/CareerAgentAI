@@ -16,6 +16,7 @@ from career_agent_ai.application.api import (
 )
 from career_agent_ai.application.career import (
     ApprovalDecision,
+    CandidateApprovalSubmission,
     CandidateApprovalUnavailableError,
     CareerLoopConflictError,
     HumanActionRequiredError,
@@ -3108,3 +3109,48 @@ def test_reconciliation_accepts_maximum_sqlite_state_version_without_precision_l
     assert status == "200 OK"
     assert response == {"run_id": "run-1", "phase": "complete"}
     assert getattr(loop, call_attribute)[-1] == (1 << 63) - 1
+
+
+
+def test_candidate_approval_submission_rejects_state_version_above_sqlite_limit():
+    with pytest.raises(ValueError, match="non-negative SQLite integer"):
+        CandidateApprovalSubmission(
+            run_id="run-1",
+            state_version=(1 << 63),
+            action_fingerprint="0" * 64,
+            decision="approve",
+        )
+
+
+def test_post_approval_rejects_state_version_above_sqlite_limit_before_loop():
+    loop = Loop()
+    raw_json = (
+        b'{"schema_version":1,"run_id":"run-1",'
+        b'"state_version":9223372036854775808,'
+        b'"action_fingerprint":"' + (b"0" * 64) + b'","decision":"approve"}'
+    )
+
+    (status, _), response = request_raw(
+        app(loop), path="/v1/candidate/runs/run-1/approval", raw_json=raw_json
+    )
+
+    assert status == "400 Bad Request"
+    assert response["error"] == "invalid_request"
+    assert loop.submission is None
+
+
+def test_post_approval_accepts_maximum_sqlite_state_version():
+    loop = Loop()
+    raw_json = (
+        b'{"schema_version":1,"run_id":"run-1",'
+        b'"state_version":9223372036854775807,'
+        b'"action_fingerprint":"' + (b"0" * 64) + b'","decision":"approve"}'
+    )
+
+    (status, _), response = request_raw(
+        app(loop), path="/v1/candidate/runs/run-1/approval", raw_json=raw_json
+    )
+
+    assert status == "200 OK"
+    assert response == {"run_id": "run-1", "phase": "message_approval"}
+    assert loop.submission.state_version == (1 << 63) - 1

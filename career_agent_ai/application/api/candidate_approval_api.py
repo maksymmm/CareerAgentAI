@@ -10,6 +10,7 @@ from hashlib import sha256, sha512
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
+from career_agent_ai.application.career.approval_contract import MAX_SQLITE_STATE_VERSION
 from career_agent_ai.application.career import (
     CandidateApprovalConflictError,
     CandidateApprovalSubmission,
@@ -26,9 +27,6 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 from .candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
-
-
-_MAX_SQLITE_STATE_VERSION = (1 << 63) - 1
 
 
 _STRICT_START_TEXT_PATTERN = (
@@ -528,7 +526,7 @@ class CandidateApprovalWSGIApp:
         """Validate a state version before converting untrusted numeric values."""
         error = "state_version must be a non-negative SQLite integer."
         if type(value) is int:
-            if 0 <= value <= _MAX_SQLITE_STATE_VERSION:
+            if 0 <= value <= MAX_SQLITE_STATE_VERSION:
                 return value
             raise ValueError(error)
         if type(value) is float:
@@ -536,7 +534,7 @@ class CandidateApprovalWSGIApp:
                 not math.isfinite(value)
                 or not value.is_integer()
                 or value < 0
-                or value > _MAX_SQLITE_STATE_VERSION
+                or value > MAX_SQLITE_STATE_VERSION
             ):
                 raise ValueError(error)
             return int(value)
@@ -544,7 +542,7 @@ class CandidateApprovalWSGIApp:
             if (
                 not value.is_finite()
                 or value < 0
-                or value > _MAX_SQLITE_STATE_VERSION
+                or value > MAX_SQLITE_STATE_VERSION
                 or value != value.to_integral_value()
             ):
                 raise ValueError(error)
@@ -759,7 +757,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
             "run_id": {"type": "string", "minLength": 1},
-            "state_version": {"type": "integer", "minimum": 0, "maximum": _MAX_SQLITE_STATE_VERSION},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "action_kind": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "object", "additionalProperties": True},
@@ -780,7 +778,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
             "run_id": {"type": "string", "minLength": 1},
-            "state_version": {"type": "integer", "minimum": 0, "maximum": _MAX_SQLITE_STATE_VERSION},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "action_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "decision": {"type": "string", "enum": ["approve", "decline"]},
         },
@@ -791,7 +789,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["schema_version", "state_version", "submitted"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
-            "state_version": {"type": "integer", "minimum": 0, "maximum": _MAX_SQLITE_STATE_VERSION},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "submitted": {"type": "boolean"},
             "provider_submission_id": {
                 "type": "string", "minLength": 1, "maxLength": 1_000,
@@ -813,7 +811,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["schema_version", "state_version", "delivered"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
-            "state_version": {"type": "integer", "minimum": 0, "maximum": _MAX_SQLITE_STATE_VERSION},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "delivered": {"type": "boolean"},
         },
         "additionalProperties": False,
@@ -823,7 +821,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["schema_version", "state_version", "completed"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
-            "state_version": {"type": "integer", "minimum": 0, "maximum": _MAX_SQLITE_STATE_VERSION},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "completed": {"type": "boolean"},
             "provider_event_id": {
                 "type": "string", "minLength": 1, "maxLength": 1_000,
@@ -1089,7 +1087,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                                 "properties": {
                                     "schema_version": {"type": "integer", "const": 1},
                                     "run_id": {"type": "string", "minLength": 1},
-                                    "state_version": {"type": "integer", "minimum": 0, "maximum": _MAX_SQLITE_STATE_VERSION},
+                                    "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
                                     "phase": {"type": "string", "enum": [p.value for p in CareerLoopPhase]},
                                     "waiting_for_human": {"type": "boolean"},
                                     "terminal": {"type": "boolean"},

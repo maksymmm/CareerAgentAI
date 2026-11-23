@@ -1581,9 +1581,9 @@ the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
 
 
-Candidate reconciliation state-version bounds: authenticated application, message and
-interview observations now validate non-negative integral state versions against the
-SQLite signed 64-bit maximum before integer conversion. Decimal exponent bombs,
+Candidate state-version bounds: candidate approval submissions and authenticated
+application, message and interview observations now validate non-negative integral
+state versions against the SQLite signed 64-bit maximum before integer conversion. Decimal exponent bombs,
 fractional/negative values, non-finite JSON constants and values above the storage
 range return sanitized 400 responses without reaching a provider resolver. OpenAPI
 publishes the same bound; HTTP regressions cover all three reconciliation routes,
