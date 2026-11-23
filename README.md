@@ -254,6 +254,8 @@ An `in_progress` operation found after restart is treated as ambiguous. It moves
 
 The current capability is infrastructure only: no production communication or application provider is configured, and no real external action is sent.
 
+The candidate interview reschedule sandbox exposes an authenticated, read-only pending-intent lookup. After a timeout or browser restart, it restores only the exact event/version/target tuple from the durable SQLite operation ledger; switching events cannot carry an in-memory slot across owners or events. Independent provider attestation is always reset after reload, and ambiguous operations remain blocked from retry until evidence-backed reconciliation completes. The lookup exposes no provider identifiers and performs no calendar I/O.
+
 ---
 
 ## Communication Adapter
