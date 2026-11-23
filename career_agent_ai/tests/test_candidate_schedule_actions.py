@@ -480,6 +480,35 @@ def test_pending_lookup_recovers_stranded_in_progress_operation_without_provider
     candidate.close()
 
 
+def test_pending_lookup_recovers_operation_after_event_commit_before_operation_commit(tmp_path):
+    path = tmp_path / "pending-event-committed.sqlite"
+    target_event = _event().transition(
+        ScheduleStatus.RESCHEDULE_REQUESTED,
+        start_at=datetime.fromisoformat(START),
+        end_at=datetime.fromisoformat(END),
+        timezone_name=ZONE,
+    )
+    _seed(path, target_event)
+    operation_id = _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    status, pending = candidate.pending()
+    assert status == "200 OK"
+    assert pending["outcome"] == "pending"
+    assert pending["state_version"] == 1
+    assert pending["start_at"] == START
+    assert _stored_event(path).version == 2
+    assert _effect_count(path) == 0
+
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    finally:
+        database.close()
+    candidate.close()
+
+
 def test_pending_lookup_fails_closed_when_multiple_ambiguous_intents_exist(tmp_path):
     path = tmp_path / "pending-ambiguous.sqlite"
     _seed(path, _event())
