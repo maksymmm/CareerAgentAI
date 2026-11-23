@@ -1590,3 +1590,12 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate interview acceptance version binding: `SchedulingService.accept` now accepts an
+optional exact candidate-approved `expected_version`, rejects stale approvals before
+preparing a provider operation, and rejects reuse of one operation ID for a different
+approved version. Existing trusted internal callers remain source-compatible; candidate
+HTTP adapters must pass the displayed version. Regressions prove stale approval creates
+no ledger row or provider effect and a successful operation cannot be rebound to a newer
+version. Next: expose acceptance through an authenticated candidate endpoint with durable
+pending/reconciliation recovery and sandbox-only provider effects.
