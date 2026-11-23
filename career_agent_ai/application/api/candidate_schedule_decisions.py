@@ -237,6 +237,11 @@ class CandidateScheduleDeclineWSGIApp:
         pending_ids: tuple[str, ...],
         user_id: str,
         event_id: str,
+        event_version: int,
+        event_start_at: str,
+        event_end_at: str | None,
+        event_timezone_name: str,
+        event_status: str,
     ) -> bool:
         """Validate the active ledger row and report whether it is still ambiguous."""
         if active_operation_id is None:
@@ -328,6 +333,24 @@ class CandidateScheduleDeclineWSGIApp:
             if pending_ids:
                 raise SchedulingOperationConflict(
                     "A prepared decline conflicts with another ambiguous ledger row."
+                )
+            required_snapshot_fields = {
+                "event_start_at",
+                "event_end_at",
+                "event_timezone_name",
+                "event_status",
+            }
+            if (
+                not required_snapshot_fields.issubset(payload)
+                or type(event_version) is not int
+                or event_version != state_version
+                or payload.get("event_start_at") != event_start_at
+                or payload.get("event_end_at") != event_end_at
+                or payload.get("event_timezone_name") != event_timezone_name
+                or payload.get("event_status") != event_status
+            ):
+                raise SchedulingOperationConflict(
+                    "Prepared decline source snapshot no longer matches the event."
                 )
             return False
         raise SchedulingOperationConflict(
@@ -606,6 +629,11 @@ class CandidateScheduleDeclineWSGIApp:
                 pending_ids,
                 user_id,
                 event_id,
+                event_version=event_row[13],
+                event_start_at=event_row[5],
+                event_end_at=event_row[7],
+                event_timezone_name=event_row[9],
+                event_status=event_row[10],
             )
             if not has_pending:
                 return self._respond(
@@ -631,6 +659,11 @@ class CandidateScheduleDeclineWSGIApp:
                 pending_ids,
                 user_id,
                 event_id,
+                event_version=event.version,
+                event_start_at=event.start_at.isoformat(),
+                event_end_at=None if event.end_at is None else event.end_at.isoformat(),
+                event_timezone_name=event.timezone_name,
+                event_status=event.status.value,
             )
             if not has_pending:
                 return self._respond(
