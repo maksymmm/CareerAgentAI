@@ -481,6 +481,9 @@ _HTML = r"""<!doctype html>
           : 'Provider confirmed no calendar effect. Review and explicitly retry if you still want to decline.';
         byId('decline-confirmed').checked = false;
         await loadPendingDecline(identifier, snapshot, generation);
+        byId('decline-state').textContent = result.outcome === 'completed'
+          ? 'Interview declined in the sandbox.'
+          : 'Provider confirmed no calendar effect. Review and explicitly retry if you still want to decline.';
         show({status: 200, payload: {outcome: result.outcome,
           event_id: identifier, state_version: snapshot.state_version}});
       } catch (error) {
