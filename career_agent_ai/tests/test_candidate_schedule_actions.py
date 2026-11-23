@@ -72,6 +72,11 @@ def _body(**overrides):
     }
 
 
+def _raw_state_version(body, literal):
+    encoded = json.dumps(body, separators=(",", ":"))
+    return encoded.replace('"state_version":1', f'"state_version":{literal}', 1).encode("utf-8")
+
+
 class Candidate:
     def __init__(self, path, plan=None):
         self.path = str(path)
@@ -275,6 +280,41 @@ def test_reschedule_rejects_unapproved_or_malformed_request_before_effect(tmp_pa
     assert status == "400 Bad Request"
     assert result == {"error": "invalid_request"}
     assert _effect_count(path) == 0
+    candidate.close()
+
+
+@pytest.mark.parametrize("literal", ["1e1000000000", "1" + "0" * 5000])
+def test_reschedule_rejects_extreme_state_version_without_integer_expansion(tmp_path, literal):
+    path = tmp_path / "extreme-state-version.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+    status, result = candidate.call(
+        CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+        raw=_raw_state_version(_body(), literal),
+    )
+    assert (status, result) == ("400 Bad Request", {"error": "invalid_request"})
+    assert _effect_count(path) == 0
+    candidate.close()
+
+
+def test_reconciliation_rejects_extreme_state_version_before_provider_resolution(tmp_path):
+    path = tmp_path / "extreme-reconciliation-version.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    assert candidate.reschedule()[0] == "202 Accepted"
+    request = {
+        key: _body()[key]
+        for key in ("schema_version", "event_id", "state_version", "start_at", "end_at", "timezone_name")
+    }
+    request.update(completed=True, independently_verified=True)
+    status, result = candidate.call(
+        CandidateScheduleActionWSGIApp.RECONCILIATION_PATH,
+        raw=_raw_state_version(request, "1e1000000000"),
+    )
+    assert (status, result) == ("400 Bad Request", {"error": "invalid_request"})
+    assert _effect_count(path) == 1
     candidate.close()
 
 

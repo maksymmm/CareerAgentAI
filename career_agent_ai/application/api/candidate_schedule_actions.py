@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from dataclasses import asdict
@@ -41,6 +42,9 @@ from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import
 from career_agent_ai.application.storage.sqlite_scheduling_repository import (
     SQLiteSchedulingRepository,
 )
+
+_MAX_STATE_VERSION = (1 << 63) - 1
+
 
 _INSTANT = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
@@ -451,13 +455,27 @@ class CandidateScheduleActionWSGIApp:
     def _positive_integer(value: object, field: str) -> int:
         if type(value) not in {int, float, Decimal}:
             raise ValueError(f"{field} must be a positive integer.")
-        try:
-            normalized = int(value)
-        except (OverflowError, ValueError) as exc:
-            raise ValueError(f"{field} must be a positive integer.") from exc
-        if value != normalized or normalized < 1:
+        if isinstance(value, Decimal):
+            if (
+                not value.is_finite()
+                or value < 1
+                or value > _MAX_STATE_VERSION
+                or value != value.to_integral_value()
+            ):
+                raise ValueError(f"{field} must be a positive integer.")
+            return int(value)
+        if isinstance(value, float):
+            if (
+                not math.isfinite(value)
+                or value < 1
+                or value > _MAX_STATE_VERSION
+                or not value.is_integer()
+            ):
+                raise ValueError(f"{field} must be a positive integer.")
+            return int(value)
+        if value < 1 or value > _MAX_STATE_VERSION:
             raise ValueError(f"{field} must be a positive integer.")
-        return normalized
+        return value
 
     @staticmethod
     def _instant(value: object, field: str) -> datetime:
@@ -497,6 +515,7 @@ class CandidateScheduleActionWSGIApp:
             payload = json.loads(
                 body.decode("utf-8"),
                 object_pairs_hook=self._unique_json_object,
+                parse_int=Decimal,
                 parse_float=Decimal,
             )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
