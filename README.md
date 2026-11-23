@@ -953,6 +953,7 @@ Implemented foundations:
 - Provider-neutral, human-gated communication with a no-I/O fake provider
 - Restart-safe persistence of communication thread, message, and reply identifiers
 - Durable, human-gated interview/trial-day scheduling with conflict detection and exact local-time presentation
+- Candidate-approved interview decline with restart-safe provider-evidence recovery, including the event-committed/operation-pending crash boundary
 - Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
