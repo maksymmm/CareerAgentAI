@@ -107,12 +107,17 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             SELECT operation_id
             FROM external_action_operations
             WHERE action_type = ?
-              AND status = ?
+              AND status IN (?, ?)
               AND json_extract(payload_json, '$.event_id') = ?
             ORDER BY created_at DESC, operation_id ASC
             LIMIT 2
             """,
-            (action_type, ExternalActionStatus.RECONCILIATION_REQUIRED.value, event_id),
+            (
+                action_type,
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                event_id,
+            ),
         ).fetchall()
         operations = tuple(self.get(row[0]) for row in rows)
         if any(operation is None for operation in operations):
