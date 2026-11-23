@@ -737,22 +737,48 @@ class CandidateScheduleDeclineWSGIApp:
     def _require_event_matches_intent(
         event: ScheduleEvent, payload: Mapping[str, Any], state_version: int
     ) -> None:
+        required_snapshot_fields = {
+            "event_start_at",
+            "event_end_at",
+            "event_timezone_name",
+            "event_status",
+        }
+        if not required_snapshot_fields.issubset(payload):
+            raise ValueError("Decline source snapshot is incomplete.")
+
+        source_start_at = payload["event_start_at"]
+        source_end_at = payload["event_end_at"]
+        source_timezone_name = payload["event_timezone_name"]
+        source_status = payload["event_status"]
+        if (
+            not isinstance(source_start_at, str)
+            or not isinstance(source_timezone_name, str)
+            or source_status not in {
+                ScheduleStatus.PROPOSED.value,
+                ScheduleStatus.RESCHEDULE_REQUESTED.value,
+            }
+            or (
+                source_end_at is not None
+                and not isinstance(source_end_at, str)
+            )
+        ):
+            raise ValueError("Decline source snapshot is malformed.")
+
+        current_end_at = None if event.end_at is None else event.end_at.isoformat()
         source_matches = (
             event.version == state_version
-            and payload.get("event_start_at") == event.start_at.isoformat()
-            and payload.get("event_end_at")
-                == (None if event.end_at is None else event.end_at.isoformat())
-            and payload.get("event_timezone_name") == event.timezone_name
-            and payload.get("event_status") == event.status.value
+            and source_start_at == event.start_at.isoformat()
+            and source_end_at == current_end_at
+            and source_timezone_name == event.timezone_name
+            and source_status == event.status.value
         )
         target_already_applied = (
             state_version < _MAX_STATE_VERSION
             and event.version == state_version + 1
             and event.status == ScheduleStatus.DECLINED
-            and payload.get("event_start_at") == event.start_at.isoformat()
-            and payload.get("event_end_at")
-                == (None if event.end_at is None else event.end_at.isoformat())
-            and payload.get("event_timezone_name") == event.timezone_name
+            and source_start_at == event.start_at.isoformat()
+            and source_end_at == current_end_at
+            and source_timezone_name == event.timezone_name
         )
         if not (source_matches or target_already_applied):
             raise ValueError("Decline source or applied target no longer matches the event.")
