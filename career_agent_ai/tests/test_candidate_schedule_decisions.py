@@ -849,3 +849,36 @@ def test_decline_retry_rejects_missing_nullable_end_snapshot_for_open_ended_even
         {"error": "approval_conflict"},
     )
     assert _effect_count(path) == 0
+
+def test_open_ended_decline_retry_accepts_explicit_null_end_snapshot(tmp_path):
+    path = tmp_path / "decline-open-ended-source-valid.sqlite"
+    _seed(path, _event(open_ended=True))
+    candidate = Candidate(
+        path,
+        lambda _key, attempt: (
+            SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT
+            if attempt == 1 else SandboxCalendarOutcome.SUCCESS
+        ),
+    )
+    assert candidate.decline()[0] == "202 Accepted"
+    assert candidate.reconcile(False)[1]["outcome"] == "no_effect"
+
+    connection = sqlite3.connect(path)
+    try:
+        operation_id = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        payload_json = connection.execute(
+            "SELECT payload_json FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+        assert json.loads(payload_json)["event_end_at"] is None
+    finally:
+        connection.close()
+
+    status, result = candidate.decline()
+    assert status == "200 OK"
+    assert result["outcome"] == "completed"
+    assert result["event"]["status"] == "declined"
+    assert _effect_count(path) == 1
