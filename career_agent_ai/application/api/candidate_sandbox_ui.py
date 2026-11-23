@@ -402,7 +402,15 @@ _HTML = r"""<!doctype html>
           const validInstant = value => typeof value === 'string' &&
             /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
             Number.isFinite(Date.parse(value));
-          if (!Number.isSafeInteger(pending.state_version) || pending.state_version !== snapshot.state_version ||
+          const sourceVersionMatches = pending.state_version === snapshot.state_version;
+          const targetAlreadyApplied = pending.state_version < Number.MAX_SAFE_INTEGER &&
+            pending.state_version + 1 === snapshot.state_version &&
+            snapshot.status === 'reschedule_requested' &&
+            snapshot.start_at === pending.start_at &&
+            (snapshot.end_at || null) === pending.end_at &&
+            snapshot.timezone_name === pending.timezone_name;
+          if (!Number.isSafeInteger(pending.state_version) ||
+              (!sourceVersionMatches && !targetAlreadyApplied) ||
               !validInstant(pending.start_at) ||
               !(pending.end_at === null || (validInstant(pending.end_at) &&
                 Date.parse(pending.end_at) > Date.parse(pending.start_at))) ||
