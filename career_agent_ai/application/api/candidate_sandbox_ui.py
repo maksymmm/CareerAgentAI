@@ -177,7 +177,23 @@ _HTML = r"""<!doctype html>
     <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
     <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
-    <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
+    <fieldset id="decline-panel" disabled aria-busy="false">
+      <legend>Respond to interview invitation</legend>
+      <label class="attestation"><input id="decline-confirmed" type="checkbox" disabled> I confirm that I want to decline this interview invitation.</label>
+      <button id="decline-event" type="button" disabled>Decline interview</button>
+      <p id="decline-state" role="status">Select an owned proposed event to respond.</p>
+    </fieldset>
+    <fieldset id="decline-reconciliation-panel" disabled aria-busy="false">
+      <legend>Verify an uncertain interview decline</legend>
+      <p id="decline-reconciliation-state" role="status">No decline is awaiting reconciliation.</p>
+      <label class="attestation"><input id="decline-reconciliation-verified" type="checkbox" disabled> I independently verified the provider outcome for this exact event version.</label>
+      <div class="actions">
+        <button id="confirm-decline-completed" type="button" disabled>Confirm interview declined</button>
+        <button id="confirm-decline-no-effect" type="button" disabled>Confirm no calendar effect</button>
+      </div>
+      <p class="muted">Only independently verified sandbox-provider evidence may resolve an uncertain decline. No real calendar is contacted.</p>
+    </fieldset>
+    <p class="muted">Event snapshots are read-only. A decline requires explicit candidate confirmation and uses only the durable SQLite sandbox calendar.</p>
   </section>
   <h2 id="result-title">Result</h2>
   <pre id="result" role="region" aria-labelledby="result-title" aria-live="polite">Ready.</pre>
@@ -216,6 +232,8 @@ _HTML = r"""<!doctype html>
     let nextEventCursor = null;
     let selectedEventId = null;
     let selectedEventVersion = null;
+    let declineInFlight = false;
+    let pendingDecline = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
     const calendarDate = value => {
       if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -297,10 +315,27 @@ _HTML = r"""<!doctype html>
     }
     let eventVersionFloorId = null;
     let eventVersionFloor = null;
+    function clearDeclineState() {
+      pendingDecline = null;
+      byId('decline-panel').disabled = true;
+      byId('decline-panel').setAttribute('aria-busy', 'false');
+      byId('decline-confirmed').checked = false;
+      byId('decline-confirmed').disabled = true;
+      byId('decline-event').disabled = true;
+      byId('decline-reconciliation-panel').disabled = true;
+      byId('decline-reconciliation-panel').setAttribute('aria-busy', 'false');
+      byId('decline-reconciliation-verified').checked = false;
+      byId('decline-reconciliation-verified').disabled = true;
+      byId('confirm-decline-completed').disabled = true;
+      byId('confirm-decline-no-effect').disabled = true;
+      byId('decline-state').textContent = '';
+      byId('decline-reconciliation-state').textContent = 'No decline is awaiting reconciliation.';
+    }
     function clearEventDetail() {
       if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
       eventDetailTrigger = null;
       eventDetailGeneration += 1;
+      clearDeclineState();
       byId('event-detail').setAttribute('aria-busy', 'false');
       byId('event-detail').textContent = '';
       byId('event-detail-state').textContent = '';
@@ -315,6 +350,7 @@ _HTML = r"""<!doctype html>
       byId('next-events').disabled = true;
     }
     async function loadEventDetail(identifier, minimumVersion, trigger) {
+      if (declineInFlight) throw new Error('Wait for the current interview-decline request to finish.');
       const versionFloor = eventVersionFloorId === identifier && eventVersionFloor !== null
         ? Math.max(minimumVersion, eventVersionFloor) : minimumVersion;
       clearEventDetail();
@@ -336,6 +372,7 @@ _HTML = r"""<!doctype html>
         eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
+        await loadPendingDecline(identifier, snapshot, generation);
       } catch (error) {
         if (generation === eventDetailGeneration) {
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
@@ -349,6 +386,192 @@ _HTML = r"""<!doctype html>
         }
       }
     }
+    async function loadPendingDecline(identifier, snapshot, generation) {
+      const pending = await call('/v1/candidate/schedule-event/decline-pending?event_id=' +
+        encodeURIComponent(identifier), {}, 'Pending interview-decline recovery failed.', true);
+      if (generation !== eventDetailGeneration) return;
+      if (!pending || pending.schema_version !== 1 || pending.event_id !== identifier ||
+          !['none', 'pending'].includes(pending.outcome)) {
+        throw new Error('Invalid pending interview-decline snapshot.');
+      }
+      if (pending.outcome === 'pending') {
+        if (!Number.isSafeInteger(pending.state_version) || pending.state_version < 1 ||
+            !(pending.state_version === snapshot.state_version ||
+              (pending.state_version < Number.MAX_SAFE_INTEGER &&
+                pending.state_version + 1 === snapshot.state_version && snapshot.status === 'declined'))) {
+          throw new Error('Pending interview decline does not match the selected event version.');
+        }
+        pendingDecline = {
+          schema_version: 1, event_id: identifier, state_version: pending.state_version,
+          decision: 'decline'
+        };
+        byId('decline-panel').disabled = true;
+        byId('decline-reconciliation-panel').disabled = false;
+        byId('decline-reconciliation-verified').disabled = false;
+        byId('decline-state').textContent = 'Interview decline is awaiting provider reconciliation.';
+        byId('decline-reconciliation-state').textContent =
+          'An ambiguous interview decline was restored from durable storage. Independently verify the provider outcome.';
+        return;
+      }
+      pendingDecline = null;
+      const eligible = ['proposed', 'reschedule_requested'].includes(snapshot.status);
+      byId('decline-panel').disabled = !eligible;
+      byId('decline-confirmed').disabled = !eligible;
+      byId('decline-event').disabled = true;
+      byId('decline-state').textContent = eligible
+        ? 'Confirm that you want to decline this interview invitation.'
+        : 'This event is not awaiting a candidate response.';
+      byId('decline-reconciliation-panel').disabled = true;
+      byId('decline-reconciliation-verified').disabled = true;
+      byId('confirm-decline-completed').disabled = true;
+      byId('confirm-decline-no-effect').disabled = true;
+    }
+    async function requestDecline() {
+      if (declineInFlight) throw new Error('An interview decline is already being submitted.');
+      if (selectedEventId === null || !Number.isSafeInteger(selectedEventVersion) ||
+          pendingDecline !== null || !byId('decline-confirmed').checked) {
+        throw new Error('Select an eligible event and explicitly confirm the decline.');
+      }
+      const identifier = selectedEventId;
+      const version = selectedEventVersion;
+      const generation = eventDetailGeneration;
+      declineInFlight = true;
+      byId('decline-panel').setAttribute('aria-busy', 'true');
+      byId('decline-panel').disabled = true;
+      byId('decline-confirmed').disabled = true;
+      byId('decline-event').disabled = true;
+      byId('decline-state').textContent = 'Submitting the explicitly approved sandbox decline…';
+      try {
+        const result = await call('/v1/candidate/schedule-event/decline', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({schema_version: 1, event_id: identifier,
+            state_version: version, decision: 'decline'})
+        }, 'Interview decline request failed.');
+        if (generation !== eventDetailGeneration) return;
+        if (!result || result.schema_version !== 1 ||
+            !['completed', 'no_effect', 'reconciliation_required'].includes(result.outcome)) {
+          throw new Error('Invalid interview decline response.');
+        }
+        if (result.outcome === 'reconciliation_required') {
+          pendingDecline = {schema_version: 1, event_id: identifier,
+            state_version: version, decision: 'decline'};
+          byId('decline-reconciliation-panel').disabled = false;
+          byId('decline-reconciliation-verified').disabled = false;
+          byId('decline-reconciliation-state').textContent =
+            'Provider outcome is uncertain. Independently verify the sandbox provider before reconciling.';
+          byId('decline-state').textContent = 'Decline is awaiting provider reconciliation.';
+          show({status: 202, payload: {outcome: result.outcome, event_id: identifier}});
+          return;
+        }
+        const snapshot = eventSnapshot(result.event);
+        if (snapshot.event_id !== identifier || snapshot.state_version < version ||
+            (result.outcome === 'completed' &&
+              (snapshot.status !== 'declined' || snapshot.state_version !== version + 1)) ||
+            (result.outcome === 'no_effect' &&
+              (snapshot.state_version !== version || !['proposed', 'reschedule_requested'].includes(snapshot.status)))) {
+          throw new Error('Interview decline response does not match the approved event version.');
+        }
+        selectedEventVersion = snapshot.state_version;
+        eventVersionFloorId = identifier;
+        eventVersionFloor = snapshot.state_version;
+        byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
+        byId('decline-state').textContent = result.outcome === 'completed'
+          ? 'Interview declined in the sandbox.'
+          : 'Provider confirmed no calendar effect. Review and explicitly retry if you still want to decline.';
+        byId('decline-confirmed').checked = false;
+        await loadPendingDecline(identifier, snapshot, generation);
+        show({status: 200, payload: {outcome: result.outcome,
+          event_id: identifier, state_version: snapshot.state_version}});
+      } catch (error) {
+        if (generation === eventDetailGeneration) {
+          byId('decline-state').textContent = 'Decline result is uncertain. Reload the event before taking another action.';
+          clearDeclineState();
+          byId('decline-state').textContent = 'Decline result is uncertain. Reload the event before taking another action.';
+        }
+        throw error;
+      } finally {
+        declineInFlight = false;
+        if (generation === eventDetailGeneration) {
+          byId('decline-panel').setAttribute('aria-busy', 'false');
+          byId('decline-reconciliation-panel').setAttribute('aria-busy', 'false');
+        }
+      }
+    }
+    async function reconcileDecline(completed) {
+      if (declineInFlight) throw new Error('Interview decline reconciliation is already in progress.');
+      if (!pendingDecline || !byId('decline-reconciliation-verified').checked) {
+        throw new Error('Restore the pending decline and independently verify its provider outcome first.');
+      }
+      const intent = pendingDecline;
+      const generation = eventDetailGeneration;
+      declineInFlight = true;
+      byId('decline-reconciliation-panel').setAttribute('aria-busy', 'true');
+      byId('decline-reconciliation-panel').disabled = true;
+      byId('decline-reconciliation-verified').disabled = true;
+      byId('confirm-decline-completed').disabled = true;
+      byId('confirm-decline-no-effect').disabled = true;
+      byId('decline-reconciliation-state').textContent = 'Recording independently verified provider evidence…';
+      try {
+        const result = await call('/v1/candidate/schedule-event/decline-reconciliation', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({schema_version: 1, event_id: intent.event_id,
+            state_version: intent.state_version, completed,
+            independently_verified: true})
+        }, 'Interview decline reconciliation failed.');
+        if (generation !== eventDetailGeneration) return;
+        if (!result || result.schema_version !== 1 ||
+            result.outcome !== (completed ? 'completed' : 'no_effect')) {
+          throw new Error('Invalid interview decline reconciliation response.');
+        }
+        const snapshot = eventSnapshot(result.event);
+        if (snapshot.event_id !== intent.event_id ||
+            (completed && (snapshot.status !== 'declined' ||
+              snapshot.state_version !== intent.state_version + 1)) ||
+            (!completed && (snapshot.state_version !== intent.state_version ||
+              !['proposed', 'reschedule_requested'].includes(snapshot.status)))) {
+          throw new Error('Reconciled event does not match the approved decline intent.');
+        }
+        selectedEventVersion = snapshot.state_version;
+        eventVersionFloorId = intent.event_id;
+        eventVersionFloor = snapshot.state_version;
+        byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
+        byId('decline-reconciliation-state').textContent = completed
+          ? 'Provider evidence confirmed the interview decline.'
+          : 'Provider evidence confirmed no calendar change. A deliberate retry is available.';
+        pendingDecline = null;
+        byId('decline-reconciliation-verified').checked = false;
+        await loadPendingDecline(intent.event_id, snapshot, generation);
+        show({status: 200, payload: {outcome: result.outcome,
+          event_id: intent.event_id, state_version: snapshot.state_version}});
+      } catch (error) {
+        if (generation === eventDetailGeneration) {
+          clearDeclineState();
+          byId('decline-state').textContent = 'Reconciliation result is uncertain. Reload the event before taking another action.';
+        }
+        throw error;
+      } finally {
+        declineInFlight = false;
+        if (generation === eventDetailGeneration) {
+          byId('decline-reconciliation-panel').setAttribute('aria-busy', 'false');
+        }
+      }
+    }
+    byId('decline-confirmed').addEventListener('change', () => {
+      byId('decline-event').disabled =
+        !byId('decline-confirmed').checked || selectedEventId === null ||
+        declineInFlight || pendingDecline !== null;
+    });
+    byId('decline-event').addEventListener('click', () => guarded(() => requestDecline()));
+    byId('confirm-decline-completed').addEventListener('click', () =>
+      guarded(() => reconcileDecline(true)));
+    byId('confirm-decline-no-effect').addEventListener('click', () =>
+      guarded(() => reconcileDecline(false)));
+    byId('decline-reconciliation-verified').addEventListener('change', () => {
+      const enabled = byId('decline-reconciliation-verified').checked &&
+        pendingDecline !== null && !declineInFlight;
+      byId('confirm-decline-completed').disabled = !enabled;
+      byId('confirm-decline-no-effect').disabled = !enabled;
+    });
     async function loadEvents(after = null) {
       clearEvents();
       const generation = eventsGeneration;
