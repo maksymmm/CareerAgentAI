@@ -866,7 +866,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 8 <= self.prompt_reads <= 10:
+            if 8 <= self.prompt_reads <= 11:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
@@ -889,7 +889,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     details["status"] = "accepted"
                 elif self.prompt_reads == 9:
                     details["event_version"] = "1"
-            elif self.prompt_reads >= 11:
+            elif self.prompt_reads >= 12:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -899,7 +899,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 11:
+                if self.prompt_reads == 12:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
             fingerprint = sha256(json.dumps(
