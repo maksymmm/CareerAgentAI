@@ -335,7 +335,7 @@ class JobRelevanceScorer:
         if not phrase:
             return False
         return re.search(
-            r"(?<![\w+#.-])" + re.escape(phrase) + r"(?![\w+#.-])",
+            r"(?<![\w+#.])" + re.escape(phrase) + r"(?![\w+#.])",
             text,
             flags=re.UNICODE,
         ) is not None

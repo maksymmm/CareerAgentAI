@@ -1,3 +1,10 @@
+Relevance boundary follow-up: hyphens are separators between complete technology
+identifiers and location tokens, while letters, digits, underscore, plus, hash and
+period remain part of identifier boundaries. Java matches Java-based and New matches
+New-York, but Java still does not match JavaScript-based. Parameterized title/description
+and location regressions cover both positive and negative cases. Exact-head CI and
+Codex review are required before the relevance PR can merge.
+
 Candidate relevance false-positive and salary integrity regression:
 keyword/title/description matching now uses true Unicode-aware token boundaries
 without treating the literal letter "w" as a word-class escape. This prevents Java

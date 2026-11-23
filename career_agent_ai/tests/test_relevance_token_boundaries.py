@@ -55,6 +55,40 @@ def test_identifier_punctuation_is_preserved(keyword, title):
     assert score.title == JobRelevanceScorer.TITLE_EXACT + JobRelevanceScorer.TITLE_TERM
 
 
+@pytest.mark.parametrize(
+    ("keyword", "title", "description"),
+    [
+        ("Java", "Java-based Engineer", "Java-based backend services"),
+        ("C++", "C++-based Engineer", "C++-based systems"),
+        ("Node.js", "Node.js-based Engineer", "Node.js-based services"),
+    ],
+)
+def test_hyphens_separate_complete_technology_identifiers(keyword, title, description):
+    score = JobRelevanceScorer().score(
+        job(title, description),
+        JobFilter(keyword=keyword),
+    )
+    assert score.title == JobRelevanceScorer.TITLE_EXACT + JobRelevanceScorer.TITLE_TERM
+    assert score.skills == JobRelevanceScorer.DESCRIPTION_PHRASE + JobRelevanceScorer.DESCRIPTION_TERM
+
+
+def test_hyphen_does_not_split_a_longer_identifier():
+    score = JobRelevanceScorer().score(
+        job("JavaScript-based Engineer", "JavaScript-based systems"),
+        JobFilter(keyword="Java"),
+    )
+    assert score.title == 0.0
+    assert score.skills == 0.0
+
+
+def test_city_matches_at_a_hyphen_boundary():
+    score = JobRelevanceScorer().score(
+        job(city="New-York"),
+        JobFilter(city="New"),
+    )
+    assert score.location == JobRelevanceScorer.LOCATION_CITY / 2
+
+
 def test_city_prefix_does_not_count_as_city_match():
     score = JobRelevanceScorer().score(
         job(city="Newcastle"),
