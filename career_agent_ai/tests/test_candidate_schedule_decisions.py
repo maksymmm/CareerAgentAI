@@ -428,3 +428,39 @@ def test_candidate_sandbox_browser_can_decline_an_owned_interview(tmp_path):
         thread.join(timeout=10)
         server.server_close()
         app.close()
+
+
+@pytest.mark.parametrize(
+    "malformed_payload",
+    [
+        "[]",
+        '{"unexpected":"shape"}',
+        '{"event_id":null}',
+        '{"event_id":"bad id"}',
+        '{"event_id":"candidate-decline-interview-1","event_id":"other"}',
+    ],
+)
+def test_pending_decline_fails_closed_on_unmatchable_ambiguous_payload(
+    tmp_path, malformed_payload
+):
+    path = tmp_path / "decline-malformed-pending.sqlite"
+    _seed(path, _event())
+    first = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    assert first.decline()[0] == "202 Accepted"
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "UPDATE external_action_operations SET payload_json = ?",
+            (malformed_payload,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    restarted = Candidate(path)
+    status, result = restarted.pending()
+    assert status == "409 Conflict"
+    assert result == {"error": "approval_conflict"}
+    assert _effect_count(path) == 1
