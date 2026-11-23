@@ -85,14 +85,8 @@ class CandidateScheduleActionWSGIApp:
             or not raw_method.isascii()
             or not raw_method.isalpha()
             or raw_method != raw_method.upper()
+            or raw_method != "POST"
         ):
-            return self._respond(
-                start_response,
-                "405 Method Not Allowed",
-                {"error": "method_not_allowed"},
-                [("Allow", "POST")],
-            )
-        if raw_method != "POST":
             return self._respond(
                 start_response,
                 "405 Method Not Allowed",
@@ -136,33 +130,45 @@ class CandidateScheduleActionWSGIApp:
             )
         try:
             payload = self._read_json(environ)
-            if path == self.RESCHEDULE_PATH:
-                request = self._reschedule_request(payload)
-                return self._reschedule(start_response, user_id, request)
-            request = self._reconciliation_request(payload)
-            return self._reconcile(start_response, user_id, request)
+            request = (
+                self._reschedule_request(payload)
+                if path == self.RESCHEDULE_PATH
+                else self._reconciliation_request(payload)
+            )
         except (TypeError, ValueError, KeyError, OverflowError):
             return self._respond(
                 start_response, "400 Bad Request", {"error": "invalid_request"}
             )
+
+        try:
+            if path == self.RESCHEDULE_PATH:
+                return self._reschedule(start_response, user_id, request)
+            return self._reconcile(start_response, user_id, request)
         except KeyError as exc:
-            # The inner handlers translate missing or foreign resources to 404.
-            if str(exc) == "'not_found'":
+            if exc.args and exc.args[0] == "not_found":
                 return self._respond(start_response, "404 Not Found", {"error": "not_found"})
             return self._respond(
-                start_response, "400 Bad Request", {"error": "invalid_request"}
+                start_response, "409 Conflict", {"error": "approval_conflict"}
             )
         except CalendarReconciliationEvidenceError:
             return self._respond(
                 start_response, "409 Conflict", {"error": "provider_evidence_conflict"}
             )
-        except (SchedulingConflictError, SchedulingOperationConflict):
+        except SchedulingConflictError:
             return self._respond(
                 start_response, "409 Conflict", {"error": "schedule_conflict"}
+            )
+        except SchedulingOperationConflict:
+            return self._respond(
+                start_response, "409 Conflict", {"error": "approval_conflict"}
             )
         except sqlite3.OperationalError:
             return self._respond(
                 start_response, "503 Service Unavailable", {"error": "storage_unavailable"}
+            )
+        except (TypeError, ValueError):
+            return self._respond(
+                start_response, "409 Conflict", {"error": "approval_conflict"}
             )
         except Exception:
             return self._respond(
@@ -611,6 +617,11 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
             "state_version": {"type": "integer", "minimum": 1},
         },
     }
+    no_effect_event_properties = dict(event_properties)
+    no_effect_event_properties["status"] = {
+        "type": "string",
+        "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"],
+    }
     no_effect_response = {
         "type": "object", "additionalProperties": False,
         "required": ["schema_version", "outcome", "event"],
@@ -618,7 +629,9 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
             "schema_version": {"const": 1},
             "outcome": {"const": "no_effect"},
             "event": {
-                "type": "object", "additionalProperties": True,
+                "type": "object", "additionalProperties": False,
+                "required": list(no_effect_event_properties),
+                "properties": no_effect_event_properties,
             },
         },
     }
@@ -633,6 +646,7 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
                             "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                             "content": json_content({"oneOf": [completed_response, no_effect_response]})},
                     "202": {"description": "Provider outcome is ambiguous and requires reconciliation",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                             "content": json_content(pending_response)},
                     **common,
                     "409": {"description": "Stale state, scheduling conflict or provider conflict",
