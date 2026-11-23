@@ -381,7 +381,7 @@ _HTML = r"""<!doctype html>
           encodeURIComponent(identifier), {}, 'Pending reschedule recovery failed.', true);
         if (generation !== eventDetailGeneration) return;
         if (!pending || pending.schema_version !== 1 || pending.event_id !== identifier ||
-            !['none', 'pending'].includes(pending.outcome)) {
+            !['none', 'pending', 'in_progress'].includes(pending.outcome)) {
           throw new Error('Invalid pending reschedule snapshot.');
         }
         selectedEventId = identifier;
@@ -398,7 +398,23 @@ _HTML = r"""<!doctype html>
         byId('reschedule-end').disabled = false;
         byId('reschedule-timezone').disabled = false;
         byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
-        if (pending.outcome === 'pending') {
+        if (pending.outcome === 'in_progress') {
+          pendingReschedule = null;
+          byId('reschedule-start').disabled = true;
+          byId('reschedule-end').disabled = true;
+          byId('reschedule-timezone').disabled = true;
+          byId('reschedule-panel').disabled = true;
+          byId('request-reschedule').disabled = true;
+          byId('reschedule-reconciliation-panel').disabled = true;
+          byId('reschedule-reconciliation-verified').checked = false;
+          byId('reschedule-reconciliation-verified').disabled = true;
+          byId('confirm-reschedule-completed').disabled = true;
+          byId('confirm-reschedule-no-effect').disabled = true;
+          byId('reschedule-reconciliation-state').textContent =
+            'A sandbox reschedule is still in progress. Refresh this event after the current request finishes.';
+          byId('reschedule-state').textContent =
+            'The current sandbox request is active. Do not submit another target or attest an outcome.';
+        } else if (pending.outcome === 'pending') {
           const validInstant = value => typeof value === 'string' &&
             /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
             Number.isFinite(Date.parse(value));

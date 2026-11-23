@@ -1601,3 +1601,6 @@ used.
 Next: verify exact-head CI coverage and Codex review; then extend the same candidate
 action contract to explicit interview decline without weakening the provider evidence
 and human-approval boundaries.
+
+
+Active reschedule execution protection: pending GET now distinguishes a recent `in_progress` operation from a stranded one. A five-minute grace from the durable status timestamp keeps concurrent candidate tabs from converting a live provider request into reconciliation-required; the API returns `202 in_progress` and the browser disables new target submission and attestation. Once the grace expires, the writable recheck uses the existing status compare-and-swap to classify the operation as reconciliation-required. This is scoped to the synchronous local SQLite sandbox provider; future network adapters require a renewable lease or a bounded provider deadline. Regression coverage verifies fresh operations remain in progress, stale operations recover without provider replay, and existing partial-commit recovery remains evidence-gated.

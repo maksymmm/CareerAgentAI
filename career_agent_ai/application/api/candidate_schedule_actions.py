@@ -7,7 +7,7 @@ import math
 import re
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Any, Callable, Iterable, Mapping
@@ -49,6 +49,7 @@ from career_agent_ai.application.storage.sqlite_scheduling_repository import (
 )
 
 _MAX_STATE_VERSION = (1 << 63) - 1
+_IN_PROGRESS_RECOVERY_GRACE = timedelta(minutes=5)
 
 
 _INSTANT = re.compile(
@@ -343,18 +344,12 @@ class CandidateScheduleActionWSGIApp:
                     "More than one ambiguous reschedule is bound to this event."
                 )
             operation = pending[0]
-            if operation.status == ExternalActionStatus.IN_PROGRESS:
-                operation = operations.transition(
-                    operation.operation_id,
-                    ExternalActionStatus.IN_PROGRESS,
-                    ExternalActionStatus.RECONCILIATION_REQUIRED,
-                    error=(
-                        "Process restarted while the calendar provider action was in "
-                        "progress; provider evidence is required before retry."
-                    ),
-                )
-            if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+            if operation.status not in {
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+            }:
                 raise ValueError("Pending reschedule is not in a recoverable state.")
+            was_in_progress = operation.status == ExternalActionStatus.IN_PROGRESS
             payload = operation.payload
             raw_version = payload.get("event_version")
             if type(raw_version) is not int or not 1 <= raw_version <= _MAX_STATE_VERSION:
@@ -384,7 +379,10 @@ class CandidateScheduleActionWSGIApp:
                 and event.timezone_name == timezone_name
             )
             if (
-                operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED
+                operation.status not in {
+                    ExternalActionStatus.IN_PROGRESS,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED,
+                }
                 or operation.action_type != "calendar.reschedule"
                 or payload.get("event_id") != event_id
                 or not (source_matches or target_already_applied)
@@ -398,6 +396,27 @@ class CandidateScheduleActionWSGIApp:
             )
             if operation.operation_id != expected_operation_id:
                 raise ValueError("Persisted reschedule operation identity is invalid.")
+            if was_in_progress:
+                age = datetime.now(timezone.utc) - operation.updated_at.astimezone(timezone.utc)
+                if age < _IN_PROGRESS_RECOVERY_GRACE:
+                    return self._respond(
+                        start_response,
+                        "202 Accepted",
+                        {
+                            "schema_version": 1,
+                            "outcome": "in_progress",
+                            "event_id": event_id,
+                        },
+                    )
+                operation = operations.transition(
+                    operation.operation_id,
+                    ExternalActionStatus.IN_PROGRESS,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED,
+                    error=(
+                        "The calendar provider execution lease expired; provider "
+                        "evidence is required before retry."
+                    ),
+                )
             return self._respond(
                 start_response,
                 "200 OK",

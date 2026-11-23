@@ -180,6 +180,19 @@ def _seed_pending_operation(path, *, start_at=START, end_at=END, final_status=No
     return operation_id
 
 
+def _mark_operation_stale(path, operation_id, *, age=timedelta(minutes=10)):
+    connection = sqlite3.connect(path)
+    try:
+        stale_at = (datetime.now(timezone.utc) - age).isoformat()
+        connection.execute(
+            "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+            (stale_at, operation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def _effect_count(path):
     connection = sqlite3.connect(path)
     try:
@@ -463,10 +476,35 @@ def test_pending_reschedule_intent_is_restored_after_restart_without_provider_re
     restarted.close()
 
 
+def test_pending_lookup_keeps_fresh_in_progress_operation_active_without_reconciliation(tmp_path):
+    path = tmp_path / "pending-live-in-progress.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    status, pending = candidate.pending()
+    assert status == "202 Accepted"
+    assert pending == {
+        "schema_version": 1,
+        "outcome": "in_progress",
+        "event_id": EVENT_ID,
+    }
+    assert _effect_count(path) == 0
+
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.IN_PROGRESS
+    finally:
+        database.close()
+    candidate.close()
+
+
 def test_pending_lookup_recovers_stranded_in_progress_operation_without_provider_retry(tmp_path):
     path = tmp_path / "pending-in-progress.sqlite"
     _seed(path, _event())
     operation_id = _seed_pending_operation(path)
+    _mark_operation_stale(path, operation_id)
     candidate = Candidate(path)
 
     status, pending = candidate.pending()
@@ -495,6 +533,7 @@ def test_pending_lookup_recovers_operation_after_event_commit_before_operation_c
     )
     _seed(path, target_event)
     operation_id = _seed_pending_operation(path)
+    _mark_operation_stale(path, operation_id)
     candidate = Candidate(path)
 
     status, pending = candidate.pending()
@@ -640,6 +679,10 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     reconciliation = document["paths"][CandidateScheduleActionWSGIApp.RECONCILIATION_PATH]["post"]
     reconciliation_schema = reconciliation["requestBody"]["content"]["application/json"]["schema"]
     assert reconciliation_schema["properties"]["independently_verified"]["const"] is True
+    pending_get = document["paths"][CandidateScheduleActionWSGIApp.PENDING_PATH]["get"]
+    assert "202" in pending_get["responses"]
+    active_schema = pending_get["responses"]["202"]["content"]["application/json"]["schema"]
+    assert active_schema["properties"]["outcome"]["const"] == "in_progress"
 
     html = candidate_sandbox_html().decode("utf-8")
     for identifier in (
@@ -649,6 +692,8 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
         "/v1/candidate/schedule-event/reschedule-reconciliation",
     ):
         assert identifier in html
+    assert "['none', 'pending', 'in_progress'].includes(pending.outcome)" in html
+    assert "A sandbox reschedule is still in progress." in html
     assert "No real calendar is contacted" in html
 
 
