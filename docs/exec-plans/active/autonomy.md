@@ -1593,3 +1593,11 @@ decision state remains cleared, controls stay disabled, backend text is suppress
 the candidate is directed to refresh durable status. Chromium covers the conflict and
 the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
+
+Candidate decline prepared-intent integrity: after provider-confirmed no-effect reconciliation,
+a retained PREPARED decline is reported as non-ambiguous only when its complete source
+snapshot is present and matches the current event version, start/end instants, timezone,
+and status. Missing or corrupted snapshot fields now fail closed on pending GET and
+same-key POST. HTTP/SQLite regressions cover missing start/end, invalid timezone, and
+status mismatch with zero provider effects. Next: exact-head full CI and Codex code/security
+review before integration.
