@@ -318,6 +318,68 @@ class CandidateScheduleDeclineWSGIApp:
         finally:
             database.close()
 
+    @staticmethod
+    def _pending_operation_ids(connection, event_id: str) -> tuple[str, ...]:
+        """Scan ambiguous decline rows with bounded, fail-closed payload validation."""
+        rows = connection.execute(
+            """
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = ?
+              AND status IN (?, ?)
+            ORDER BY created_at DESC, operation_id ASC
+            LIMIT 1001
+            """,
+            (
+                "calendar.decline",
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+            ),
+        ).fetchall()
+        if len(rows) > 1000:
+            raise SchedulingOperationConflict(
+                "Too many ambiguous calendar operations to recover safely."
+            )
+
+        def object_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Persisted operation payload contains duplicate members.")
+                result[key] = value
+            return result
+
+        def reject_constant(_value):
+            raise ValueError("Persisted operation payload contains a non-finite number.")
+
+        matches = []
+        for operation_id, payload_json in rows:
+            try:
+                payload = json.loads(
+                    payload_json,
+                    object_pairs_hook=object_pairs,
+                    parse_constant=reject_constant,
+                )
+                if not isinstance(payload, dict):
+                    raise ValueError("Persisted operation payload must be an object.")
+                raw_event_id = payload.get("event_id")
+                normalized_event_id = validate_schedule_identifier(
+                    raw_event_id, "event_id"
+                )
+                if normalized_event_id != raw_event_id:
+                    raise ValueError("Persisted operation event identity is not canonical.")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise SchedulingOperationConflict(
+                    "An ambiguous calendar operation has an unmatchable payload."
+                ) from exc
+            if normalized_event_id == event_id:
+                matches.append(operation_id)
+                if len(matches) > 1:
+                    raise SchedulingOperationConflict(
+                        "More than one ambiguous decline is bound to this event."
+                    )
+        return tuple(matches)
+
     def _pending(
         self, start_response, user_id: str, request: Mapping[str, str]
     ) -> Iterable[bytes]:
@@ -348,24 +410,10 @@ class CandidateScheduleDeclineWSGIApp:
                     "200 OK",
                     {"schema_version": 1, "outcome": "none", "event_id": event_id},
                 )
-            pending_rows = read_database.connection.execute(
-                """
-                SELECT operation_id
-                FROM external_action_operations
-                WHERE action_type = ?
-                  AND status IN (?, ?)
-                  AND json_extract(payload_json, '$.event_id') = ?
-                ORDER BY created_at DESC, operation_id ASC
-                LIMIT 2
-                """,
-                (
-                    "calendar.decline",
-                    ExternalActionStatus.IN_PROGRESS.value,
-                    ExternalActionStatus.RECONCILIATION_REQUIRED.value,
-                    event_id,
-                ),
-            ).fetchall()
-            if not pending_rows:
+            pending_ids = self._pending_operation_ids(
+                read_database.connection, event_id
+            )
+            if not pending_ids:
                 return self._respond(
                     start_response,
                     "200 OK",
@@ -379,24 +427,8 @@ class CandidateScheduleDeclineWSGIApp:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
-            rows = database.connection.execute(
-                """
-                SELECT operation_id
-                FROM external_action_operations
-                WHERE action_type = ?
-                  AND status IN (?, ?)
-                  AND json_extract(payload_json, '$.event_id') = ?
-                ORDER BY created_at DESC, operation_id ASC
-                LIMIT 2
-                """,
-                (
-                    "calendar.decline",
-                    ExternalActionStatus.IN_PROGRESS.value,
-                    ExternalActionStatus.RECONCILIATION_REQUIRED.value,
-                    event_id,
-                ),
-            ).fetchall()
-            pending = tuple(operations.get(row[0]) for row in rows)
+            pending_ids = self._pending_operation_ids(database.connection, event_id)
+            pending = tuple(operations.get(operation_id) for operation_id in pending_ids)
             if any(operation is None for operation in pending):
                 raise ValueError("Pending decline operation disappeared.")
             if not pending:
