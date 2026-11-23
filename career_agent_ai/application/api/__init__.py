@@ -5,6 +5,7 @@ from .candidate_approval_api import (
     candidate_approval_openapi_document,
     start_owner_scoped_run,
 )
+from .candidate_schedule_actions import CandidateScheduleActionWSGIApp
 
 from .operational_api import OperationalApiService, OperationalWSGIApp, openapi_document
 from .promotion_approval_api import (
@@ -15,6 +16,7 @@ from .promotion_approval_api import (
 
 __all__ = [
     "CandidateApprovalWSGIApp",
+    "CandidateScheduleActionWSGIApp",
     "candidate_approval_openapi_document",
     "start_owner_scoped_run",
     "OperationalApiService",
