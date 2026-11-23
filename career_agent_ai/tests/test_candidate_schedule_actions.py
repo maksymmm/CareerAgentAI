@@ -606,8 +606,16 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "Provider evidence did not confirm"
             ).wait_for()
-            assert not page.locator("#reschedule-reconciliation-panel").is_disabled()
+            assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+            assert not page.locator("#reschedule-reconciliation-verified").is_checked()
 
+            # A rejected evidence claim consumes the attestation. Re-selecting the
+            # event restores the pending slot and requires a fresh independent check.
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage"
+            ).wait_for()
+            page.locator("#reschedule-reconciliation-verified").check()
             page.locator("#confirm-reschedule-completed").click()
             page.locator("#reschedule-state").get_by_text(
                 "Provider evidence confirmed the sandbox reschedule"
@@ -670,6 +678,12 @@ def test_candidate_sandbox_browser_retries_only_same_slot_after_verified_no_effe
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "Provider evidence did not confirm"
             ).wait_for()
+            assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage"
+            ).wait_for()
+            page.locator("#reschedule-reconciliation-verified").check()
             page.locator("#confirm-reschedule-no-effect").click()
             page.locator("#reschedule-state").get_by_text(
                 "Provider evidence confirmed no calendar change"
