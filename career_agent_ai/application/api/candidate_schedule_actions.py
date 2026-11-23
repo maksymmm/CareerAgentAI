@@ -218,8 +218,64 @@ class CandidateScheduleActionWSGIApp:
     def _pending(
         self, start_response, user_id: str, request: Mapping[str, str]
     ) -> Iterable[bytes]:
-        """Restore one owned ambiguous reschedule intent without provider execution."""
+        """Restore one owned ambiguous reschedule intent without provider execution.
+
+        The common no-pending path is strictly read-only: it must not initialize
+        provider or external-action tables merely because a candidate viewed an event.
+        Writable recovery is opened only after a durable pending operation is found.
+        """
         event_id = request["event_id"]
+        read_database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            event_row = read_database.connection.execute(
+                """
+                SELECT event_id, candidate_id, employer_name, event_type, location,
+                       start_at, start_epoch_us, end_at, end_epoch_us, timezone_name,
+                       status, provider_event_id, application_id, version,
+                       created_at, updated_at
+                FROM scheduling_events
+                WHERE event_id = ? AND candidate_id = ?
+                """,
+                (event_id, user_id),
+            ).fetchone()
+            if event_row is None:
+                raise KeyError("not_found")
+            operation_table = read_database.connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'external_action_operations'"
+            ).fetchone()
+            if operation_table is None:
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"schema_version": 1, "outcome": "none", "event_id": event_id},
+                )
+            pending_rows = read_database.connection.execute(
+                """
+                SELECT operation_id
+                FROM external_action_operations
+                WHERE action_type = ?
+                  AND status IN (?, ?)
+                  AND json_extract(payload_json, '$.event_id') = ?
+                ORDER BY created_at DESC, operation_id ASC
+                LIMIT 2
+                """,
+                (
+                    "calendar.reschedule",
+                    ExternalActionStatus.IN_PROGRESS.value,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                    event_id,
+                ),
+            ).fetchall()
+            if not pending_rows:
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"schema_version": 1, "outcome": "none", "event_id": event_id},
+                )
+        finally:
+            read_database.close()
+
         database, repository, _service, operations = self._open_stack()
         try:
             event = repository.get(event_id)
