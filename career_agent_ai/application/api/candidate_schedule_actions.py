@@ -224,7 +224,6 @@ class CandidateScheduleActionWSGIApp:
             FROM external_action_operations
             WHERE action_type = ?
               AND status IN (?, ?)
-            ORDER BY created_at DESC, operation_id ASC
             LIMIT 1001
             """,
             (

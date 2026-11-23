@@ -889,3 +889,33 @@ def test_pending_lookup_fails_closed_on_unmatchable_ambiguous_operation_payload(
     assert status == "409 Conflict"
     assert result == {"error": "approval_conflict"}
     assert _effect_count(path) == 0
+
+
+def test_pending_reschedule_scan_uses_composite_index_without_temporary_sort(tmp_path):
+    path = tmp_path / "pending-reschedule-query-plan.sqlite"
+    _seed(path, _event())
+    _seed_pending_operation(path)
+
+    connection = sqlite3.connect(path)
+    try:
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = ?
+              AND status IN (?, ?)
+            LIMIT 1001
+            """,
+            (
+                "calendar.reschedule",
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+            ),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    details = tuple(str(row[3]) for row in plan)
+    assert any("idx_external_actions_type_status" in detail for detail in details)
+    assert not any("TEMP B-TREE" in detail.upper() for detail in details)
