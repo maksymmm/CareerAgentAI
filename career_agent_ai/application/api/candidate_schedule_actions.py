@@ -23,6 +23,7 @@ from career_agent_ai.application.external_actions.external_action_repository imp
 from career_agent_ai.application.scheduling import (
     CalendarReconciliationEvidenceError,
     ScheduleEvent,
+    ScheduleStatus,
     SchedulingService,
 )
 from career_agent_ai.application.scheduling.models import (
@@ -260,18 +261,29 @@ class CandidateScheduleActionWSGIApp:
             timezone_name = validate_timezone_name(raw_timezone)
             if timezone_name != raw_timezone or (end_at is not None and end_at <= start_at):
                 raise ValueError("Persisted reschedule target is invalid.")
+            source_matches = (
+                event.version == state_version
+                and payload.get("event_start_at") == event.start_at.isoformat()
+                and payload.get("event_end_at")
+                    == (None if event.end_at is None else event.end_at.isoformat())
+                and payload.get("event_timezone_name") == event.timezone_name
+                and payload.get("event_status") == event.status.value
+            )
+            target_already_applied = (
+                state_version < _MAX_STATE_VERSION
+                and event.version == state_version + 1
+                and event.status == ScheduleStatus.RESCHEDULE_REQUESTED
+                and event.start_at == start_at
+                and event.end_at == end_at
+                and event.timezone_name == timezone_name
+            )
             if (
                 operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED
                 or operation.action_type != "calendar.reschedule"
                 or payload.get("event_id") != event_id
-                or event.version != state_version
-                or payload.get("event_start_at") != event.start_at.isoformat()
-                or payload.get("event_end_at")
-                    != (None if event.end_at is None else event.end_at.isoformat())
-                or payload.get("event_timezone_name") != event.timezone_name
-                or payload.get("event_status") != event.status.value
+                or not (source_matches or target_already_applied)
             ):
-                raise ValueError("Persisted reschedule source no longer matches the event.")
+                raise ValueError("Persisted reschedule source or applied target no longer matches the event.")
             self._require_matching_operation(
                 operation, event_id, state_version, start_at, end_at, timezone_name
             )
