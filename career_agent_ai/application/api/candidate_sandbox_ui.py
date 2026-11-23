@@ -177,7 +177,31 @@ _HTML = r"""<!doctype html>
     <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
     <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
-    <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
+    <fieldset id="reschedule-panel" disabled aria-busy="false">
+      <legend>Request a new interview time</legend>
+      <label>New start (ISO 8601 with UTC offset)
+        <input id="reschedule-start" type="text" maxlength="64" autocomplete="off">
+      </label>
+      <label>New end (optional ISO 8601 with UTC offset)
+        <input id="reschedule-end" type="text" maxlength="64" autocomplete="off">
+      </label>
+      <label>IANA timezone
+        <input id="reschedule-timezone" type="text" maxlength="100" autocomplete="off">
+      </label>
+      <button id="request-reschedule" type="button" disabled>Confirm sandbox reschedule</button>
+      <p id="reschedule-state" role="status">Select an owned proposed or accepted event to request a new time.</p>
+    </fieldset>
+    <fieldset id="reschedule-reconciliation-panel" disabled aria-busy="false">
+      <legend>Verify an uncertain sandbox reschedule</legend>
+      <p id="reschedule-reconciliation-state" role="status">No reschedule is awaiting reconciliation.</p>
+      <label class="attestation"><input id="reschedule-reconciliation-verified" type="checkbox" disabled> I independently verified the provider outcome for this exact event version and target slot.</label>
+      <div class="actions">
+        <button id="confirm-reschedule-completed" type="button" disabled>Confirm reschedule completed</button>
+        <button id="confirm-reschedule-no-effect" type="button" disabled>Confirm no calendar change</button>
+      </div>
+      <p class="muted">The server independently checks durable sandbox-provider evidence. Never guess an outcome or retry while it is uncertain.</p>
+    </fieldset>
+    <p class="muted">Only the explicitly approved sandbox request is changed. No real calendar is contacted.</p>
   </section>
   <h2 id="result-title">Result</h2>
   <pre id="result" role="region" aria-labelledby="result-title" aria-live="polite">Ready.</pre>
@@ -199,6 +223,9 @@ _HTML = r"""<!doctype html>
     let messageReconciliationVersion = null;
     let interviewReconciliationAvailable = false;
     let interviewReconciliationVersion = null;
+    let rescheduleInFlight = false;
+    let rescheduleGeneration = 0;
+    let pendingReschedule = null;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -301,6 +328,24 @@ _HTML = r"""<!doctype html>
       if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
       eventDetailTrigger = null;
       eventDetailGeneration += 1;
+      rescheduleGeneration += 1;
+      pendingReschedule = null;
+      selectedEventId = null;
+      selectedEventVersion = null;
+      byId('reschedule-panel').disabled = true;
+      byId('reschedule-panel').setAttribute('aria-busy', 'false');
+      byId('reschedule-reconciliation-panel').disabled = true;
+      byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
+      byId('reschedule-reconciliation-verified').checked = false;
+      byId('confirm-reschedule-completed').disabled = true;
+      byId('confirm-reschedule-no-effect').disabled = true;
+      byId('request-reschedule').disabled = true;
+      byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
+      byId('reschedule-start').disabled = false;
+      byId('reschedule-end').disabled = false;
+      byId('reschedule-timezone').disabled = false;
+      byId('reschedule-state').textContent = 'Select an owned proposed or accepted event to request a new time.';
+      byId('reschedule-reconciliation-state').textContent = 'No reschedule is awaiting reconciliation.';
       byId('event-detail').setAttribute('aria-busy', 'false');
       byId('event-detail').textContent = '';
       byId('event-detail-state').textContent = '';
@@ -315,6 +360,7 @@ _HTML = r"""<!doctype html>
       byId('next-events').disabled = true;
     }
     async function loadEventDetail(identifier, minimumVersion, trigger) {
+      if (rescheduleInFlight) throw new Error('Wait for the current reschedule request to finish.');
       const versionFloor = eventVersionFloorId === identifier && eventVersionFloor !== null
         ? Math.max(minimumVersion, eventVersionFloor) : minimumVersion;
       clearEventDetail();
@@ -336,6 +382,19 @@ _HTML = r"""<!doctype html>
         eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
+        byId('reschedule-start').value = snapshot.start_at;
+        byId('reschedule-end').value = snapshot.end_at || '';
+        byId('reschedule-timezone').value = snapshot.timezone_name;
+        byId('reschedule-start').disabled = false;
+        byId('reschedule-end').disabled = false;
+        byId('reschedule-timezone').disabled = false;
+        byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
+        const reschedulable = ['proposed', 'accepted', 'reschedule_requested'].includes(snapshot.status);
+        byId('reschedule-panel').disabled = !reschedulable;
+        byId('request-reschedule').disabled = !reschedulable || rescheduleInFlight;
+        byId('reschedule-state').textContent = reschedulable
+          ? 'Review the exact target slot, then explicitly confirm the sandbox request.'
+          : 'This event is terminal and cannot be rescheduled.';
       } catch (error) {
         if (generation === eventDetailGeneration) {
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
@@ -350,6 +409,7 @@ _HTML = r"""<!doctype html>
       }
     }
     async function loadEvents(after = null) {
+      if (rescheduleInFlight) throw new Error('Wait for the current reschedule request to finish.');
       clearEvents();
       const generation = eventsGeneration;
       const selectedStatus = byId('event-status').value;
@@ -830,7 +890,7 @@ _HTML = r"""<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       activePromptLoadGeneration = null;
-      byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
+      byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight || rescheduleInFlight;
     }
     function setReconciliationAttestation(id, enabled) {
       const checkbox = byId(id); checkbox.checked = false; checkbox.disabled = !enabled; }
@@ -974,7 +1034,7 @@ _HTML = r"""<!doctype html>
     }
     byId('start').addEventListener('click', () => guarded(async () => {
       if (startInFlight) throw new Error('A run start is already in progress.');
-      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) {
+      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       startInFlight = true;
@@ -1034,7 +1094,7 @@ _HTML = r"""<!doctype html>
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
       if (startInFlight) throw new Error('Wait for the run start to finish.');
-      if (promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) throw new Error('Wait for the workflow action to finish.');
+      if (promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
       byId('status').disabled = true;
       byId('inspect-panel').setAttribute('aria-busy', 'true');
@@ -1106,7 +1166,7 @@ _HTML = r"""<!doctype html>
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (recoveryInFlight) throw new Error('Recovery is already running.');
-      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
+      if (reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for reconciliation or reschedule to finish.');
       recoveryInFlight = true;
       byId('continue').disabled = true;
       byId('prompt').disabled = true;
@@ -1151,7 +1211,7 @@ _HTML = r"""<!doctype html>
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (promptInFlight) throw new Error('An approval prompt is already loading.');
-      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
+      if (reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for reconciliation or reschedule to finish.');
       promptInFlight = true;
       invalidateApprovalPrompt('Loading approval prompt…');
       const promptGeneration = approvalPromptGeneration;
@@ -1210,7 +1270,7 @@ _HTML = r"""<!doctype html>
         if (activePromptLoadGeneration === promptGeneration) {
           activePromptLoadGeneration = null;
         }
-        byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight;
+        byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || rescheduleInFlight;
       }
     }));
     async function decide(decision) {
@@ -1220,7 +1280,7 @@ _HTML = r"""<!doctype html>
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
-      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
+      if (reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for reconciliation or reschedule to finish.');
       decisionInFlight = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
@@ -1285,7 +1345,7 @@ _HTML = r"""<!doctype html>
           reconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the application reconciliation state first.');
       }
-      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
@@ -1331,7 +1391,7 @@ _HTML = r"""<!doctype html>
           messageReconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the message reconciliation state first.');
       }
-      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
@@ -1371,7 +1431,7 @@ _HTML = r"""<!doctype html>
           interviewReconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the interview reconciliation state first.');
       }
-      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
@@ -1411,6 +1471,195 @@ _HTML = r"""<!doctype html>
       guarded(() => reconcileInterview(true)));
     byId('confirm-calendar-not-completed').addEventListener('click', () =>
       guarded(() => reconcileInterview(false)));
+    byId('reschedule-reconciliation-verified').addEventListener('change', () => {
+      const enabled = pendingReschedule !== null &&
+        byId('reschedule-reconciliation-verified').checked === true && !rescheduleInFlight;
+      byId('confirm-reschedule-completed').disabled = !enabled;
+      byId('confirm-reschedule-no-effect').disabled = !enabled;
+    });
+    async function submitReschedule() {
+      if (rescheduleInFlight) throw new Error('A reschedule request is already in progress.');
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight ||
+          decisionInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      if (pendingReschedule !== null) throw new Error('Reconcile the uncertain reschedule before another action.');
+      if (selectedEventId === null || selectedEventVersion === null ||
+          byId('reschedule-panel').disabled) {
+        throw new Error('Load an owned reschedulable event first.');
+      }
+      const startText = byId('reschedule-start').value;
+      const endText = byId('reschedule-end').value;
+      const zone = byId('reschedule-timezone').value;
+      const instant = value => typeof value === 'string' &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+        Number.isFinite(Date.parse(value));
+      if (!instant(startText) || (endText !== '' && !instant(endText)) || !timezoneName(zone)) {
+        throw new Error('Enter valid ISO-8601 instants with offsets and an IANA timezone.');
+      }
+      if (endText !== '' && Date.parse(endText) <= Date.parse(startText)) {
+        throw new Error('The new end must be later than the new start.');
+      }
+      const request = {
+        schema_version: 1, event_id: selectedEventId, state_version: selectedEventVersion,
+        start_at: startText, end_at: endText === '' ? null : endText,
+        timezone_name: zone, decision: 'approve'
+      };
+      rescheduleInFlight = true;
+      const generation = ++rescheduleGeneration;
+      byId('reschedule-panel').setAttribute('aria-busy', 'true');
+      byId('request-reschedule').disabled = true;
+      try {
+        const result = await call('/v1/candidate/schedule-event/reschedule', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(request)
+        }, 'Sandbox reschedule request failed.', true);
+        if (generation !== rescheduleGeneration) return;
+        if (!result || result.schema_version !== 1) throw new Error('Invalid reschedule response.');
+        if (result.outcome === 'reconciliation_required') {
+          if (result.event_id !== request.event_id || result.state_version !== request.state_version) {
+            throw new Error('Reschedule reconciliation is not bound to the selected event version.');
+          }
+          pendingReschedule = request;
+          byId('reschedule-panel').disabled = true;
+          byId('reschedule-reconciliation-panel').disabled = false;
+          byId('reschedule-reconciliation-state').textContent =
+            'Provider outcome is uncertain. Independently inspect the sandbox evidence before confirming either outcome.';
+          byId('reschedule-state').textContent = 'No retry is permitted until reconciliation finishes.';
+          return;
+        }
+        if (!['completed', 'no_effect'].includes(result.outcome) || !result.event) {
+          throw new Error('Invalid reschedule outcome.');
+        }
+        const snapshot = eventSnapshot(result.event);
+        if (snapshot.event_id !== request.event_id ||
+            snapshot.state_version < request.state_version ||
+            (result.outcome === 'completed' && snapshot.status !== 'reschedule_requested')) {
+          throw new Error('Reschedule response does not match the approved event.');
+        }
+        selectedEventVersion = snapshot.state_version;
+        eventVersionFloorId = snapshot.event_id;
+        eventVersionFloor = snapshot.state_version;
+        byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
+        if (result.outcome === 'completed') {
+          byId('reschedule-start').value = snapshot.start_at;
+          byId('reschedule-end').value = snapshot.end_at || '';
+          byId('reschedule-timezone').value = snapshot.timezone_name;
+          byId('reschedule-start').disabled = false;
+          byId('reschedule-end').disabled = false;
+          byId('reschedule-timezone').disabled = false;
+          byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
+          byId('reschedule-state').textContent =
+            'Sandbox reschedule completed. Reload the event list to refresh its row.';
+        } else {
+          byId('reschedule-state').textContent =
+            'The sandbox provider confirmed no calendar change. You may retry the same approved slot.';
+        }
+        byId('reschedule-panel').disabled = false;
+        byId('reschedule-reconciliation-panel').disabled = true;
+      } catch (error) {
+        if (generation === rescheduleGeneration) {
+          byId('reschedule-state').textContent = error.code === 'schedule_conflict'
+            ? 'The requested slot conflicts with another committed event.'
+            : 'The reschedule result is uncertain or stale. Refresh event detail before retrying.';
+        }
+        throw error;
+      } finally {
+        rescheduleInFlight = false;
+        byId('reschedule-panel').setAttribute('aria-busy', 'false');
+        byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
+        byId('request-reschedule').disabled =
+          selectedEventId === null || byId('reschedule-panel').disabled || pendingReschedule !== null;
+        const enabled = pendingReschedule !== null &&
+          byId('reschedule-reconciliation-verified').checked === true;
+        byId('confirm-reschedule-completed').disabled = !enabled;
+        byId('confirm-reschedule-no-effect').disabled = !enabled;
+      }
+    }
+    async function reconcileReschedule(completed) {
+      if (rescheduleInFlight) throw new Error('A reschedule operation is already in progress.');
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight ||
+          decisionInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      if (pendingReschedule === null ||
+          byId('reschedule-reconciliation-verified').checked !== true) {
+        throw new Error('Independently verify the exact provider outcome before reconciliation.');
+      }
+      const request = pendingReschedule;
+      rescheduleInFlight = true;
+      const generation = ++rescheduleGeneration;
+      byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'true');
+      byId('confirm-reschedule-completed').disabled = true;
+      byId('confirm-reschedule-no-effect').disabled = true;
+      try {
+        const result = await call('/v1/candidate/schedule-event/reschedule-reconciliation', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            schema_version: 1, event_id: request.event_id, state_version: request.state_version,
+            start_at: request.start_at, end_at: request.end_at,
+            timezone_name: request.timezone_name, completed, independently_verified: true
+          })
+        }, 'Sandbox reschedule reconciliation failed.', true);
+        if (generation !== rescheduleGeneration) return;
+        if (!result || result.schema_version !== 1 ||
+            !['completed', 'no_effect'].includes(result.outcome) || !result.event) {
+          throw new Error('Invalid reschedule reconciliation response.');
+        }
+        const snapshot = eventSnapshot(result.event);
+        if (snapshot.event_id !== request.event_id ||
+            snapshot.state_version < request.state_version ||
+            (result.outcome === 'completed' && snapshot.status !== 'reschedule_requested')) {
+          throw new Error('Reconciliation response does not match the approved event.');
+        }
+        pendingReschedule = null;
+        byId('reschedule-reconciliation-panel').disabled = true;
+        byId('reschedule-reconciliation-verified').checked = false;
+        byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
+        selectedEventVersion = snapshot.state_version;
+        eventVersionFloorId = snapshot.event_id;
+        eventVersionFloor = snapshot.state_version;
+        if (result.outcome === 'completed') {
+          byId('reschedule-start').value = snapshot.start_at;
+          byId('reschedule-end').value = snapshot.end_at || '';
+          byId('reschedule-timezone').value = snapshot.timezone_name;
+          byId('reschedule-state').textContent =
+            'Provider evidence confirmed the sandbox reschedule. Reload the event list to refresh its row.';
+        } else {
+          byId('reschedule-start').disabled = true;
+          byId('reschedule-end').disabled = true;
+          byId('reschedule-timezone').disabled = true;
+          byId('request-reschedule').textContent = 'Retry same approved slot';
+          byId('reschedule-state').textContent =
+            'Provider evidence confirmed no calendar change. Retry only the same approved slot.';
+        }
+        byId('reschedule-panel').disabled = false;
+        byId('reschedule-reconciliation-state').textContent =
+          'Provider evidence was checked and the ambiguous operation was reconciled.';
+      } catch (error) {
+        if (generation === rescheduleGeneration) {
+          byId('reschedule-reconciliation-state').textContent =
+            'Provider evidence did not confirm the reported outcome. Keep the action pending and verify again.';
+        }
+        throw error;
+      } finally {
+        rescheduleInFlight = false;
+        byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
+        byId('reschedule-panel').setAttribute('aria-busy', 'false');
+        byId('request-reschedule').disabled =
+          selectedEventId === null || byId('reschedule-panel').disabled || pendingReschedule !== null;
+        const enabled = pendingReschedule !== null &&
+          byId('reschedule-reconciliation-verified').checked === true;
+        byId('confirm-reschedule-completed').disabled = !enabled;
+        byId('confirm-reschedule-no-effect').disabled = !enabled;
+      }
+    }
+    byId('request-reschedule').addEventListener('click', () =>
+      guarded(() => submitReschedule(), true));
+    byId('confirm-reschedule-completed').addEventListener('click', () =>
+      guarded(() => reconcileReschedule(true), true));
+    byId('confirm-reschedule-no-effect').addEventListener('click', () =>
+      guarded(() => reconcileReschedule(false), true));
   </script>
 </body>
 </html>

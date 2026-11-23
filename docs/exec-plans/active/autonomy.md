@@ -1,3 +1,11 @@
+Candidate reschedule input-bound hardening: parse both JSON integer and decimal
+number tokens as bounded `Decimal` values, then validate candidate schedule
+state versions as finite integral values in SQLite's signed 64-bit range before any
+integer conversion. Extreme exponent and oversized integer literals now fail with
+sanitized HTTP 400 on both reschedule and reconciliation routes, without provider
+effects or evidence resolution. HTTP regressions cover both parsing paths and preserve
+the existing ambiguous provider effect count.
+
 # Autonomous Implementation Plan
 
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
@@ -1563,3 +1571,23 @@ decision state remains cleared, controls stay disabled, backend text is suppress
 the candidate is directed to refresh durable status. Chromium covers the conflict and
 the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
+
+
+Candidate-approved interview rescheduling: the authenticated candidate dashboard can
+request a replacement slot for an owned proposed/accepted event only after explicit
+confirmation of the exact target instants, timezone, and source state version. The
+operation ID is derived server-side from the candidate, event, source version, and
+target; committed-slot conflicts are rejected before provider execution. The durable
+SQLite calendar sandbox records the intent and effect, replays the same operation
+without a second effect, and exposes no provider identifiers in the candidate snapshot.
+An ambiguous outcome disables further actions until a version-bound candidate
+attestation is submitted and the server independently verifies the persisted provider
+evidence. Restart tests cover timeout-after-effect, interruption-before-effect,
+no-effect retry, stale versions, foreign ownership, and conflicting slots. Chromium
+covers the explicit confirmation, disabled pending state, rejected false evidence,
+and successful provider-verified recovery. No production calendar or credentials are
+used.
+
+Next: verify exact-head CI coverage and Codex review; then extend the same candidate
+action contract to explicit interview decline without weakening the provider evidence
+and human-approval boundaries.
