@@ -1031,3 +1031,13 @@ retain their legacy child and operation IDs, including replay after restart.
 Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
 The ownership check includes retained applications, messages and external-action
 records, so deleting a terminal loop snapshot cannot release its child namespace.
+
+
+## Candidate reconciliation numeric bounds
+
+Candidate approval submissions and application, message and interview reconciliation
+accept only non-negative state versions representable by SQLite's signed 64-bit integer contract. Decimal and
+floating-point JSON forms are checked for finiteness, integrality and range before
+integer conversion, so extreme exponents cannot trigger unbounded integer
+materialization or reach a provider resolver. The OpenAPI request schemas publish the
+same maximum. Rejected observations leave provider and durable workflow state untouched.

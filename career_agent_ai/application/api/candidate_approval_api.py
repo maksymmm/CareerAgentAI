@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from urllib.parse import parse_qsl
 from hashlib import sha256, sha512
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
+from career_agent_ai.application.career.approval_contract import MAX_SQLITE_STATE_VERSION
 from career_agent_ai.application.career import (
     CandidateApprovalConflictError,
     CandidateApprovalSubmission,
@@ -520,6 +522,34 @@ class CandidateApprovalWSGIApp:
         )
 
     @staticmethod
+    def _reconciliation_state_version(value: Any) -> int:
+        """Validate a state version before converting untrusted numeric values."""
+        error = "state_version must be a non-negative SQLite integer."
+        if type(value) is int:
+            if 0 <= value <= MAX_SQLITE_STATE_VERSION:
+                return value
+            raise ValueError(error)
+        if type(value) is float:
+            if (
+                not math.isfinite(value)
+                or not value.is_integer()
+                or value < 0
+                or value > MAX_SQLITE_STATE_VERSION
+            ):
+                raise ValueError(error)
+            return int(value)
+        if type(value) is Decimal:
+            if (
+                not value.is_finite()
+                or value < 0
+                or value > MAX_SQLITE_STATE_VERSION
+                or value != value.to_integral_value()
+            ):
+                raise ValueError(error)
+            return int(value)
+        raise ValueError(error)
+
+    @staticmethod
     def _application_reconciliation(
         payload: Mapping[str, Any],
     ) -> tuple[bool, str | None, int]:
@@ -535,15 +565,9 @@ class CandidateApprovalWSGIApp:
             or payload["schema_version"] != 1
         ):
             raise ValueError("schema_version must equal 1.")
-        state_version = payload["state_version"]
-        if type(state_version) not in {int, float, Decimal}:
-            raise ValueError("state_version must be a non-negative integer.")
-        try:
-            normalized_state_version = int(state_version)
-        except (OverflowError, ValueError) as exc:
-            raise ValueError("state_version must be a non-negative integer.") from exc
-        if state_version != normalized_state_version or normalized_state_version < 0:
-            raise ValueError("state_version must be a non-negative integer.")
+        normalized_state_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["state_version"]
+        )
         submitted = payload["submitted"]
         if type(submitted) is not bool:
             raise ValueError("submitted must be a boolean.")
@@ -575,15 +599,9 @@ class CandidateApprovalWSGIApp:
             or payload["schema_version"] != 1
         ):
             raise ValueError("schema_version must equal 1.")
-        state_version = payload["state_version"]
-        if type(state_version) not in {int, float, Decimal}:
-            raise ValueError("state_version must be a non-negative integer.")
-        try:
-            normalized_state_version = int(state_version)
-        except (OverflowError, ValueError) as exc:
-            raise ValueError("state_version must be a non-negative integer.") from exc
-        if state_version != normalized_state_version or normalized_state_version < 0:
-            raise ValueError("state_version must be a non-negative integer.")
+        normalized_state_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["state_version"]
+        )
         delivered = payload["delivered"]
         if type(delivered) is not bool:
             raise ValueError("delivered must be a boolean.")
@@ -604,15 +622,9 @@ class CandidateApprovalWSGIApp:
             or payload["schema_version"] != 1
         ):
             raise ValueError("schema_version must equal 1.")
-        state_version = payload["state_version"]
-        if type(state_version) not in {int, float, Decimal}:
-            raise ValueError("state_version must be a non-negative integer.")
-        try:
-            normalized_state_version = int(state_version)
-        except (OverflowError, ValueError) as exc:
-            raise ValueError("state_version must be a non-negative integer.") from exc
-        if state_version != normalized_state_version or normalized_state_version < 0:
-            raise ValueError("state_version must be a non-negative integer.")
+        normalized_state_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["state_version"]
+        )
         completed = payload["completed"]
         if type(completed) is not bool:
             raise ValueError("completed must be a boolean.")
@@ -745,7 +757,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
             "run_id": {"type": "string", "minLength": 1},
-            "state_version": {"type": "integer", "minimum": 0},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "action_kind": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "object", "additionalProperties": True},
@@ -766,7 +778,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
             "run_id": {"type": "string", "minLength": 1},
-            "state_version": {"type": "integer", "minimum": 0},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "action_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "decision": {"type": "string", "enum": ["approve", "decline"]},
         },
@@ -777,7 +789,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["schema_version", "state_version", "submitted"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
-            "state_version": {"type": "integer", "minimum": 0},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "submitted": {"type": "boolean"},
             "provider_submission_id": {
                 "type": "string", "minLength": 1, "maxLength": 1_000,
@@ -799,7 +811,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["schema_version", "state_version", "delivered"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
-            "state_version": {"type": "integer", "minimum": 0},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "delivered": {"type": "boolean"},
         },
         "additionalProperties": False,
@@ -809,7 +821,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["schema_version", "state_version", "completed"],
         "properties": {
             "schema_version": {"type": "integer", "const": 1},
-            "state_version": {"type": "integer", "minimum": 0},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
             "completed": {"type": "boolean"},
             "provider_event_id": {
                 "type": "string", "minLength": 1, "maxLength": 1_000,
@@ -1075,7 +1087,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                                 "properties": {
                                     "schema_version": {"type": "integer", "const": 1},
                                     "run_id": {"type": "string", "minLength": 1},
-                                    "state_version": {"type": "integer", "minimum": 0},
+                                    "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
                                     "phase": {"type": "string", "enum": [p.value for p in CareerLoopPhase]},
                                     "waiting_for_human": {"type": "boolean"},
                                     "terminal": {"type": "boolean"},

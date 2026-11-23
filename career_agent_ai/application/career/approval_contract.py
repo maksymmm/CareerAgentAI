@@ -42,6 +42,7 @@ class CandidateApprovalUnavailableError(ValueError):
 
 
 _SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
+MAX_SQLITE_STATE_VERSION = (1 << 63) - 1
 
 
 def _validate_action_fingerprint(value: Any) -> str:
@@ -133,8 +134,9 @@ class CandidateApprovalSubmission:
             not isinstance(self.state_version, int)
             or isinstance(self.state_version, bool)
             or self.state_version < 0
+            or self.state_version > MAX_SQLITE_STATE_VERSION
         ):
-            raise ValueError("approval state_version must be a non-negative integer.")
+            raise ValueError("approval state_version must be a non-negative SQLite integer.")
         object.__setattr__(
             self,
             "action_fingerprint",
@@ -170,8 +172,9 @@ class CandidateApprovalSubmission:
             not isinstance(state_version, int)
             or isinstance(state_version, bool)
             or state_version < 0
+            or state_version > MAX_SQLITE_STATE_VERSION
         ):
-            raise ValueError("approval state_version must be a non-negative integer.")
+            raise ValueError("approval state_version must be a non-negative SQLite integer.")
         fingerprint = _validate_action_fingerprint(payload["action_fingerprint"])
         try:
             decision = ApprovalDecision(payload["decision"])

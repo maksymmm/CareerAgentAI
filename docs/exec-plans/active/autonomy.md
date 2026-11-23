@@ -1579,3 +1579,14 @@ decision state remains cleared, controls stay disabled, backend text is suppress
 the candidate is directed to refresh durable status. Chromium covers the conflict and
 the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
+
+
+Candidate state-version bounds: candidate approval submissions and authenticated
+application, message and interview observations now validate non-negative integral
+state versions against the SQLite signed 64-bit maximum before integer conversion. Decimal exponent bombs,
+fractional/negative values, non-finite JSON constants and values above the storage
+range return sanitized 400 responses without reaching a provider resolver. OpenAPI
+publishes the same bound; HTTP regressions cover all three reconciliation routes,
+including the maximum accepted value. No provider I/O or durable mutation is added.
+Next: finish durable recovery for pending candidate interview actions, including
+owner-scoped intent discovery after browser reload and version-bound reconciliation.
