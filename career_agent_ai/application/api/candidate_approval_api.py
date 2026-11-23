@@ -23,6 +23,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     validate_loop_identifier,
 )
 from .candidate_sandbox_ui import candidate_sandbox_html
+from .candidate_schedule_decisions import candidate_schedule_decision_openapi_paths
 from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 
@@ -1377,4 +1378,5 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "type": "object", "additionalProperties": False,
                             "required": list(event_properties), "properties": event_properties}},
                         "next_after": {**event_properties["event_id"], "type": ["string", "null"]}}})}}}}
+    document["paths"].update(candidate_schedule_decision_openapi_paths())
     return document
