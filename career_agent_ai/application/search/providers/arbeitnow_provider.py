@@ -471,6 +471,24 @@ class ArbeitnowProvider(JobProvider):
                 ):
                     continue
 
+                # Explicit provider timestamps must be well-formed; never
+                # silently downgrade malformed dates to missing metadata.
+                iso = item.get("created_at_iso")
+                if iso is not None and (
+                    not isinstance(iso, str)
+                    or not iso.strip()
+                    or self._parse_created_at_iso(iso) is None
+                ):
+                    continue
+                epoch = item.get("created_at")
+                if epoch is not None and (
+                    isinstance(epoch, bool)
+                    or not isinstance(epoch, (int, float))
+                    or not math.isfinite(epoch)
+                    or self._parse_created_at_epoch(epoch) is None
+                ):
+                    continue
+
                 try:
                     job = self._to_job(item)
                 except (OverflowError, TypeError, ValueError):
@@ -1175,50 +1193,29 @@ class ArbeitnowProvider(JobProvider):
         return None
 
     @staticmethod
-    def _extract_created_at(
-        item: dict[str, Any],
-    ) -> datetime | None:
-        created_at_iso = item.get(
-            "created_at_iso"
-        )
+    def _parse_created_at_iso(value: str) -> datetime | None:
+        try:
+            return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
-        if isinstance(
-            created_at_iso,
-            str,
-        ):
-            value = created_at_iso.strip()
+    @staticmethod
+    def _parse_created_at_epoch(value: int | float) -> datetime | None:
+        try:
+            return datetime.fromtimestamp(value, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
 
-            if value:
-                try:
-                    return datetime.fromisoformat(
-                        value.replace(
-                            "Z",
-                            "+00:00",
-                        )
-                    )
-                except ValueError:
-                    pass
-
-        created_at = item.get(
-            "created_at"
-        )
-
-        if isinstance(
-            created_at,
-            (int, float),
-        ):
-            try:
-                return datetime.fromtimestamp(
-                    created_at,
-                    tz=UTC,
-                )
-            except (
-                OverflowError,
-                OSError,
-                ValueError,
-            ):
-                return None
-
+    @staticmethod
+    def _extract_created_at(item: dict[str, Any]) -> datetime | None:
+        iso = item.get("created_at_iso")
+        if isinstance(iso, str) and iso.strip():
+            parsed = ArbeitnowProvider._parse_created_at_iso(iso)
+            if parsed is not None:
+                return parsed
+        epoch = item.get("created_at")
+        if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+            return ArbeitnowProvider._parse_created_at_epoch(epoch)
         return None
 
     @staticmethod
