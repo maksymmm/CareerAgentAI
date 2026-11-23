@@ -1635,6 +1635,8 @@ _HTML = r"""<!doctype html>
       }
       const request = pendingReschedule;
       rescheduleInFlight = true;
+      byId('reschedule-reconciliation-verified').checked = false;
+      byId('reschedule-reconciliation-verified').disabled = true;
       const generation = ++rescheduleGeneration;
       byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'true');
       byId('confirm-reschedule-completed').disabled = true;
