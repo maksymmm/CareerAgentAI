@@ -1563,3 +1563,23 @@ decision state remains cleared, controls stay disabled, backend text is suppress
 the candidate is directed to refresh durable status. Chromium covers the conflict and
 the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
+
+
+Candidate-approved interview rescheduling: the authenticated candidate dashboard can
+request a replacement slot for an owned proposed/accepted event only after explicit
+confirmation of the exact target instants, timezone, and source state version. The
+operation ID is derived server-side from the candidate, event, source version, and
+target; committed-slot conflicts are rejected before provider execution. The durable
+SQLite calendar sandbox records the intent and effect, replays the same operation
+without a second effect, and exposes no provider identifiers in the candidate snapshot.
+An ambiguous outcome disables further actions until a version-bound candidate
+attestation is submitted and the server independently verifies the persisted provider
+evidence. Restart tests cover timeout-after-effect, interruption-before-effect,
+no-effect retry, stale versions, foreign ownership, and conflicting slots. Chromium
+covers the explicit confirmation, disabled pending state, rejected false evidence,
+and successful provider-verified recovery. No production calendar or credentials are
+used.
+
+Next: verify exact-head CI coverage and Codex review; then extend the same candidate
+action contract to explicit interview decline without weakening the provider evidence
+and human-approval boundaries.
