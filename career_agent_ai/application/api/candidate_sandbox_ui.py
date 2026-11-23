@@ -664,7 +664,7 @@ _HTML = r"""<!doctype html>
         'candidate_snapshot_sha256', 'application_id', 'application_version',
         'application_status', 'artifact_content', 'artifact_sha256'],
       approve_message: ['message_id', 'sender', 'recipient', 'subject', 'body'],
-      approve_interview: ['event_id', 'employer', 'event_type', 'location', 'local_date',
+      approve_interview: ['event_id', 'event_version', 'employer', 'event_type', 'location', 'local_date',
         'local_start_time', 'local_end_date', 'local_end_time', 'timezone', 'utc_offset',
         'end_utc_offset', 'status'],
     };
@@ -737,10 +737,12 @@ _HTML = r"""<!doctype html>
       }
       if (kind === 'approve_interview') {
         const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];
-        const validScalars = fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]) ||
+        const validScalars = fields.filter(field => field !== 'event_version').every(field =>
+          validApprovalText(value[field], approvalTextLimits[kind][field]) ||
           (nullableFields.includes(field) && value[field] === null));
         const endValues = nullableFields.map(field => value[field]);
-        if (!validScalars || !eventId(value.event_id) ||
+        if (!Number.isSafeInteger(value.event_version) || value.event_version < 1 ||
+            !validScalars || !eventId(value.event_id) ||
             !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(value.event_type) ||
             !['proposed', 'reschedule_requested'].includes(value.status) ||
             !calendarDate(value.local_date) || !localTime(value.local_start_time) ||
@@ -1193,7 +1195,9 @@ _HTML = r"""<!doctype html>
         invalidateReconciliationForVersion(selectedRunVersion);
         approvalPrompt = loadedPrompt;
         byId('action-title').textContent = loadedPrompt.title;
-        byId('action-details').textContent = JSON.stringify(loadedPrompt.details, null, 2);
+        const visibleDetails = {...loadedPrompt.details};
+        delete visibleDetails.event_version;
+        byId('action-details').textContent = JSON.stringify(visibleDetails, null, 2);
         byId('approve').disabled = false;
         byId('decline').disabled = false;
       } catch (error) {

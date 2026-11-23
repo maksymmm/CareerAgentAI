@@ -1029,3 +1029,47 @@ def test_succeeded_calendar_reconciliation_replay_enriches_missing_provider_id()
     assert persisted is not None
     assert persisted.provider_event_id == opaque_id
     assert replay.result["event_snapshot"]["provider_event_id"] == opaque_id
+
+def test_accept_rejects_stale_candidate_approved_version_before_preparing():
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    service.add_event(replace(event(), version=2))
+
+    with pytest.raises(ValueError, match="candidate-approved version"):
+        service.accept(
+            "accept:stale-approved-version",
+            "event-1",
+            human_approved=True,
+            expected_version=1,
+        )
+
+    assert operations.get("accept:stale-approved-version") is None
+    assert repository.get("event-1").version == 2
+    assert provider.calls == []
+
+
+def test_accept_operation_id_cannot_be_rebound_to_another_approved_version():
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+
+    accepted = service.accept(
+        "accept:version-bound",
+        "event-1",
+        human_approved=True,
+        expected_version=1,
+    )
+    assert accepted is not None
+    assert accepted.status == ScheduleStatus.ACCEPTED
+    operation = operations.get("accept:version-bound")
+    assert operation is not None
+    assert operation.payload["event_version"] == 1
+
+    with pytest.raises(ValueError, match="different approved event version"):
+        service.accept(
+            "accept:version-bound",
+            "event-1",
+            human_approved=True,
+            expected_version=2,
+        )
+
+    assert repository.get("event-1") == accepted
+    assert provider.calls == [("accept", "accept:version-bound")]

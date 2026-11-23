@@ -866,11 +866,12 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 8 <= self.prompt_reads <= 10:
+            if 8 <= self.prompt_reads <= 11:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
                     "event_id": "event-1",
+                    "event_version": 1,
                     "employer": "Sandbox GmbH",
                     "event_type": "interview",
                     "location": "Berlin",
@@ -886,7 +887,9 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 if self.prompt_reads == 8:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
-            elif self.prompt_reads >= 11:
+                elif self.prompt_reads == 9:
+                    details["event_version"] = "1"
+            elif self.prompt_reads >= 12:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -896,7 +899,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 11:
+                if self.prompt_reads == 12:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
             fingerprint = sha256(json.dumps(
@@ -1024,7 +1027,13 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert page.locator("#decline").is_disabled()
 
             page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve interview").wait_for()
+            assert '"event_version"' not in page.locator("#action-details").text_content()
             assert '"local_end_date": null' in page.locator("#action-details").text_content()
             assert '"local_end_time": null' in page.locator("#action-details").text_content()
             assert '"end_utc_offset": null' in page.locator("#action-details").text_content()
@@ -2122,6 +2131,8 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "await validApprovalDetails(loadedPrompt.action_kind, loadedPrompt.details)" in html
     assert "!approvalDetailsValid" in html
     assert "Number.isSafeInteger(value.application_version)" in html
+    assert "Number.isSafeInteger(value.event_version)" in html
+    assert "delete visibleDetails.event_version;" in html
     assert "/^[0-9a-f]{64}$/.test(value.artifact_sha256)" in html
     assert "/^[0-9a-f]{64}$/.test(value.candidate_snapshot_sha256)" in html
     assert "value.company_id === null || normalizedApplicationText(value.company_id, 200)" in html
