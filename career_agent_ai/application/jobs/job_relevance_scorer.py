@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -131,7 +132,7 @@ class JobRelevanceScorer:
         if not title:
             return 0.0
 
-        if normalized_keyword in title:
+        if self._contains_phrase(title, normalized_keyword):
             score = self.TITLE_EXACT
         else:
             score = 0.0
@@ -141,7 +142,7 @@ class JobRelevanceScorer:
         )
 
         for term in terms:
-            if term in title:
+            if self._contains_term(title, term):
                 score += self.TITLE_TERM
 
         return score
@@ -167,13 +168,13 @@ class JobRelevanceScorer:
 
         score = 0.0
 
-        if normalized_keyword in description:
+        if self._contains_phrase(description, normalized_keyword):
             score += self.DESCRIPTION_PHRASE
 
         for term in self._terms(
             normalized_keyword
         ):
-            if term in description:
+            if self._contains_term(description, term):
                 score += self.DESCRIPTION_TERM
 
         return score
@@ -221,13 +222,13 @@ class JobRelevanceScorer:
         if requested_country:
             if requested_country == job_country:
                 score += self.LOCATION_COUNTRY
-            elif requested_country in job_country:
+            elif self._contains_phrase(job_country, requested_country):
                 score += self.LOCATION_COUNTRY / 2
 
         if requested_city:
             if requested_city == job_city:
                 score += self.LOCATION_CITY
-            elif requested_city in job_city:
+            elif self._contains_phrase(job_city, requested_city):
                 score += self.LOCATION_CITY / 2
 
         return score
@@ -292,6 +293,11 @@ class JobRelevanceScorer:
             None,
         )
 
+        minimum = self._finite_salary(minimum)
+        maximum = self._finite_salary(maximum)
+        if minimum is None and maximum is None:
+            return self.SALARY_UNKNOWN
+
         if (
             filters.minimum_salary is not None
             and maximum is not None
@@ -323,6 +329,30 @@ class JobRelevanceScorer:
             return self.EMPLOYMENT_MATCH
 
         return self.EMPLOYMENT_MISMATCH
+
+    @staticmethod
+    def _contains_phrase(text: str, phrase: str) -> bool:
+        if not phrase:
+            return False
+        return re.search(
+            r"(?<![\\w+#.-])" + re.escape(phrase) + r"(?![\\w+#.-])",
+            text,
+            flags=re.UNICODE,
+        ) is not None
+
+    @classmethod
+    def _contains_term(cls, text: str, term: str) -> bool:
+        return cls._contains_phrase(text, term)
+
+    @staticmethod
+    def _finite_salary(value: object) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
 
     @staticmethod
     def _normalize(
