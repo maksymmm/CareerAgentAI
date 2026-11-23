@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from career_agent_ai.application.api import (
     CandidateApprovalWSGIApp,
+    CandidateScheduleActionWSGIApp,
     OperationalApiService,
     OperationalWSGIApp,
     start_owner_scoped_run,
@@ -68,6 +69,7 @@ from career_agent_ai.application.storage.sqlite_sandbox_communication_provider i
     SQLiteSandboxCommunicationProvider,
 )
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SandboxCalendarOutcomePlan,
     SQLiteSandboxCalendarProvider,
 )
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
@@ -131,23 +133,32 @@ class RuntimeCandidateApp:
         jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
         sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+        sandbox_calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._resolve_bearer = resolve_bearer
         self._sandbox_outcome_plan = sandbox_outcome_plan
+        self._sandbox_calendar_outcome_plan = sandbox_calendar_outcome_plan
         self._closed = False
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
-        """Serve a candidate approval request while the sandbox is open."""
+        """Serve candidate workflow and schedule actions while the sandbox is open."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
-        app = CandidateApprovalWSGIApp(
-            _RequestCandidateLoop(
-                self._database_path, self._jobs, self._sandbox_outcome_plan
-            ),
-            resolve_bearer=self._resolve_bearer,
-        )
+        if environ.get("PATH_INFO") in CandidateScheduleActionWSGIApp.ROUTES:
+            app = CandidateScheduleActionWSGIApp(
+                database_path=self._database_path,
+                resolve_bearer=self._resolve_bearer,
+                outcome_plan=self._sandbox_calendar_outcome_plan,
+            )
+        else:
+            app = CandidateApprovalWSGIApp(
+                _RequestCandidateLoop(
+                    self._database_path, self._jobs, self._sandbox_outcome_plan
+                ),
+                resolve_bearer=self._resolve_bearer,
+            )
         return app(environ, start_response)
 
     def start(
@@ -426,6 +437,7 @@ def build_candidate_sandbox_app_from_env(
     jobs: Iterable[Job] = (),
     environ: Mapping[str, str] | None = None,
     sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+    sandbox_calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
     config = validate_candidate_sandbox_environment(environ)
@@ -448,6 +460,7 @@ def build_candidate_sandbox_app_from_env(
         jobs=configured_jobs,
         resolve_bearer=resolve_bearer,
         sandbox_outcome_plan=sandbox_outcome_plan,
+        sandbox_calendar_outcome_plan=sandbox_calendar_outcome_plan,
     )
 
 
