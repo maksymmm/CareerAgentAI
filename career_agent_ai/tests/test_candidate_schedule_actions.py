@@ -832,3 +832,28 @@ def test_candidate_sandbox_browser_retries_only_same_slot_after_verified_no_effe
         thread.join(timeout=10)
         server.server_close()
         candidate.close()
+
+
+@pytest.mark.parametrize("create_operations_table", [False, True])
+def test_empty_pending_lookup_does_not_mutate_candidate_database(
+    tmp_path, create_operations_table
+):
+    path = tmp_path / ("pending-read-only-" + str(create_operations_table) + ".sqlite")
+    _seed(path, _event())
+    if create_operations_table:
+        database = SQLiteDatabase(str(path))
+        SQLiteExternalActionOperationRepository(database)
+        database.close()
+    baseline = path.read_bytes()
+    candidate = Candidate(path)
+    try:
+        status, result = candidate.pending()
+        assert status == "200 OK"
+        assert result == {
+            "schema_version": 1,
+            "outcome": "none",
+            "event_id": EVENT_ID,
+        }
+    finally:
+        candidate.close()
+    assert path.read_bytes() == baseline
