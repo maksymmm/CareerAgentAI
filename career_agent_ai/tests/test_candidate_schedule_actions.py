@@ -697,6 +697,54 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     assert "No real calendar is contacted" in html
 
 
+def test_candidate_sandbox_browser_disables_actions_while_reschedule_is_live(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-live-reschedule.sqlite"
+    _seed(path, _event())
+    _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, candidate.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#reschedule-state").get_by_text(
+                "The current sandbox request is active", exact=False
+            ).wait_for()
+
+            assert page.locator("#reschedule-panel").is_disabled()
+            assert page.locator("#reschedule-start").is_disabled()
+            assert page.locator("#reschedule-end").is_disabled()
+            assert page.locator("#reschedule-timezone").is_disabled()
+            assert page.locator("#request-reschedule").is_disabled()
+            assert page.locator("#reschedule-reconciliation-panel").is_disabled()
+            assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            assert _effect_count(path) == 0
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        candidate.close()
+
+
 def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_reschedule(tmp_path):
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     from threading import Thread
