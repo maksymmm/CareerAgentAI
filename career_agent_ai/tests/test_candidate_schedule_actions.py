@@ -375,3 +375,69 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     ):
         assert identifier in html
     assert "No real calendar is contacted" in html
+
+
+def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_reschedule(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-reschedule.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, candidate.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").wait_for()
+            page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
+            assert not page.locator("#reschedule-panel").is_disabled()
+
+            page.locator("#reschedule-start").fill(START)
+            page.locator("#reschedule-end").fill(END)
+            page.locator("#reschedule-timezone").fill(ZONE)
+            page.locator("#request-reschedule").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "Provider outcome is uncertain"
+            ).wait_for()
+            assert page.locator("#reschedule-panel").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+
+            page.locator("#reschedule-reconciliation-verified").check()
+            page.locator("#confirm-reschedule-no-effect").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "Provider evidence did not confirm"
+            ).wait_for()
+            assert not page.locator("#reschedule-reconciliation-panel").is_disabled()
+
+            page.locator("#confirm-reschedule-completed").click()
+            page.locator("#reschedule-state").get_by_text(
+                "Provider evidence confirmed the sandbox reschedule"
+            ).wait_for()
+            assert '"status": "reschedule_requested"' in page.locator(
+                "#event-detail"
+            ).text_content()
+            assert '"state_version": 2' in page.locator("#event-detail").text_content()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
+        candidate.close()
