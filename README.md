@@ -348,9 +348,14 @@ local clearing, not server-side token revocation or cancellation of accepted wor
 
 Candidate sandbox My interviews and events loads owned event pages, supports
 next-page/retry and View event detail, and renders allowlisted text-only snapshots
-including exact UTC/local times and both offsets. Page loads/token edits invalidate
-pending details; token edits clear all schedule state. Malformed responses and raw
-backend errors never enter the result pane. No calendar action controls are added.
+including exact UTC/local times and both offsets. A selected proposed/accepted event
+can be rescheduled only through an explicit candidate confirmation bound to its event
+version and exact target slot. The request uses a deterministic operation ID, checks
+committed-slot conflicts, and executes only against the durable SQLite sandbox calendar.
+An ambiguous result locks further reschedule actions until a version-bound attestation
+is submitted and the provider's persisted evidence independently confirms completion
+or no effect. Token edits clear the selection and attestation; malformed responses and
+raw backend errors never enter the result pane. No real calendar is contacted.
 Sparse owner/status projections may carry a valid next cursor; the cursor must still
 identify the final visible event and event IDs must advance strictly without duplicates.
 The browser verifies the IANA zone's local date/time at both UTC instants. Unknown
