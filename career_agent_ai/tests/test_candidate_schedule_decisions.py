@@ -572,6 +572,144 @@ def test_pending_decline_rejects_operation_identity_tampering_before_filtering(
     assert _effect_count(path) == 1
 
 
+
+def test_pending_decline_rejects_coherently_rewritten_row_with_stale_active_pointer(
+    tmp_path,
+):
+    path = tmp_path / "decline-active-pointer-rewrite.sqlite"
+    _seed(path, _event())
+    first = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert first.decline()[0] == "202 Accepted"
+    assert _effect_count(path) == 0
+
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            """
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = 'calendar.decline'
+            """
+        ).fetchone()
+        assert row is not None
+        original_operation_id, payload_json = row
+        payload = json.loads(payload_json)
+        payload["candidate_id"] = "candidate-2"
+        payload["event_id"] = "another-valid-event"
+        rewritten_operation_id = CandidateScheduleDeclineWSGIApp._operation_id(
+            payload["candidate_id"], payload["event_id"], payload["event_version"]
+        )
+        connection.execute(
+            """
+            UPDATE external_action_operations
+            SET operation_id = ?, payload_json = ?
+            WHERE operation_id = ?
+            """,
+            (
+                rewritten_operation_id,
+                json.dumps(payload, separators=(",", ":")),
+                original_operation_id,
+            ),
+        )
+        active_operation_id = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        assert active_operation_id == original_operation_id
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert restarted.decline() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 0
+
+
+def test_pending_decline_rejects_dangling_active_pointer_without_recreating_operation(
+    tmp_path,
+):
+    path = tmp_path / "decline-active-pointer-dangling.sqlite"
+    _seed(path, _event())
+    first = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert first.decline()[0] == "202 Accepted"
+    assert _effect_count(path) == 0
+
+    connection = sqlite3.connect(path)
+    try:
+        operation_id = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        assert operation_id
+        connection.execute(
+            "DELETE FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert restarted.decline() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 0
+
+
+def test_pending_decline_rejects_ambiguous_row_without_active_pointer(tmp_path):
+    path = tmp_path / "decline-active-pointer-missing.sqlite"
+    _seed(path, _event())
+    first = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert first.decline()[0] == "202 Accepted"
+    assert _effect_count(path) == 0
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            """
+            UPDATE scheduling_events
+            SET active_action_operation_id = NULL
+            WHERE event_id = ?
+            """,
+            (EVENT_ID,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert restarted.decline() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 0
+
+
 def test_pending_decline_scan_uses_composite_index_without_temporary_sort(tmp_path):
     path = tmp_path / "decline-pending-query-plan.sqlite"
     _seed(path, _event())
