@@ -16,6 +16,20 @@ are required before the existing relevance PR can merge.
 
 # Autonomous Implementation Plan
 
+Candidate interview decline workflow: the authenticated candidate dashboard now
+allows an explicit decline only for owned proposed or reschedule-requested events.
+The server binds the decision to the candidate-approved source version inside
+`SchedulingService`, persists candidate identity with the source snapshot, and retains
+the repository compare-and-swap claim as the final race guard. Pending recovery verifies
+each ambiguous row's candidate/event/version tuple against its deterministic operation
+ID before filtering; the query uses the composite action/status index with a row limit
+and no temporary sort. Recovery cross-checks the event's active-action pointer with the sole ambiguous decline row, and both pending GET and repeated POST fail closed on a missing or mismatched pointer. A provider-confirmed no-effect reconciliation may retain the same validated operation in `prepared` state; pending GET reports no ambiguity while preserving the same key for an explicit retry. HTTP/SQLite restart regressions now cover a concurrent reschedule
+between approval validation and service execution, payload identity tampering, and the
+SQLite query plan. Exact-head CI and clean Codex code/security review are required for
+this follow-up before integration.
+Next: exact-head CI/review, then audit candidate accept/decline concurrency parity
+without enabling real calendar providers.
+
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
 
 Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory
@@ -1579,3 +1593,11 @@ decision state remains cleared, controls stay disabled, backend text is suppress
 the candidate is directed to refresh durable status. Chromium covers the conflict and
 the refreshed in-progress state.
 Next: exact-head CI/review, then continue bounded candidate workflow recovery hardening.
+
+Candidate decline prepared-intent integrity: after provider-confirmed no-effect reconciliation,
+a retained PREPARED decline is reported as non-ambiguous only when its complete source
+snapshot is present and matches the current event version, start/end instants, timezone,
+and status. Missing or corrupted snapshot fields now fail closed on pending GET and
+same-key POST. HTTP/SQLite regressions cover missing start/end, invalid timezone, and
+status mismatch with zero provider effects. Next: exact-head full CI and Codex code/security
+review before integration.
