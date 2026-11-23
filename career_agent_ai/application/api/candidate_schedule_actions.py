@@ -622,6 +622,7 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
         "type": "string",
         "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"],
     }
+    no_effect_event_properties["state_version"] = {"type": "integer", "minimum": 1}
     no_effect_response = {
         "type": "object", "additionalProperties": False,
         "required": ["schema_version", "outcome", "event"],
