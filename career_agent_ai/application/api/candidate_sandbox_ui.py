@@ -1262,7 +1262,7 @@ _HTML = r"""<!doctype html>
         if (activePromptLoadGeneration === promptGeneration) {
           activePromptLoadGeneration = null;
         }
-        byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight;
+        byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || rescheduleInFlight;
       }
     }));
     async function decide(decision) {
@@ -1383,7 +1383,7 @@ _HTML = r"""<!doctype html>
           messageReconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the message reconciliation state first.');
       }
-      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
@@ -1423,7 +1423,7 @@ _HTML = r"""<!doctype html>
           interviewReconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the interview reconciliation state first.');
       }
-      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
