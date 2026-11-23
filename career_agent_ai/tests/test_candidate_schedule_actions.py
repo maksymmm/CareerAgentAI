@@ -13,10 +13,17 @@ from career_agent_ai.application.api import (
     CandidateScheduleActionWSGIApp,
     candidate_approval_openapi_document,
 )
+from career_agent_ai.application.external_actions.external_action_operation import (
+    ExternalActionOperation,
+    ExternalActionStatus,
+)
 from career_agent_ai.application.api.candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.runtime.composition import build_candidate_sandbox_app_from_env
 from career_agent_ai.application.scheduling import ScheduleEvent, ScheduleEventType, ScheduleStatus
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_external_action_repository import (
+    SQLiteExternalActionOperationRepository,
+)
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import SandboxCalendarOutcome
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
 
@@ -127,6 +134,45 @@ class Candidate:
 
     def close(self):
         self.app.close()
+
+
+def _seed_pending_operation(path, *, start_at=START, end_at=END, final_status=None):
+    event = _event()
+    target_start = datetime.fromisoformat(start_at)
+    target_end = None if end_at is None else datetime.fromisoformat(end_at)
+    operation_id = CandidateScheduleActionWSGIApp._operation_id(
+        OWNER, EVENT_ID, 1, target_start, target_end, ZONE
+    )
+    payload = {
+        "event_id": EVENT_ID,
+        "event_version": 1,
+        "event_start_at": event.start_at.isoformat(),
+        "event_end_at": event.end_at.isoformat(),
+        "event_timezone_name": event.timezone_name,
+        "event_status": event.status.value,
+        "start_at": start_at,
+        "end_at": end_at,
+        "timezone_name": ZONE,
+    }
+    database = SQLiteDatabase(str(path))
+    operations = SQLiteExternalActionOperationRepository(database)
+    operations.create(ExternalActionOperation(
+        operation_id=operation_id,
+        action_type="calendar.reschedule",
+        payload=payload,
+    ))
+    operations.transition(
+        operation_id, ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS
+    )
+    if final_status == ExternalActionStatus.RECONCILIATION_REQUIRED:
+        operations.transition(
+            operation_id,
+            ExternalActionStatus.IN_PROGRESS,
+            ExternalActionStatus.RECONCILIATION_REQUIRED,
+            error="Simulated ambiguous provider result.",
+        )
+    database.close()
+    return operation_id
 
 
 def _effect_count(path):
@@ -410,6 +456,51 @@ def test_pending_reschedule_intent_is_restored_after_restart_without_provider_re
     assert reconciled["event"]["state_version"] == 2
     assert _effect_count(path) == 1
     restarted.close()
+
+
+def test_pending_lookup_recovers_stranded_in_progress_operation_without_provider_retry(tmp_path):
+    path = tmp_path / "pending-in-progress.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    candidate = Candidate(path)
+
+    status, pending = candidate.pending()
+    assert status == "200 OK"
+    assert pending["outcome"] == "pending"
+    assert pending["state_version"] == 1
+    assert pending["start_at"] == START
+    assert _effect_count(path) == 0
+
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    finally:
+        database.close()
+    candidate.close()
+
+
+def test_pending_lookup_fails_closed_when_multiple_ambiguous_intents_exist(tmp_path):
+    path = tmp_path / "pending-ambiguous.sqlite"
+    _seed(path, _event())
+    _seed_pending_operation(
+        path,
+        start_at="2026-12-02T10:00:00+01:00",
+        end_at="2026-12-02T11:00:00+01:00",
+        final_status=ExternalActionStatus.RECONCILIATION_REQUIRED,
+    )
+    _seed_pending_operation(
+        path,
+        start_at="2026-12-02T12:00:00+01:00",
+        end_at="2026-12-02T13:00:00+01:00",
+        final_status=ExternalActionStatus.RECONCILIATION_REQUIRED,
+    )
+    candidate = Candidate(path)
+    assert candidate.pending() == (
+        "409 Conflict", {"error": "approval_conflict"}
+    )
+    assert _effect_count(path) == 0
+    candidate.close()
 
 
 def test_pending_reschedule_lookup_is_owner_scoped_and_returns_none_when_absent(tmp_path):
