@@ -844,8 +844,8 @@ def test_empty_pending_lookup_does_not_mutate_candidate_database(
         database = SQLiteDatabase(str(path))
         SQLiteExternalActionOperationRepository(database)
         database.close()
-    baseline = path.read_bytes()
     candidate = Candidate(path)
+    baseline = path.read_bytes()
     try:
         status, result = candidate.pending()
         assert status == "200 OK"
@@ -857,3 +857,35 @@ def test_empty_pending_lookup_does_not_mutate_candidate_database(
     finally:
         candidate.close()
     assert path.read_bytes() == baseline
+
+
+@pytest.mark.parametrize(
+    "malformed_payload",
+    [
+        "[]",
+        '{"unexpected":"shape"}',
+        '{"event_id":null}',
+        '{"event_id":"bad id"}',
+        '{"event_id":"interview-reschedule-1","event_id":"other"}',
+    ],
+)
+def test_pending_lookup_fails_closed_on_unmatchable_ambiguous_operation_payload(
+    tmp_path, malformed_payload
+):
+    path = tmp_path / "malformed-pending-payload.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+            (malformed_payload, operation_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    candidate = Candidate(path)
+    status, result = candidate.pending()
+    assert status == "409 Conflict"
+    assert result == {"error": "approval_conflict"}
+    assert _effect_count(path) == 0
