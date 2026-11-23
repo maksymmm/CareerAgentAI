@@ -882,7 +882,7 @@ _HTML = r"""<!doctype html>
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       activePromptLoadGeneration = null;
-      byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
+      byId('prompt').disabled = startInFlight || statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight || rescheduleInFlight;
     }
     function setReconciliationAttestation(id, enabled) {
       const checkbox = byId(id); checkbox.checked = false; checkbox.disabled = !enabled; }
@@ -1026,7 +1026,7 @@ _HTML = r"""<!doctype html>
     }
     byId('start').addEventListener('click', () => guarded(async () => {
       if (startInFlight) throw new Error('A run start is already in progress.');
-      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) {
+      if (statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       startInFlight = true;
@@ -1086,7 +1086,7 @@ _HTML = r"""<!doctype html>
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
       if (startInFlight) throw new Error('Wait for the run start to finish.');
-      if (promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) throw new Error('Wait for the workflow action to finish.');
+      if (promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
       byId('status').disabled = true;
       byId('inspect-panel').setAttribute('aria-busy', 'true');
@@ -1158,7 +1158,7 @@ _HTML = r"""<!doctype html>
       if (promptInFlight) throw new Error('Wait for the approval prompt to finish loading.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (recoveryInFlight) throw new Error('Recovery is already running.');
-      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
+      if (reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for reconciliation or reschedule to finish.');
       recoveryInFlight = true;
       byId('continue').disabled = true;
       byId('prompt').disabled = true;
@@ -1203,7 +1203,7 @@ _HTML = r"""<!doctype html>
       if (recoveryInFlight) throw new Error('Wait for recovery to finish.');
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (promptInFlight) throw new Error('An approval prompt is already loading.');
-      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
+      if (reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for reconciliation or reschedule to finish.');
       promptInFlight = true;
       invalidateApprovalPrompt('Loading approval prompt…');
       const promptGeneration = approvalPromptGeneration;
@@ -1272,7 +1272,7 @@ _HTML = r"""<!doctype html>
       if (statusInFlight) throw new Error('Wait for the status refresh to finish.');
       if (!approvalPrompt) throw new Error('Load the current prompt first.');
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
-      if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
+      if (reconciliationInFlight || rescheduleInFlight) throw new Error('Wait for reconciliation or reschedule to finish.');
       decisionInFlight = true;
       byId('approve').disabled = true;
       byId('decline').disabled = true;
@@ -1337,7 +1337,7 @@ _HTML = r"""<!doctype html>
           reconciliationVersion !== selectedRunVersion) {
         throw new Error('Refresh the application reconciliation state first.');
       }
-      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight || decisionInFlight || rescheduleInFlight) {
         throw new Error('Wait for the current workflow request to finish.');
       }
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
