@@ -37,6 +37,8 @@ EVENT_ID = "interview-reschedule-1"
 START = "2026-12-02T10:00:00+01:00"
 END = "2026-12-02T11:00:00+01:00"
 ZONE = "Europe/Berlin"
+PENDING_START = datetime.fromisoformat(START).astimezone(timezone.utc).isoformat()
+PENDING_END = datetime.fromisoformat(END).astimezone(timezone.utc).isoformat()
 
 
 def _event(event_id=EVENT_ID, candidate_id=OWNER, *, status=ScheduleStatus.ACCEPTED,
@@ -138,8 +140,11 @@ class Candidate:
 
 def _seed_pending_operation(path, *, start_at=START, end_at=END, final_status=None):
     event = _event()
-    target_start = datetime.fromisoformat(start_at)
-    target_end = None if end_at is None else datetime.fromisoformat(end_at)
+    target_start = datetime.fromisoformat(start_at).astimezone(timezone.utc)
+    target_end = (
+        None if end_at is None
+        else datetime.fromisoformat(end_at).astimezone(timezone.utc)
+    )
     operation_id = CandidateScheduleActionWSGIApp._operation_id(
         OWNER, EVENT_ID, 1, target_start, target_end, ZONE
     )
@@ -150,8 +155,8 @@ def _seed_pending_operation(path, *, start_at=START, end_at=END, final_status=No
         "event_end_at": event.end_at.isoformat(),
         "event_timezone_name": event.timezone_name,
         "event_status": event.status.value,
-        "start_at": start_at,
-        "end_at": end_at,
+        "start_at": target_start.isoformat(),
+        "end_at": None if target_end is None else target_end.isoformat(),
         "timezone_name": ZONE,
     }
     database = SQLiteDatabase(str(path))
@@ -440,8 +445,8 @@ def test_pending_reschedule_intent_is_restored_after_restart_without_provider_re
         "outcome": "pending",
         "event_id": EVENT_ID,
         "state_version": 1,
-        "start_at": START,
-        "end_at": END,
+        "start_at": PENDING_START,
+        "end_at": PENDING_END,
         "timezone_name": ZONE,
     }
     assert _effect_count(path) == 1
@@ -468,7 +473,7 @@ def test_pending_lookup_recovers_stranded_in_progress_operation_without_provider
     assert status == "200 OK"
     assert pending["outcome"] == "pending"
     assert pending["state_version"] == 1
-    assert pending["start_at"] == START
+    assert pending["start_at"] == PENDING_START
     assert _effect_count(path) == 0
 
     database = SQLiteDatabase(str(path))
@@ -496,7 +501,7 @@ def test_pending_lookup_recovers_operation_after_event_commit_before_operation_c
     assert status == "200 OK"
     assert pending["outcome"] == "pending"
     assert pending["state_version"] == 1
-    assert pending["start_at"] == START
+    assert pending["start_at"] == PENDING_START
     assert _stored_event(path).version == 2
     assert _effect_count(path) == 0
 
@@ -702,8 +707,8 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "An ambiguous reschedule was restored from durable storage"
             ).wait_for()
-            assert page.locator("#reschedule-start").input_value() == START
-            assert page.locator("#reschedule-end").input_value() == END
+            assert page.locator("#reschedule-start").input_value() == PENDING_START
+            assert page.locator("#reschedule-end").input_value() == PENDING_END
             assert page.locator("#reschedule-timezone").input_value() == ZONE
             assert not page.locator("#reschedule-reconciliation-verified").is_checked()
             assert page.locator("#confirm-reschedule-completed").is_disabled()
@@ -718,7 +723,7 @@ def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_resche
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "An ambiguous reschedule was restored from durable storage"
             ).wait_for()
-            assert page.locator("#reschedule-start").input_value() == START
+            assert page.locator("#reschedule-start").input_value() == PENDING_START
             assert not page.locator("#reschedule-reconciliation-verified").is_checked()
 
             page.locator("#reschedule-reconciliation-verified").check()
