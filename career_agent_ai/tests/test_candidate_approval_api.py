@@ -3026,3 +3026,85 @@ def test_status_storage_failure_is_sanitized():
     (status, _), payload = request(app(BrokenLoop()), path='/v1/candidate/runs/run-1/status')
     assert status == '500 Internal Server Error'
     assert payload == {'error': 'internal_error'}
+
+
+
+def request_raw(app, *, path, raw_json, method="POST", token="valid"):
+    """Send exact JSON bytes through the WSGI boundary without client re-encoding."""
+    statuses = []
+    environ = {
+        "REQUEST_METHOD": method,
+        "PATH_INFO": path,
+        "QUERY_STRING": "",
+        "HTTP_AUTHORIZATION": f"Bearer {token}" if token else "",
+        "CONTENT_LENGTH": str(len(raw_json)),
+        "CONTENT_TYPE": "application/json",
+        "wsgi.input": BytesIO(raw_json),
+    }
+    response = b"".join(
+        app(environ, lambda status, headers: statuses.append((status, headers)))
+    )
+    return statuses[0], json.loads(response)
+
+
+@pytest.mark.parametrize(
+    ("path", "flag", "call_attribute"),
+    [
+        ("/v1/candidate/runs/run-1/application-reconciliation", "submitted", "reconciliation"),
+        ("/v1/candidate/runs/run-1/message-reconciliation", "delivered", "message_reconciliation_call"),
+        ("/v1/candidate/runs/run-1/interview-reconciliation", "completed", "interview_reconciliation_call"),
+    ],
+)
+@pytest.mark.parametrize(
+    "raw_version",
+    [
+        "1e1000000000",
+        "1e-1000000000",
+        "9223372036854775808",
+        "-1",
+        "1.5",
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        "1e" + ("9" * 60),
+    ],
+)
+def test_reconciliation_rejects_unrepresentable_state_versions_before_provider_resolution(
+    path, flag, call_attribute, raw_version
+):
+    loop = Loop()
+    raw_json = (
+        b'{"schema_version":1,"state_version":'
+        + raw_version.encode("ascii")
+        + b',"' + flag.encode("ascii") + b'":false}'
+    )
+
+    (status, _), response = request_raw(app(loop), path=path, raw_json=raw_json)
+
+    assert status == "400 Bad Request"
+    assert response["error"] == "invalid_request"
+    assert not hasattr(loop, call_attribute)
+
+
+@pytest.mark.parametrize(
+    ("path", "flag", "call_attribute"),
+    [
+        ("/v1/candidate/runs/run-1/application-reconciliation", "submitted", "reconciliation"),
+        ("/v1/candidate/runs/run-1/message-reconciliation", "delivered", "message_reconciliation_call"),
+        ("/v1/candidate/runs/run-1/interview-reconciliation", "completed", "interview_reconciliation_call"),
+    ],
+)
+def test_reconciliation_accepts_maximum_sqlite_state_version_without_precision_loss(
+    path, flag, call_attribute
+):
+    loop = Loop()
+    raw_json = (
+        b'{"schema_version":1,"state_version":9223372036854775807,"'
+        + flag.encode("ascii") + b'":false}'
+    )
+
+    (status, _), response = request_raw(app(loop), path=path, raw_json=raw_json)
+
+    assert status == "200 OK"
+    assert response == {"run_id": "run-1", "phase": "complete"}
+    assert getattr(loop, call_attribute)[-1] == (1 << 63) - 1
