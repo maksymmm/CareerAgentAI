@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from career_agent_ai.application.api import (
     CandidateApprovalWSGIApp,
+    CandidateScheduleDeclineWSGIApp,
     OperationalApiService,
     OperationalWSGIApp,
     start_owner_scoped_run,
@@ -142,12 +143,18 @@ class RuntimeCandidateApp:
         """Serve a candidate approval request while the sandbox is open."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
-        app = CandidateApprovalWSGIApp(
-            _RequestCandidateLoop(
-                self._database_path, self._jobs, self._sandbox_outcome_plan
-            ),
-            resolve_bearer=self._resolve_bearer,
-        )
+        if environ.get("PATH_INFO") in CandidateScheduleDeclineWSGIApp.ROUTES:
+            app = CandidateScheduleDeclineWSGIApp(
+                database_path=self._database_path,
+                resolve_bearer=self._resolve_bearer,
+            )
+        else:
+            app = CandidateApprovalWSGIApp(
+                _RequestCandidateLoop(
+                    self._database_path, self._jobs, self._sandbox_outcome_plan
+                ),
+                resolve_bearer=self._resolve_bearer,
+            )
         return app(environ, start_response)
 
     def start(
