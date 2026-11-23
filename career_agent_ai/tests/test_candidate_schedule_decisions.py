@@ -255,6 +255,10 @@ def test_interruption_before_effect_requires_no_effect_evidence_before_same_key_
     assert result["outcome"] == "no_effect"
     assert result["event"]["status"] == "proposed"
     assert _effect_count(path) == 0
+    assert restarted.pending() == (
+        "200 OK",
+        {"schema_version": 1, "outcome": "none", "event_id": EVENT_ID},
+    )
 
     retry_status, retry = restarted.decline()
     assert retry_status == "200 OK"
