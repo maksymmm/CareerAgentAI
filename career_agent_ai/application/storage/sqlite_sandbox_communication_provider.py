@@ -155,13 +155,24 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
                     raise ConnectionError("Sandbox provider connection was interrupted.")
                 raise PreDeliveryCommunicationError("Sandbox provider recorded no delivery.")
             delivered = replace(message, direction=MessageDirection.OUTBOUND)
-            self._save_message(delivered, commit=False)
+            try:
+                self._save_message(delivered, commit=False)
+            except ValueError as exc:
+                # The provider refused to bind this message_id to different content.
+                raise PreDeliveryCommunicationError(str(exc)) from exc
             connection.execute(
                 "INSERT INTO sandbox_communication_deliveries "
                 "(operation_id, fingerprint, message_id, action) VALUES (?, ?, ?, ?)",
                 (operation_id, fingerprint, delivered.message_id, action),
             )
             connection.commit()
+        except sqlite3.IntegrityError as exc:
+            # Another operation key already delivered this message: nothing was committed.
+            if connection.in_transaction:
+                connection.rollback()
+            raise PreDeliveryCommunicationError(
+                "Sandbox provider already delivered this message under another operation."
+            ) from exc
         except Exception:
             if connection.in_transaction:
                 connection.rollback()

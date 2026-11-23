@@ -384,11 +384,17 @@ def _run_parallel(path, work):
 
 def test_concurrent_submissions_through_the_service_yield_one_provider_effect(path):
     Stack(path).close()
-    outcomes = _run_parallel(path, lambda s: s.service.submit(OP, **_submit_kwargs()))
-    assert any(isinstance(o, dict) for o in outcomes)
-    verifier = Stack(path)
+    _run_parallel(path, lambda s: s.service.submit(OP, **_submit_kwargs()))
+    # Either caller may win; a caller that observes the action in flight refuses to repeat
+    # it and leaves it for evidence-based reconciliation. Never a second effect.
+    verifier = Stack(path, evidence=True)
     assert len(verifier.provider.ledger_entries()) == 1
     assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
+    assert verifier.status() in {ExternalActionStatus.SUCCEEDED, REQUIRED}
+    if verifier.status() == REQUIRED:
+        verifier.service.resolve_reconciliation(OP, submitted=True, provider_submission_id=PID)
+    assert verifier.status() == ExternalActionStatus.SUCCEEDED
+    assert len(verifier.provider.ledger_entries()) == 1
     verifier.close()
 
 

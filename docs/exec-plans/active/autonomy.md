@@ -16,6 +16,9 @@ are required before the existing relevance PR can merge.
 
 # Autonomous Implementation Plan
 
+ADR 0004: Message and calendar sandbox providers now guard duplicate effects and candidate/event identity, with restart and authenticated HTTP recovery regressions. Exact-head CI and review are required before integration.
+
+
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
 
 Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory
