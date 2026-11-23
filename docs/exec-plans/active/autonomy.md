@@ -1595,7 +1595,11 @@ Candidate interview acceptance version binding: `SchedulingService.accept` now a
 optional exact candidate-approved `expected_version`, rejects stale approvals before
 preparing a provider operation, and rejects reuse of one operation ID for a different
 approved version. Existing trusted internal callers remain source-compatible; candidate
-HTTP adapters must pass the displayed version. Regressions prove stale approval creates
-no ledger row or provider effect and a successful operation cannot be rebound to a newer
-version. Next: expose acceptance through an authenticated candidate endpoint with durable
-pending/reconciliation recovery and sandbox-only provider effects.
+HTTP adapters must pass the displayed version. The autonomous candidate loop now captures
+the event version in its prompt fingerprint, verifies the view did not race a version
+change, and passes the exact version into SchedulingService.accept. The browser validates
+a positive safe integer while omitting this internal binding from rendered details.
+Regressions prove a concurrent reschedule between prompt validation and service execution
+cannot prepare an acceptance operation or invoke the acceptance provider. Next: expose
+acceptance through an authenticated candidate endpoint with durable pending/reconciliation
+recovery and sandbox-only provider effects.

@@ -1519,6 +1519,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert details["local_date"] == "2026-11-12"
     assert details["local_start_time"] == "10:00:00"
     assert details["timezone"] == "Europe/Berlin"
+    assert details["event_version"] == 1
     assert submission_provider.calls == []
     assert [call for call in communication_provider.calls if call[0] == "send"] == [
         ("send", f"{run_id}:message-send")
@@ -1548,6 +1549,60 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     snapshot = loop.get(run_id, user_id="user-1")
     assert snapshot.completed is True
     assert snapshot.human_action is None
+    database.close()
+
+
+def test_candidate_interview_acceptance_rejects_version_race_before_provider_effect(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "candidate-interview-version-race.sqlite")
+    run_id = "candidate-interview-version-race"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    started = loop.start(request(), run_id=run_id)
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    after_application = loop.resume(run_id, approved=True, user_id="user-1")
+    assert after_application.phase == CareerLoopPhase.MESSAGE_APPROVAL
+    after_message = loop.resume(run_id, approved=True, user_id="user-1")
+    assert after_message.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    assert after_message.human_action is not None
+    assert after_message.human_action.details["event_version"] == 1
+
+    original_accept = scheduling.accept
+    received_versions = []
+
+    def reschedule_before_accept(
+        operation_id, event_id, *, human_approved, expected_version=None
+    ):
+        received_versions.append(expected_version)
+        scheduling.reschedule(
+            "competing-reschedule",
+            event_id,
+            start_at=START + timedelta(days=3),
+            end_at=START + timedelta(days=3, hours=1),
+            timezone_name="Europe/Berlin",
+            human_approved=True,
+        )
+        return original_accept(
+            operation_id,
+            event_id,
+            human_approved=human_approved,
+            expected_version=expected_version,
+        )
+
+    monkeypatch.setattr(scheduling, "accept", reschedule_before_accept)
+
+    result = loop.resume(run_id, approved=True, user_id="user-1")
+
+    assert received_versions == [1]
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "candidate-approved version" in (result.error or "")
+    assert scheduling.get_operation(f"{run_id}:interview-accept") is None
+    assert calendar_provider.calls == [("reschedule", "competing-reschedule")]
+    updated_event = scheduling.get_event("interview-1")
+    assert updated_event.version == 2
+    assert updated_event.status == ScheduleStatus.RESCHEDULE_REQUESTED
     database.close()
 
 
