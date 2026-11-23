@@ -94,6 +94,36 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("Persisted external-action operation is malformed.") from exc
 
+    def find_pending_for_event(
+        self, action_type: str, event_id: str
+    ) -> tuple[ExternalActionOperation, ...]:
+        """Return at most two ambiguous operations bound to one event."""
+        if not isinstance(action_type, str) or not action_type.strip():
+            raise ValueError("action_type must be non-empty text.")
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise ValueError("event_id must be non-empty text.")
+        rows = self._database.connection.execute(
+            """
+            SELECT operation_id
+            FROM external_action_operations
+            WHERE action_type = ?
+              AND status IN (?, ?)
+              AND json_extract(payload_json, '$.event_id') = ?
+            ORDER BY created_at DESC, operation_id ASC
+            LIMIT 2
+            """,
+            (
+                action_type,
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                event_id,
+            ),
+        ).fetchall()
+        operations = tuple(self.get(row[0]) for row in rows)
+        if any(operation is None for operation in operations):
+            raise ValueError("Pending external-action operation disappeared.")
+        return operations  # type: ignore[return-value]
+
     def transition(
         self,
         operation_id: str,

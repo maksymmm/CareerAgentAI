@@ -337,6 +337,7 @@ _HTML = r"""<!doctype html>
       byId('reschedule-reconciliation-panel').disabled = true;
       byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'false');
       byId('reschedule-reconciliation-verified').checked = false;
+      byId('reschedule-reconciliation-verified').disabled = true;
       byId('confirm-reschedule-completed').disabled = true;
       byId('confirm-reschedule-no-effect').disabled = true;
       byId('request-reschedule').disabled = true;
@@ -376,12 +377,20 @@ _HTML = r"""<!doctype html>
         if (!detail || detail.schema_version !== 1 || !detail.event || detail.event.event_id !== identifier) throw new Error('Invalid event detail.');
         const snapshot = eventSnapshot(detail.event);
         if (snapshot.state_version < versionFloor) throw new Error('Stale event detail.');
+        const pending = await call('/v1/candidate/schedule-event/reschedule-pending?event_id=' +
+          encodeURIComponent(identifier), {}, 'Pending reschedule recovery failed.', true);
+        if (generation !== eventDetailGeneration) return;
+        if (!pending || pending.schema_version !== 1 || pending.event_id !== identifier ||
+            !['none', 'pending'].includes(pending.outcome)) {
+          throw new Error('Invalid pending reschedule snapshot.');
+        }
         selectedEventId = identifier;
         selectedEventVersion = snapshot.state_version;
         eventVersionFloorId = identifier;
         eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
+        const reschedulable = ['proposed', 'accepted', 'reschedule_requested'].includes(snapshot.status);
         byId('reschedule-start').value = snapshot.start_at;
         byId('reschedule-end').value = snapshot.end_at || '';
         byId('reschedule-timezone').value = snapshot.timezone_name;
@@ -389,12 +398,56 @@ _HTML = r"""<!doctype html>
         byId('reschedule-end').disabled = false;
         byId('reschedule-timezone').disabled = false;
         byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
-        const reschedulable = ['proposed', 'accepted', 'reschedule_requested'].includes(snapshot.status);
-        byId('reschedule-panel').disabled = !reschedulable;
-        byId('request-reschedule').disabled = !reschedulable || rescheduleInFlight;
-        byId('reschedule-state').textContent = reschedulable
-          ? 'Review the exact target slot, then explicitly confirm the sandbox request.'
-          : 'This event is terminal and cannot be rescheduled.';
+        if (pending.outcome === 'pending') {
+          const validInstant = value => typeof value === 'string' &&
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+            Number.isFinite(Date.parse(value));
+          const sourceVersionMatches = pending.state_version === snapshot.state_version;
+          const targetAlreadyApplied = pending.state_version < Number.MAX_SAFE_INTEGER &&
+            pending.state_version + 1 === snapshot.state_version &&
+            snapshot.status === 'reschedule_requested' &&
+            snapshot.start_at === pending.start_at &&
+            (snapshot.end_at || null) === pending.end_at &&
+            snapshot.timezone_name === pending.timezone_name;
+          if (!Number.isSafeInteger(pending.state_version) ||
+              (!sourceVersionMatches && !targetAlreadyApplied) ||
+              !validInstant(pending.start_at) ||
+              !(pending.end_at === null || (validInstant(pending.end_at) &&
+                Date.parse(pending.end_at) > Date.parse(pending.start_at))) ||
+              !timezoneName(pending.timezone_name)) {
+            throw new Error('Pending reschedule does not match the selected event snapshot.');
+          }
+          pendingReschedule = {
+            schema_version: 1, event_id: identifier, state_version: pending.state_version,
+            start_at: pending.start_at, end_at: pending.end_at,
+            timezone_name: pending.timezone_name, decision: 'approve'
+          };
+          byId('reschedule-start').value = pending.start_at;
+          byId('reschedule-end').value = pending.end_at || '';
+          byId('reschedule-timezone').value = pending.timezone_name;
+          byId('reschedule-start').disabled = true;
+          byId('reschedule-end').disabled = true;
+          byId('reschedule-timezone').disabled = true;
+          byId('reschedule-panel').disabled = true;
+          byId('request-reschedule').disabled = true;
+          byId('reschedule-reconciliation-panel').disabled = false;
+          byId('reschedule-reconciliation-verified').checked = false;
+          byId('reschedule-reconciliation-verified').disabled = false;
+          byId('confirm-reschedule-completed').disabled = true;
+          byId('confirm-reschedule-no-effect').disabled = true;
+          byId('reschedule-reconciliation-state').textContent =
+            'An ambiguous reschedule was restored from durable storage. Independently inspect the provider outcome before attesting.';
+          byId('reschedule-state').textContent =
+            'The exact approved target is restored. No retry is permitted until reconciliation finishes.';
+        } else {
+          byId('reschedule-reconciliation-panel').disabled = true;
+          byId('reschedule-reconciliation-verified').disabled = true;
+          byId('reschedule-panel').disabled = !reschedulable;
+          byId('request-reschedule').disabled = !reschedulable || rescheduleInFlight;
+          byId('reschedule-state').textContent = reschedulable
+            ? 'Review the exact target slot, then explicitly confirm the sandbox request.'
+            : 'This event is terminal and cannot be rescheduled.';
+        }
       } catch (error) {
         if (generation === eventDetailGeneration) {
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
@@ -1521,6 +1574,8 @@ _HTML = r"""<!doctype html>
             throw new Error('Reschedule reconciliation is not bound to the selected event version.');
           }
           pendingReschedule = request;
+          byId('reschedule-reconciliation-verified').checked = false;
+          byId('reschedule-reconciliation-verified').disabled = false;
           byId('reschedule-panel').disabled = true;
           byId('reschedule-reconciliation-panel').disabled = false;
           byId('reschedule-reconciliation-state').textContent =
@@ -1588,6 +1643,8 @@ _HTML = r"""<!doctype html>
       }
       const request = pendingReschedule;
       rescheduleInFlight = true;
+      byId('reschedule-reconciliation-verified').checked = false;
+      byId('reschedule-reconciliation-verified').disabled = true;
       const generation = ++rescheduleGeneration;
       byId('reschedule-reconciliation-panel').setAttribute('aria-busy', 'true');
       byId('confirm-reschedule-completed').disabled = true;
@@ -1615,6 +1672,7 @@ _HTML = r"""<!doctype html>
         pendingReschedule = null;
         byId('reschedule-reconciliation-panel').disabled = true;
         byId('reschedule-reconciliation-verified').checked = false;
+        byId('reschedule-reconciliation-verified').disabled = true;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         selectedEventVersion = snapshot.state_version;
         eventVersionFloorId = snapshot.event_id;
