@@ -1655,3 +1655,5 @@ evidence. The browser confirms the accepted event version and clears its attesta
 SQLite assertions prove one timeout attempt, one durable effect, zero provider replays,
 and a succeeded external-action operation. Next: exact-head CI/coverage and review for
 the acceptance recovery stack, then continue candidate decline/reschedule parity.
+
+Candidate sandbox provider composition now accepts a dedicated `sandbox_calendar_outcome_plan` independently from the application-submission plan. Runtime request composition passes it through the calendar provider used by candidate interview acceptance, so timeout-after-effect and no-replay recovery are deterministic at the HTTP/runtime boundary. The exact-head Chromium restart regression exercises this path against the same durable SQLite database.
