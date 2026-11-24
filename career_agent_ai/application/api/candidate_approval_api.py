@@ -1082,11 +1082,12 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "description": "Read-only owner-scoped durable status snapshot",
                             "content": content({
                                 "type": "object",
-                                "required": ["schema_version", "run_id", "state_version",
+                                "required": ["schema_version", "run_id", "run_ref", "state_version",
                                              "phase", "waiting_for_human", "terminal"],
                                 "properties": {
                                     "schema_version": {"type": "integer", "const": 1},
                                     "run_id": {"type": "string", "minLength": 1},
+                                    "run_ref": {"type": "string", "pattern": "^[a-f0-9]{24}$"},
                                     "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
                                     "phase": {"type": "string", "enum": [p.value for p in CareerLoopPhase]},
                                     "waiting_for_human": {"type": "boolean"},
