@@ -89,8 +89,10 @@ no matching actions exist.
 The dependency-free sandbox page includes a read-only "My external actions" panel
 for the selected owner-scoped run. It validates the exact action projection response,
 stable run reference, allowlisted family/status values, UTC timestamps and bounded
-cursor before rendering text-only lifecycle rows. Run or bearer-token changes
-invalidate in-flight pages and clear prior action data. The panel cannot retry,
-reconcile or execute provider work. This is sandbox discovery UI, not the
-deployment-ready candidate web dashboard; production candidate UI and provider
+cursor before rendering text-only lifecycle rows. Optional status and action-family
+filters are applied in SQLite before pagination, and every filtered cursor is bound
+to the exact run and filter set. Changing either filter clears prior rows and reloads
+the first page; run or bearer-token changes also invalidate in-flight pages. The panel
+cannot retry, reconcile or execute provider work. This is sandbox discovery UI, not
+the deployment-ready candidate web dashboard; production candidate UI and provider
 adapters remain outside the current backend release.

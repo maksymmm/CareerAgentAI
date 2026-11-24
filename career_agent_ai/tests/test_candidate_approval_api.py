@@ -3423,3 +3423,142 @@ def test_candidate_sandbox_browser_discards_external_actions_after_run_switch():
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+
+def test_candidate_sandbox_browser_filters_actions_and_resets_pagination():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from career_agent_ai.application.observability.action_cursor import encode_action_cursor
+
+    class FilteredActionLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.action_reads = []
+
+        def list_candidate_action_statuses(
+            self, run_id, *, user_id, limit=25, after=None,
+            status=None, action_family=None,
+        ):
+            self.action_reads.append(
+                (run_id, user_id, limit, after, status, action_family)
+            )
+            run_ref = sha256(run_id.encode("utf-8")).hexdigest()[:24]
+            if status is None and action_family is None and after is None:
+                return {
+                    "schema_version": 1,
+                    "run_ref": run_ref,
+                    "items": [{
+                        "operation_ref": "a" * 24,
+                        "action_family": "application_submission",
+                        "status": "prepared",
+                        "created_at": "2026-11-24T10:00:00+00:00",
+                        "updated_at": "2026-11-24T10:00:00+00:00",
+                        "error_present": False,
+                    }],
+                    "next_after": encode_action_cursor(
+                        "operation-1", candidate_run_ref=run_ref
+                    ),
+                }
+            if status is None and action_family is None and after is not None:
+                return {
+                    "schema_version": 1,
+                    "run_ref": run_ref,
+                    "items": [{
+                        "operation_ref": "b" * 24,
+                        "action_family": "communication",
+                        "status": "in_progress",
+                        "created_at": "2026-11-24T10:01:00+00:00",
+                        "updated_at": "2026-11-24T10:02:00+00:00",
+                        "error_present": False,
+                    }],
+                    "next_after": None,
+                }
+            if status == "failed" and action_family is None:
+                return {
+                    "schema_version": 1,
+                    "run_ref": run_ref,
+                    "items": [{
+                        "operation_ref": "c" * 24,
+                        "action_family": "application_submission",
+                        "status": "failed",
+                        "created_at": "2026-11-24T10:03:00+00:00",
+                        "updated_at": "2026-11-24T10:04:00+00:00",
+                        "error_present": True,
+                    }],
+                    "next_after": encode_action_cursor(
+                        "operation-3",
+                        candidate_run_ref=run_ref,
+                        status="failed",
+                    ),
+                }
+            if status == "failed" and action_family == "calendar":
+                return {
+                    "schema_version": 1,
+                    "run_ref": run_ref,
+                    "items": [{
+                        "operation_ref": "d" * 24,
+                        "action_family": "calendar",
+                        "status": "failed",
+                        "created_at": "2026-11-24T10:05:00+00:00",
+                        "updated_at": "2026-11-24T10:06:00+00:00",
+                        "error_present": True,
+                    }],
+                    "next_after": None,
+                }
+            raise AssertionError("Unexpected candidate action filter combination.")
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = FilteredActionLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#list-candidate-actions").click()
+            page.locator("#candidate-actions").get_by_text(
+                "application submission — prepared", exact=False
+            ).wait_for()
+            assert not page.locator("#next-candidate-actions").is_disabled()
+
+            page.locator("#next-candidate-actions").click()
+            page.locator("#candidate-actions").get_by_text(
+                "communication — in progress", exact=False
+            ).wait_for()
+
+            page.locator("#candidate-action-status").select_option("failed")
+            page.locator("#candidate-actions").get_by_text(
+                "application submission — failed", exact=False
+            ).wait_for()
+            assert not page.locator("#next-candidate-actions").is_disabled()
+
+            page.locator("#candidate-action-family").select_option("calendar")
+            page.locator("#candidate-actions").get_by_text(
+                "calendar — failed", exact=False
+            ).wait_for()
+            filtered_text = page.locator("#candidate-actions").inner_text()
+            assert "application submission — failed" not in filtered_text
+            assert "communication — in progress" not in filtered_text
+            assert page.locator("#next-candidate-actions").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert loop.action_reads == [
+        ("run-1", "candidate-1", 25, None, None, None),
+        ("run-1", "candidate-1", 25,
+         encode_action_cursor(
+             "operation-1", candidate_run_ref=sha256(b"run-1").hexdigest()[:24]
+         ), None, None),
+        ("run-1", "candidate-1", 25, None, "failed", None),
+        ("run-1", "candidate-1", 25, None, "failed", "calendar"),
+    ]

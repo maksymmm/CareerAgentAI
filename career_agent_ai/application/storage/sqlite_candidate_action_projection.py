@@ -24,6 +24,12 @@ _ACTION_STATUSES = frozenset({
     "failed",
     "reconciliation_required",
 })
+_ACTION_FAMILIES = frozenset({
+    "application_submission",
+    "communication",
+    "calendar",
+    "other",
+})
 
 
 class SQLiteCandidateActionProjection:
@@ -41,8 +47,18 @@ class SQLiteCandidateActionProjection:
         user_id: str,
         limit: int = 25,
         after: str | None = None,
+        status: str | None = None,
+        action_family: str | None = None,
     ) -> dict[str, Any]:
-        """Return one bounded owner-verified action page for a durable candidate run."""
+        """Return a bounded owner-verified action page using exact SQL filters."""
+        if status is not None and (
+            not isinstance(status, str) or status not in _ACTION_STATUSES
+        ):
+            raise ValueError("status filter is not a supported candidate action status.")
+        if action_family is not None and (
+            not isinstance(action_family, str) or action_family not in _ACTION_FAMILIES
+        ):
+            raise ValueError("action_family filter is not a supported candidate action family.")
         identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
         owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
         if type(limit) is not int or not 1 <= limit <= 25:
@@ -57,7 +73,12 @@ class SQLiteCandidateActionProjection:
         cursor = (
             None
             if after is None
-            else decode_action_cursor(after, candidate_run_ref=run_ref)
+            else decode_action_cursor(
+                after,
+                candidate_run_ref=run_ref,
+                status=status,
+                action_family=action_family,
+            )
         )
 
         if not self._table_exists("external_action_operations"):
@@ -113,11 +134,28 @@ class SQLiteCandidateActionProjection:
             where = "correlation_id = ?"
             filter_value = identifier
 
+        clauses = [where]
+        parameters: list[object] = [filter_value]
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status)
+        family_predicates = {
+            "application_submission": "action_type GLOB 'application.*'",
+            "communication": "action_type GLOB 'communication.*'",
+            "calendar": "action_type GLOB 'calendar.*'",
+        }
+        if action_family == "other":
+            clauses.append(
+                "action_type NOT GLOB 'application.*' "
+                "AND action_type NOT GLOB 'communication.*' "
+                "AND action_type NOT GLOB 'calendar.*'"
+            )
+        elif action_family is not None:
+            clauses.append(family_predicates[action_family])
         if cursor is not None:
-            where += " AND operation_id > ?"
-            parameters: tuple[object, ...] = (filter_value, cursor, limit + 1)
-        else:
-            parameters = (filter_value, limit + 1)
+            clauses.append("operation_id > ?")
+            parameters.append(cursor)
+        parameters.append(limit + 1)
 
         rows = self._database.connection.execute(
             f"""
@@ -125,11 +163,11 @@ class SQLiteCandidateActionProjection:
                    CASE WHEN error IS NULL THEN 0 ELSE 1 END,
                    correlation_id
             FROM external_action_operations
-            WHERE {where}
+            WHERE {" AND ".join(clauses)}
             ORDER BY operation_id ASC
             LIMIT ?
             """,
-            parameters,
+            tuple(parameters),
         ).fetchall()
 
         visible = rows[:limit]
@@ -137,7 +175,7 @@ class SQLiteCandidateActionProjection:
         for (
             operation_id,
             action_type,
-            status,
+            action_status,
             created_at,
             updated_at,
             error_present,
@@ -160,7 +198,7 @@ class SQLiteCandidateActionProjection:
                 or any(0xD800 <= ord(character) <= 0xDFFF for character in action_type)
             ):
                 raise RuntimeError("Persisted candidate action type is malformed.")
-            if status not in _ACTION_STATUSES:
+            if action_status not in _ACTION_STATUSES:
                 raise RuntimeError("Persisted candidate action status is malformed.")
             if action_type.startswith("application."):
                 family = "application_submission"
@@ -174,14 +212,19 @@ class SQLiteCandidateActionProjection:
             items.append({
                 "operation_ref": operation_ref,
                 "action_family": family,
-                "status": status,
+                "status": action_status,
                 "created_at": self._timestamp(created_at),
                 "updated_at": self._timestamp(updated_at),
                 "error_present": bool(error_present),
             })
 
         next_after = (
-            encode_action_cursor(visible[-1][0], candidate_run_ref=run_ref)
+            encode_action_cursor(
+                visible[-1][0],
+                candidate_run_ref=run_ref,
+                status=status,
+                action_family=action_family,
+            )
             if len(rows) > limit and visible
             else None
         )

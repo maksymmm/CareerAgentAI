@@ -191,15 +191,27 @@ class RuntimeCandidateApp:
             database.close()
 
     def list_candidate_action_statuses(
-        self, run_id: str, *, user_id: str, limit: int = 25, after: str | None = None
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        limit: int = 25,
+        after: str | None = None,
+        status: str | None = None,
+        action_family: str | None = None,
     ) -> dict[str, Any]:
-        """Read only the authenticated candidate's external-action lifecycle."""
+        """Read the authenticated candidate's filtered lifecycle without writes."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteCandidateActionProjection(database).list_page(
-                run_id, user_id=user_id, limit=limit, after=after
+                run_id,
+                user_id=user_id,
+                limit=limit,
+                after=after,
+                status=status,
+                action_family=action_family,
             )
         finally:
             database.close()
@@ -305,13 +317,25 @@ class _RequestCandidateLoop:
             database.close()
 
     def list_candidate_action_statuses(
-        self, run_id: str, *, user_id: str, limit: int = 25, after: str | None = None
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        limit: int = 25,
+        after: str | None = None,
+        status: str | None = None,
+        action_family: str | None = None,
     ) -> dict[str, Any]:
-        """Read an authenticated candidate's actions using request-local read-only storage."""
+        """Read filtered candidate actions through request-local read-only storage."""
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteCandidateActionProjection(database).list_page(
-                run_id, user_id=user_id, limit=limit, after=after
+                run_id,
+                user_id=user_id,
+                limit=limit,
+                after=after,
+                status=status,
+                action_family=action_family,
             )
         finally:
             database.close()
