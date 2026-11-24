@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Calendar provider writer-contention hardening: regressions now hold a real SQLite
+`BEGIN IMMEDIATE` lock from a second connection and prove that a candidate calendar
+action fails before intent/attempt/effect persistence, then safely retries the same
+operation after lock release. Evidence lookup under a competing writer lock fails
+closed instead of returning confirmed absence. Barrier-based two-connection tests
+prove identical concurrent operation IDs serialize to one committed calendar effect
+and one scripted attempt, while conflicting source intents cannot rebind the key.
+The calendar ADR records these transaction and evidence guarantees. Next: apply the
+same contention matrix to communication evidence and expose sanitized recovery
+classification without leaking provider payloads.
