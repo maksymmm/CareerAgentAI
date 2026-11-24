@@ -397,7 +397,15 @@ _HTML = r"""<!doctype html>
         eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Event detail loaded. Acceptance requires an explicit candidate action.';
-        await loadAcceptanceStatus(identifier, snapshot.state_version, generation);
+        try {
+          await loadAcceptanceStatus(identifier, snapshot.state_version, generation);
+        } catch (error) {
+          if (generation === eventDetailGeneration) {
+            clearAcceptance();
+            byId('event-acceptance-state').textContent =
+              'Acceptance status is unavailable. Refresh this event before taking action.';
+          }
+        }
       } catch (error) {
         if (generation === eventDetailGeneration) {
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
