@@ -68,7 +68,7 @@ class OperationalApiService:
         ):
             raise ValueError("limit must be between 1 and 25.")
         if after is not None and (
-            not isinstance(after, str) or not after or len(after) > 512
+            not isinstance(after, str) or not after or len(after) > 1200
         ):
             raise ValueError("after must be a bounded opaque cursor.")
         now = self._clock()
@@ -231,7 +231,7 @@ class OperationalWSGIApp:
                 if not 1 <= limit <= 25:
                     raise ValueError("limit must be between 1 and 25.")
                 after = query.get("after", [None])[0]
-                if after is not None and (not after or len(after) > 512):
+                if after is not None and (not after or len(after) > 1200):
                     raise ValueError("after must be a bounded opaque cursor.")
                 try:
                     payload = self._service.actions(limit=limit, after=after)
@@ -435,7 +435,7 @@ def openapi_document() -> dict[str, Any]:
                             "in": "query",
                             "required": False,
                             "description": "Opaque keyset cursor; not an authorization credential",
-                            "schema": {"type": "string", "minLength": 1, "maxLength": 512,
+                            "schema": {"type": "string", "minLength": 1, "maxLength": 1200,
                                        "pattern": "^[A-Za-z0-9_-]+$"},
                         },
                     ],
