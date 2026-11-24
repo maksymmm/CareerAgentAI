@@ -1590,3 +1590,18 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Sandbox application-submission writer contention (ADR 0001): the third evidence path
+now has the same independent-connection contention coverage as calendar and
+communication. A competing BEGIN IMMEDIATE writer rejects submission before intent,
+attempt, or provider-plan consumption; the exact operation can proceed after lock
+release. Evidence lookup fails closed under a writer lock for both absent and present
+records, then returns the authoritative state after release. Concurrent conflicting
+intents cannot rebind one operation ID: exactly one fingerprint wins, one provider
+attempt/effect is recorded, and the durable intent fingerprint matches the ledger.
+The existing same-key concurrency regression continues to prove one effect and one
+counted replay. Tests use temporary SQLite files and no external provider.
+Next: complete exact-head CI and independent review for the three evidence-path
+contention PRs; then implement operator-facing recovery observability that exposes
+bounded lifecycle metadata without private payloads or provider exception details.
