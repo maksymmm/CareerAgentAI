@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import sqlite3
 from math import isfinite
 from datetime import datetime, timedelta, timezone
@@ -785,6 +786,134 @@ class SQLiteCandidateRunStatusProjection:
         if row is None or row[0] != owner:
             raise KeyError("Unknown autonomous career loop for this user.")
         return self._status_from_row(identifier, row, owner=owner)
+
+    def get_application_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
+        """Restore minimal owned application intent without exposing private evidence."""
+        identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
+        owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
+        row = self._database.connection.execute(
+            """
+            SELECT owner_user_id, payload_json, version
+            FROM autonomous_career_loops
+            WHERE run_id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        if row is None or row[0] != owner:
+            raise KeyError("Unknown autonomous career loop for this user.")
+        try:
+            payload = json.loads(
+                row[1],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
+            state = SQLiteCareerLoopRepository._deserialize(
+                payload, storage_version=row[2]
+            )
+            if state.run_id != identifier or state.request.user_id != owner:
+                raise ValueError("Persisted application intent ownership is malformed.")
+            if state.phase is not CareerLoopPhase.APPLICATION_RECONCILIATION:
+                return None
+            action = state.pending_human_action
+            if (
+                action is None
+                or action.kind is not HumanActionKind.RECONCILE_APPLICATION_SUBMISSION
+            ):
+                raise ValueError("Pending application reconciliation action is malformed.")
+            details = action.details
+
+            def validated_identifier(value: Any, field: str) -> str:
+                normalized = SQLiteCareerLoopRepository._identifier(value, field)
+                if value != normalized or any(
+                    ord(character) < 32
+                    or ord(character) == 127
+                    or 0xD800 <= ord(character) <= 0xDFFF
+                    for character in normalized
+                ):
+                    raise ValueError(f"Persisted {field} is malformed.")
+                return normalized
+
+            def validated_text(value: Any, field: str, maximum: int) -> str:
+                if (
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > maximum
+                    or value != value.strip()
+                    or any(
+                        ord(character) < 32
+                        or ord(character) == 127
+                        or 0xD800 <= ord(character) <= 0xDFFF
+                        for character in value
+                    )
+                ):
+                    raise ValueError(f"Persisted {field} is malformed.")
+                return value
+
+            # Validate the private operation key, but never include it in the projection.
+            validated_identifier(details.get("operation_id"), "operation_id")
+            application_id = validated_identifier(
+                details.get("application_id"), "application_id"
+            )
+            job_id = validated_identifier(details.get("job_id"), "job_id")
+            if application_id != state.application_id or job_id != state.selected_job_id:
+                raise ValueError("Pending application intent does not match the tracked application.")
+
+            job_title = validated_text(details.get("job_title"), "job_title", 500)
+            company = validated_text(details.get("company"), "company", 200)
+            company_id = details.get("company_id")
+            if company_id is not None:
+                company_id = validated_identifier(company_id, "company_id")
+            if (
+                job_title != state.selected_job_title
+                or company != state.selected_company
+                or company_id != state.selected_company_id
+            ):
+                raise ValueError("Pending application intent does not match the selected job.")
+
+            snapshot_digest = details.get("candidate_snapshot_sha256")
+            if (
+                not isinstance(snapshot_digest, str)
+                or len(snapshot_digest) != 64
+                or any(character not in "0123456789abcdef" for character in snapshot_digest)
+                or snapshot_digest != state.selected_job_snapshot_sha256
+                or snapshot_digest != candidate_snapshot_sha256(
+                    job_id, job_title, company, company_id
+                )
+            ):
+                raise ValueError("Pending application candidate snapshot is malformed.")
+
+            artifact_content = details.get("artifact_content")
+            artifact_digest = details.get("artifact_sha256")
+            if (
+                not isinstance(artifact_content, str)
+                or len(artifact_content) > 100_000
+                or not isinstance(artifact_digest, str)
+                or len(artifact_digest) != 64
+                or any(character not in "0123456789abcdef" for character in artifact_digest)
+                or sha256(artifact_content.encode("utf-8")).hexdigest() != artifact_digest
+                or artifact_content != state.application_artifact_content
+                or artifact_digest != state.application_artifact_sha256
+            ):
+                raise ValueError("Pending application artifact evidence is malformed.")
+
+            return {
+                "schema_version": 1,
+                "run_id": identifier,
+                "state_version": state.version,
+                "application_id": application_id,
+                "job_id": job_id,
+                "job_title": job_title,
+                "company": company,
+                "candidate_snapshot_sha256": snapshot_digest,
+                "artifact_sha256": artifact_digest,
+            }
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, UnicodeError) as exc:
+            raise ValueError(
+                "Persisted candidate application reconciliation is malformed."
+            ) from exc
 
     @staticmethod
     def _status_from_row(identifier: str, row: tuple[Any, ...], *, owner: str) -> dict[str, Any]:

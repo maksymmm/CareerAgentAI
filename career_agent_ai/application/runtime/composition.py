@@ -323,6 +323,18 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def get_candidate_application_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
+        """Read pending application intent without permitting storage writes."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(database).get_application_reconciliation(
+                run_id, user_id=user_id
+            )
+        finally:
+            database.close()
+
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str):
         """Load one owner-scoped prompt using request-thread storage."""
         database = SQLiteDatabase(self._database_path)

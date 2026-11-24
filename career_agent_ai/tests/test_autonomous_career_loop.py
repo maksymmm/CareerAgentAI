@@ -4156,3 +4156,112 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+def test_application_reconciliation_projection_is_minimal_owner_scoped_and_read_only(
+    tmp_path, monkeypatch
+):
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    path = str(tmp_path / "application-reconciliation-projection.sqlite")
+    run_id = "application-reconciliation-projection"
+    database, loop, _, _, _, submission_provider, *_ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1", keyword="Logistics", candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+
+    def ambiguous_submit(*args, **kwargs):
+        raise RuntimeError("synthetic ambiguous application submission")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    gate = loop.resume(run_id, approved=True, user_id="user-1")
+    assert gate.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    status = loop.get_candidate_run_status(run_id, user_id="user-1")
+    database.close()
+
+    before = open(path, "rb").read()
+    read_only = SQLiteDatabase.open_read_only(path)
+    try:
+        projection = SQLiteCandidateRunStatusProjection(read_only)
+        intent = projection.get_application_reconciliation(run_id, user_id="user-1")
+        assert set(intent) == {
+            "schema_version", "run_id", "state_version", "application_id", "job_id",
+            "job_title", "company", "candidate_snapshot_sha256", "artifact_sha256",
+        }
+        assert intent["schema_version"] == 1
+        assert intent["run_id"] == run_id
+        assert intent["state_version"] == status["state_version"]
+        assert intent["application_id"] == f"{run_id}:application"
+        assert intent["job_id"] == "job-1"
+        assert intent["job_title"]
+        assert intent["company"]
+        assert len(intent["candidate_snapshot_sha256"]) == 64
+        assert len(intent["artifact_sha256"]) == 64
+        assert "operation_id" not in intent
+        assert "artifact_content" not in intent
+        assert "instruction" not in intent
+        with pytest.raises(KeyError):
+            projection.get_application_reconciliation(run_id, user_id="user-2")
+        with pytest.raises(KeyError):
+            projection.get_application_reconciliation("missing-application-run", user_id="user-1")
+    finally:
+        read_only.close()
+    assert open(path, "rb").read() == before
+
+
+def test_application_reconciliation_projection_rejects_tampered_artifact_context(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    path = str(tmp_path / "application-reconciliation-tampered.sqlite")
+    run_id = "application-reconciliation-tampered"
+    database, loop, _, _, _, submission_provider, *_ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1", keyword="Logistics", candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+
+    def ambiguous_submit(*args, **kwargs):
+        raise RuntimeError("synthetic ambiguous application submission")
+
+    monkeypatch.setattr(submission_provider, "submit", ambiguous_submit)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    database.close()
+
+    with sqlite3.connect(path) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM autonomous_career_loops WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        payload = json.loads(row[0])
+        payload["pending_human_action"]["details"]["artifact_content"] += "tampered"
+        connection.execute(
+            "UPDATE autonomous_career_loops SET payload_json = ? WHERE run_id = ?",
+            (json.dumps(payload, sort_keys=True, separators=(",", ":")), run_id),
+        )
+        connection.commit()
+
+    read_only = SQLiteDatabase.open_read_only(path)
+    try:
+        projection = SQLiteCandidateRunStatusProjection(read_only)
+        with pytest.raises(
+            ValueError, match="Persisted candidate application reconciliation is malformed"
+        ):
+            projection.get_application_reconciliation(run_id, user_id="user-1")
+    finally:
+        read_only.close()
+

@@ -30,6 +30,13 @@ class Loop:
         )
         self.submission = None
         self.started = None
+        self.application_intent_reads = []
+        self.application_intent = {
+            "schema_version": 1, "run_id": "run-1", "state_version": 3,
+            "application_id": "application-1", "job_id": "job-1",
+            "job_title": "Platform Engineer", "company": "Sandbox GmbH",
+            "candidate_snapshot_sha256": "a" * 64, "artifact_sha256": "b" * 64,
+        }
 
     def start(self, request, *, run_id=None):
         self.started = (request, run_id)
@@ -41,6 +48,11 @@ class Loop:
     def get_candidate_approval_prompt(self, run_id, *, user_id):
         assert (run_id, user_id) == ("run-1", "candidate-1")
         return self.prompt
+
+    def get_candidate_application_reconciliation(self, run_id, *, user_id):
+        assert (run_id, user_id) == ("run-1", "candidate-1")
+        self.application_intent_reads.append((run_id, user_id))
+        return self.application_intent
 
     def resume_candidate_submission(self, *, user_id, submission):
         assert user_id == "candidate-1"
@@ -76,6 +88,42 @@ class Loop:
             run_id, user_id, completed, provider_event_id, expected_state_version
         )
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+
+def test_application_reconciliation_get_restores_minimal_owned_intent():
+    loop = Loop()
+    (status, headers), body = request(
+        app(loop), method="GET",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == loop.application_intent
+    assert loop.application_intent_reads == [("run-1", "candidate-1")]
+    assert "operation_id" not in body
+    assert "artifact_content" not in body
+    assert "provider_submission_id" not in body
+
+    (status, _), _ = request(
+        app(loop), method="GET",
+        path="/v1/candidate/runs/run-1/application-reconciliation", query="unexpected=1",
+    )
+    assert status == "400 Bad Request"
+    assert loop.application_intent_reads == [("run-1", "candidate-1")]
+
+
+def test_application_reconciliation_get_reports_missing_pending_intent_as_conflict():
+    class NoIntentLoop(Loop):
+        def get_candidate_application_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return None
+
+    (status, _), body = request(
+        app(NoIntentLoop()), method="GET",
+        path="/v1/candidate/runs/run-1/application-reconciliation",
+    )
+    assert status == "409 Conflict"
+    assert body == {"error": "reconciliation_unavailable"}
 
 
 def test_application_reconciliation_binds_owner_and_verified_provider_outcome():
@@ -143,9 +191,10 @@ def test_application_reconciliation_rejects_ambiguous_or_identity_bearing_body(b
     assert not hasattr(loop, "reconciliation")
 
 
-def test_application_reconciliation_contract_is_post_only_and_fail_closed():
+def test_application_reconciliation_contract_documents_read_only_get_and_versioned_post():
     route = "/v1/candidate/runs/{run_id}/application-reconciliation"
-    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    operations = candidate_approval_openapi_document()["paths"][route]
+    operation = operations["post"]
     schema = operation["requestBody"]["content"]["application/json"]["schema"]
     assert operation["security"] == [{"bearerAuth": []}]
     assert schema["additionalProperties"] is False
@@ -153,12 +202,24 @@ def test_application_reconciliation_contract_is_post_only_and_fail_closed():
     assert schema["properties"]["provider_submission_id"]["maxLength"] == 1_000
     conflict = operation["responses"]["409"]["content"]["application/json"]["schema"]
     assert conflict["properties"]["error"]["const"] == "approval_conflict"
+
+    get_operation = operations["get"]
+    get_schema = get_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert get_operation["security"] == [{"bearerAuth": []}]
+    assert get_schema["additionalProperties"] is False
+    assert get_schema["required"] == [
+        "schema_version", "run_id", "state_version", "application_id", "job_id",
+        "job_title", "company", "candidate_snapshot_sha256", "artifact_sha256",
+    ]
+    assert get_schema["properties"]["artifact_sha256"]["pattern"] == "^[a-f0-9]{64}$"
+    assert get_operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
+
     (status, headers), body = request(
-        app(Loop()), method="GET",
+        app(Loop()), method="PUT",
         path="/v1/candidate/runs/run-1/application-reconciliation",
     )
     assert status == "405 Method Not Allowed"
-    assert ("Allow", "POST") in headers
+    assert ("Allow", "GET, POST") in headers
     assert body == {"error": "method_not_allowed"}
 
 
@@ -284,6 +345,48 @@ def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch,
         "run_id": "run-1", "user_id": "candidate-1", "submitted": True,
         "provider_submission_id": "provider-confirmed", "expected_state_version": 7,
     }
+
+
+def test_runtime_candidate_app_reads_application_reconciliation_through_read_only_projection(
+    monkeypatch, tmp_path
+):
+    from career_agent_ai.application.runtime import composition
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+
+    path = str(tmp_path / "runtime-application-intent.sqlite")
+    database = SQLiteDatabase(path)
+    database.close()
+    observed = {}
+    expected = {
+        "schema_version": 1, "run_id": "run-1", "state_version": 7,
+        "application_id": "application-1", "job_id": "job-1",
+        "job_title": "Platform Engineer", "company": "Sandbox GmbH",
+        "candidate_snapshot_sha256": "a" * 64, "artifact_sha256": "b" * 64,
+    }
+
+    def project(self, run_id, *, user_id):
+        observed.update(run_id=run_id, user_id=user_id)
+        return expected
+
+    monkeypatch.setattr(
+        SQLiteCandidateRunStatusProjection, "get_application_reconciliation", project
+    )
+    runtime = composition.RuntimeCandidateApp(
+        database_path=path, jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    try:
+        result = runtime.get_candidate_application_reconciliation(
+            "run-1", user_id="candidate-1"
+        )
+    finally:
+        runtime.close()
+
+    assert result == expected
+    assert observed == {"run_id": "run-1", "user_id": "candidate-1"}
 
 
 def test_runtime_candidate_app_delegates_message_reconciliation(monkeypatch, tmp_path):
@@ -1625,6 +1728,16 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
                 "allowed_decisions": ["approve", "decline"],
             })
 
+        def get_candidate_application_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": self.status_version,
+                "application_id": "application-1", "job_id": "job-1",
+                "job_title": "Platform Engineer", "company": "Sandbox GmbH",
+                "candidate_snapshot_sha256": "a" * 64,
+                "artifact_sha256": sha256(b"Candidate application").hexdigest(),
+            }
+
         def resolve_application_reconciliation(self, run_id, **kwargs):
             self.resolutions.append((run_id, kwargs))
             return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
@@ -1648,6 +1761,9 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             page.locator("#reconciliation-state").get_by_text(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
+            page.locator("#application-reconciliation-intent").get_by_text(
+                "Sandbox GmbH", exact=False
+            ).wait_for()
             assert page.locator("#confirm-submitted").is_disabled()
             page.locator("#application-reconciliation-verified").check()
             page.locator("#provider-submission-id").fill("version-7-evidence")
@@ -1667,6 +1783,7 @@ def test_candidate_sandbox_browser_submits_versioned_application_reconciliation(
             assert page.locator("#provider-submission-id").input_value() == ""
             page.locator("#provider-submission-id").fill("stale-provider-evidence")
             page.locator("#run-id").fill("run-2")
+            assert page.locator("#application-reconciliation-intent").text_content() == "No pending application intent loaded."
             assert page.locator("#provider-submission-id").input_value() == ""
             assert page.locator("#provider-submission-id").is_disabled()
             page.locator("#run-id").fill("run-1")

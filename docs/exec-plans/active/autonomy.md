@@ -1590,3 +1590,7 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate application reconciliation intent recovery: an authenticated owner-scoped GET projection restores only the minimal approved application context after a browser reload. The projection validates the durable run, pending action, application/job identity, candidate snapshot digest and exact approved artifact digest, while omitting the private external-action operation ID, artifact content and provider payload. It opens SQLite read-only and returns no intent for a run outside the application-reconciliation phase. The candidate sandbox accepts the response only when its run ID and state version match the fresh status snapshot; explicit independent provider verification and the existing version-bound POST remain required. Regression coverage includes owner isolation, immutable read-only storage, tampered artifact rejection, strict OpenAPI, runtime composition and Chromium context invalidation.
+Next: apply the same reload-restoration contract to pending message reconciliation, then run exact-head CI and independent code/security review.
+

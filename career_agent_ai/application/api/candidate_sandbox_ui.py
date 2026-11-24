@@ -98,6 +98,7 @@ _HTML = r"""<!doctype html>
   <fieldset id="reconciliation-panel" tabindex="-1" aria-busy="false">
     <legend>Application submission reconciliation</legend>
     <p id="reconciliation-state" role="status">Refresh a run in application reconciliation before recording independently verified provider evidence.</p>
+    <p id="application-reconciliation-intent" class="muted" role="status">No pending application intent loaded.</p>
     <label>Provider submission ID
       <input id="provider-submission-id" autocomplete="off" maxlength="1000" disabled>
     </label>
@@ -839,6 +840,7 @@ _HTML = r"""<!doctype html>
       reconciliationAvailable = false;
       reconciliationVersion = null;
       byId('reconciliation-state').textContent = message;
+      byId('application-reconciliation-intent').textContent = 'No pending application intent loaded.';
       byId('provider-submission-id').value = '';
       byId('provider-submission-id').disabled = true;
       setReconciliationAttestation('application-reconciliation-verified', false);
@@ -854,6 +856,51 @@ _HTML = r"""<!doctype html>
       setReconciliationAttestation('application-reconciliation-verified', true);
       byId('confirm-submitted').disabled = true;
       byId('confirm-not-submitted').disabled = true;
+    }
+    async function restoreApplicationReconciliationIntent(runId, version, contextGeneration) {
+      invalidateApplicationReconciliation('Restoring the approved application details…');
+      try {
+        const intent = await call(runPath('/application-reconciliation'), {},
+          'Application reconciliation details request failed.', true);
+        if (contextGeneration !== inputContextGeneration || runId !== byId('run-id').value ||
+            selectedRunVersion !== version) return;
+        const fields = ['schema_version', 'run_id', 'state_version', 'application_id', 'job_id',
+          'job_title', 'company', 'candidate_snapshot_sha256', 'artifact_sha256'];
+        const validIdentifier = value => typeof value === 'string' && value.length > 0 &&
+          Array.from(value).length <= 200 && value === value.trim() &&
+          !Array.from(value).some(character => {
+            const codePoint = character.codePointAt(0);
+            return codePoint < 32 || codePoint === 127 ||
+              (codePoint >= 0xD800 && codePoint <= 0xDFFF);
+          });
+        const validText = (value, maximum) => typeof value === 'string' && value.length > 0 &&
+          Array.from(value).length <= maximum && value === value.trim() &&
+          !Array.from(value).some(character => {
+            const codePoint = character.codePointAt(0);
+            return codePoint < 32 || codePoint === 127 ||
+              (codePoint >= 0xD800 && codePoint <= 0xDFFF);
+          });
+        const validDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+        if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
+            Object.keys(intent).length !== fields.length ||
+            !fields.every(field => Object.hasOwn(intent, field)) ||
+            intent.schema_version !== 1 || intent.run_id !== runId ||
+            intent.state_version !== version || !validIdentifier(intent.application_id) ||
+            !validIdentifier(intent.job_id) || !validText(intent.job_title, 500) ||
+            !validText(intent.company, 200) ||
+            !validDigest(intent.candidate_snapshot_sha256) || !validDigest(intent.artifact_sha256)) {
+          throw new Error('Invalid application reconciliation intent.');
+        }
+        byId('application-reconciliation-intent').textContent =
+          intent.company + ' · ' + intent.job_title + ' · Application ' + intent.application_id +
+          ' · Approved artifact SHA-256 ' + intent.artifact_sha256;
+        enableApplicationReconciliation(version);
+      } catch {
+        if (contextGeneration === inputContextGeneration && runId === byId('run-id').value) {
+          invalidateApplicationReconciliation(
+            'Pending application details could not be restored. Refresh run status.');
+        }
+      }
     }
     function invalidateMessageReconciliation(message =
       'Refresh a run in message reconciliation before recording the independently verified delivery outcome.') {
@@ -1059,7 +1106,8 @@ _HTML = r"""<!doctype html>
         }
         selectedRunVersion = snapshot.state_version;
         if (snapshot.phase === 'application_reconciliation' && snapshot.waiting_for_human) {
-          enableApplicationReconciliation(snapshot.state_version);
+          await restoreApplicationReconciliationIntent(
+            runId, snapshot.state_version, statusContextGeneration);
         } else {
           invalidateApplicationReconciliation();
         }
