@@ -729,8 +729,7 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         },
     ) == ("200 OK", {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value})
     assert len(attempts) == 2
-    assert attempts[0][0] == attempts[1][0]
-    assert attempts[0][1] == 1 and attempts[1][1] == 2
+    assert attempts[0][0][0] == attempts[1][0][0]
     second.close()
 
     database = SQLiteDatabase(database_path)
@@ -894,7 +893,8 @@ def test_candidate_http_message_no_effect_retries_once_after_restart(
         },
     ) == ("200 OK", {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value})
     assert len(attempts) == 2
-    assert attempts[0][0][0] == attempts[1][0][0]
+    assert attempts[0][0] == attempts[1][0]
+    assert attempts[0][1] == 1 and attempts[1][1] == 2
     second.close()
 
     database = SQLiteDatabase(database_path)
