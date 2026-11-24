@@ -12,7 +12,7 @@ from threading import Barrier, Thread
 import pytest
 
 from career_agent_ai.application.api import candidate_approval_openapi_document
-from career_agent_ai.application.career import ApplicationSubmissionService
+from career_agent_ai.application.career import ApplicationSubmissionService, EvidenceState
 from career_agent_ai.application.career.application_submission import PreSubmissionError
 from career_agent_ai.application.external_actions import (
     ExternalActionService,
@@ -580,3 +580,148 @@ def test_openapi_contract_exposes_no_new_sandbox_provider_surface():
     assert methods == {"post"}
     assert "409" in paths[route]["post"]["responses"]
     assert not [p for p in paths if "ledger" in p or "provider" in p or "sandbox-" in p]
+
+
+# ----------------------- application-provider writer contention -----------------------
+
+
+def _hold_submission_writer_lock(path):
+    """Hold a competing SQLite write transaction until the caller releases it."""
+    connection = sqlite3.connect(str(path), timeout=0)
+    connection.execute("BEGIN IMMEDIATE")
+    return connection
+
+
+def test_competing_writer_rejects_submission_before_intent_attempt_or_effect(path):
+    calls: list[tuple[str, int]] = []
+
+    def plan(operation_id: str, attempt: int) -> SandboxOutcome:
+        calls.append((operation_id, attempt))
+        return OUTCOME.SUCCESS
+
+    stack = Stack(path, plan)
+    stack.database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = _hold_submission_writer_lock(path)
+    try:
+        with pytest.raises(PreSubmissionError, match="busy"):
+            stack.provider.submit(
+                OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+            )
+        assert calls == []
+        for table in (
+            "sandbox_submission_intents",
+            "sandbox_submission_attempts",
+            "sandbox_submission_ledger",
+        ):
+            count = stack.database.connection.execute(
+                f"SELECT COUNT(*) FROM {table}"
+            ).fetchone()[0]
+            assert count == 0
+    finally:
+        holder.rollback()
+        holder.close()
+
+    result = stack.provider.submit(
+        OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+    )
+    assert result["provider_submission_id"] == "fake:application-1"
+    assert calls == [(OP, 1)]
+    assert stack.provider.attempts(OP) == (OUTCOME.SUCCESS,)
+    entries = stack.provider.ledger_entries()
+    assert len(entries) == 1 and entries[0].replays == 0
+    stack.close()
+
+
+def test_evidence_lookup_fails_closed_instead_of_confirming_absence_under_writer_lock(
+    path,
+):
+    stack = Stack(path, evidence=True)
+    stack.database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = _hold_submission_writer_lock(path)
+    try:
+        with pytest.raises(PreSubmissionError, match="busy"):
+            stack.provider.verify_submission(OP)
+    finally:
+        holder.rollback()
+        holder.close()
+
+    evidence = stack.provider.verify_submission(OP)
+    assert evidence.state == EvidenceState.ABSENT_CONFIRMED
+    stack.close()
+
+
+def test_evidence_lookup_fails_closed_when_existing_submission_is_locked(path):
+    stack = Stack(path, evidence=True)
+    stack.provider.submit(
+        OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+    )
+    stack.database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = _hold_submission_writer_lock(path)
+    try:
+        with pytest.raises(PreSubmissionError, match="busy"):
+            stack.provider.verify_submission(OP)
+    finally:
+        holder.rollback()
+        holder.close()
+
+    evidence = stack.provider.verify_submission(OP)
+    assert evidence.state == EvidenceState.PRESENT
+    assert evidence.job_id == "job-1"
+    assert evidence.application_id == "application-1"
+    assert evidence.provider_submission_id == "fake:application-1"
+    assert evidence.artifact_sha256 == DIGEST
+    assert evidence.candidate_snapshot_sha256 == SNAPSHOT
+    stack.close()
+
+
+def test_concurrent_conflicting_submission_intents_cannot_rebind_operation_id(path):
+    barrier = Barrier(2)
+    outcomes: list[tuple[str, str, str, object]] = []
+
+    def worker(job_id: str, application_id: str) -> None:
+        stack = Stack(path)
+        try:
+            barrier.wait(timeout=10)
+            result = stack.provider.submit(
+                OP, job_id, application_id, CONTENT, DIGEST, SNAPSHOT
+            )
+            outcomes.append(("success", job_id, application_id, result))
+        except BaseException as exc:  # surfaced by assertions below
+            outcomes.append(("error", job_id, application_id, exc))
+        finally:
+            stack.close()
+
+    threads = [
+        Thread(target=worker, args=("job-1", "application-1")),
+        Thread(target=worker, args=("job-2", "application-2")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(outcomes) == 2
+
+    successes = [item for item in outcomes if item[0] == "success"]
+    failures = [item for item in outcomes if item[0] == "error"]
+    assert len(successes) == 1 and len(failures) == 1
+    assert isinstance(failures[0][3], PreSubmissionError)
+    assert "different submission intent" in str(failures[0][3])
+
+    _, winning_job, winning_application, _ = successes[0]
+    verifier = Stack(path)
+    entries = verifier.provider.ledger_entries()
+    assert len(entries) == 1 and entries[0].replays == 0
+    assert entries[0].job_id == winning_job
+    assert entries[0].application_id == winning_application
+    assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
+    intent_fingerprint = verifier.database.connection.execute(
+        "SELECT fingerprint FROM sandbox_submission_intents WHERE idempotency_key = ?",
+        (OP,),
+    ).fetchone()[0]
+    ledger_fingerprint = verifier.database.connection.execute(
+        "SELECT fingerprint FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+        (OP,),
+    ).fetchone()[0]
+    assert intent_fingerprint == ledger_fingerprint
+    verifier.close()
