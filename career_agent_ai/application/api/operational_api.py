@@ -75,9 +75,10 @@ class OperationalApiService:
             or not 1 <= limit <= 25
         ):
             raise ValueError("limit must be between 1 and 25.")
-        if candidate_run_ref is not None and re.fullmatch(
-            r"[a-f0-9]{24}", candidate_run_ref
-        ) is None:
+        if candidate_run_ref is not None and (
+            not isinstance(candidate_run_ref, str)
+            or re.fullmatch(r"[a-f0-9]{24}", candidate_run_ref) is None
+        ):
             raise ValueError(
                 "candidate_run_ref must be a 24-character lowercase hexadecimal reference."
             )
