@@ -308,7 +308,13 @@ def test_concurrent_conflicting_message_intents_cannot_rebind_one_operation_id(t
     initialized = SQLiteDatabase(path)
     provider = SQLiteSandboxCommunicationProvider(initialized)
     original = _message()
+    conflicting = replace(
+        original,
+        message_id="message-evidence-conflict",
+        body="Different approved content",
+    )
     provider.draft(original)
+    provider.draft(conflicting)
     initialized.close()
 
     barrier = Barrier(2)
@@ -334,7 +340,7 @@ def test_concurrent_conflicting_message_intents_cannot_rebind_one_operation_id(t
         finally:
             database.close()
 
-    messages = (original, replace(original, body="Different approved content"))
+    messages = (original, conflicting)
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(deliver, message) for message in messages]
         outcomes = [future.result(timeout=30) for future in futures]
