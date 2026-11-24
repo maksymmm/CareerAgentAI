@@ -155,12 +155,42 @@ def test_operational_action_auth_method_and_query_validation_precede_storage(tmp
             "limit=1&limit=2",
             "user_id=another-operator",
             "after=",
-            "after=not-a-cursor",
         ):
             assert _request(runtime, query=query)[0] == "400 Bad Request"
             assert not path.exists()
     finally:
         runtime.close()
+
+
+def test_operational_action_cursor_supports_maximum_unicode_operation_ids(tmp_path):
+    path = tmp_path / "unicode-cursor.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteExternalActionOperationRepository(database)
+    for operation_id in ("é" * 200, "ê" * 200):
+        repository.create(ExternalActionOperation(
+            operation_id=operation_id,
+            action_type="calendar.accept",
+            payload={},
+            created_at=NOW,
+            updated_at=NOW,
+        ))
+    database.close()
+    baseline = path.read_bytes()
+    runtime = RuntimeOperationalApp(database_path=str(path), bearer_token=TOKEN)
+    try:
+        status, _, first = _request(runtime, query="limit=1")
+        assert status == "200 OK"
+        assert first["next_after"] is not None
+        assert 512 < len(first["next_after"]) <= 1200
+        status, _, second = _request(
+            runtime, query="limit=1&after=" + first["next_after"]
+        )
+        assert status == "200 OK"
+        assert len(second["items"]) == 1
+        assert second["next_after"] is None
+    finally:
+        runtime.close()
+    assert path.read_bytes() == baseline
 
 
 def test_operational_action_projection_rejects_invalid_cursor_without_mutation(tmp_path):
