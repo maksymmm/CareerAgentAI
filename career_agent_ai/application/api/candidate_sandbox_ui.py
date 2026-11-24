@@ -1045,12 +1045,13 @@ _HTML = r"""<!doctype html>
         const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
         if (statusContextGeneration !== inputContextGeneration ||
             runId !== byId('run-id').value) return;
-        const statusFields = ['schema_version', 'run_id', 'state_version', 'phase',
+        const statusFields = ['schema_version', 'run_id', 'run_ref', 'state_version', 'phase',
           'waiting_for_human', 'terminal'];
         if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
             Object.keys(snapshot).length !== statusFields.length ||
             !statusFields.every(field => Object.hasOwn(snapshot, field)) ||
             snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
+            typeof snapshot.run_ref !== 'string' || !/^[a-f0-9]{24}$/.test(snapshot.run_ref) ||
             !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
             (selectedRunVersion !== null && snapshot.state_version < selectedRunVersion) ||
             !runPhases.includes(snapshot.phase) || typeof snapshot.waiting_for_human !== 'boolean' ||
@@ -1083,7 +1084,8 @@ _HTML = r"""<!doctype html>
         )});
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
-          ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
+          ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id +
+          ' · Reference: ' + snapshot.run_ref;
       } catch (error) {
         if (statusContextGeneration === inputContextGeneration &&
             runId === byId('run-id').value) {
