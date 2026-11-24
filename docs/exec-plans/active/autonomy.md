@@ -1614,6 +1614,4 @@ provider request into restart recovery; stale in-progress operations are promote
 the existing compare-and-swap transition and never replay the provider during recovery.
 HTTP/SQLite regressions cover successful acceptance, restart replay with one sandbox
 effect, stale-version rejection, foreign-event isolation, strict request/query parsing,
-and active-versus-stale recovery. Next: wire the candidate dashboard's selected event
-and fresh attestation controls to these acceptance endpoints, then add Chromium
-acceptance and ambiguous-outcome UI recovery coverage.
+and active-versus-stale recovery. The candidate dashboard is now wired to these endpoints: acceptance is an explicit click, status is restored from the durable operation after reload, stale recovery is a separate action, and every ambiguous reconciliation consumes its independent attestation before the request. Chromium regressions cover reload with a fresh attestation and retry only after provider-confirmed no effect. Next: add an end-to-end browser test against the real SQLite sandbox provider for timeout-after-effect reconciliation and verify the exact CI coverage gate.

@@ -177,7 +177,22 @@ _HTML = r"""<!doctype html>
     <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
     <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
-    <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
+    <fieldset id="event-acceptance-panel" disabled>
+      <legend>Candidate interview acceptance</legend>
+      <p id="event-acceptance-state" role="status">Select an event to inspect its durable acceptance state.</p>
+      <button id="accept-event" type="button" disabled>Accept interview</button>
+      <button id="refresh-acceptance" type="button" disabled>Refresh acceptance status</button>
+      <button id="recover-acceptance" type="button" disabled>Check for interrupted acceptance</button>
+    </fieldset>
+    <fieldset id="event-acceptance-reconciliation-panel" disabled>
+      <legend>Verify an ambiguous calendar outcome</legend>
+      <p id="acceptance-reconciliation-state" role="status">Independent provider verification is required only when an acceptance outcome is ambiguous.</p>
+      <label><input id="acceptance-verified" type="checkbox" disabled> I independently checked the sandbox calendar for this exact interview.</label>
+      <label for="acceptance-provider-event-id">Provider event ID (required only when the event exists)</label>
+      <input id="acceptance-provider-event-id" type="text" maxlength="1000" autocomplete="off" disabled>
+      <button id="acceptance-completed" type="button" disabled>Confirm event recorded</button>
+      <button id="acceptance-no-effect" type="button" disabled>Confirm no calendar effect</button>
+    </fieldset>
   </section>
   <h2 id="result-title">Result</h2>
   <pre id="result" role="region" aria-labelledby="result-title" aria-live="polite">Ready.</pre>
@@ -216,6 +231,10 @@ _HTML = r"""<!doctype html>
     let nextEventCursor = null;
     let selectedEventId = null;
     let selectedEventVersion = null;
+    let selectedEventStatus = null;
+    let acceptanceGeneration = 0;
+    let acceptanceInFlight = false;
+    let acceptanceStatus = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
     const calendarDate = value => {
       if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -297,10 +316,58 @@ _HTML = r"""<!doctype html>
     }
     let eventVersionFloorId = null;
     let eventVersionFloor = null;
+    function clearAcceptance() {
+      acceptanceGeneration += 1;
+      acceptanceInFlight = false;
+      acceptanceStatus = null;
+      byId('event-acceptance-panel').disabled = true;
+      byId('event-acceptance-reconciliation-panel').disabled = true;
+      byId('event-acceptance-state').textContent = '';
+      byId('acceptance-reconciliation-state').textContent =
+        'Independent provider verification is required only when an acceptance outcome is ambiguous.';
+      byId('acceptance-verified').checked = false;
+      byId('acceptance-verified').disabled = true;
+      byId('acceptance-provider-event-id').value = '';
+      byId('acceptance-provider-event-id').disabled = true;
+      byId('accept-event').disabled = true;
+      byId('refresh-acceptance').disabled = true;
+      byId('recover-acceptance').disabled = true;
+      byId('acceptance-completed').disabled = true;
+      byId('acceptance-no-effect').disabled = true;
+    }
+    function updateAcceptanceControls() {
+      const eligible = ['proposed', 'reschedule_requested'].includes(selectedEventStatus);
+      const usable = eligible && !acceptanceInFlight;
+      const pending = ['not_started', 'prepared', 'failed'].includes(acceptanceStatus);
+      const active = acceptanceStatus === 'in_progress';
+      const ambiguous = acceptanceStatus === 'reconciliation_required';
+      byId('event-acceptance-panel').disabled = !usable || acceptanceStatus === 'succeeded';
+      byId('accept-event').disabled = !usable || !pending;
+      byId('refresh-acceptance').disabled = !usable;
+      byId('recover-acceptance').disabled = !usable || !active;
+      byId('event-acceptance-reconciliation-panel').disabled = !usable || !ambiguous;
+      byId('acceptance-verified').disabled = !usable || !ambiguous;
+      byId('acceptance-provider-event-id').disabled = !usable || !ambiguous;
+      byId('acceptance-completed').disabled =
+        !usable || !ambiguous || !byId('acceptance-verified').checked ||
+        !byId('acceptance-provider-event-id').value.trim();
+      byId('acceptance-no-effect').disabled =
+        !usable || !ambiguous || !byId('acceptance-verified').checked ||
+        !!byId('acceptance-provider-event-id').value.trim();
+    }
+    function markAcceptanceUnknown(message) {
+      acceptanceStatus = null;
+      byId('acceptance-verified').checked = false;
+      byId('acceptance-provider-event-id').value = '';
+      byId('event-acceptance-state').textContent = message;
+      updateAcceptanceControls();
+    }
     function clearEventDetail() {
       if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
       eventDetailTrigger = null;
       eventDetailGeneration += 1;
+      clearAcceptance();
+      selectedEventStatus = null;
       byId('event-detail').setAttribute('aria-busy', 'false');
       byId('event-detail').textContent = '';
       byId('event-detail-state').textContent = '';
@@ -332,10 +399,20 @@ _HTML = r"""<!doctype html>
         if (snapshot.state_version < versionFloor) throw new Error('Stale event detail.');
         selectedEventId = identifier;
         selectedEventVersion = snapshot.state_version;
+        selectedEventStatus = snapshot.status;
         eventVersionFloorId = identifier;
         eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
-        byId('event-detail-state').textContent = 'Read-only event detail.';
+        byId('event-detail-state').textContent = 'Event detail loaded. Acceptance requires an explicit candidate action.';
+        try {
+          await loadAcceptanceStatus(identifier, snapshot.state_version, generation);
+        } catch (error) {
+          if (generation === eventDetailGeneration) {
+            clearAcceptance();
+            byId('event-acceptance-state').textContent =
+              'Acceptance status is unavailable. Refresh this event before taking action.';
+          }
+        }
       } catch (error) {
         if (generation === eventDetailGeneration) {
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
@@ -349,6 +426,157 @@ _HTML = r"""<!doctype html>
         }
       }
     }
+    const acceptanceStatuses = [
+      'not_started', 'prepared', 'in_progress', 'succeeded', 'failed', 'reconciliation_required',
+    ];
+    function acceptancePayload() {
+      if (!eventId(selectedEventId) || !Number.isSafeInteger(selectedEventVersion) ||
+          selectedEventVersion < 1) throw new Error('Select a current event before accepting it.');
+      return {schema_version: 1, event_id: selectedEventId, event_version: selectedEventVersion};
+    }
+    async function loadAcceptanceStatus(identifier = selectedEventId, version = selectedEventVersion,
+      detailGeneration = eventDetailGeneration) {
+      if (!eventId(identifier) || !Number.isSafeInteger(version) || version < 1) return;
+      const generation = ++acceptanceGeneration;
+      byId('event-acceptance-state').textContent = 'Loading durable acceptance state…';
+      let payload;
+      try {
+        payload = await call('/v1/candidate/schedule-event/acceptance?event_id=' +
+          encodeURIComponent(identifier) + '&event_version=' + encodeURIComponent(String(version)),
+          {}, 'Acceptance status request failed.', true);
+      } catch (error) {
+        if (generation === acceptanceGeneration && detailGeneration === eventDetailGeneration &&
+            selectedEventId === identifier && selectedEventVersion === version) {
+          markAcceptanceUnknown('Acceptance status is unavailable. Refresh before taking action.');
+        }
+        throw error;
+      }
+      if (generation !== acceptanceGeneration || detailGeneration !== eventDetailGeneration ||
+          selectedEventId !== identifier || selectedEventVersion !== version) return;
+      if (!payload || payload.schema_version !== 1 || payload.event_id !== identifier ||
+          payload.event_version !== version || !acceptanceStatuses.includes(payload.status)) {
+        markAcceptanceUnknown('Acceptance status response is invalid. Refresh before taking action.');
+        throw new Error('Invalid candidate acceptance status.');
+      }
+      if (payload.status !== 'reconciliation_required') {
+        byId('acceptance-verified').checked = false;
+        byId('acceptance-provider-event-id').value = '';
+      }
+      acceptanceStatus = payload.status;
+      const messages = {
+        not_started: 'No acceptance intent exists. Review the displayed slot before accepting.',
+        prepared: 'The provider confirmed no calendar effect. The same approved operation can be retried.',
+        in_progress: 'Acceptance is still active. Wait or explicitly check for an interrupted operation.',
+        succeeded: 'Interview acceptance is confirmed. Reload this event to view its accepted snapshot.',
+        failed: 'The provider confirmed no effect. You may deliberately retry this same event version.',
+        reconciliation_required: 'The outcome is ambiguous. Independently verify the sandbox calendar before confirming it.',
+      };
+      byId('event-acceptance-state').textContent = messages[acceptanceStatus];
+      byId('acceptance-reconciliation-state').textContent =
+        acceptanceStatus === 'reconciliation_required'
+          ? 'Fresh independent verification is required for every reconciliation attempt.'
+          : 'Independent provider verification is required only when an acceptance outcome is ambiguous.';
+      updateAcceptanceControls();
+    }
+    async function submitEventAcceptance() {
+      if (acceptanceInFlight) throw new Error('An interview acceptance request is already active.');
+      const payload = acceptancePayload();
+      const identifier = selectedEventId, version = selectedEventVersion;
+      const detailGeneration = eventDetailGeneration;
+      acceptanceInFlight = true; updateAcceptanceControls();
+      try {
+        const result = await call('/v1/candidate/schedule-event/accept', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        }, 'Interview acceptance request failed.', true);
+        if (!result || result.schema_version !== 1 || result.event_id !== identifier ||
+            result.event_version !== version || !acceptanceStatuses.includes(result.status)) {
+          throw new Error('Invalid interview acceptance response.');
+        }
+        if (detailGeneration !== eventDetailGeneration || selectedEventId !== identifier) return;
+        await loadAcceptanceStatus(identifier, version, detailGeneration);
+        if (result.status === 'succeeded') {
+          byId('event-detail-state').textContent =
+            'Interview acceptance is confirmed. Reload the event to display the accepted version.';
+        }
+      } catch (error) {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          markAcceptanceUnknown('Acceptance outcome is unknown. Refresh durable status before retrying.');
+        }
+        throw error;
+      } finally {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          acceptanceInFlight = false; updateAcceptanceControls();
+        }
+      }
+    }
+    async function recoverEventAcceptance() {
+      if (acceptanceInFlight) throw new Error('An interview acceptance request is already active.');
+      const payload = acceptancePayload();
+      const identifier = selectedEventId, version = selectedEventVersion;
+      const detailGeneration = eventDetailGeneration;
+      acceptanceInFlight = true; updateAcceptanceControls();
+      try {
+        const result = await call('/v1/candidate/schedule-event/acceptance-recovery', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        }, 'Acceptance recovery request failed.', true);
+        if (!result || result.schema_version !== 1 || result.event_id !== identifier ||
+            result.event_version !== version || !acceptanceStatuses.includes(result.status)) {
+          throw new Error('Invalid acceptance recovery response.');
+        }
+        if (detailGeneration !== eventDetailGeneration || selectedEventId !== identifier) return;
+        await loadAcceptanceStatus(identifier, version, detailGeneration);
+      } catch (error) {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          markAcceptanceUnknown('Recovery outcome is unknown. Refresh durable status before retrying.');
+        }
+        throw error;
+      } finally {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          acceptanceInFlight = false; updateAcceptanceControls();
+        }
+      }
+    }
+    async function reconcileEventAcceptance(completed) {
+      if (acceptanceInFlight) throw new Error('An interview acceptance request is already active.');
+      const payload = acceptancePayload();
+      const attestation = byId('acceptance-verified');
+      if (!attestation.checked) throw new Error('Independently verify the sandbox calendar before reconciliation.');
+      const providerEventId = byId('acceptance-provider-event-id').value.trim();
+      if (completed && !providerEventId) throw new Error('Enter the provider event ID for a confirmed event.');
+      if (!completed && providerEventId) throw new Error('Clear the provider event ID when confirming no effect.');
+      // Consume the independent attestation before any network request. A failed
+      // attempt or a later retry always requires a fresh candidate verification.
+      attestation.checked = false;
+      byId('acceptance-provider-event-id').value = '';
+      const identifier = selectedEventId, version = selectedEventVersion;
+      const detailGeneration = eventDetailGeneration;
+      acceptanceInFlight = true; updateAcceptanceControls();
+      const body = {...payload, completed, ...(completed ? {provider_event_id: providerEventId} : {})};
+      try {
+        const result = await call('/v1/candidate/schedule-event/acceptance-reconciliation', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        }, 'Acceptance reconciliation request failed.', true);
+        if (!result || result.schema_version !== 1 || result.event_id !== identifier ||
+            result.event_version !== version || !acceptanceStatuses.includes(result.status)) {
+          throw new Error('Invalid acceptance reconciliation response.');
+        }
+        if (detailGeneration !== eventDetailGeneration || selectedEventId !== identifier) return;
+        await loadAcceptanceStatus(identifier, version, detailGeneration);
+      } catch (error) {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          markAcceptanceUnknown('Reconciliation outcome is unknown. Refresh status and verify again before retrying.');
+        }
+        throw error;
+      } finally {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          acceptanceInFlight = false; updateAcceptanceControls();
+        }
+      }
+    }
+
     async function loadEvents(after = null) {
       clearEvents();
       const generation = eventsGeneration;
@@ -397,6 +625,13 @@ _HTML = r"""<!doctype html>
         }
       }
     }
+    byId('accept-event').addEventListener('click', () => guarded(() => submitEventAcceptance(), true));
+    byId('refresh-acceptance').addEventListener('click', () => guarded(
+      () => loadAcceptanceStatus(), true));
+    byId('recover-acceptance').addEventListener('click', () => guarded(
+      () => recoverEventAcceptance(), true));
+    byId('acceptance-verified').addEventListener('change', updateAcceptanceControls);
+    byId('acceptance-provider-event-id').addEventListener('input', updateAcceptanceControls);
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents(), true));
     byId('event-status').addEventListener('change', clearEvents);
     byId('next-events').addEventListener('click', () => guarded(() => {
