@@ -1371,6 +1371,7 @@ class AutonomousCareerLoop:
                 artifact_sha256=artifact_digest,
                 candidate_snapshot_sha256=state.selected_job_snapshot_sha256,
                 human_approved=True,
+                correlation_id=state.run_id,
             )
         except Exception:
             durable_operation = self._submission.get_operation(operation_id)
