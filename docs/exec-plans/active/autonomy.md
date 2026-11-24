@@ -1606,3 +1606,14 @@ shape. Listing is diagnostic only and provides no retry or reconciliation action
 Next: exact-head CI/coverage and independent code/security review, then assess
 operator-safe correlation between candidate runs and action references without
 exposing provider payloads or adding mutation routes.
+
+
+Operator action projection filters: the authenticated read-only action-status endpoint now
+accepts allowlisted lifecycle-status and action-family filters. SQLite applies both filters
+before keyset pagination, keeping the page bound meaningful for large ledgers. Filtered
+cursors carry a compact digest of the exact filter pair; reusing a cursor with changed or
+removed filters fails before storage access. Unfiltered legacy cursors remain compatible.
+HTTP, service, SQLite, Unicode-bound and OpenAPI regressions cover filtering, cursor
+binding, duplicate/unknown query rejection and read-only database bytes.
+Next: exact-head CI/coverage and independent code/security review, then continue operator
+recovery diagnostics without adding mutation routes.
