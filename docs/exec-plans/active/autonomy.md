@@ -1590,3 +1590,12 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Live external-action duplicate protection: a second request now observes a recent
+`in_progress` operation without reclassifying it as stale while the original provider
+call is still running. Only operations older than the bounded five-minute grace move to
+`reconciliation_required`, and that transition never calls the provider. Recovery
+uses an aware UTC clock and a validated 1–3600 second bound. Concurrent application
+submission and calendar restart regressions exercise the live and interrupted-before-
+effect paths with the same durable operation ID.
