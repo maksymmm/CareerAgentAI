@@ -45,6 +45,7 @@ _HTML = r"""<!doctype html>
     <a href="#inspect-panel">Inspect runs</a>
     <a href="#decision-panel">Pending decision</a>
     <a href="#overview-title">Run overview</a>
+    <a href="#candidate-actions-title">External actions</a>
     <a href="#applications-title">My applications</a>
     <a href="#schedule-title">Interviews and events</a>
   </nav>
@@ -136,6 +137,15 @@ _HTML = r"""<!doctype html>
     <p id="run-overview" role="status" aria-live="polite">Refresh status to load a snapshot.</p>
     <p class="muted">A snapshot never authorizes an action. Inspect the current approval prompt before deciding.</p>
   </section>
+  <section aria-labelledby="candidate-actions-title">
+    <h2 id="candidate-actions-title" tabindex="-1">My external actions</h2>
+    <p class="muted">Read-only application, communication and calendar lifecycle metadata for the selected run.</p>
+    <button id="list-candidate-actions" type="button" disabled>Load actions for selected run</button>
+    <ul id="candidate-actions" aria-label="External action status" aria-busy="false"></ul>
+    <p id="candidate-actions-state" role="status" aria-live="polite">Select a run and load its external actions.</p>
+    <button id="next-candidate-actions" type="button" disabled>Next action page</button>
+    <p class="muted">This view cannot retry, reconcile or execute provider actions.</p>
+  </section>
   <section aria-labelledby="applications-title">
     <h2 id="applications-title" tabindex="-1">My applications</h2>
     <label for="application-status">Status</label>
@@ -206,6 +216,9 @@ _HTML = r"""<!doctype html>
     let listGeneration = 0;
     let nextRunCursor = null;
     let selectedRunVersion = null;
+    let actionStatusGeneration = 0;
+    let nextCandidateActionCursor = null;
+    let candidateActionRunId = null;
     const byId = (id) => document.getElementById(id);
     const pageSummary = (count, singular, plural, hasMore, instruction = '') =>
       count + ' ' + (count === 1 ? singular : plural) + ' on this page. ' +
@@ -652,6 +665,106 @@ _HTML = r"""<!doctype html>
       byId('list-state').textContent = '';
       byId('next-runs').disabled = true;
     }
+    function clearCandidateActions() {
+      actionStatusGeneration += 1;
+      nextCandidateActionCursor = null;
+      candidateActionRunId = null;
+      byId('candidate-actions').setAttribute('aria-busy', 'false');
+      byId('candidate-actions').replaceChildren();
+      byId('candidate-actions-state').textContent = 'Select a run and load its external actions.';
+      byId('next-candidate-actions').disabled = true;
+      byId('list-candidate-actions').disabled = !byId('run-id').value || !byId('token').value;
+    }
+    async function loadCandidateActions(after = null) {
+      const runId = byId('run-id').value;
+      if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(runId) ||
+          !byId('token').value) {
+        throw new Error('Select a run and enter the bearer token first.');
+      }
+      if (after !== null && candidateActionRunId !== runId) {
+        throw new Error('Select the run again before loading the next action page.');
+      }
+      const contextGeneration = inputContextGeneration;
+      const generation = ++actionStatusGeneration;
+      candidateActionRunId = runId;
+      nextCandidateActionCursor = null;
+      byId('list-candidate-actions').disabled = true;
+      byId('candidate-actions').setAttribute('aria-busy', 'true');
+      byId('candidate-actions').replaceChildren();
+      byId('candidate-actions-state').textContent = 'Loading external actions…';
+      byId('next-candidate-actions').disabled = true;
+      try {
+        const page = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
+          '/actions?limit=25' + (after === null ? '' : '&after=' + encodeURIComponent(after)),
+          {}, 'External action status request failed.', true);
+        if (generation !== actionStatusGeneration || contextGeneration !== inputContextGeneration ||
+            runId !== byId('run-id').value) return;
+        const expectedRunRef = (await sha256Hex(runId)).slice(0, 24);
+        if (generation !== actionStatusGeneration || contextGeneration !== inputContextGeneration ||
+            runId !== byId('run-id').value) return;
+        const actionFamilies = ['application_submission', 'communication', 'calendar', 'other'];
+        const actionStatuses = ['prepared', 'in_progress', 'succeeded', 'failed', 'reconciliation_required'];
+        const validActionTimestamp = value => typeof value === 'string' && value.length <= 64 &&
+          value.slice(0, 4) !== '0000' &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?\+00:00$/.test(value) &&
+          Number.isFinite(Date.parse(value));
+        if (!hasExactFields(page, ['schema_version', 'run_ref', 'items', 'next_after']) ||
+            page.schema_version !== 1 || page.run_ref !== expectedRunRef ||
+            !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null ||
+              (typeof page.next_after === 'string' && page.next_after.length <= 1200 &&
+                /^[A-Za-z0-9_-]+$/.test(page.next_after))) ||
+            (page.next_after !== null && (page.items.length === 0 || page.next_after === after))) {
+          throw new Error('Invalid external action page.');
+        }
+        const refs = new Set();
+        const items = page.items.map(item => {
+          const fields = ['operation_ref', 'action_family', 'status', 'created_at',
+            'updated_at', 'error_present'];
+          if (!hasExactFields(item, fields) ||
+              typeof item.operation_ref !== 'string' || !/^[a-f0-9]{24}$/.test(item.operation_ref) ||
+              refs.has(item.operation_ref) ||
+              !actionFamilies.includes(item.action_family) ||
+              !actionStatuses.includes(item.status) ||
+              !validActionTimestamp(item.created_at) ||
+              !validActionTimestamp(item.updated_at) ||
+              Date.parse(item.updated_at) < Date.parse(item.created_at) ||
+              typeof item.error_present !== 'boolean') {
+            throw new Error('Invalid external action item.');
+          }
+          refs.add(item.operation_ref);
+          return item;
+        });
+        for (const item of items) {
+          const row = document.createElement('li');
+          row.textContent = item.action_family.replaceAll('_', ' ') + ' — ' +
+            item.status.replaceAll('_', ' ') + ' — updated ' + item.updated_at +
+            ' · Reference ' + item.operation_ref +
+            (item.error_present ? ' · Error recorded' : '');
+          byId('candidate-actions').append(row);
+        }
+        nextCandidateActionCursor = page.next_after;
+        byId('next-candidate-actions').disabled = nextCandidateActionCursor === null;
+        byId('candidate-actions-state').textContent = pageSummary(
+          items.length, 'action', 'actions', nextCandidateActionCursor !== null,
+          'Read-only lifecycle metadata.');
+      } catch (error) {
+        if (generation === actionStatusGeneration) {
+          byId('candidate-actions').replaceChildren();
+          nextCandidateActionCursor = after;
+          byId('next-candidate-actions').disabled = after === null;
+          byId('candidate-actions-state').textContent = after === null
+            ? 'External actions could not be loaded. Retry the page.'
+            : 'The next action page failed. Retry the next page.';
+        }
+        throw error;
+      } finally {
+        if (generation === actionStatusGeneration) {
+          byId('candidate-actions').setAttribute('aria-busy', 'false');
+          byId('list-candidate-actions').disabled = !byId('run-id').value || !byId('token').value;
+        }
+      }
+    }
     const runPhases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
       'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
       'message_send', 'message_reconciliation', 'track', 'interview_coordination',
@@ -820,6 +933,11 @@ _HTML = r"""<!doctype html>
     byId('next-runs').addEventListener('click', () => guarded(() => {
       if (nextRunCursor !== null) return loadRunList(nextRunCursor);
     }, true));
+    byId('list-candidate-actions').addEventListener(
+      'click', () => guarded(() => loadCandidateActions(), true));
+    byId('next-candidate-actions').addEventListener('click', () => guarded(() => {
+      if (nextCandidateActionCursor !== null) return loadCandidateActions(nextCandidateActionCursor);
+    }, true));
     byId('run-phase').addEventListener('change', clearRunList);
     byId('token').addEventListener('input', clearRunList);
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
@@ -925,6 +1043,7 @@ _HTML = r"""<!doctype html>
       inputContextGeneration += 1;
       latestResultRequest += 1;
       byId('run-id').value = runId;
+      clearCandidateActions();
       invalidateApprovalPrompt();
       invalidateApplicationReconciliation();
       invalidateMessageReconciliation();
@@ -1015,6 +1134,7 @@ _HTML = r"""<!doctype html>
       inputContextGeneration += 1;
       latestResultRequest += 1;
       latestStartRequest += 1;
+      clearCandidateActions();
       invalidateApprovalPrompt();
       invalidateApplicationReconciliation();
       invalidateMessageReconciliation();
