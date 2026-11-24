@@ -1046,6 +1046,10 @@ same maximum. Rejected observations leave provider and durable workflow state un
 The authenticated read-only operational API also exposes
 `GET /v1/operational/actions` for a bounded view of non-terminal application,
 communication and calendar action lifecycle states. The projection uses a stable
-reference and URL-safe keyset cursor; it never returns raw operation IDs, action payloads,
-provider results or error text. It is diagnostic only and cannot retry, reconcile or
-mutate an external action.
+operation reference and URL-safe keyset cursor; it never returns raw operation IDs,
+action payloads, provider results or error text. Candidate-originated actions also carry
+a stable `candidate_run_ref` that matches the `run_ref` in the owner-scoped candidate
+status response. The raw correlation ID is stored in a dedicated nullable column, never
+in provider payload or result JSON. Legacy actions remain unlinked, and an idempotent
+replay cannot rebind an existing operation to a different run. The endpoint is
+diagnostic only and cannot retry, reconcile or mutate an external action.
