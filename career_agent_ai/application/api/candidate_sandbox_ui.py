@@ -43,6 +43,7 @@ _HTML = r"""<!doctype html>
   <nav aria-label="Candidate dashboard">
     <a href="#start-panel">Start run</a>
     <a href="#inspect-panel">Inspect runs</a>
+    <a href="#pending-interview-actions-panel">Pending interview actions</a>
     <a href="#decision-panel">Pending decision</a>
     <a href="#overview-title">Run overview</a>
     <a href="#applications-title">My applications</a>

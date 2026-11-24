@@ -314,6 +314,7 @@ def test_candidate_browser_rediscovers_pending_interview_action_after_reload():
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            assert page.locator('nav[aria-label="Candidate dashboard"] a[href="#pending-interview-actions-panel"]').count() == 1
             page.locator("#token").fill("valid")
             page.locator("#list-interview-actions").click()
             page.locator("#pending-interview-actions").get_by_text(
@@ -328,6 +329,7 @@ def test_candidate_browser_rediscovers_pending_interview_action_after_reload():
             assert page.locator("#confirm-calendar-completed").is_disabled()
             page.locator("#token").fill("changed")
             assert page.locator("#pending-interview-actions li").count() == 0
+            assert page.locator("#pending-interview-actions-panel").get_attribute("aria-busy") == "false"
             browser.close()
     finally:
         server.shutdown()
