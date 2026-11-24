@@ -3474,7 +3474,6 @@ class CandidateScheduleAcceptanceBrowserLoop(Loop):
     def __init__(self):
         super().__init__()
         self.status = "not_started"
-        self.no_effect_first = no_effect_first
         self.acceptance_calls = []
         self.reconciliation_calls = []
         self.event = {
