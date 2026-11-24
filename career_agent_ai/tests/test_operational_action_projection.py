@@ -202,7 +202,7 @@ def test_operational_action_openapi_contract_is_bounded_and_minimal():
     assert operation["security"] == [{"bearerAuth": []}]
     parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
     assert parameters["limit"]["schema"]["maximum"] == 25
-    assert parameters["after"]["schema"]["maxLength"] == 512
+    assert parameters["after"]["schema"]["maxLength"] == 1200
     schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert schema["properties"]["items"]["maxItems"] == 25
     item = schema["properties"]["items"]["items"]
