@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from career_agent_ai.application.observability.action_cursor import (
     decode_action_cursor,
     encode_action_cursor,
+    validate_action_filters,
 )
 from career_agent_ai.application.observability.models import (
     OperationalIssue,
@@ -58,7 +59,12 @@ class SQLiteOperationalProbe:
 
 
     def list_action_statuses(
-        self, *, limit: int = 25, after: str | None = None
+        self,
+        *,
+        limit: int = 25,
+        after: str | None = None,
+        status: str | None = None,
+        action_family: str | None = None,
     ) -> dict[str, object]:
         """List bounded non-terminal action metadata without parsing private payloads."""
         if (
@@ -67,35 +73,69 @@ class SQLiteOperationalProbe:
             or not 1 <= limit <= 25
         ):
             raise ValueError("limit must be between 1 and 25.")
-        cursor = None if after is None else decode_action_cursor(after)
+        validate_action_filters(status, action_family)
+        cursor = (
+            None
+            if after is None
+            else decode_action_cursor(
+                after,
+                status=status,
+                action_family=action_family,
+            )
+        )
         if not self._table_exists("external_action_operations"):
             return {"items": [], "next_after": None}
+
+        conditions = [
+            "status IN ('prepared', 'in_progress', 'failed', 'reconciliation_required')"
+        ]
+        parameters: list[object] = []
+        if status is not None:
+            conditions.append("status = ?")
+            parameters.append(status)
+        if action_family is not None:
+            family_expression = """CASE
+                WHEN substr(action_type, 1, 12) = 'application.' THEN 'application_submission'
+                WHEN substr(action_type, 1, 14) = 'communication.' THEN 'communication'
+                WHEN substr(action_type, 1, 9) = 'calendar.' THEN 'calendar'
+                ELSE 'other'
+            END"""
+            conditions.append(f"{family_expression} = ?")
+            parameters.append(action_family)
+        if cursor is not None:
+            conditions.append("operation_id > ?")
+            parameters.append(cursor)
+
         rows = self._database.connection.execute(
-            """
+            f"""
             SELECT operation_id, action_type, status, created_at, updated_at,
                    CASE WHEN error IS NULL THEN 0 ELSE 1 END
             FROM external_action_operations
-            WHERE status IN ('prepared', 'in_progress', 'failed', 'reconciliation_required')
-              AND (? IS NULL OR operation_id > ?)
+            WHERE {" AND ".join(conditions)}
             ORDER BY operation_id ASC
             LIMIT ?
             """,
-            (cursor, cursor, limit + 1),
+            (*parameters, limit + 1),
         ).fetchall()
         visible = rows[:limit]
         items: list[dict[str, object]] = []
-        for operation_id, action_type, status, created_at, updated_at, error_present in visible:
+        for operation_id, action_type, status_value, created_at, updated_at, error_present in visible:
             if (
                 not isinstance(operation_id, str)
                 or not operation_id
                 or len(operation_id) > 200
                 or operation_id != operation_id.strip()
-                or any(ord(character) < 32 or ord(character) == 127 for character in operation_id)
+                or any(
+                    ord(character) < 32
+                    or ord(character) == 127
+                    or 0xD800 <= ord(character) <= 0xDFFF
+                    for character in operation_id
+                )
             ):
                 raise RuntimeError("Persisted external-action identifier is malformed.")
             if not isinstance(action_type, str) or not action_type or len(action_type) > 100:
                 raise RuntimeError("Persisted external-action type is malformed.")
-            if status not in {
+            if status_value not in {
                 "prepared", "in_progress", "failed", "reconciliation_required"
             }:
                 raise RuntimeError("Persisted external-action status is malformed.")
@@ -115,13 +155,17 @@ class SQLiteOperationalProbe:
             items.append({
                 "operation_ref": hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24],
                 "action_family": family,
-                "status": status,
+                "status": status_value,
                 "created_at": created.isoformat(),
                 "updated_at": updated.isoformat(),
                 "error_present": bool(error_present),
             })
         next_after = (
-            encode_action_cursor(visible[-1][0])
+            encode_action_cursor(
+                visible[-1][0],
+                status=status,
+                action_family=action_family,
+            )
             if len(rows) > limit and visible
             else None
         )

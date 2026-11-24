@@ -1045,7 +1045,9 @@ same maximum. Rejected observations leave provider and durable workflow state un
 
 The authenticated read-only operational API also exposes
 `GET /v1/operational/actions` for a bounded view of non-terminal application,
-communication and calendar action lifecycle states. The projection uses a stable
-reference and URL-safe keyset cursor; it never returns raw operation IDs, action payloads,
-provider results or error text. It is diagnostic only and cannot retry, reconcile or
-mutate an external action.
+communication and calendar action lifecycle states. Optional allowlisted `status` and
+`action_family` filters are applied in SQLite before keyset pagination. Filtered cursors
+are bound to the exact filter values, so a page token cannot be reused to change the
+result set. The projection uses stable references and URL-safe cursors; it never returns
+raw operation IDs, action payloads, provider results or error text. It is diagnostic only
+and cannot retry, reconcile or mutate an external action.
