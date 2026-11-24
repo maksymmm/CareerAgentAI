@@ -1590,3 +1590,19 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Operator action-status projection delivered: authenticated read-only
+`GET /v1/operational/actions` exposes bounded keyset pages for non-terminal
+application, communication and calendar actions. The SQLite projection selects only
+lifecycle columns and never parses payload/result JSON or returns raw operation IDs,
+provider results or error text. A stable digest reference, allowlisted action family,
+validated lifecycle status, UTC timestamps and an error-present flag are the complete
+item contract. Authentication, method and query validation precede storage access;
+request-local SQLite is opened read-only; malformed durable timestamps fail closed.
+Regression coverage verifies pagination, privacy, terminal-action exclusion,
+authentication-before-storage, invalid cursors, read-only database bytes and OpenAPI
+shape. Listing is diagnostic only and provides no retry or reconciliation action.
+Next: exact-head CI/coverage and independent code/security review, then assess
+operator-safe correlation between candidate runs and action references without
+exposing provider payloads or adding mutation routes.
