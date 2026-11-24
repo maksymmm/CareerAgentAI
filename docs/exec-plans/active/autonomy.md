@@ -8,6 +8,8 @@ Candidate reschedule durable recovery: authenticated event-scoped GET lookup res
 
 Next: exact-head full CI/coverage and Codex code/security review; then reconcile the stacked PR with the candidate reschedule workflow.
 
+Distinct-target reschedule protection: an authenticated POST cannot create a second target while the owned event has any ambiguous calendar.reschedule operation. The API strictly validates the existing operation's complete source snapshot and owner-derived deterministic identity, then returns a minimal 202 blocked response without provider invocation or ledger mutation. The dashboard disables target and attestation controls until the candidate refreshes the event; the pending GET then restores either the active state or the exact evidence-gated reconciliation intent. HTTP/SQLite regressions cover both IN_PROGRESS and RECONCILIATION_REQUIRED, including preservation of the original target and zero additional sandbox effects; Chromium covers a distinct-target submission from a stale second tab.
+
 Candidate reschedule input-bound hardening: parse both JSON integer and decimal
 number tokens as bounded `Decimal` values, then validate candidate schedule
 state versions as finite integral values in SQLite's signed 64-bit range before any

@@ -233,6 +233,49 @@ def test_duplicate_reschedule_post_preserves_fresh_in_progress_operation(tmp_pat
     candidate.close()
 
 
+@pytest.mark.parametrize(
+    "final_status,expected_status",
+    [
+        (None, ExternalActionStatus.IN_PROGRESS),
+        (ExternalActionStatus.RECONCILIATION_REQUIRED, ExternalActionStatus.RECONCILIATION_REQUIRED),
+    ],
+)
+def test_distinct_target_post_is_blocked_by_existing_ambiguous_event_operation(
+    tmp_path, final_status, expected_status
+):
+    path = tmp_path / "distinct-target-blocked.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path, final_status=final_status)
+    candidate = Candidate(path)
+    different_target = _body(
+        start_at="2026-12-02T12:00:00+01:00",
+        end_at="2026-12-02T13:00:00+01:00",
+    )
+
+    status, result = candidate.reschedule(different_target)
+
+    assert status == "202 Accepted"
+    assert result == {
+        "schema_version": 1,
+        "outcome": "blocked",
+        "event_id": EVENT_ID,
+    }
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == expected_status
+    finally:
+        database.close()
+    assert _effect_count(path) == 0
+    if expected_status == ExternalActionStatus.RECONCILIATION_REQUIRED:
+        pending_status, pending = candidate.pending()
+        assert pending_status == "200 OK"
+        assert pending["outcome"] == "pending"
+        assert pending["start_at"] == PENDING_START
+        assert pending["end_at"] == PENDING_END
+    candidate.close()
+
+
 def test_candidate_can_reschedule_owned_interview_and_replay_after_restart(tmp_path):
     path = tmp_path / "candidate-reschedule.sqlite"
     _seed(path, _event())
@@ -711,7 +754,7 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     post_active_schemas = reschedule_post["responses"]["202"]["content"]["application/json"]["schema"]["oneOf"]
     assert {
         schema["properties"]["outcome"]["const"] for schema in post_active_schemas
-    } == {"in_progress", "reconciliation_required"}
+    } == {"in_progress", "reconciliation_required", "blocked"}
 
     html = candidate_sandbox_html().decode("utf-8")
     for identifier in (
@@ -723,7 +766,8 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
         assert identifier in html
     assert "['none', 'pending', 'in_progress'].includes(pending.outcome)" in html
     assert "A sandbox reschedule is still in progress." in html
-    assert "result.outcome === 'in_progress'" in html
+    assert "A previous sandbox reschedule is unresolved." in html
+    assert "result.outcome === 'blocked' || result.outcome === 'in_progress'" in html
     assert "No real calendar is contacted" in html
 
 
@@ -802,13 +846,13 @@ def test_candidate_sandbox_browser_disables_duplicate_post_while_reschedule_is_l
             page.get_by_role("button", name="View event 1: interview-reschedule-1").click()
             page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
 
-            page.locator("#reschedule-start").fill(START)
-            page.locator("#reschedule-end").fill(END)
+            page.locator("#reschedule-start").fill("2026-12-02T12:00:00+01:00")
+            page.locator("#reschedule-end").fill("2026-12-02T13:00:00+01:00")
             page.locator("#reschedule-timezone").fill(ZONE)
             operation_id = _seed_pending_operation(path)
             page.locator("#request-reschedule").click()
             page.locator("#reschedule-state").get_by_text(
-                "The current sandbox request is active", exact=False
+                "Another target is blocked", exact=False
             ).wait_for()
 
             assert page.locator("#reschedule-panel").get_attribute("disabled") is not None
