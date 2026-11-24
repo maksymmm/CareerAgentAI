@@ -105,13 +105,11 @@ class SQLiteCandidateActionProjection:
             ).fetchone()
             if inconsistent is not None:
                 raise RuntimeError("Persisted candidate action correlation is inconsistent.")
-            reference_select = "correlation_ref"
             where = "correlation_ref = ?"
             filter_value = run_ref
         else:
             # Read-only compatibility for pre-reference schemas. The raw correlation
             # column is already indexed and is never included in the response.
-            reference_select = "NULL"
             where = "correlation_id = ?"
             filter_value = identifier
 
@@ -125,7 +123,7 @@ class SQLiteCandidateActionProjection:
             f"""
             SELECT operation_id, action_type, status, created_at, updated_at,
                    CASE WHEN error IS NULL THEN 0 ELSE 1 END,
-                   correlation_id, {reference_select}
+                   correlation_id
             FROM external_action_operations
             WHERE {where}
             ORDER BY operation_id ASC
@@ -144,7 +142,6 @@ class SQLiteCandidateActionProjection:
             updated_at,
             error_present,
             correlation_id,
-            stored_reference,
         ) in visible:
             try:
                 # The cursor encoder applies the same strict operation-key bounds
@@ -155,8 +152,6 @@ class SQLiteCandidateActionProjection:
                 raise RuntimeError("Persisted candidate action identifier is malformed.") from exc
             if correlation_id != identifier:
                 raise RuntimeError("Persisted candidate action correlation is inconsistent.")
-            if has_reference and stored_reference != run_ref:
-                raise RuntimeError("Persisted candidate action reference is inconsistent.")
             if (
                 not isinstance(action_type, str)
                 or not action_type
@@ -167,9 +162,6 @@ class SQLiteCandidateActionProjection:
                 raise RuntimeError("Persisted candidate action type is malformed.")
             if status not in _ACTION_STATUSES:
                 raise RuntimeError("Persisted candidate action status is malformed.")
-            if error_present not in (0, 1):
-                raise RuntimeError("Persisted candidate action error marker is malformed.")
-
             if action_type.startswith("application."):
                 family = "application_submission"
             elif action_type.startswith("communication."):
