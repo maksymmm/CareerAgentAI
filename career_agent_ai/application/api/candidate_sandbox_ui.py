@@ -836,6 +836,7 @@ _HTML = r"""<!doctype html>
       interviewActionsGeneration += 1;
       nextInterviewActionsCursor = null;
       byId('list-interview-actions').disabled = false;
+      byId('pending-interview-actions-panel').setAttribute('aria-busy', 'false');
       byId('pending-interview-actions').setAttribute('aria-busy', 'false');
       byId('pending-interview-actions').replaceChildren();
       byId('pending-interview-actions-state').textContent = '';

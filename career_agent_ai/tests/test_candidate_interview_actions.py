@@ -319,13 +319,15 @@ def test_candidate_browser_rediscovers_pending_interview_action_after_reload():
             page.locator("#pending-interview-actions").get_by_text(
                 "Sandbox GmbH", exact=False
             ).wait_for()
-            page.get_by_role("button", name="Inspect reconciliation").click()
+            page.locator("#pending-interview-actions button").click()
             assert page.locator("#run-id").input_value() == "run-browser"
             page.locator("#status").click()
             page.locator("#interview-reconciliation-state").get_by_text(
                 "Verify the calendar provider outcome outside this sandbox", exact=False
             ).wait_for()
             assert page.locator("#confirm-calendar-completed").is_disabled()
+            page.locator("#token").fill("changed")
+            assert page.locator("#pending-interview-actions li").count() == 0
             browser.close()
     finally:
         server.shutdown()
