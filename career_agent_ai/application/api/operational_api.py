@@ -9,7 +9,10 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qs
 
 from career_agent_ai.application.observability import OperationalProbe
-from career_agent_ai.application.observability.action_cursor import decode_action_cursor
+from career_agent_ai.application.observability.action_cursor import (
+    decode_action_cursor,
+    validate_action_filters,
+)
 
 
 class OperationalApiService:
@@ -60,23 +63,40 @@ class OperationalApiService:
         }
 
 
-    def actions(self, *, limit: int = 25, after: str | None = None) -> dict[str, Any]:
-        """Return a bounded, read-only projection of non-terminal external actions."""
+    def actions(
+        self,
+        *,
+        limit: int = 25,
+        after: str | None = None,
+        status: str | None = None,
+        action_family: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a bounded, filtered, read-only projection of non-terminal actions."""
         if (
             not isinstance(limit, int)
             or isinstance(limit, bool)
             or not 1 <= limit <= 25
         ):
             raise ValueError("limit must be between 1 and 25.")
+        validate_action_filters(status, action_family)
         if after is not None:
-            decode_action_cursor(after)
+            decode_action_cursor(
+                after,
+                status=status,
+                action_family=action_family,
+            )
         now = self._clock()
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("operational API clock must return a timezone-aware datetime.")
         projection = getattr(self._probe, "list_action_statuses", None)
         if not callable(projection):
             raise RuntimeError("Operational action projection is unavailable.")
-        page = projection(limit=limit, after=after)
+        page = projection(
+            limit=limit,
+            after=after,
+            status=status,
+            action_family=action_family,
+        )
         if (
             not isinstance(page, dict)
             or set(page) != {"items", "next_after"}
@@ -93,9 +113,15 @@ class OperationalApiService:
             raise RuntimeError("Operational action projection returned an invalid page.")
         if page["next_after"] is not None:
             try:
-                decode_action_cursor(page["next_after"])
+                decode_action_cursor(
+                    page["next_after"],
+                    status=status,
+                    action_family=action_family,
+                )
             except ValueError as exc:
-                raise RuntimeError("Operational action projection returned an invalid cursor.") from exc
+                raise RuntimeError(
+                    "Operational action projection returned an invalid cursor."
+                ) from exc
         return {
             "generated_at": now.astimezone(timezone.utc).isoformat(),
             "schema_version": 1,
@@ -226,11 +252,11 @@ class OperationalWSGIApp:
                 query = parse_qs(
                     str(environ.get("QUERY_STRING", "")),
                     keep_blank_values=True,
-                    max_num_fields=3,
+                    max_num_fields=5,
                     strict_parsing=True,
                     errors="strict",
                 )
-                if set(query) - {"limit", "after"} or any(
+                if set(query) - {"limit", "after", "status", "action_family"} or any(
                     len(values) != 1 for values in query.values()
                 ):
                     raise ValueError("unknown or duplicate operational action query parameter.")
@@ -243,8 +269,15 @@ class OperationalWSGIApp:
                 after = query.get("after", [None])[0]
                 if after is not None and (not after or len(after) > 1200):
                     raise ValueError("after must be a bounded opaque cursor.")
+                status_filter = query.get("status", [None])[0]
+                family_filter = query.get("action_family", [None])[0]
                 try:
-                    payload = self._service.actions(limit=limit, after=after)
+                    payload = self._service.actions(
+                        limit=limit,
+                        after=after,
+                        status=status_filter,
+                        action_family=family_filter,
+                    )
                     return self._respond(start_response, "200 OK", payload)
                 except ValueError:
                     raise
@@ -444,9 +477,29 @@ def openapi_document() -> dict[str, Any]:
                             "name": "after",
                             "in": "query",
                             "required": False,
-                            "description": "URL-safe encoded keyset cursor; not an authorization credential",
+                            "description": "URL-safe keyset cursor bound to the selected filters; not an authorization credential",
                             "schema": {"type": "string", "minLength": 1, "maxLength": 1200,
                                        "pattern": "^[A-Za-z0-9_-]+$"},
+                        },
+                        {
+                            "name": "status",
+                            "in": "query",
+                            "required": False,
+                            "description": "Return only operations in this non-terminal lifecycle state.",
+                            "schema": {
+                                "type": "string",
+                                "enum": ["prepared", "in_progress", "failed", "reconciliation_required"],
+                            },
+                        },
+                        {
+                            "name": "action_family",
+                            "in": "query",
+                            "required": False,
+                            "description": "Return only operations in this allowlisted action family.",
+                            "schema": {
+                                "type": "string",
+                                "enum": ["application_submission", "communication", "calendar", "other"],
+                            },
                         },
                     ],
                     "responses": {
