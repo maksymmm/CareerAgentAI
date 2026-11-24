@@ -401,6 +401,65 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def accept_candidate_schedule_event(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Accept an owned event using request-local sandbox provider storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).accept_candidate_schedule_event(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        finally:
+            database.close()
+
+    def get_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Read an owned acceptance intent without provider I/O or recovery."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            loop = _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            )
+            return loop.get_candidate_schedule_acceptance(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        finally:
+            database.close()
+
+    def recover_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Classify a stale acceptance through request-local SQLite storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).recover_candidate_schedule_acceptance(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        finally:
+            database.close()
+
+    def resolve_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int,
+        completed: bool, provider_event_id: str | None = None,
+    ):
+        """Reconcile an owned acceptance using sandbox provider evidence."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).resolve_candidate_schedule_acceptance(
+                event_id, user_id=user_id, expected_version=expected_version,
+                completed=completed, provider_event_id=provider_event_id,
+            )
+        finally:
+            database.close()
+
     def resolve_interview_reconciliation(
         self, run_id: str, *, user_id: str, completed: bool,
         provider_event_id: str | None = None,
