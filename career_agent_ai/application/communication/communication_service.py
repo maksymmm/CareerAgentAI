@@ -332,7 +332,7 @@ class CommunicationService:
 
     def _execute(self, operation_id: str, human_approved: bool) -> CommunicationMessage | None:
         operation = self._external_actions.execute(
-            operation_id, human_approved=human_approved
+            operation_id, human_approved=human_approved, recover_in_progress=False
         )
         if operation.status != ExternalActionStatus.SUCCEEDED:
             return None

@@ -314,7 +314,7 @@ class ApplicationSubmissionService:
         else:
             self._external_actions.prepare(operation_id, "application.submit", payload)
         operation = self._external_actions.execute(
-            operation_id, human_approved=human_approved
+            operation_id, human_approved=human_approved, recover_in_progress=False
         )
         if operation.status != ExternalActionStatus.SUCCEEDED:
             return None

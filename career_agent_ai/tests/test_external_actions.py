@@ -213,6 +213,25 @@ def test_adapter_failure_is_persisted_and_not_retried():
     assert len(adapter.calls) == 1
 
 
+
+
+def test_live_in_progress_operation_is_observed_without_recovery_when_requested():
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-live", "application", {})
+    repository.transition(
+        "operation-live", ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS
+    )
+
+    observed = service.execute(
+        "operation-live", human_approved=True, recover_in_progress=False
+    )
+
+    assert observed.status == ExternalActionStatus.IN_PROGRESS
+    assert repository.get("operation-live").status == ExternalActionStatus.IN_PROGRESS
+    assert adapter.calls == []
+
+
 def test_restart_marks_in_progress_operation_for_reconciliation(tmp_path):
     path = str(tmp_path / "actions.sqlite")
     first_database = SQLiteDatabase(path)

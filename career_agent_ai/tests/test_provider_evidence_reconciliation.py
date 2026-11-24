@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
 
 import pytest
 
@@ -391,6 +391,54 @@ def test_concurrent_submissions_through_the_service_yield_one_provider_effect(pa
     assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
     verifier.close()
 
+
+
+
+def test_live_duplicate_submission_does_not_promote_in_progress_or_replay_provider(path):
+    provider_entered = Event()
+    release_provider = Event()
+    first_results = []
+    first_errors = []
+
+    class BlockingProvider(SQLiteSandboxSubmissionProvider):
+        def submit(self, *args, **kwargs):
+            provider_entered.set()
+            if not release_provider.wait(timeout=10):
+                raise RuntimeError("Timed out waiting to release sandbox provider.")
+            return super().submit(*args, **kwargs)
+
+    def first_submit():
+        stack = Stack(path, evidence=True, provider_cls=BlockingProvider)
+        try:
+            first_results.append(stack.service.submit(OP, **_submit_kwargs()))
+        except Exception as exc:
+            first_errors.append(exc)
+        finally:
+            stack.close()
+
+    first_thread = Thread(target=first_submit)
+    first_thread.start()
+    try:
+        assert provider_entered.wait(timeout=10)
+        duplicate = Stack(path, evidence=True)
+        try:
+            assert duplicate.service.submit(OP, **_submit_kwargs()) is None
+            assert duplicate.status() == ExternalActionStatus.IN_PROGRESS
+            assert duplicate.provider.attempts(OP) == ()
+        finally:
+            duplicate.close()
+    finally:
+        release_provider.set()
+        first_thread.join(timeout=30)
+
+    assert not first_thread.is_alive()
+    assert first_errors == []
+    assert len(first_results) == 1 and isinstance(first_results[0], dict)
+    verifier = Stack(path, evidence=True)
+    assert verifier.status() == ExternalActionStatus.SUCCEEDED
+    assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
+    assert len(verifier.provider.ledger_entries()) == 1
+    verifier.close()
 
 def test_concurrent_reconciliations_resolve_once_with_one_provider_effect(path):
     _ambiguous(path).close()

@@ -356,6 +356,8 @@ _HTML = r"""<!doctype html>
         !!byId('acceptance-provider-event-id').value.trim();
     }
     function markAcceptanceUnknown(message) {
+      // A response that began before an ambiguous mutation must never restore stale controls.
+      acceptanceGeneration += 1;
       acceptanceStatus = null;
       byId('acceptance-verified').checked = false;
       byId('acceptance-provider-event-id').value = '';
@@ -483,6 +485,8 @@ _HTML = r"""<!doctype html>
       const payload = acceptancePayload();
       const identifier = selectedEventId, version = selectedEventVersion;
       const detailGeneration = eventDetailGeneration;
+      // Supersede every status GET that started before this provider mutation.
+      acceptanceGeneration += 1;
       acceptanceInFlight = true; updateAcceptanceControls();
       try {
         const result = await call('/v1/candidate/schedule-event/accept', {
@@ -515,6 +519,8 @@ _HTML = r"""<!doctype html>
       const payload = acceptancePayload();
       const identifier = selectedEventId, version = selectedEventVersion;
       const detailGeneration = eventDetailGeneration;
+      // Supersede every status GET that started before this provider mutation.
+      acceptanceGeneration += 1;
       acceptanceInFlight = true; updateAcceptanceControls();
       try {
         const result = await call('/v1/candidate/schedule-event/acceptance-recovery', {
@@ -552,6 +558,8 @@ _HTML = r"""<!doctype html>
       byId('acceptance-provider-event-id').value = '';
       const identifier = selectedEventId, version = selectedEventVersion;
       const detailGeneration = eventDetailGeneration;
+      // Supersede every status GET that started before this provider mutation.
+      acceptanceGeneration += 1;
       acceptanceInFlight = true; updateAcceptanceControls();
       const body = {...payload, completed, ...(completed ? {provider_event_id: providerEventId} : {})};
       try {

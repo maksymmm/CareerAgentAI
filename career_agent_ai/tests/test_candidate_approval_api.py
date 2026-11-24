@@ -3424,6 +3424,7 @@ def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys
     from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
     from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
     from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+    from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
 
     path = tmp_path / "candidate-acceptance-corrupt-ledger.sqlite"
     database = SQLiteDatabase(str(path))
@@ -3438,6 +3439,7 @@ def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys
         database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1"
     ) as runtime:
         database = SQLiteDatabase(str(path))
+        SQLiteExternalActionOperationRepository(database)
         operation_id = _candidate_schedule_accept_operation_id(
             "candidate-1", "event-corrupt", 1
         )
@@ -3589,7 +3591,7 @@ def test_candidate_sandbox_browser_recovers_acceptance_after_reload_with_fresh_a
             page.locator("#token").fill("valid")
             page.locator("#list-events").click()
             page.locator("#owned-events button").click()
-            page.locator("#acceptance-reconciliation-panel").wait_for(state="visible")
+            page.locator("#event-acceptance-reconciliation-panel").wait_for(state="visible")
             page.wait_for_function(
                 "() => !document.querySelector('#acceptance-verified').disabled"
             )
@@ -3635,7 +3637,7 @@ def test_candidate_sandbox_browser_retries_only_after_verified_acceptance_no_eff
             page.locator("#acceptance-verified").check()
             page.locator("#acceptance-no-effect").click()
             page.locator("#event-acceptance-state").get_by_text(
-                "provider confirmed no calendar effect", exact=False
+                "The provider confirmed no calendar effect", exact=False
             ).wait_for()
             assert not page.locator("#accept-event").is_disabled()
             assert not page.locator("#acceptance-verified").is_checked()
@@ -3720,7 +3722,7 @@ def test_candidate_sandbox_browser_clears_unsubmitted_attestation_when_status_ch
             loop.status = "prepared"
             page.locator("#refresh-acceptance").click()
             page.locator("#event-acceptance-state").get_by_text(
-                "provider confirmed no calendar effect", exact=False
+                "The provider confirmed no calendar effect", exact=False
             ).wait_for()
             assert not page.locator("#acceptance-verified").is_checked()
             assert page.locator("#acceptance-provider-event-id").input_value() == ""
@@ -3734,6 +3736,120 @@ def test_candidate_sandbox_browser_clears_unsubmitted_attestation_when_status_ch
             assert page.locator("#acceptance-provider-event-id").input_value() == ""
             browser.close()
     finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+
+def test_candidate_sandbox_browser_discards_status_get_started_before_unknown_acceptance_post():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIServer
+
+    class DelayedStatusLoop(CandidateScheduleAcceptanceBrowserLoop):
+        def __init__(self):
+            super().__init__()
+            self.block_next_status = False
+            self.status_read_started = Event()
+            self.status_read_returned = Event()
+            self.release_status_read = Event()
+
+        def get_candidate_schedule_acceptance(self, event_id, *, user_id, expected_version):
+            if self.block_next_status:
+                self.block_next_status = False
+                observed_status = self.status
+                self.status_read_started.set()
+                if not self.release_status_read.wait(timeout=10):
+                    raise RuntimeError("Timed out waiting to release stale status read.")
+                self.status_read_returned.set()
+                return {
+                    "schema_version": 1, "event_id": event_id,
+                    "event_version": expected_version, "status": observed_status,
+                }
+            return super().get_candidate_schedule_acceptance(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+
+        def accept_candidate_schedule_event(self, event_id, *, user_id, expected_version):
+            self.acceptance_calls.append((event_id, expected_version))
+            self.status = "in_progress"
+            raise RuntimeError("private provider exception detail")
+
+    class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    loop = DelayedStatusLoop()
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(loop), server_class=ThreadingWSGIServer,
+        handler_class=QuietHandler,
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.add_init_script("""
+                (() => {
+                  const originalFetch = window.fetch.bind(window);
+                  window.__acceptanceStatusResponses = 0;
+                  window.fetch = async (...args) => {
+                    const response = await originalFetch(...args);
+                    if (String(args[0]).includes('/v1/candidate/schedule-event/acceptance?')) {
+                      window.__acceptanceStatusResponses += 1;
+                    }
+                    return response;
+                  };
+                })();
+            """)
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.wait_for_function(
+                "() => !document.querySelector('#accept-event').disabled"
+            )
+
+            loop.block_next_status = True
+            page.locator("#refresh-acceptance").click()
+            assert loop.status_read_started.wait(timeout=10)
+
+            # This POST fails ambiguously while the older status GET is still blocked.
+            page.locator("#accept-event").click()
+            page.locator("#result").get_by_text(
+                "Interview acceptance request failed", exact=False
+            ).wait_for()
+            assert page.locator("#accept-event").is_disabled()
+
+            loop.release_status_read.set()
+            assert loop.status_read_returned.wait(timeout=10)
+            page.wait_for_function("() => window.__acceptanceStatusResponses === 2")
+            page.wait_for_timeout(100)
+
+            # The pre-POST not_started response must not re-enable acceptance.
+            assert page.locator("#accept-event").is_disabled()
+            assert "Acceptance outcome is unknown" in page.locator(
+                "#event-acceptance-state"
+            ).text_content()
+
+            # Only a new owner-scoped GET made after the failed POST may restore state.
+            page.locator("#refresh-acceptance").click()
+            page.wait_for_function("() => window.__acceptanceStatusResponses === 3")
+            page.locator("#event-acceptance-state").get_by_text(
+                "Acceptance is still active", exact=False
+            ).wait_for()
+            assert page.locator("#accept-event").is_disabled()
+            assert not page.locator("#recover-acceptance").is_disabled()
+            assert loop.acceptance_calls == [("event-browser-1", 1)]
+            browser.close()
+    finally:
+        loop.release_status_read.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()

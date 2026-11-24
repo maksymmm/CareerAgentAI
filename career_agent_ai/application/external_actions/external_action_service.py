@@ -63,12 +63,17 @@ class ExternalActionService:
         operation_id: str,
         *,
         human_approved: bool,
+        recover_in_progress: bool = True,
     ) -> ExternalActionOperation:
         """Execute a prepared action once after explicit human approval.
 
-        An operation already left in ``in_progress`` is ambiguous: it is moved to
-        ``reconciliation_required`` and the adapter is deliberately not called.
+        Recovery callers may promote a previously in-progress operation to
+        ``reconciliation_required``. Ordinary duplicate requests pass
+        ``recover_in_progress=False`` so they observe a live operation without
+        mutating its durable state or invoking the adapter again.
         """
+        if not isinstance(recover_in_progress, bool):
+            raise TypeError("recover_in_progress must be a boolean.")
         operation = self._require_operation(operation_id)
         if operation.status in {
             ExternalActionStatus.SUCCEEDED,
@@ -77,6 +82,8 @@ class ExternalActionService:
         }:
             return operation
         if operation.status == ExternalActionStatus.IN_PROGRESS:
+            if not recover_in_progress:
+                return operation
             return self._repository.transition(
                 operation.operation_id,
                 ExternalActionStatus.IN_PROGRESS,
