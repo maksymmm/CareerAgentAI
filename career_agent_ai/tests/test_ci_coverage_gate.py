@@ -66,4 +66,4 @@ def test_coverage_cli_fails_when_measured_coverage_is_below_threshold(
     )
 
     assert report.returncode != 0
-    assert "FAIL Required test coverage" in report.stdout
+    assert "fail-under=90" in report.stdout
