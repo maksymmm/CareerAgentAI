@@ -3346,3 +3346,200 @@ def test_candidate_runtime_retries_message_after_verified_no_delivery_across_res
         )
     finally:
         database.close()
+
+
+def test_candidate_runtime_reconciles_message_timeout_after_delivery_across_restart(
+    tmp_path,
+):
+    from datetime import datetime, timezone
+
+    from career_agent_ai.application.career.autonomous_loop_models import CareerLoopRequest
+    from career_agent_ai.application.external_actions import ExternalActionStatus
+    from career_agent_ai.application.jobs.company import Company
+    from career_agent_ai.application.jobs.job import Job
+    from career_agent_ai.application.jobs.location import Location
+    from career_agent_ai.application.runtime.composition import (
+        build_candidate_sandbox_app_from_env,
+    )
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
+        SandboxCommunicationOutcome,
+    )
+
+    path = str(tmp_path / "candidate-message-timeout-after-delivery.sqlite")
+    environ = {
+        "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+        "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        "CAREER_AGENT_DB_PATH": path,
+    }
+    created_at = datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc)
+    job = Job.create(
+        job_id="message-timeout-recovery-job",
+        title="Logistics Coordinator",
+        company=Company("message-timeout-company", "Sandbox Logistics"),
+        location=Location("Germany", "Karlsruhe"),
+        description="Warehouse logistics coordination",
+        created_at=created_at,
+    )
+
+    def timeout_after_delivery(_operation_id, attempt):
+        assert attempt == 1
+        return SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT
+
+    def provider_must_not_be_reinvoked(_operation_id, attempt):
+        raise AssertionError(
+            f"Evidence reconciliation unexpectedly invoked provider attempt {attempt}."
+        )
+
+    runtime1 = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+        jobs=(job,),
+        environ=environ,
+        sandbox_communication_outcome_plan=timeout_after_delivery,
+    )
+    request_data = CareerLoopRequest(
+        user_id="candidate-1",
+        keyword="Logistics",
+        candidate_profile=(
+            "Logistics professional with warehouse picking, inventory control, "
+            "and workflow coordination experience."
+        ),
+        location="Karlsruhe",
+        sender="candidate@example.test",
+        recipient="recruiter@example.test",
+        message_subject="Application follow-up",
+        message_body="Thank you for considering my application.",
+    )
+    started = runtime1.start(request_data, run_id="message-timeout-after-effect")
+    run_id = started.run_id
+    assert started.phase.value == "application_approval"
+
+    approval_path = f"/v1/candidate/runs/{run_id}/approval"
+
+    def approve_current_prompt(runtime):
+        (status, _headers), prompt = request(
+            runtime, method="GET", token="valid", path=approval_path
+        )
+        assert status == "200 OK"
+        payload = {
+            "schema_version": 1,
+            "run_id": prompt["run_id"],
+            "state_version": prompt["state_version"],
+            "action_fingerprint": prompt["action_fingerprint"],
+            "decision": "approve",
+        }
+        (status, _headers), result = request(
+            runtime,
+            method="POST",
+            token="valid",
+            path=approval_path,
+            body=payload,
+        )
+        assert status == "200 OK"
+        return prompt, result
+
+    application_prompt, application_result = approve_current_prompt(runtime1)
+    assert application_prompt["action_kind"] == "approve_application"
+    assert application_result["phase"] == "message_approval"
+
+    message_prompt, message_result = approve_current_prompt(runtime1)
+    assert message_prompt["action_kind"] == "approve_message"
+    assert message_prompt["details"]["sender"] == "candidate@example.test"
+    assert message_prompt["details"]["recipient"] == "recruiter@example.test"
+    assert message_result["phase"] == "message_reconciliation"
+
+    (status, _headers), pending = request(
+        runtime1,
+        method="GET",
+        token="valid",
+        path=f"/v1/candidate/runs/{run_id}/status",
+    )
+    assert status == "200 OK"
+    assert pending["phase"] == "message_reconciliation"
+    runtime1.close()
+
+    runtime2 = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+        jobs=(job,),
+        environ=environ,
+        sandbox_communication_outcome_plan=provider_must_not_be_reinvoked,
+    )
+    try:
+        (status, _headers), restored = request(
+            runtime2,
+            method="GET",
+            token="valid",
+            path=f"/v1/candidate/runs/{run_id}/status",
+        )
+        assert status == "200 OK"
+        assert restored["phase"] == "message_reconciliation"
+        assert restored["state_version"] == pending["state_version"]
+
+        (status, _headers), completed = request(
+            runtime2,
+            method="POST",
+            token="valid",
+            path=f"/v1/candidate/runs/{run_id}/message-reconciliation",
+            body={
+                "schema_version": 1,
+                "state_version": restored["state_version"],
+                "delivered": True,
+            },
+        )
+        assert status == "200 OK"
+        assert completed == {"run_id": run_id, "phase": "complete"}
+    finally:
+        runtime2.close()
+
+    database = SQLiteDatabase(path)
+    try:
+        operations = database.connection.execute(
+            "SELECT operation_id, status FROM external_action_operations "
+            "WHERE action_type = 'communication.send'"
+        ).fetchall()
+        assert len(operations) == 1
+        operation_id, operation_status = operations[0]
+        assert operation_status == ExternalActionStatus.SUCCEEDED.value
+
+        attempts = database.connection.execute(
+            "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_no",
+            (operation_id,),
+        ).fetchall()
+        assert attempts == [
+            (1, SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT.value),
+        ]
+
+        deliveries = database.connection.execute(
+            "SELECT message_id, action, replays FROM sandbox_communication_deliveries "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall()
+        assert len(deliveries) == 1
+        message_id, action, replays = deliveries[0]
+        assert action == "send"
+        assert replays == 0
+        assert database.connection.execute(
+            "SELECT COUNT(*) FROM sandbox_communication_deliveries"
+        ).fetchone()[0] == 1
+
+        provider_message = database.connection.execute(
+            "SELECT direction, sender, recipient, subject, body "
+            "FROM sandbox_communication_messages WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+        assert provider_message == (
+            "outbound",
+            "candidate@example.test",
+            "recruiter@example.test",
+            "Application follow-up",
+            "Thank you for considering my application.",
+        )
+
+        persisted_message = database.connection.execute(
+            "SELECT direction FROM communication_messages WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+        assert persisted_message == ("outbound",)
+    finally:
+        database.close()
