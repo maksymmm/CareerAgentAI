@@ -277,6 +277,61 @@ class CandidateScheduleActionWSGIApp:
                     )
         return tuple(matches)
 
+    @classmethod
+    def _validate_ambiguous_operation(
+        cls, operation, user_id: str, event: ScheduleEvent
+    ) -> None:
+        """Fail closed unless an ambiguous event operation is fully bound to its owner."""
+        if operation.status not in {
+            ExternalActionStatus.IN_PROGRESS,
+            ExternalActionStatus.RECONCILIATION_REQUIRED,
+        }:
+            raise ValueError("Ambiguous reschedule changed state during lookup.")
+        payload = operation.payload
+        required_fields = {
+            "event_id", "event_version", "event_start_at", "event_end_at",
+            "event_timezone_name", "event_status", "start_at", "end_at",
+            "timezone_name",
+        }
+        if not isinstance(payload, Mapping) or not required_fields.issubset(payload):
+            raise ValueError("Ambiguous reschedule source snapshot is incomplete.")
+        state_version = payload["event_version"]
+        if type(state_version) is not int or not 1 <= state_version <= _MAX_STATE_VERSION:
+            raise ValueError("Ambiguous reschedule source version is invalid.")
+        start_at = cls._instant(payload["start_at"], "start_at")
+        raw_end = payload["end_at"]
+        end_at = None if raw_end is None else cls._instant(raw_end, "end_at")
+        raw_timezone = payload["timezone_name"]
+        timezone_name = validate_timezone_name(raw_timezone)
+        if timezone_name != raw_timezone or (end_at is not None and end_at <= start_at):
+            raise ValueError("Ambiguous reschedule target is invalid.")
+        cls._require_matching_operation(
+            operation, event.event_id, state_version, start_at, end_at, timezone_name
+        )
+        expected_operation_id = cls._operation_id(
+            user_id, event.event_id, state_version, start_at, end_at, timezone_name
+        )
+        if operation.operation_id != expected_operation_id:
+            raise ValueError("Ambiguous reschedule operation identity is invalid.")
+        source_matches = (
+            event.version == state_version
+            and payload["event_start_at"] == event.start_at.isoformat()
+            and payload["event_end_at"]
+                == (None if event.end_at is None else event.end_at.isoformat())
+            and payload["event_timezone_name"] == event.timezone_name
+            and payload["event_status"] == event.status.value
+        )
+        target_already_applied = (
+            state_version < _MAX_STATE_VERSION
+            and event.version == state_version + 1
+            and event.status == ScheduleStatus.RESCHEDULE_REQUESTED
+            and event.start_at == start_at
+            and event.end_at == end_at
+            and event.timezone_name == timezone_name
+        )
+        if not (source_matches or target_already_applied):
+            raise ValueError("Ambiguous reschedule no longer matches the owned event.")
+
     def _pending(
         self, start_response, user_id: str, request: Mapping[str, str]
     ) -> Iterable[bytes]:
@@ -444,11 +499,32 @@ class CandidateScheduleActionWSGIApp:
         operation_id = self._operation_id(
             user_id, event_id, state_version, start_at, end_at, timezone_name
         )
-        database, repository, service, _operations = self._open_stack()
+        database, repository, service, operations = self._open_stack()
         try:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
+            ambiguous_ids = self._pending_operation_ids(database.connection, event_id)
+            ambiguous = tuple(operations.get(identifier) for identifier in ambiguous_ids)
+            if any(item is None for item in ambiguous):
+                raise ValueError("Ambiguous reschedule disappeared during lookup.")
+            if len(ambiguous) > 1:
+                raise SchedulingOperationConflict(
+                    "More than one ambiguous reschedule is bound to this event."
+                )
+            if ambiguous:
+                active = ambiguous[0]
+                self._validate_ambiguous_operation(active, user_id, event)
+                if active.operation_id != operation_id:
+                    return self._respond(
+                        start_response,
+                        "202 Accepted",
+                        {
+                            "schema_version": 1,
+                            "outcome": "blocked",
+                            "event_id": event_id,
+                        },
+                    )
             operation = service.get_operation(operation_id)
             if operation is not None:
                 self._require_matching_operation(
@@ -940,6 +1016,15 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
             "event_id": event_properties["event_id"],
         },
     }
+    pending_blocked_response = {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_version", "outcome", "event_id"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "outcome": {"const": "blocked"},
+            "event_id": event_properties["event_id"],
+        },
+    }
     no_effect_response = {
         "type": "object", "additionalProperties": False,
         "required": ["schema_version", "outcome", "event"],
@@ -991,9 +1076,11 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
                     "200": {"description": "Sandbox reschedule completed or definitively had no effect",
                             "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                             "content": json_content({"oneOf": [completed_response, no_effect_response]})},
-                    "202": {"description": "The request is already active or the provider outcome is ambiguous",
+                    "202": {"description": "The request is active, another ambiguous event operation blocks a new target, or the provider outcome is ambiguous",
                             "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
-                            "content": json_content({"oneOf": [pending_response, pending_active_response]})},
+                            "content": json_content({"oneOf": [
+                                pending_response, pending_active_response, pending_blocked_response
+                            ]})},
                     **common,
                     "409": {"description": "Stale state, scheduling conflict or provider conflict",
                             "content": json_content(error_schema)},
