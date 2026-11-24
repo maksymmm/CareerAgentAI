@@ -82,3 +82,15 @@ column. Cursors are bound to the exact filter; cross-filter and filtered-to-unfi
 reuse is rejected. Read-only requests never migrate legacy storage. If the indexed
 reference column is absent, filtered discovery fails closed rather than claiming that
 no matching actions exist.
+
+
+## Candidate sandbox external-action status
+
+The dependency-free sandbox page includes a read-only "My external actions" panel
+for the selected owner-scoped run. It validates the exact action projection response,
+stable run reference, allowlisted family/status values, UTC timestamps and bounded
+cursor before rendering text-only lifecycle rows. Run or bearer-token changes
+invalidate in-flight pages and clear prior action data. The panel cannot retry,
+reconcile or execute provider work. This is sandbox discovery UI, not the
+deployment-ready candidate web dashboard; production candidate UI and provider
+adapters remain outside the current backend release.

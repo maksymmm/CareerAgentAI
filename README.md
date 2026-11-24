@@ -1076,3 +1076,9 @@ It returns stable action references, an allowlisted action family, lifecycle sta
 UTC timestamps, and an `error_present` flag only. Provider payloads, results,
 error text, raw operation IDs, and correlation IDs are never returned. The endpoint
 opens SQLite read-only and cannot retry, reconcile, or mutate an external action.
+The candidate sandbox includes a matching "My external actions" panel for the selected
+run. It verifies the stable run reference, exact response fields, allowlisted action
+families and lifecycle states, UTC timestamps, and bounded opaque cursor before
+rendering text-only rows. Pagination is invalidated whenever the selected run or
+bearer-token context changes. The panel is discovery-only: it has no retry,
+reconciliation, or provider-execution controls.

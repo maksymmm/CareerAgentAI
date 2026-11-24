@@ -16,6 +16,19 @@ are required before the existing relevance PR can merge.
 
 # Autonomous Implementation Plan
 
+Candidate-owned external-action status dashboard: the dependency-free candidate
+sandbox now loads the selected run's owner-scoped `/actions` projection, validates
+the exact response shape and stable run reference, and renders only allowlisted
+action family/status, UTC timestamps, stable operation references, and the
+`error_present` flag. Bounded opaque-cursor pagination is supported. Pending
+responses are discarded and displayed rows cleared when the run or bearer-token
+context changes. Chromium regressions cover pagination, malformed extra fields,
+and stale responses after a run switch. The panel is discovery-only and exposes no
+retry, reconciliation, or provider execution controls. Exact-head full CI and
+independent code/security review are required before integration.
+Next: read-only candidate history UI, then audit candidate dashboard context
+invalidation across all owner-scoped collections.
+
 Operator-to-candidate action correlation: durable external-action records now carry
 optional non-payload correlation metadata from the candidate run through application
 submission, message delivery and calendar acceptance. The owner-scoped candidate status
