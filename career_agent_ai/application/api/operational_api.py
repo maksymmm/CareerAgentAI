@@ -9,6 +9,10 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qs
 
 from career_agent_ai.application.observability import OperationalProbe
+from career_agent_ai.application.observability.structured_logging import (
+    redact_mapping,
+    redact_text,
+)
 
 
 class OperationalApiService:
@@ -48,11 +52,11 @@ class OperationalApiService:
             "generated_at": now.isoformat(),
             "issues": [
                 {
-                    "issue_type": issue.issue_type,
-                    "entity_id": issue.entity_id,
+                    "issue_type": redact_text(issue.issue_type),
+                    "entity_id": redact_text(issue.entity_id),
                     "severity": issue.severity.value,
                     "updated_at": issue.updated_at.astimezone(timezone.utc).isoformat(),
-                    "details": dict(issue.details),
+                    "details": redact_mapping(issue.details),
                 }
                 for issue in issues
             ],
