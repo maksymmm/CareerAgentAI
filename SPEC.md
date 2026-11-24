@@ -41,10 +41,11 @@ Both live job discovery and employer-signal collection enforce the disabled-by-d
 network-provider flag at the provider call boundary.
 The read-only WSGI API exposes public liveness at `/healthz`, bearer-authenticated
 operational issues at `/v1/operational/issues`, and a bounded non-terminal action
-lifecycle projection at `/v1/operational/actions`. The action projection omits raw
-operation IDs, payloads, provider results and error text, and cannot execute or retry
-work. Its schema is OpenAPI 3.1. This operational API is not a candidate-facing
-workflow API.
+lifecycle projection at `/v1/operational/actions`. The action projection supports
+allowlisted lifecycle-status and action-family filters applied before pagination; filtered
+keyset cursors are bound to those exact filters. It omits raw operation IDs, payloads,
+provider results and error text, and cannot execute or retry work. Its schema is OpenAPI
+3.1. This operational API is not a candidate-facing workflow API.
 
 Migration sequencing, deployment and rollback constraints are documented in
 `docs/operations/`. Runbooks alone do not establish a deployed service or verified
