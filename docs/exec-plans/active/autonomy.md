@@ -1590,3 +1590,12 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Operational issue API redaction boundary: the authenticated read-only issues endpoint
+now sanitizes issue type, entity identifier, and nested diagnostic details at the API
+projection boundary, rather than relying only on the SQLite probe's current error-field
+redaction. Regression coverage injects synthetic secrets through identifiers, action
+types, authorization fields, nested diagnostics, and non-finite values; verifies safe
+fields remain useful; and confirms authentication still precedes probe access. This is
+a read-only response hardening change: it adds no provider calls, state transitions,
+or external actions. Next: exact-head CI and independent code/security review.
