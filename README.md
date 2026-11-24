@@ -578,6 +578,20 @@ snapshot confirms message reconciliation. The controls are bound to that snapsho
 require an explicit independent-verification attestation, are disabled on every submission or
 input-context change, and require another status refresh after
 a conflict or uncertain response.
+
+Pending interview approvals and calendar reconciliations can be rediscovered after a
+browser reload through authenticated, read-only
+`GET /v1/candidate/pending-interview-actions`. The bounded keyset projection filters by
+the bearer-authenticated owner and pending interview phases in SQL before parsing any
+stored payload. It returns only the run ID, durable state version, event identity and
+minimal employer/local-time summary; internal operation IDs and provider evidence are
+never exposed. The sandbox renders this list and selecting an item only selects its run.
+The candidate must still refresh the owned status and load the current approval prompt
+or provide a fresh independent reconciliation attestation. A listed state version
+is discovery metadata, not authority to approve or reconcile; stale versions are
+rejected by the existing decision boundary. The collection cannot approve an interview
+or modify a calendar event.
+
 Interview reconciliation is exposed through the same authenticated, owner-scoped boundary.
 Completed calendar actions require independently verified provider event evidence; confirmed
 non-completion forbids that evidence. Both outcomes are bound to the displayed durable version,
@@ -621,7 +635,7 @@ current candidate-visible approval prompt, continue recovery, and submit approve
 decline decisions. The static page contains no credentials or durable state: the
 candidate enters a bearer token that stays only in the tab's memory.
 An accessible dashboard navigation landmark links to start, inspection, pending
-decision, overview, applications and interviews. Native fragment links move keyboard
+interview actions, pending decision, overview, applications and interviews. Native fragment links move keyboard
 focus without API requests or credential/state changes; a return link reaches the top.
 The first keyboard focus exposes a skip link that bypasses the heading and navigation
 and moves focus directly to the interactive dashboard content.

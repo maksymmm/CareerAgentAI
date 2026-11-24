@@ -48,6 +48,9 @@ class CandidateApprovalLoop(Protocol):
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
                           phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
+    def list_pending_interview_actions(
+        self, *, user_id: str, limit: int = 25, after: str | None = None
+    ) -> dict[str, Any]: ...
 
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
@@ -146,7 +149,15 @@ class CandidateApprovalWSGIApp:
         is_application = parts == ["v1", "candidate", "application"] or is_history
         is_schedule = parts == ["v1", "candidate", "schedule-event"]
         is_schedule_list = parts == ["v1", "candidate", "schedule-events"]
-        is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications or is_schedule_list
+        is_pending_interview_actions = parts == [
+            "v1", "candidate", "pending-interview-actions"
+        ]
+        is_list = (
+            parts == ["v1", "candidate", "run-statuses"]
+            or is_applications
+            or is_schedule_list
+            or is_pending_interview_actions
+        )
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
@@ -221,15 +232,20 @@ class CandidateApprovalWSGIApp:
                                       max_num_fields=3,
                                       errors="strict")
                     values = dict(pairs)
-                    allowed = ({"limit", "after", "status"} if (is_applications or is_schedule_list)
-                               else {"limit", "after", "phase"})
+                    if is_applications or is_schedule_list:
+                        allowed = {"limit", "after", "status"}
+                    elif is_pending_interview_actions:
+                        allowed = {"limit", "after"}
+                    else:
+                        allowed = {"limit", "after", "phase"}
                     if len(values) != len(pairs) or set(values) - allowed:
                         raise ValueError("unknown or duplicate query parameter")
                     raw_limit = values.get("limit", "25")
                     if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 3:
                         raise ValueError("invalid limit")
                     limit = int(raw_limit)
-                    if not 1 <= limit <= 100:
+                    maximum_limit = 25 if is_pending_interview_actions else 100
+                    if not 1 <= limit <= maximum_limit:
                         raise ValueError("invalid limit")
                     after = values.get("after")
                     if after is not None:
@@ -248,18 +264,29 @@ class CandidateApprovalWSGIApp:
                     elif is_schedule_list and "status" in values:
                         status = ScheduleStatus(values["status"])
                     phase = None
-                    if not is_applications and not is_schedule_list and "phase" in values:
+                    if (
+                        not is_applications
+                        and not is_schedule_list
+                        and not is_pending_interview_actions
+                        and "phase" in values
+                    ):
                         phase = CareerLoopPhase(values["phase"])
                 except (TypeError, ValueError):
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
                 if is_schedule_list:
                     collection = self._loop.list_schedule_events
+                elif is_pending_interview_actions:
+                    collection = self._loop.list_pending_interview_actions
                 else:
                     collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
                 arguments = {"user_id": user_id, "limit": limit, "after": after}
                 if is_applications or (is_schedule_list and status is not None):
                     arguments["status"] = status
-                elif not is_schedule_list and phase is not None:
+                elif (
+                    not is_schedule_list
+                    and not is_pending_interview_actions
+                    and phase is not None
+                ):
                     arguments["phase"] = phase
                 return self._respond(start_response, "200 OK", collection(**arguments))
             if is_start:
@@ -1389,4 +1416,91 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "type": "object", "additionalProperties": False,
                             "required": list(event_properties), "properties": event_properties}},
                         "next_after": {**event_properties["event_id"], "type": ["string", "null"]}}})}}}}
+    interview_action_id = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+    }
+    interview_action_item = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "run_id", "state_version", "phase", "action_kind", "event_id",
+            "employer", "local_date", "local_start_time", "timezone",
+        ],
+        "properties": {
+            "run_id": interview_action_id,
+            "state_version": {"type": "integer", "minimum": 1},
+            "phase": {
+                "type": "string",
+                "enum": ["interview_approval", "interview_reconciliation"],
+            },
+            "action_kind": {
+                "type": "string",
+                "enum": ["approve_interview", "reconcile_interview_response"],
+            },
+            "event_id": interview_action_id,
+            "employer": {"type": "string", "minLength": 1, "maxLength": 500},
+            "local_date": {"type": "string", "format": "date"},
+            "local_start_time": {
+                "type": "string",
+                "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$",
+            },
+            "timezone": {"type": "string", "minLength": 1, "maxLength": 100},
+        },
+    }
+    document["paths"]["/v1/candidate/pending-interview-actions"] = {
+        "get": {
+            "operationId": "listPendingCandidateInterviewActions",
+            "security": [{"bearerAuth": []}],
+            "parameters": [
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer", "minimum": 1, "maximum": 25, "default": 25
+                    },
+                },
+                {
+                    "name": "after",
+                    "in": "query",
+                    "description": "Exclusive run-ID cursor, not an ownership credential",
+                    "schema": interview_action_id,
+                },
+            ],
+            "responses": {
+                "200": {
+                    "description": (
+                        "Bounded, read-only interview actions belonging to the authenticated "
+                        "candidate; internal operation and provider identifiers are omitted"
+                    ),
+                    "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                    "content": content({
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["schema_version", "items", "next_after"],
+                        "properties": {
+                            "schema_version": {"const": 1},
+                            "items": {
+                                "type": "array",
+                                "maxItems": 25,
+                                "items": interview_action_item,
+                            },
+                            "next_after": {
+                                **interview_action_id,
+                                "type": ["string", "null"],
+                            },
+                        },
+                    }),
+                },
+                **common_responses,
+                "405": {
+                    "description": "Only GET is allowed",
+                    "headers": {"Allow": {"schema": {"const": "GET"}}},
+                    "content": content(error_schema),
+                },
+            },
+        }
+    }
     return document

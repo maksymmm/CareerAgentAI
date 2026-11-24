@@ -1590,3 +1590,19 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Pending interview action rediscovery delivered: authenticated
+`GET /v1/candidate/pending-interview-actions` now provides bounded owner-scoped keyset
+pages for durable interview approval and reconciliation gates. SQL filters the trusted
+owner and pending phases before payload parsing; the projection validates the persisted
+loop/action binding and returns only the run ID, state version, event identity, employer,
+local date/time and timezone. Internal operation IDs, provider identifiers and raw
+payloads are omitted. The candidate sandbox can rediscover these actions after a tab or
+process restart, select the run, then refresh status and use the existing approval or
+version-bound reconciliation gate. Listing is read-only and cannot approve or modify a
+calendar event. Regressions cover pagination, owner isolation including malformed
+foreign payloads, malformed owned snapshots, auth-before-storage, browser rediscovery,
+read-only behavior and stale-version rejection. Next: operator-facing recovery
+observability across application, communication and calendar actions without exposing
+provider payloads or enabling retries from status reads.
