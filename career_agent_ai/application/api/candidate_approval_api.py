@@ -26,6 +26,8 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 )
 from .candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
+from career_agent_ai.application.scheduling.calendar_adapter import CalendarReconciliationEvidenceError
+from career_agent_ai.application.scheduling.scheduling_repository import SchedulingConflictError
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 
 
@@ -55,6 +57,10 @@ class CandidateApprovalLoop(Protocol):
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def accept_candidate_schedule_event(self, event_id: str, *, user_id: str, expected_version: int) -> dict[str, Any]: ...
+    def get_candidate_schedule_acceptance(self, event_id: str, *, user_id: str, expected_version: int) -> dict[str, Any]: ...
+    def recover_candidate_schedule_acceptance(self, event_id: str, *, user_id: str, expected_version: int) -> dict[str, Any]: ...
+    def resolve_candidate_schedule_acceptance(self, event_id: str, *, user_id: str, expected_version: int, completed: bool, provider_event_id: str | None = None) -> dict[str, Any]: ...
     def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None,
                              status: ScheduleStatus | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
@@ -146,6 +152,10 @@ class CandidateApprovalWSGIApp:
         is_application = parts == ["v1", "candidate", "application"] or is_history
         is_schedule = parts == ["v1", "candidate", "schedule-event"]
         is_schedule_list = parts == ["v1", "candidate", "schedule-events"]
+        is_schedule_accept = parts == ["v1", "candidate", "schedule-event", "accept"]
+        is_schedule_acceptance = parts == ["v1", "candidate", "schedule-event", "acceptance"]
+        is_schedule_acceptance_recovery = parts == ["v1", "candidate", "schedule-event", "acceptance-recovery"]
+        is_schedule_acceptance_reconciliation = parts == ["v1", "candidate", "schedule-event", "acceptance-reconciliation"]
         is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications or is_schedule_list
         is_existing_run = (
             len(parts) == 5
@@ -153,7 +163,7 @@ class CandidateApprovalWSGIApp:
             and parts[4] in {"approval", "continue", "status", "application-reconciliation",
                              "message-reconciliation", "interview-reconciliation"}
         )
-        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
+        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule and not is_schedule_accept and not is_schedule_acceptance and not is_schedule_acceptance_recovery and not is_schedule_acceptance_reconciliation:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -183,6 +193,84 @@ class CandidateApprovalWSGIApp:
                     {"error": "invalid_request", "message": str(exc)[:500]},
                 )
         try:
+            if is_schedule_acceptance:
+                if method != "GET":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "GET")],
+                    )
+                try:
+                    event_id, event_version = self._schedule_acceptance_query(
+                        str(environ.get("QUERY_STRING", ""))
+                    )
+                except (TypeError, ValueError, InvalidOperation):
+                    return self._respond(
+                        start_response, "400 Bad Request", {"error": "invalid_request"}
+                    )
+                result = self._loop.get_candidate_schedule_acceptance(
+                    event_id, user_id=user_id, expected_version=event_version
+                )
+                return self._respond(start_response, "200 OK", result)
+
+            if (
+                is_schedule_accept
+                or is_schedule_acceptance_recovery
+                or is_schedule_acceptance_reconciliation
+            ):
+                if method != "POST":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    if is_schedule_acceptance_reconciliation:
+                        (
+                            event_id, event_version, completed, provider_event_id,
+                        ) = self._schedule_acceptance_reconciliation(payload)
+                    else:
+                        event_id, event_version = self._schedule_acceptance_request(payload)
+                except (TypeError, ValueError, InvalidOperation) as exc:
+                    return self._respond(
+                        start_response, "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                try:
+                    if is_schedule_accept:
+                        result = self._loop.accept_candidate_schedule_event(
+                            event_id, user_id=user_id, expected_version=event_version
+                        )
+                    elif is_schedule_acceptance_recovery:
+                        result = self._loop.recover_candidate_schedule_acceptance(
+                            event_id, user_id=user_id, expected_version=event_version
+                        )
+                    else:
+                        result = self._loop.resolve_candidate_schedule_acceptance(
+                            event_id, user_id=user_id, expected_version=event_version,
+                            completed=completed, provider_event_id=provider_event_id,
+                        )
+                except CalendarReconciliationEvidenceError:
+                    return self._respond(
+                        start_response, "409 Conflict",
+                        {"error": "provider_evidence_conflict"},
+                    )
+                except (ValueError, TypeError, SchedulingConflictError):
+                    return self._respond(
+                        start_response, "409 Conflict", {"error": "approval_conflict"}
+                    )
+                response_status = (
+                    "202 Accepted"
+                    if result["status"] in {"in_progress", "reconciliation_required"}
+                    else "200 OK"
+                )
+                return self._respond(start_response, response_status, result)
+
             if is_application or is_schedule:
                 if method != "GET":
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
@@ -644,6 +732,96 @@ class CandidateApprovalWSGIApp:
         else:
             provider_event_id = None
         return completed, provider_event_id, normalized_state_version
+
+    @staticmethod
+    def _schedule_acceptance_request(
+        payload: Mapping[str, Any],
+    ) -> tuple[str, int]:
+        """Validate one explicit candidate acceptance for an exact event version."""
+        if set(payload) != {"schema_version", "event_id", "event_version"}:
+            raise ValueError("acceptance body has unknown or missing fields.")
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
+            raise ValueError("schema_version must equal 1.")
+        event_id = validate_schedule_identifier(payload["event_id"], "event_id")
+        event_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["event_version"]
+        )
+        if event_version < 1:
+            raise ValueError("event_version must be positive.")
+        return event_id, event_version
+
+    @staticmethod
+    def _schedule_acceptance_reconciliation(
+        payload: Mapping[str, Any],
+    ) -> tuple[str, int, bool, str | None]:
+        """Validate a version-bound provider observation for candidate acceptance."""
+        allowed = {
+            "schema_version", "event_id", "event_version", "completed",
+            "provider_event_id",
+        }
+        required = {"schema_version", "event_id", "event_version", "completed"}
+        if set(payload) - allowed or not required <= set(payload):
+            raise ValueError("acceptance reconciliation body has unknown or missing fields.")
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
+            raise ValueError("schema_version must equal 1.")
+        event_id = validate_schedule_identifier(payload["event_id"], "event_id")
+        event_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["event_version"]
+        )
+        if event_version < 1:
+            raise ValueError("event_version must be positive.")
+        completed = payload["completed"]
+        if type(completed) is not bool:
+            raise ValueError("completed must be a boolean.")
+        if completed:
+            provider_event_id = payload.get("provider_event_id")
+            if (
+                not isinstance(provider_event_id, str)
+                or not provider_event_id
+                or len(provider_event_id) > 1_000
+                or provider_event_id != provider_event_id.strip()
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in provider_event_id)
+                or any(0xD800 <= ord(ch) <= 0xDFFF for ch in provider_event_id)
+            ):
+                raise ValueError("provider_event_id is malformed.")
+        elif "provider_event_id" in payload:
+            raise ValueError("provider_event_id is forbidden when completed is false.")
+        else:
+            provider_event_id = None
+        return event_id, event_version, completed, provider_event_id
+
+    @staticmethod
+    def _schedule_acceptance_query(query: str) -> tuple[str, int]:
+        """Parse the exact two-field status query before opening durable storage."""
+        if len(query) > 1_000 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
+            raise ValueError("query is malformed or too long.")
+        pairs = parse_qsl(
+            query, keep_blank_values=True, strict_parsing=True,
+            max_num_fields=2, errors="strict",
+        )
+        values = dict(pairs)
+        if len(pairs) != 2 or len(values) != 2 or set(values) != {
+            "event_id", "event_version"
+        }:
+            raise ValueError("event_id and event_version are required exactly once.")
+        event_id = validate_schedule_identifier(values["event_id"], "event_id")
+        raw_version = values["event_version"]
+        if (
+            not raw_version.isascii()
+            or not raw_version.isdecimal()
+            or len(raw_version) > 19
+        ):
+            raise ValueError("event_version must be a positive SQLite integer.")
+        event_version = int(raw_version)
+        if not 1 <= event_version <= MAX_SQLITE_STATE_VERSION:
+            raise ValueError("event_version must be a positive SQLite integer.")
+        return event_id, event_version
 
     @staticmethod
     def _owner_scoped_run_id(user_id: str, client_run_id: str) -> str:
@@ -1389,4 +1567,109 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "type": "object", "additionalProperties": False,
                             "required": list(event_properties), "properties": event_properties}},
                         "next_after": {**event_properties["event_id"], "type": ["string", "null"]}}})}}}}
+    acceptance_state_schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_version", "event_id", "event_version", "status"],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "event_id": event_properties["event_id"],
+            "event_version": {"type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION},
+            "status": {"type": "string", "enum": [
+                "not_started", "prepared", "in_progress", "succeeded",
+                "failed", "reconciliation_required",
+            ]},
+        },
+    }
+    acceptance_request_schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_version", "event_id", "event_version"],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "event_id": event_properties["event_id"],
+            "event_version": {"type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION},
+        },
+    }
+    acceptance_reconciliation_schema = {
+        "type": "object", "additionalProperties": False,
+        "required": ["schema_version", "event_id", "event_version", "completed"],
+        "properties": {
+            **acceptance_request_schema["properties"],
+            "completed": {"type": "boolean"},
+            "provider_event_id": {
+                "type": "string", "minLength": 1, "maxLength": 1000,
+                "pattern": r"^(?![\\s\\S]*[\\u0000-\\u001F\\u007F\\uD800-\\uDFFF])[^\\s]+$",
+            },
+        },
+        "allOf": [
+            {"if": {"properties": {"completed": {"const": True}}},
+             "then": {"required": ["provider_event_id"]}},
+            {"if": {"properties": {"completed": {"const": False}}},
+             "then": {"not": {"required": ["provider_event_id"]}}},
+        ],
+    }
+    common_acceptance_responses = {
+        **common_responses,
+        "404": {"description": "Missing or foreign candidate event", "content": content(error_schema)},
+        "409": {"description": "Stale approval or conflicting provider evidence", "content": content(error_schema)},
+        "405": {"description": "Method not allowed", "content": content(error_schema)},
+        "415": {"description": "Request body is not application/json", "content": content(error_schema)},
+    }
+    document["paths"]["/v1/candidate/schedule-event/accept"] = {
+        "post": {
+            "operationId": "acceptCandidateScheduleEvent",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {"required": True, "content": content(acceptance_request_schema)},
+            "responses": {
+                "200": {"description": "Sandbox calendar acceptance completed or a definite no-effect was recorded",
+                        "content": content(acceptance_state_schema)},
+                "202": {"description": "Acceptance is active or requires provider-evidence reconciliation",
+                        "content": content(acceptance_state_schema)},
+                **common_acceptance_responses,
+            },
+        },
+    }
+    document["paths"]["/v1/candidate/schedule-event/acceptance"] = {
+        "get": {
+            "operationId": "getCandidateScheduleAcceptance",
+            "security": [{"bearerAuth": []}],
+            "parameters": [
+                {"name": "event_id", "in": "query", "required": True,
+                 "schema": event_properties["event_id"]},
+                {"name": "event_version", "in": "query", "required": True,
+                 "schema": {"type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION}},
+            ],
+            "responses": {
+                "200": {"description": "Read-only owner-scoped durable acceptance state",
+                        "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                        "content": content(acceptance_state_schema)},
+                **common_acceptance_responses,
+            },
+        },
+    }
+    document["paths"]["/v1/candidate/schedule-event/acceptance-recovery"] = {
+        "post": {
+            "operationId": "recoverCandidateScheduleAcceptance",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {"required": True, "content": content(acceptance_request_schema)},
+            "responses": {
+                "200": {"description": "No stale in-progress acceptance was found",
+                        "content": content(acceptance_state_schema)},
+                "202": {"description": "A live or interrupted acceptance remains unresolved",
+                        "content": content(acceptance_state_schema)},
+                **common_acceptance_responses,
+            },
+        },
+    }
+    document["paths"]["/v1/candidate/schedule-event/acceptance-reconciliation"] = {
+        "post": {
+            "operationId": "resolveCandidateScheduleAcceptance",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {"required": True, "content": content(acceptance_reconciliation_schema)},
+            "responses": {
+                "200": {"description": "Provider evidence reconciled the exact approved event version",
+                        "content": content(acceptance_state_schema)},
+                **common_acceptance_responses,
+            },
+        },
+    }
     return document
