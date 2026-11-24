@@ -25,7 +25,14 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     validate_loop_identifier,
 )
 from .candidate_sandbox_ui import candidate_sandbox_html
-from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
+from career_agent_ai.application.scheduling.models import (
+    ScheduleEventType,
+    ScheduleStatus,
+    validate_schedule_identifier,
+)
+from career_agent_ai.application.scheduling.candidate_schedule_cursor import (
+    decode_schedule_event_cursor,
+)
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 
 
@@ -56,7 +63,8 @@ class CandidateApprovalLoop(Protocol):
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None,
-                             status: ScheduleStatus | None = None) -> dict[str, Any]: ...
+                             status: ScheduleStatus | None = None,
+                             event_type: ScheduleEventType | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
     def resolve_application_reconciliation(
@@ -218,11 +226,14 @@ class CandidateApprovalWSGIApp:
                     if is_schedule_list and re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("invalid escape")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True,
-                                      max_num_fields=3,
+                                      max_num_fields=4,
                                       errors="strict")
                     values = dict(pairs)
-                    allowed = ({"limit", "after", "status"} if (is_applications or is_schedule_list)
-                               else {"limit", "after", "phase"})
+                    allowed = (
+                        {"limit", "after", "status"} if is_applications else
+                        {"limit", "after", "status", "event_type"} if is_schedule_list else
+                        {"limit", "after", "phase"}
+                    )
                     if len(values) != len(pairs) or set(values) - allowed:
                         raise ValueError("unknown or duplicate query parameter")
                     raw_limit = values.get("limit", "25")
@@ -232,21 +243,23 @@ class CandidateApprovalWSGIApp:
                     if not 1 <= limit <= 100:
                         raise ValueError("invalid limit")
                     after = values.get("after")
+                    status = None
+                    event_type = None
+                    if is_applications and "status" in values:
+                        status = JobApplicationStatus(values["status"])
+                    elif is_schedule_list and "status" in values:
+                        status = ScheduleStatus(values["status"])
+                    if is_schedule_list and "event_type" in values:
+                        event_type = ScheduleEventType(values["event_type"])
                     if after is not None:
                         if is_applications:
                             if not after or len(after) > 200 or after != after.strip():
                                 raise ValueError("invalid cursor")
                             after.encode("utf-8", errors="strict")
                         elif is_schedule_list:
-                            if validate_schedule_identifier(after, "after") != after:
-                                raise ValueError("invalid cursor")
+                            decode_schedule_event_cursor(after, status=status, event_type=event_type)
                         elif validate_loop_identifier(after, "after") != after:
                             raise ValueError("invalid cursor")
-                    status = None
-                    if is_applications and "status" in values:
-                        status = JobApplicationStatus(values["status"])
-                    elif is_schedule_list and "status" in values:
-                        status = ScheduleStatus(values["status"])
                     phase = None
                     if not is_applications and not is_schedule_list and "phase" in values:
                         phase = CareerLoopPhase(values["phase"])
@@ -257,9 +270,14 @@ class CandidateApprovalWSGIApp:
                 else:
                     collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
                 arguments = {"user_id": user_id, "limit": limit, "after": after}
-                if is_applications or (is_schedule_list and status is not None):
+                if is_applications:
                     arguments["status"] = status
-                elif not is_schedule_list and phase is not None:
+                elif is_schedule_list:
+                    if status is not None:
+                        arguments["status"] = status
+                    if event_type is not None:
+                        arguments["event_type"] = event_type
+                elif phase is not None:
                     arguments["phase"] = phase
                 return self._respond(start_response, "200 OK", collection(**arguments))
             if is_start:
@@ -1369,15 +1387,21 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         "schema_version": {"const": 1}, "event": {"type": "object",
                             "additionalProperties": False, "required": list(event_properties),
                             "properties": event_properties}}})}}}}
+    schedule_cursor_schema = {
+        "type": "string", "maxLength": 600,
+        "pattern": r"^(?:[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}|sc1~\.[A-Za-z0-9_-]{1,267}\.[0-9a-f]{64})$",
+    }
     schedule_detail = document["paths"]["/v1/candidate/schedule-event"]["get"]
     document["paths"]["/v1/candidate/schedule-events"] = {"get": {
         "operationId": "listCandidateScheduleEvents", "security": [{"bearerAuth": []}],
         "parameters": [
             {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
-            {"name": "after", "in": "query", "description": "Exclusive event-ID cursor, not an ownership credential",
-             "schema": event_properties["event_id"]},
-            {"name": "status", "in": "query", "description": "Optional lifecycle status filter preserved across pages",
-             "schema": event_properties["status"]}],
+            {"name": "after", "in": "query", "description": "Exclusive filter-bound keyset cursor; not an ownership credential",
+             "schema": schedule_cursor_schema},
+            {"name": "status", "in": "query", "description": "Optional lifecycle status filter bound into continuation cursors",
+             "schema": event_properties["status"]},
+            {"name": "event_type", "in": "query", "description": "Optional event-kind filter applied before pagination",
+             "schema": event_properties["event_type"]}],
         "responses": {**common_responses,
             "405": schedule_detail["responses"]["405"],
             "200": {"description": "Bounded read-only owned events in event-ID order; no calendar actions",
@@ -1388,5 +1412,5 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         "items": {"type": "array", "maxItems": 100, "items": {
                             "type": "object", "additionalProperties": False,
                             "required": list(event_properties), "properties": event_properties}},
-                        "next_after": {**event_properties["event_id"], "type": ["string", "null"]}}})}}}}
+                        "next_after": {**schedule_cursor_schema, "type": ["string", "null"]}}})}}}}
     return document

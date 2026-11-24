@@ -3,7 +3,12 @@
 from dataclasses import asdict
 from typing import Any
 
-from career_agent_ai.application.scheduling.models import HumanScheduleView, ScheduleStatus, validate_schedule_identifier
+from career_agent_ai.application.scheduling.models import (
+    HumanScheduleView, ScheduleEventType, ScheduleStatus, validate_schedule_identifier,
+)
+from career_agent_ai.application.scheduling.candidate_schedule_cursor import (
+    decode_schedule_event_cursor, encode_schedule_event_cursor,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
 
@@ -41,16 +46,19 @@ class SQLiteCandidateSchedule:
 
     def list_page(self, *, user_id: str, limit: int = 25,
                   after: str | None = None,
-                  status: ScheduleStatus | None = None) -> dict[str, Any]:
+                  status: ScheduleStatus | None = None,
+                  event_type: ScheduleEventType | None = None) -> dict[str, Any]:
         """Read bounded ID-ordered owned events without private fields or calendar I/O."""
         owner = validate_schedule_identifier(user_id, "user_id")
-        cursor = "" if after is None else validate_schedule_identifier(after, "after")
-        if after is not None and cursor != after:
-            raise ValueError("after must be a canonical event identity.")
+        cursor = "" if after is None else decode_schedule_event_cursor(
+            after, status=status, event_type=event_type
+        )
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100.")
         if status is not None and not isinstance(status, ScheduleStatus):
             raise TypeError("status must be a ScheduleStatus.")
+        if event_type is not None and not isinstance(event_type, ScheduleEventType):
+            raise TypeError("event_type must be a ScheduleEventType.")
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             # Bound in SQL, using the owner/ID index installed only by writable startup.
@@ -59,13 +67,18 @@ class SQLiteCandidateSchedule:
             if status is not None:
                 where += " AND status = ?"
                 parameters += (status.value,)
+            if event_type is not None:
+                where += " AND event_type = ?"
+                parameters += (event_type.value,)
             rows = database.connection.execute(
                 "SELECT " + _VISIBLE_COLUMNS + "FROM scheduling_events WHERE " +
                 where + " ORDER BY event_id LIMIT ?", parameters + (limit + 1,),
             ).fetchall()
             items = [self._snapshot(row) for row in rows[:limit]]
             return {"schema_version": 1, "items": items,
-                    "next_after": items[-1]["event_id"] if len(rows) > limit else None}
+                    "next_after": (encode_schedule_event_cursor(
+                        items[-1]["event_id"], status=status, event_type=event_type
+                    ) if len(rows) > limit else None)}
         finally:
             database.close()
 

@@ -763,7 +763,7 @@ def test_schedule_http_collection_restart_owner_pagination_and_contract(tmp_path
     assert path.read_bytes() == baseline and "private" not in str(first) + str(second)
     operation = candidate_approval_openapi_document()["paths"][route]["get"]
     assert operation["security"] == [{"bearerAuth": []}]
-    assert {parameter["name"] for parameter in operation["parameters"]} == {"limit", "after", "status"}
+    assert {parameter["name"] for parameter in operation["parameters"]} == {"limit", "after", "status", "event_type"}
     schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert set(first) == set(schema["required"])
     assert set(first["items"][0]) == set(schema["properties"]["items"]["items"]["required"])
@@ -1868,6 +1868,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "async function guarded(operation, preserveOverview = false)" in html
     assert "show({error: String(error.message || error)}, preserveOverview)" in html
     assert "guarded(() => loadEvents(), true)" in html
+    assert 'id="event-type"' in html
+    assert "&event_type=" in html
+    assert "eventCursorId" in html and "eventCursorMatches" in html
     assert "guarded(loadApplicationHistory, true)" in html
     assert "guarded(() => loadApplications(), true)" in html
     assert "guarded(() => loadRunList(), true)" in html
@@ -2218,7 +2221,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "loadApplicationDetail(item.application_id, item.state_version, button)" in application_loader
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
     assert "items.length !== 25" not in event_loader
-    assert "page.next_after !== items.at(-1).event_id" in event_loader
+    assert "eventCursorId(page.next_after) !== items.at(-1).event_id" in event_loader
+    assert "selectedType === '' || item.event_type === selectedType" in event_loader
+    assert "&event_type=" in event_loader
     event_detail_loader = html[html.index("async function loadEventDetail"):html.index("async function loadEvents")]
     assert event_detail_loader.index("const versionFloor") < event_detail_loader.index("clearEventDetail()")
     assert "eventVersionFloorId === identifier" in event_detail_loader
@@ -3154,3 +3159,46 @@ def test_post_approval_accepts_maximum_sqlite_state_version():
     assert status == "200 OK"
     assert response == {"run_id": "run-1", "phase": "message_approval"}
     assert loop.submission.state_version == (1 << 63) - 1
+
+
+
+def test_schedule_http_collection_filters_event_type_and_binds_cursor():
+    from urllib.parse import urlencode
+    from career_agent_ai.application.scheduling.models import ScheduleEventType, ScheduleStatus
+    from career_agent_ai.application.scheduling.candidate_schedule_cursor import (
+        encode_schedule_event_cursor,
+    )
+    route = "/v1/candidate/schedule-events"
+    cursor = encode_schedule_event_cursor(
+        "event-a", status=ScheduleStatus.PROPOSED, event_type=ScheduleEventType.INTERVIEW
+    )
+
+    class Loop:
+        def list_schedule_events(self, **kwargs):
+            assert kwargs == {
+                "user_id": "candidate-1", "limit": 2, "after": cursor,
+                "status": ScheduleStatus.PROPOSED, "event_type": ScheduleEventType.INTERVIEW,
+            }
+            return {"schema_version": 1, "items": [], "next_after": None}
+
+    query = urlencode({
+        "limit": 2, "status": "proposed", "event_type": "interview", "after": cursor,
+    })
+    assert request(app(Loop()), path=route, query=query)[0][0] == "200 OK"
+    mismatch = urlencode({
+        "limit": 2, "status": "accepted", "event_type": "interview", "after": cursor,
+    })
+    assert request(app(object()), path=route, query=mismatch)[0][0] == "400 Bad Request"
+    for invalid in (
+        "event_type=", "event_type=unknown",
+        "event_type=interview&event_type=phone_call",
+        "status=proposed&event_type=interview&after=event-a",
+    ):
+        assert request(app(object()), path=route, query=invalid)[0][0] == "400 Bad Request"
+
+    operation = candidate_approval_openapi_document()["paths"][route]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+    assert parameters["event_type"]["schema"]["enum"] == [
+        "interview", "trial_day", "phone_call", "video_call", "other",
+    ]
+    assert parameters["after"]["schema"]["maxLength"] == 600

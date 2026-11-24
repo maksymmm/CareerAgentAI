@@ -170,6 +170,13 @@ _HTML = r"""<!doctype html>
       <option value="declined">Declined</option><option value="reschedule_requested">Reschedule requested</option>
       <option value="cancelled">Cancelled</option>
     </select>
+    <label for="event-type">Event type</label>
+    <select id="event-type">
+      <option value="">All event types</option>
+      <option value="interview">Interview</option><option value="trial_day">Trial day</option>
+      <option value="phone_call">Phone call</option><option value="video_call">Video call</option>
+      <option value="other">Other</option>
+    </select>
     <button id="list-events" type="button">Load my events</button>
     <ul id="owned-events" aria-label="My events" aria-busy="false"></ul>
     <p id="events-state" role="status"></p>
@@ -217,6 +224,22 @@ _HTML = r"""<!doctype html>
     let selectedEventId = null;
     let selectedEventVersion = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+    const eventCursorId = value => {
+      if (eventId(value)) return value;
+      if (typeof value !== 'string') return null;
+      const match = /^sc1~\.([A-Za-z0-9_-]{1,267})\.([0-9a-f]{64})$/.exec(value);
+      if (!match) return null;
+      try {
+        const encoded = match[1].replace(/-/g, '+').replace(/_/g, '/');
+        const decoded = atob(encoded + '='.repeat((4 - encoded.length % 4) % 4));
+        return eventId(decoded) ? decoded : null;
+      } catch (error) { return null; }
+    };
+    const eventCursorMatches = (value, status, type) => {
+      if (value === null) return true;
+      if (eventCursorId(value) === null) return false;
+      return value.startsWith('sc1~.') ? status !== '' || type !== '' : type === '';
+    };
     const calendarDate = value => {
       if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
       const [year, month, day] = value.split('-').map(Number);
@@ -353,21 +376,30 @@ _HTML = r"""<!doctype html>
       clearEvents();
       const generation = eventsGeneration;
       const selectedStatus = byId('event-status').value;
+      const selectedType = byId('event-type').value;
+      const cursorId = after === null ? '' : eventCursorId(after);
+      if (after !== null && !eventCursorMatches(after, selectedStatus, selectedType)) {
+        throw new Error('Invalid event cursor.');
+      }
       byId('list-events').disabled = true;
       byId('owned-events').setAttribute('aria-busy', 'true');
       byId('events-state').textContent = 'Loading events…';
       try {
         const page = await call('/v1/candidate/schedule-events?limit=25' +
           (selectedStatus === '' ? '' : '&status=' + encodeURIComponent(selectedStatus)) +
+          (selectedType === '' ? '' : '&event_type=' + encodeURIComponent(selectedType)) +
           (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
           'Schedule events request failed.', true);
         if (generation !== eventsGeneration) return;
         if (!page || page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
-            !(page.next_after === null || eventId(page.next_after))) throw new Error('Invalid event page.');
+            !eventCursorMatches(page.next_after, selectedStatus, selectedType)) throw new Error('Invalid event page.');
         const items = page.items.map(eventSnapshot);
-        if (!items.every(item => selectedStatus === '' || item.status === selectedStatus)) throw new Error('Invalid event status filter.');
-        if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : (after || ''))) ||
-            (page.next_after !== null && page.next_after !== items.at(-1).event_id)) throw new Error('Invalid event cursor.');
+        if (!items.every(item => (selectedStatus === '' || item.status === selectedStatus) &&
+            (selectedType === '' || item.event_type === selectedType))) throw new Error('Invalid event filters.');
+        if (!items.every((item, index) => item.event_id > (index ? items[index - 1].event_id : cursorId)) ||
+            (page.next_after !== null && eventCursorId(page.next_after) !== items.at(-1).event_id)) {
+          throw new Error('Invalid event cursor.');
+        }
         for (const [index, item] of items.entries()) {
           const row = document.createElement('li');
           row.textContent = item.employer_name + ' — ' + item.event_type + ' — ' + item.status + ' — ' +
@@ -399,6 +431,7 @@ _HTML = r"""<!doctype html>
     }
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents(), true));
     byId('event-status').addEventListener('change', clearEvents);
+    byId('event-type').addEventListener('change', clearEvents);
     byId('next-events').addEventListener('click', () => guarded(() => {
       if (nextEventCursor !== null) return loadEvents(nextEventCursor);
     }, true));
@@ -1027,7 +1060,7 @@ _HTML = r"""<!doctype html>
       byId(id).addEventListener('input', invalidateInputContext);
     }
     byId('clear-session').addEventListener('click', () => {
-      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'run-phase', 'application-status', 'event-status']) byId(id).value = '';
+      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'run-phase', 'application-status', 'event-status', 'event-type']) byId(id).value = '';
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });

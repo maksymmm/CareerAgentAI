@@ -1,3 +1,5 @@
+Candidate schedule discovery parity: the owner-scoped event collection now filters by validated lifecycle status and event type in SQL before keyset pagination. Filtered `sc1~` cursors bind the exact filter pair, reject cross-filter replay before storage access, and preserve legacy plain-ID continuation for existing status-only clients. Writable startup installs type-only and combined status/type indexes; read-only requests never migrate storage. Candidate sandbox filter changes clear pages and selected details. Regression coverage includes restart/read-only persistence, SQL query plans, malformed filters, cursor replay and OpenAPI/UI contract. Next: exact-head full CI and independent Codex/security review, then continue provider evidence contention audit.
+
 Relevance boundary follow-up: hyphens are separators between complete technology
 identifiers and location tokens, while letters, digits, underscore, plus, hash and
 period remain part of identifier boundaries. Java matches Java-based and New matches
