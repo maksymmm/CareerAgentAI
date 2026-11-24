@@ -238,8 +238,8 @@ def test_operational_action_openapi_contract_is_bounded_and_minimal():
     assert schema["properties"]["items"]["maxItems"] == 25
     item = schema["properties"]["items"]["items"]
     assert set(item["required"]) == {
-        "operation_ref", "action_family", "status", "created_at",
-        "updated_at", "error_present",
+        "operation_ref", "candidate_run_ref", "action_family", "status",
+        "created_at", "updated_at", "error_present",
     }
     assert item["additionalProperties"] is False
     assert "operation_id" not in item["properties"]
