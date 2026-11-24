@@ -94,7 +94,7 @@ def test_candidate_action_operations_correlate_across_all_sandbox_providers(
     )
 
     attempts = {"application": 0, "communication": 0, "calendar": 0}
-    original_submit = runtime_agent = runtime_composition.SQLiteSandboxSubmissionProvider.submit
+    original_submit = runtime_composition.SQLiteSandboxSubmissionProvider.submit
     original_send = runtime_composition.FakeCommunicationAdapter.send
     original_accept = runtime_composition.FakeCalendarAdapter.accept
 
