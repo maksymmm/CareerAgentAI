@@ -44,13 +44,16 @@ class ExternalActionService:
         operation_id: str,
         action_type: str,
         payload: Mapping[str, Any],
+        *,
+        correlation_id: str | None = None,
     ) -> ExternalActionOperation:
-        """Durably record an external-action intent before any provider call."""
+        """Durably record an intent and optional non-payload correlation metadata."""
         return self._repository.create(
             ExternalActionOperation(
                 operation_id=operation_id,
                 action_type=action_type,
                 payload=payload,
+                correlation_id=correlation_id,
             )
         )
 
