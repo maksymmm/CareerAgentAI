@@ -3936,7 +3936,7 @@ def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_r
     resolve_bearer = lambda token: "candidate-1" if token == "valid" else None
     runtime1 = RuntimeCandidateApp(
         database_path=str(path), jobs=(), resolve_bearer=resolve_bearer,
-        sandbox_outcome_plan=timeout_after_effect,
+        sandbox_calendar_outcome_plan=timeout_after_effect,
     )
     server1 = make_server("127.0.0.1", 0, runtime1, handler_class=QuietHandler)
     thread1 = Thread(target=server1.serve_forever, daemon=True)
@@ -3971,7 +3971,7 @@ def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_r
 
             runtime2 = RuntimeCandidateApp(
                 database_path=str(path), jobs=(), resolve_bearer=resolve_bearer,
-                sandbox_outcome_plan=forbid_provider_replay,
+                sandbox_calendar_outcome_plan=forbid_provider_replay,
             )
             server2 = make_server("127.0.0.1", 0, runtime2, handler_class=QuietHandler)
             thread2 = Thread(target=server2.serve_forever, daemon=True)
