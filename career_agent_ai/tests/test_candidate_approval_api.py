@@ -3467,3 +3467,187 @@ def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys
         "SELECT COUNT(*) FROM sandbox_calendar_effects"
     ).fetchone()[0] == 0
     database.close()
+
+
+
+class CandidateScheduleAcceptanceBrowserLoop(Loop):
+    def __init__(self, no_effect_first=False):
+        super().__init__()
+        self.status = "not_started"
+        self.no_effect_first = no_effect_first
+        self.acceptance_calls = []
+        self.reconciliation_calls = []
+        self.event = {
+            "event_id": "event-browser-1",
+            "employer_name": "Sandbox GmbH",
+            "event_type": "interview",
+            "location": "Berlin",
+            "status": "proposed",
+            "state_version": 1,
+            "start_at": "2026-11-24T10:00:00+00:00",
+            "end_at": "2026-11-24T11:00:00+00:00",
+            "local_date": "2026-11-24",
+            "local_start_time": "10:00:00",
+            "local_end_date": "2026-11-24",
+            "local_end_time": "11:00:00",
+            "timezone_name": "UTC",
+            "utc_offset": "+00:00",
+            "end_utc_offset": "+00:00",
+        }
+
+    def list_schedule_events(self, *, user_id, limit=25, after=None, status=None):
+        assert user_id == "candidate-1"
+        items = [dict(self.event)] if status in {None, "proposed", self.event["status"]} else []
+        if after is not None:
+            items = []
+        return {"schema_version": 1, "items": items, "next_after": None}
+
+    def get_schedule_event(self, event_id, *, user_id):
+        assert user_id == "candidate-1"
+        if event_id != self.event["event_id"]:
+            raise KeyError(event_id)
+        return {"schema_version": 1, "event": dict(self.event)}
+
+    def get_candidate_schedule_acceptance(self, event_id, *, user_id, expected_version):
+        assert (event_id, user_id, expected_version) == (
+            "event-browser-1", "candidate-1", 1
+        )
+        return {
+            "schema_version": 1, "event_id": event_id,
+            "event_version": expected_version, "status": self.status,
+        }
+
+    def accept_candidate_schedule_event(self, event_id, *, user_id, expected_version):
+        assert (event_id, user_id, expected_version) == (
+            "event-browser-1", "candidate-1", 1
+        )
+        self.acceptance_calls.append((event_id, expected_version))
+        if self.status in {"not_started", "prepared", "failed"}:
+            self.status = "reconciliation_required"
+        return {
+            "schema_version": 1, "event_id": event_id,
+            "event_version": expected_version, "status": self.status,
+        }
+
+    def recover_candidate_schedule_acceptance(self, event_id, *, user_id, expected_version):
+        assert user_id == "candidate-1"
+        return {
+            "schema_version": 1, "event_id": event_id,
+            "event_version": expected_version, "status": self.status,
+        }
+
+    def resolve_candidate_schedule_acceptance(
+        self, event_id, *, user_id, expected_version, completed, provider_event_id=None
+    ):
+        assert (event_id, user_id, expected_version) == (
+            "event-browser-1", "candidate-1", 1
+        )
+        self.reconciliation_calls.append((completed, provider_event_id))
+        if completed:
+            self.status = "succeeded"
+            self.event["status"] = "accepted"
+            self.event["state_version"] = 2
+        else:
+            self.status = "prepared"
+        return {
+            "schema_version": 1, "event_id": event_id,
+            "event_version": expected_version, "status": self.status,
+        }
+
+
+def _candidate_acceptance_browser(loop):
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, app(loop), handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def test_candidate_sandbox_browser_recovers_acceptance_after_reload_with_fresh_attestation():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    loop = CandidateScheduleAcceptanceBrowserLoop()
+    server, thread = _candidate_acceptance_browser(loop)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.locator("#accept-event").wait_for(state="visible")
+            page.locator("#accept-event").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "outcome is ambiguous", exact=False
+            ).wait_for()
+
+            page.reload()
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.locator("#acceptance-reconciliation-panel").wait_for(state="visible")
+            assert not page.locator("#acceptance-verified").is_checked()
+            assert page.locator("#acceptance-completed").is_disabled()
+            assert page.locator("#acceptance-provider-event-id").input_value() == ""
+
+            page.locator("#acceptance-verified").check()
+            page.locator("#acceptance-provider-event-id").fill("sandbox-calendar-event-1")
+            assert not page.locator("#acceptance-completed").is_disabled()
+            page.locator("#acceptance-completed").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "Acceptance is confirmed", exact=False
+            ).wait_for()
+            assert not page.locator("#acceptance-verified").is_checked()
+            assert page.locator("#acceptance-provider-event-id").input_value() == ""
+            assert loop.acceptance_calls == [("event-browser-1", 1)]
+            assert loop.reconciliation_calls == [(True, "sandbox-calendar-event-1")]
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_candidate_sandbox_browser_retries_only_after_verified_acceptance_no_effect():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    loop = CandidateScheduleAcceptanceBrowserLoop(no_effect_first=True)
+    server, thread = _candidate_acceptance_browser(loop)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.locator("#accept-event").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "outcome is ambiguous", exact=False
+            ).wait_for()
+
+            page.locator("#acceptance-verified").check()
+            page.locator("#acceptance-no-effect").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "provider confirmed no calendar effect", exact=False
+            ).wait_for()
+            assert not page.locator("#accept-event").is_disabled()
+            assert not page.locator("#acceptance-verified").is_checked()
+
+            page.locator("#accept-event").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "outcome is ambiguous", exact=False
+            ).wait_for()
+            assert loop.acceptance_calls == [
+                ("event-browser-1", 1), ("event-browser-1", 1)
+            ]
+            assert loop.reconciliation_calls == [(False, None)]
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
