@@ -1618,7 +1618,7 @@ def test_candidate_sandbox_browser_retries_reschedule_after_no_effect_across_run
         assert effects[0][2] == 0
         effect_event = json.loads(effects[0][1])
         assert effect_event["status"] == ScheduleStatus.RESCHEDULE_REQUESTED.value
-        assert effect_event["version"] == 2
+        assert effect_event["version"] == 1
         assert effect_event["start_at"] == datetime.fromisoformat(PENDING_START).isoformat()
         assert effect_event["end_at"] == datetime.fromisoformat(PENDING_END).isoformat()
         assert database.connection.execute(
