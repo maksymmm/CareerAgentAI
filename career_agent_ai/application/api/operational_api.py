@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qs
@@ -60,23 +61,39 @@ class OperationalApiService:
         }
 
 
-    def actions(self, *, limit: int = 25, after: str | None = None) -> dict[str, Any]:
-        """Return a bounded, read-only projection of non-terminal external actions."""
+    def actions(
+        self,
+        *,
+        limit: int = 25,
+        after: str | None = None,
+        candidate_run_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a bounded, read-only projection optionally scoped to one candidate run."""
         if (
             not isinstance(limit, int)
             or isinstance(limit, bool)
             or not 1 <= limit <= 25
         ):
             raise ValueError("limit must be between 1 and 25.")
+        if candidate_run_ref is not None and re.fullmatch(
+            r"[a-f0-9]{24}", candidate_run_ref
+        ) is None:
+            raise ValueError(
+                "candidate_run_ref must be a 24-character lowercase hexadecimal reference."
+            )
         if after is not None:
-            decode_action_cursor(after)
+            decode_action_cursor(after, candidate_run_ref=candidate_run_ref)
         now = self._clock()
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("operational API clock must return a timezone-aware datetime.")
         projection = getattr(self._probe, "list_action_statuses", None)
         if not callable(projection):
             raise RuntimeError("Operational action projection is unavailable.")
-        page = projection(limit=limit, after=after)
+        page = projection(
+            limit=limit,
+            after=after,
+            candidate_run_ref=candidate_run_ref,
+        )
         if (
             not isinstance(page, dict)
             or set(page) != {"items", "next_after"}
@@ -93,9 +110,14 @@ class OperationalApiService:
             raise RuntimeError("Operational action projection returned an invalid page.")
         if page["next_after"] is not None:
             try:
-                decode_action_cursor(page["next_after"])
+                decode_action_cursor(
+                    page["next_after"],
+                    candidate_run_ref=candidate_run_ref,
+                )
             except ValueError as exc:
-                raise RuntimeError("Operational action projection returned an invalid cursor.") from exc
+                raise RuntimeError(
+                    "Operational action projection returned an invalid cursor."
+                ) from exc
         return {
             "generated_at": now.astimezone(timezone.utc).isoformat(),
             "schema_version": 1,
@@ -226,11 +248,11 @@ class OperationalWSGIApp:
                 query = parse_qs(
                     str(environ.get("QUERY_STRING", "")),
                     keep_blank_values=True,
-                    max_num_fields=3,
+                    max_num_fields=4,
                     strict_parsing=True,
                     errors="strict",
                 )
-                if set(query) - {"limit", "after"} or any(
+                if set(query) - {"limit", "after", "candidate_run_ref"} or any(
                     len(values) != 1 for values in query.values()
                 ):
                     raise ValueError("unknown or duplicate operational action query parameter.")
@@ -243,8 +265,19 @@ class OperationalWSGIApp:
                 after = query.get("after", [None])[0]
                 if after is not None and (not after or len(after) > 1200):
                     raise ValueError("after must be a bounded opaque cursor.")
+                candidate_run_ref = query.get("candidate_run_ref", [None])[0]
+                if candidate_run_ref is not None and re.fullmatch(
+                    r"[a-f0-9]{24}", candidate_run_ref
+                ) is None:
+                    raise ValueError(
+                        "candidate_run_ref must be a 24-character lowercase hexadecimal reference."
+                    )
                 try:
-                    payload = self._service.actions(limit=limit, after=after)
+                    payload = self._service.actions(
+                        limit=limit,
+                        after=after,
+                        candidate_run_ref=candidate_run_ref,
+                    )
                     return self._respond(start_response, "200 OK", payload)
                 except ValueError:
                     raise
@@ -448,9 +481,17 @@ def openapi_document() -> dict[str, Any]:
                             "name": "after",
                             "in": "query",
                             "required": False,
-                            "description": "URL-safe encoded keyset cursor; not an authorization credential",
+                            "description": "URL-safe encoded keyset cursor bound to the active candidate-run filter; not an authorization credential",
                             "schema": {"type": "string", "minLength": 1, "maxLength": 1200,
                                        "pattern": "^[A-Za-z0-9_-]+$"},
+                        },
+                        {
+                            "name": "candidate_run_ref",
+                            "in": "query",
+                            "required": False,
+                            "description": "Stable candidate-run reference from the owner-scoped candidate status response",
+                            "schema": {"type": "string", "minLength": 24, "maxLength": 24,
+                                       "pattern": "^[a-f0-9]{24}$"},
                         },
                     ],
                     "responses": {
