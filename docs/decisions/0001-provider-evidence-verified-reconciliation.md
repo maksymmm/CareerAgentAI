@@ -40,14 +40,26 @@ are unchanged.
 
 ### Sandbox simulation
 
-The sandbox ledger commits the attempt and its effect in one transaction, so a missing row is
-authoritative: `ABSENT_CONFIRMED`. The lookup takes the SQLite writer lock first, which
-serializes it with any in-flight submit, so a pending effect cannot be read as absent. Failure
-to take the lock is reported as `UNKNOWN`-equivalent (lookup error, fail closed). Verification
-also rejects a connection that already has an open transaction: reusing its potentially stale
-read snapshot would not acquire the promised writer lock. Evidence objects accept only the
-closed `EvidenceState` enum, and a negative claim requires the explicit `ABSENT_CONFIRMED`
-member rather than merely any state other than `PRESENT`.
+A missing provider-effect row is not sufficient evidence of absence. The sandbox lookup takes
+the SQLite writer lock first, then requires a valid durable intent and a non-empty, contiguous
+attempt history containing only recognized outcomes. It returns `ABSENT_CONFIRMED` only when
+every recorded attempt is explicitly `NO_EFFECT`, `RETRYABLE_NO_EFFECT`, or
+`INTERRUPTED_BEFORE_EFFECT`. A missing intent, empty/gapped history, unknown outcome, or any
+success/timeout/evidence-mismatch attempt without its effect row returns `UNKNOWN`.
+
+Positive `PRESENT` evidence also requires a complete terminal effect: the last attempt must be
+`SUCCESS`, `TIMEOUT_AFTER_EFFECT`, or `EVIDENCE_MISMATCH`; earlier attempts may only prove
+no effect. The intent fingerprint, ledger fingerprint, and recomputed canonical fingerprint
+over job, application, artifact digest, and candidate snapshot digest must all agree. Digests,
+provider submission identity, and replay count are validated before any fields are exposed.
+Missing or conflicting positive metadata returns `UNKNOWN`.
+
+The writer lock serializes this snapshot with any in-flight submit, so a pending effect cannot
+be read as absent. Failure to take the lock is reported as `UNKNOWN`-equivalent (lookup error,
+fail closed). Verification also rejects a connection that already has an open transaction:
+reusing its potentially stale read snapshot would not acquire the promised writer lock. Evidence
+objects accept only the closed `EvidenceState` enum, and a negative claim requires the explicit
+`ABSENT_CONFIRMED` member rather than merely any state other than `PRESENT`.
 
 ### Future real-provider adapters
 

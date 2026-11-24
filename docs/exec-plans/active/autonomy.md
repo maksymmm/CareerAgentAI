@@ -16,6 +16,17 @@ are required before the existing relevance PR can merge.
 
 # Autonomous Implementation Plan
 
+Application sandbox evidence integrity: `verify_submission()` no longer treats a missing
+effect row as confirmed absence by itself. Negative evidence requires a valid durable intent
+and a non-empty, contiguous history of explicit no-effect/interrupted-before-effect attempts.
+Positive evidence requires a terminal effect attempt plus matching intent, ledger and
+recomputed canonical fingerprints, valid digests and the exact sandbox provider identity.
+Missing, gapped, unknown, or conflicting records return `UNKNOWN`. Regression coverage
+includes restart-safe no-effect, missing/gapped attempts, missing effects after recorded
+success/timeout, and corrupted positive metadata. Next: exact-head full CI and independent
+code/security review; then continue cross-provider concurrency and recovery-observability
+audits.
+
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
 
 Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory

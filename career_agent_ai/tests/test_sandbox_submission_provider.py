@@ -13,7 +13,10 @@ import pytest
 
 from career_agent_ai.application.api import candidate_approval_openapi_document
 from career_agent_ai.application.career import ApplicationSubmissionService
-from career_agent_ai.application.career.application_submission import PreSubmissionError
+from career_agent_ai.application.career.application_submission import (
+    EvidenceState,
+    PreSubmissionError,
+)
 from career_agent_ai.application.external_actions import (
     ExternalActionService,
     ExternalActionStatus,
@@ -154,6 +157,174 @@ def test_connection_interrupted_before_effect_reconciles_as_not_submitted_then_r
     )
     assert len(restarted.provider.ledger_entries()) == 1
     restarted.close()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "error"),
+    [
+        (OUTCOME.NO_EFFECT, PreSubmissionError),
+        (OUTCOME.RETRYABLE_NO_EFFECT, PreSubmissionError),
+        (OUTCOME.INTERRUPTED_BEFORE_EFFECT, ConnectionError),
+    ],
+)
+def test_verify_submission_confirms_absence_only_after_explicit_no_effect_attempt(
+    path, outcome, error
+):
+    stack = Stack(path, always(outcome))
+    with pytest.raises(error):
+        stack.provider.submit(
+            OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+        )
+    evidence = stack.provider.verify_submission(OP)
+    assert evidence.state is EvidenceState.ABSENT_CONFIRMED
+    stack.close()
+
+
+def test_verify_submission_returns_unknown_for_unknown_or_incomplete_history(path):
+    stack = Stack(path, always(OUTCOME.INTERRUPTED_BEFORE_EFFECT))
+    assert stack.provider.verify_submission("missing").state is EvidenceState.UNKNOWN
+    assert stack.provider.verify_submission("").state is EvidenceState.UNKNOWN
+    assert stack.provider.verify_submission(None).state is EvidenceState.UNKNOWN
+    assert stack.provider.verify_submission(" " + "x" * 200).state is EvidenceState.UNKNOWN
+    with pytest.raises(ConnectionError):
+        stack.provider.submit(
+            OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+        )
+    stack.database.connection.execute(
+        "DELETE FROM sandbox_submission_attempts WHERE idempotency_key = ?",
+        (OP,),
+    )
+    stack.database.connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    stack.close()
+
+
+def test_verify_submission_rejects_existing_transaction_and_missing_schema(path):
+    stack = Stack(path)
+    stack.database.connection.execute("BEGIN")
+    with pytest.raises(PreSubmissionError):
+        stack.provider.verify_submission(OP)
+    stack.database.connection.rollback()
+    stack.database.connection.execute("DROP TABLE sandbox_submission_attempts")
+    stack.database.connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    stack.close()
+
+
+def test_verify_submission_rejects_gapped_and_unrecognized_attempt_history(path):
+    stack = Stack(path, always(OUTCOME.NO_EFFECT))
+    with pytest.raises(PreSubmissionError):
+        stack.provider.submit(
+            OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+        )
+    connection = stack.database.connection
+    connection.execute(
+        "UPDATE sandbox_submission_attempts SET attempt_no = 2 "
+        "WHERE idempotency_key = ?",
+        (OP,),
+    )
+    connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    connection.execute(
+        "UPDATE sandbox_submission_attempts SET attempt_no = 1, outcome = 'unknown' "
+        "WHERE idempotency_key = ?",
+        (OP,),
+    )
+    connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    stack.close()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [OUTCOME.SUCCESS, OUTCOME.TIMEOUT_AFTER_EFFECT, OUTCOME.EVIDENCE_MISMATCH],
+)
+def test_verify_submission_returns_unknown_when_effect_record_is_missing(path, outcome):
+    stack = Stack(path, always(outcome))
+    if outcome is OUTCOME.TIMEOUT_AFTER_EFFECT:
+        with pytest.raises(TimeoutError):
+            stack.provider.submit(
+                OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+            )
+    else:
+        stack.provider.submit(
+            OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+        )
+    stack.database.connection.execute(
+        "DELETE FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+        (OP,),
+    )
+    stack.database.connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    stack.close()
+
+
+@pytest.mark.parametrize(
+    ("statement", "parameters"),
+    [
+        (
+            "UPDATE sandbox_submission_ledger SET fingerprint = ? WHERE idempotency_key = ?",
+            ("0" * 64, OP),
+        ),
+        (
+            "UPDATE sandbox_submission_intents SET fingerprint = ? WHERE idempotency_key = ?",
+            ("z" * 64, OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET job_id = ? WHERE idempotency_key = ?",
+            ("bad\x00job", OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET provider_submission_id = ? WHERE idempotency_key = ?",
+            ("fake:\x00", OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET job_id = ? WHERE idempotency_key = ?",
+            ("different-job", OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET application_id = ? WHERE idempotency_key = ?",
+            ("different-application", OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET artifact_sha256 = ? WHERE idempotency_key = ?",
+            ("not-a-digest", OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET candidate_snapshot_sha256 = ? WHERE idempotency_key = ?",
+            ("0" * 64, OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET provider_submission_id = ? WHERE idempotency_key = ?",
+            ("fake:other", OP),
+        ),
+        ("DELETE FROM sandbox_submission_intents WHERE idempotency_key = ?", (OP,)),
+        ("DELETE FROM sandbox_submission_attempts WHERE idempotency_key = ?", (OP,)),
+        (
+            "INSERT INTO sandbox_submission_attempts(idempotency_key, attempt_no, outcome) "
+            "VALUES (?, 2, ?)",
+            (OP, OUTCOME.NO_EFFECT.value),
+        ),
+    ],
+)
+def test_verify_submission_fails_closed_on_corrupt_positive_evidence(
+    path, statement, parameters
+):
+    stack = Stack(path)
+    stack.provider.submit(
+        OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+    )
+    evidence = stack.provider.verify_submission(OP)
+    assert evidence.state is EvidenceState.PRESENT
+    assert evidence.job_id == "job-1"
+    assert evidence.application_id == "application-1"
+    assert evidence.provider_submission_id == "fake:application-1"
+    assert evidence.artifact_sha256 == DIGEST
+    assert evidence.candidate_snapshot_sha256 == SNAPSHOT
+    stack.database.connection.execute(statement, parameters)
+    stack.database.connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    stack.close()
 
 
 @pytest.mark.parametrize("outcome", [OUTCOME.NO_EFFECT, OUTCOME.RETRYABLE_NO_EFFECT])

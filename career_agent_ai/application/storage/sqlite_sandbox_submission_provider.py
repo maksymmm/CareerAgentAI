@@ -47,6 +47,16 @@ SandboxOutcomePlan = Callable[[str, int], SandboxOutcome]
 _NO_EFFECT_OUTCOMES = frozenset(
     {SandboxOutcome.NO_EFFECT, SandboxOutcome.RETRYABLE_NO_EFFECT}
 )
+_ABSENCE_OUTCOMES = _NO_EFFECT_OUTCOMES | frozenset(
+    {SandboxOutcome.INTERRUPTED_BEFORE_EFFECT}
+)
+_EFFECT_OUTCOMES = frozenset(
+    {
+        SandboxOutcome.SUCCESS,
+        SandboxOutcome.TIMEOUT_AFTER_EFFECT,
+        SandboxOutcome.EVIDENCE_MISMATCH,
+    }
+)
 _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS sandbox_submission_intents (
@@ -208,12 +218,17 @@ class SQLiteSandboxSubmissionProvider:
         return tuple(SandboxOutcome(row[0]) for row in rows)
 
     def verify_submission(self, operation_id: str) -> SubmissionEvidence:
-        """Return authoritative evidence for one key under the writer lock.
+        """Return authoritative evidence only from a complete durable ledger.
 
-        The sandbox commits the attempt and its effect atomically, so a missing row is
-        evidence of absence. Taking the writer lock first serializes this read with any
-        in-flight submit, so a pending effect can never be observed as absent.
+        A missing effect row is not proof of absence by itself. The intent must
+        match a non-empty, contiguous attempt history whose every outcome proves
+        that no provider effect occurred. Positive evidence likewise requires a
+        terminal effect attempt and a ledger row that recomputes to the exact
+        durable intent. The writer lock serializes this snapshot with submissions.
         """
+        unknown = SubmissionEvidence(EvidenceState.UNKNOWN)
+        if not _valid_identifier(operation_id, maximum=200):
+            return unknown
         connection = self._database.connection
         if connection.in_transaction:
             raise PreSubmissionError(
@@ -221,19 +236,114 @@ class SQLiteSandboxSubmissionProvider:
             )
         self._begin(connection)
         try:
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_submission_intents "
+                "WHERE idempotency_key = ?",
+                (operation_id,),
+            ).fetchone()
+            attempts = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
+                "WHERE idempotency_key = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
             row = self._load(operation_id)
+
+            if (
+                intent is None
+                or not self._valid_fingerprint(intent[0])
+                or not attempts
+            ):
+                return unknown
+
+            parsed_attempts: list[SandboxOutcome] = []
+            for expected_no, (attempt_no, raw_outcome) in enumerate(attempts, start=1):
+                if type(attempt_no) is not int or attempt_no != expected_no:
+                    return unknown
+                try:
+                    parsed_attempts.append(SandboxOutcome(raw_outcome))
+                except (TypeError, ValueError):
+                    return unknown
+
+            if row is None:
+                if all(outcome in _ABSENCE_OUTCOMES for outcome in parsed_attempts):
+                    return SubmissionEvidence(EvidenceState.ABSENT_CONFIRMED)
+                return unknown
+
+            if not self._valid_effect_row(row, operation_id, intent[0]):
+                return unknown
+            if (
+                parsed_attempts[-1] not in _EFFECT_OUTCOMES
+                or any(
+                    outcome not in _ABSENCE_OUTCOMES
+                    for outcome in parsed_attempts[:-1]
+                )
+            ):
+                return unknown
+
+            return SubmissionEvidence(
+                EvidenceState.PRESENT,
+                job_id=row[2],
+                application_id=row[3],
+                provider_submission_id=row[6],
+                artifact_sha256=row[4],
+                candidate_snapshot_sha256=row[5],
+            )
+        except (sqlite3.DatabaseError, TypeError, ValueError, UnicodeError, OverflowError):
+            return unknown
         finally:
             connection.rollback()
-        if row is None:
-            return SubmissionEvidence(EvidenceState.ABSENT_CONFIRMED)
-        return SubmissionEvidence(
-            EvidenceState.PRESENT,
-            job_id=row[2],
-            application_id=row[3],
-            provider_submission_id=row[6],
-            artifact_sha256=row[4],
-            candidate_snapshot_sha256=row[5],
+
+    @staticmethod
+    def _valid_fingerprint(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
         )
+
+    @classmethod
+    def _valid_effect_row(
+        cls,
+        row: tuple[Any, ...],
+        operation_id: str,
+        intent_fingerprint: str,
+    ) -> bool:
+        if len(row) != 8:
+            return False
+        (
+            persisted_operation_id,
+            persisted_fingerprint,
+            job_id,
+            application_id,
+            artifact_sha256,
+            candidate_snapshot_sha256,
+            provider_submission_id,
+            replays,
+        ) = row
+        if (
+            persisted_operation_id != operation_id
+            or persisted_fingerprint != intent_fingerprint
+            or not cls._valid_fingerprint(persisted_fingerprint)
+            or not _valid_identifier(job_id, maximum=200)
+            or not _valid_identifier(application_id, maximum=200)
+            or not cls._valid_fingerprint(artifact_sha256)
+            or not cls._valid_fingerprint(candidate_snapshot_sha256)
+            or not _valid_identifier(provider_submission_id, maximum=256)
+            or provider_submission_id != f"fake:{application_id}"
+            or type(replays) is not int
+            or replays < 0
+        ):
+            return False
+        try:
+            recomputed = _fingerprint(
+                job_id,
+                application_id,
+                artifact_sha256,
+                candidate_snapshot_sha256,
+            )
+        except (TypeError, UnicodeError, ValueError):
+            return False
+        return recomputed == intent_fingerprint
 
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
@@ -354,6 +464,21 @@ class SQLiteSandboxSubmissionProvider:
             "artifact_sha256": returned_digest,
             "candidate_snapshot_sha256": candidate_snapshot_sha256,
         }
+
+
+def _valid_identifier(value: object, *, maximum: int) -> bool:
+    """Validate bounded persisted identifiers without accepting control/surrogate text."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= maximum
+        and value == value.strip()
+        and not any(
+            ord(character) < 32
+            or ord(character) == 127
+            or 0xD800 <= ord(character) <= 0xDFFF
+            for character in value
+        )
+    )
 
 
 def _fingerprint(*parts: str) -> str:

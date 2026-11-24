@@ -275,16 +275,19 @@ def _inject(stack, fail_on, durable=False):
 
 
 @pytest.mark.parametrize("fail_on, durable", [("insert", False), ("commit", False)])
-def test_sqlite_failure_without_commit_rolls_back_and_retry_is_safe(path, fail_on, durable):
+def test_sqlite_failure_without_durable_attempt_keeps_evidence_unknown(
+    path, fail_on, durable
+):
     stack = Stack(path, evidence=True)
     faulty = _inject(stack, fail_on, durable)
     assert stack.service.submit(OP, **_submit_kwargs()) is None
     assert faulty.tripped and stack.status() == REQUIRED
     assert stack.provider.ledger_entries() == () and stack.provider.attempts(OP) == ()
+    # With no committed intent or attempt, neither a positive nor negative claim
+    # is authoritative. A retry could duplicate an effect if the ledger were lost.
     _expect_rejected(stack, submitted=True, provider_submission_id=PID)
-    stack.service.resolve_reconciliation(OP, submitted=False)
-    assert stack.service.submit(OP, **_submit_kwargs())["provider_submission_id"] == PID
-    assert len(stack.provider.ledger_entries()) == 1
+    _expect_rejected(stack, submitted=False)
+    assert stack.provider.ledger_entries() == () and stack.provider.attempts(OP) == ()
     stack.close()
 
 
@@ -385,7 +388,7 @@ def _run_parallel(path, work):
 def test_concurrent_submissions_through_the_service_yield_one_provider_effect(path):
     Stack(path).close()
     outcomes = _run_parallel(path, lambda s: s.service.submit(OP, **_submit_kwargs()))
-    assert any(isinstance(o, dict) for o in outcomes)
+    assert any(isinstance(o, dict) for o in outcomes), outcomes
     verifier = Stack(path)
     assert len(verifier.provider.ledger_entries()) == 1
     assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
