@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
+import sqlite3
+from threading import Barrier, Lock
 
 import pytest
 
@@ -170,3 +174,185 @@ def test_service_requires_a_verifiable_provider():
         CommunicationService(
             messages, provider, external, require_provider_evidence=True
         )
+
+
+
+def test_busy_communication_writer_lock_records_no_attempt_and_allows_same_intent_retry(
+    tmp_path,
+):
+    path = str(tmp_path / "messages-busy-writer.db")
+    database = SQLiteDatabase(path)
+    provider = SQLiteSandboxCommunicationProvider(database)
+    message = _message()
+    provider.draft(message)
+    database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(PreDeliveryCommunicationError, match="busy; nothing was attempted"):
+            provider.send("send:busy-writer", message)
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_communication_intents WHERE operation_id = ?",
+        ("send:busy-writer",),
+    ).fetchone()[0] == 0
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_communication_attempts WHERE operation_id = ?",
+        ("send:busy-writer",),
+    ).fetchone()[0] == 0
+    assert provider.delivery_count("send:busy-writer") == 0
+    assert provider.verify_delivery(
+        "send:busy-writer"
+    ).state == DeliveryEvidenceState.ABSENT_CONFIRMED
+
+    delivered = provider.send("send:busy-writer", message)
+    assert delivered.direction == MessageDirection.OUTBOUND
+    assert provider.delivery_count("send:busy-writer") == 1
+    attempts = database.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+        "WHERE operation_id = ?",
+        ("send:busy-writer",),
+    ).fetchall()
+    assert attempts == [(1, SandboxCommunicationOutcome.SUCCESS.value)]
+    database.close()
+
+
+def test_communication_evidence_lookup_fails_closed_under_competing_writer_lock(
+    tmp_path,
+):
+    path = str(tmp_path / "messages-evidence-busy.db")
+    database = SQLiteDatabase(path)
+    provider = SQLiteSandboxCommunicationProvider(database)
+    message = _message()
+    provider.draft(message)
+    delivered = provider.send("send:evidence-busy", message)
+    database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(PreDeliveryCommunicationError, match="busy; nothing was attempted"):
+            provider.verify_delivery("send:evidence-busy")
+    finally:
+        holder.rollback()
+        holder.close()
+
+    evidence = provider.verify_delivery("send:evidence-busy")
+    assert evidence.state == DeliveryEvidenceState.PRESENT
+    assert evidence.message == delivered
+    assert provider.delivery_count("send:evidence-busy") == 1
+    database.close()
+
+
+def test_concurrent_same_key_communication_calls_commit_one_delivery(tmp_path):
+    path = str(tmp_path / "messages-concurrent-same-key.db")
+    initialized = SQLiteDatabase(path)
+    provider = SQLiteSandboxCommunicationProvider(initialized)
+    original = _message()
+    provider.draft(original)
+    initialized.close()
+
+    barrier = Barrier(2)
+    setup_lock = Lock()
+    plan_lock = Lock()
+    plan_calls = []
+
+    def plan(operation_id, attempt):
+        with plan_lock:
+            plan_calls.append((operation_id, attempt))
+        return SandboxCommunicationOutcome.SUCCESS
+
+    def deliver():
+        database = SQLiteDatabase(path)
+        try:
+            with setup_lock:
+                provider = SQLiteSandboxCommunicationProvider(database, plan)
+            barrier.wait(timeout=10)
+            return provider.send("send:concurrent", original)
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(deliver) for _ in range(2)]
+        results = [future.result(timeout=30) for future in futures]
+
+    assert results[0] == results[1]
+    assert plan_calls == [("send:concurrent", 1)]
+
+    verifier = SQLiteDatabase(path)
+    provider = SQLiteSandboxCommunicationProvider(verifier)
+    attempts = verifier.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+        "WHERE operation_id = ? ORDER BY attempt_no",
+        ("send:concurrent",),
+    ).fetchall()
+    deliveries = verifier.connection.execute(
+        "SELECT message_id, action, replays FROM sandbox_communication_deliveries "
+        "WHERE operation_id = ?",
+        ("send:concurrent",),
+    ).fetchall()
+    assert attempts == [(1, SandboxCommunicationOutcome.SUCCESS.value)]
+    assert len(deliveries) == 1
+    message_id, action, replays = deliveries[0]
+    assert action == "send"
+    assert replays == 1
+    assert provider.delivery_count("send:concurrent") == 1
+    assert provider.read(message_id) == results[0]
+    verifier.close()
+
+
+def test_concurrent_conflicting_message_intents_cannot_rebind_one_operation_id(tmp_path):
+    path = str(tmp_path / "messages-concurrent-conflict.db")
+    initialized = SQLiteDatabase(path)
+    provider = SQLiteSandboxCommunicationProvider(initialized)
+    original = _message()
+    provider.draft(original)
+    initialized.close()
+
+    barrier = Barrier(2)
+    setup_lock = Lock()
+    plan_lock = Lock()
+    plan_calls = []
+
+    def plan(operation_id, attempt):
+        with plan_lock:
+            plan_calls.append((operation_id, attempt))
+        return SandboxCommunicationOutcome.SUCCESS
+
+    def deliver(message):
+        database = SQLiteDatabase(path)
+        try:
+            with setup_lock:
+                provider = SQLiteSandboxCommunicationProvider(database, plan)
+            barrier.wait(timeout=10)
+            try:
+                return ("success", provider.send("send:conflict", message))
+            except PreDeliveryCommunicationError:
+                return ("conflict", None)
+        finally:
+            database.close()
+
+    messages = (original, replace(original, body="Different approved content"))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(deliver, message) for message in messages]
+        outcomes = [future.result(timeout=30) for future in futures]
+
+    assert sorted(kind for kind, _value in outcomes) == ["conflict", "success"]
+    assert plan_calls == [("send:conflict", 1)]
+
+    verifier = SQLiteDatabase(path)
+    provider = SQLiteSandboxCommunicationProvider(verifier)
+    assert provider.delivery_count("send:conflict") == 1
+    attempts = verifier.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+        "WHERE operation_id = ?",
+        ("send:conflict",),
+    ).fetchall()
+    evidence = provider.verify_delivery("send:conflict")
+    successful_message = next(value for kind, value in outcomes if kind == "success")
+    assert attempts == [(1, SandboxCommunicationOutcome.SUCCESS.value)]
+    assert evidence.state == DeliveryEvidenceState.PRESENT
+    assert evidence.message == successful_message
+    verifier.close()
