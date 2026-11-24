@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate recruiter-message no-delivery restart retry: candidate runtime composition now
+injects a separately typed sandbox communication outcome plan into the durable SQLite
+mailbox provider, independent of the application-submission plan. A production-composed
+candidate run is advanced through application approval and message approval; the first
+message attempt is interrupted before delivery and persists an ambiguous reconciliation
+gate. After closing runtime 1, runtime 2 reads the same owner-scoped run and accepts only
+a fresh version-bound delivered=false observation. The provider's authoritative absence
+reopens the same operation and the second runtime permits only attempt 2 to deliver.
+The HTTP regression asserts the run completes, one durable operation has the ordered
+interrupted/success attempts, exactly one outbound message exists, and no delivery replay
+occurred. All message effects remain in SQLiteSandboxCommunicationProvider.
