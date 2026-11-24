@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
+from career_agent_ai.application.observability.action_cursor import (
+    decode_action_cursor,
+    encode_action_cursor,
+)
 from career_agent_ai.application.observability.models import (
     OperationalIssue,
     OperationalSeverity,
@@ -50,6 +55,77 @@ class SQLiteOperationalProbe:
                 ),
             )
         )
+
+
+    def list_action_statuses(
+        self, *, limit: int = 25, after: str | None = None
+    ) -> dict[str, object]:
+        """List bounded non-terminal action metadata without parsing private payloads."""
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 25
+        ):
+            raise ValueError("limit must be between 1 and 25.")
+        cursor = None if after is None else decode_action_cursor(after)
+        if not self._table_exists("external_action_operations"):
+            return {"items": [], "next_after": None}
+        rows = self._database.connection.execute(
+            """
+            SELECT operation_id, action_type, status, created_at, updated_at,
+                   CASE WHEN error IS NULL THEN 0 ELSE 1 END
+            FROM external_action_operations
+            WHERE status IN ('prepared', 'in_progress', 'failed', 'reconciliation_required')
+              AND (? IS NULL OR operation_id > ?)
+            ORDER BY operation_id ASC
+            LIMIT ?
+            """,
+            (cursor, cursor, limit + 1),
+        ).fetchall()
+        visible = rows[:limit]
+        items: list[dict[str, object]] = []
+        for operation_id, action_type, status, created_at, updated_at, error_present in visible:
+            if (
+                not isinstance(operation_id, str)
+                or not operation_id
+                or len(operation_id) > 200
+                or operation_id != operation_id.strip()
+                or any(ord(character) < 32 or ord(character) == 127 for character in operation_id)
+            ):
+                raise RuntimeError("Persisted external-action identifier is malformed.")
+            if not isinstance(action_type, str) or not action_type or len(action_type) > 100:
+                raise RuntimeError("Persisted external-action type is malformed.")
+            if status not in {
+                "prepared", "in_progress", "failed", "reconciliation_required"
+            }:
+                raise RuntimeError("Persisted external-action status is malformed.")
+            try:
+                created = self._parse_timestamp(created_at, "external action")
+                updated = self._parse_timestamp(updated_at, "external action")
+            except ValueError as exc:
+                raise RuntimeError("Persisted external-action timestamp is malformed.") from exc
+            if action_type.startswith("application."):
+                family = "application_submission"
+            elif action_type.startswith("communication."):
+                family = "communication"
+            elif action_type.startswith("calendar."):
+                family = "calendar"
+            else:
+                family = "other"
+            items.append({
+                "operation_ref": hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24],
+                "action_family": family,
+                "status": status,
+                "created_at": created.isoformat(),
+                "updated_at": updated.isoformat(),
+                "error_present": bool(error_present),
+            })
+        next_after = (
+            encode_action_cursor(visible[-1][0])
+            if len(rows) > limit and visible
+            else None
+        )
+        return {"items": items, "next_after": next_after}
 
     def _external_action_issues(self, cutoff: datetime) -> list[OperationalIssue]:
         if not self._table_exists("external_action_operations"):

@@ -1041,3 +1041,11 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+The authenticated read-only operational API also exposes
+`GET /v1/operational/actions` for a bounded view of non-terminal application,
+communication and calendar action lifecycle states. The projection uses a stable
+reference and URL-safe keyset cursor; it never returns raw operation IDs, action payloads,
+provider results or error text. It is diagnostic only and cannot retry, reconcile or
+mutate an external action.

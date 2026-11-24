@@ -551,6 +551,18 @@ class _RequestSQLiteOperationalProbe:
         finally:
             database.close()
 
+    def list_action_statuses(
+        self, *, limit: int = 25, after: str | None = None
+    ) -> dict[str, object]:
+        """Read action lifecycle metadata through request-local read-only SQLite."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteOperationalProbe(database).list_action_statuses(
+                limit=limit, after=after
+            )
+        finally:
+            database.close()
+
 
 def build_operational_app_from_env(
     environ: Mapping[str, str] | None = None,
