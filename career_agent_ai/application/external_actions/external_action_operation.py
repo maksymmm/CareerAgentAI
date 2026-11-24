@@ -29,7 +29,7 @@ class ExternalActionOperation:
     error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    correlation_id: str | None = None
+    correlation_id: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         operation_id = self.operation_id.strip()
