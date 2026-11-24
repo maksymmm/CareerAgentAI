@@ -53,7 +53,7 @@ from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
 from career_agent_ai.application.search.search_service import SearchService
 from career_agent_ai.application.scheduling import FakeCalendarAdapter, SchedulingService
-from career_agent_ai.application.scheduling.models import ScheduleStatus
+from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
     SQLiteCandidateRunStatusProjection,
     SQLiteCareerLoopRepository,
