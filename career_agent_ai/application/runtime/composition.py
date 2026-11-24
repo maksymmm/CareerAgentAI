@@ -171,7 +171,10 @@ class RuntimeCandidateApp:
         database = SQLiteDatabase(self._database_path)
         try:
             loop = _build_candidate_loop(
-                database, self._jobs, self._sandbox_outcome_plan, self._sandbox_communication_outcome_plan
+                database,
+                self._jobs,
+                self._sandbox_outcome_plan,
+                self._sandbox_communication_outcome_plan,
             )
             if run_id is None:
                 return loop.start(request)
@@ -316,7 +319,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).replay_existing_start(
                 request, run_id=run_id, user_id=user_id
             )
@@ -336,7 +339,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).get_candidate_approval_prompt(run_id, user_id=user_id)
         finally:
             database.close()
@@ -346,7 +349,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resume_candidate_submission(user_id=user_id, submission=submission)
         finally:
             database.close()
@@ -356,7 +359,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).continue_run(
                 run_id, user_id=user_id
             )
@@ -376,7 +379,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_application_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -399,7 +402,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_message_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -418,7 +421,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_interview_reconciliation(
                 run_id, user_id=user_id, completed=completed,
                 provider_event_id=provider_event_id,
