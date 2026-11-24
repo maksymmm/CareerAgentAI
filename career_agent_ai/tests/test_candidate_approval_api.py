@@ -265,7 +265,7 @@ def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch,
             observed.update(run_id=run_id, **kwargs)
             return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
-    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None: DurableLoop())
+    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None, calendar_plan=None: DurableLoop())
     runtime = composition.RuntimeCandidateApp(
         database_path=str(tmp_path / "runtime.sqlite"), jobs=(),
         resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
@@ -296,7 +296,7 @@ def test_runtime_candidate_app_delegates_message_reconciliation(monkeypatch, tmp
             observed.update(run_id=run_id, **kwargs)
             return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
-    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None: DurableLoop())
+    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None, calendar_plan=None: DurableLoop())
     runtime = composition.RuntimeCandidateApp(
         database_path=str(tmp_path / "runtime-message.sqlite"), jobs=(),
         resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
@@ -326,7 +326,7 @@ def test_runtime_candidate_app_delegates_interview_reconciliation(monkeypatch, t
             observed.update(run_id=run_id, **kwargs)
             return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
-    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None: DurableLoop())
+    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None, calendar_plan=None: DurableLoop())
     runtime = composition.RuntimeCandidateApp(
         database_path=str(tmp_path / "runtime-interview.sqlite"), jobs=(),
         resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
