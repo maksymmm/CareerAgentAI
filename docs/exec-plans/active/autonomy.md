@@ -1625,3 +1625,5 @@ and reject a detached operation whose event transition did not commit.
 Next: exact-head full CI/coverage and Codex code/security review; then integrate the
 decline workflow only after all findings are resolved, while continuing candidate
 acceptance and reschedule recovery hardening.
+
+Candidate decline runtime integration now accepts a dedicated `sandbox_calendar_outcome_plan` and passes it to the SQLite provider used by the authenticated decline endpoints. A Chromium restart regression drives timeout-after-effect through the composed candidate dashboard, then proves evidence reconciliation after restart performs no provider replay and leaves exactly one durable calendar effect.
