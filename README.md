@@ -1084,3 +1084,12 @@ applied in SQLite before keyset pagination; each cursor is bound to the selected
 and exact filter set. Changing a filter clears the old page and reloads from the
 beginning. Run or bearer-token changes also invalidate prior responses. The panel
 is discovery-only: it has no retry, reconciliation, or provider-execution controls.
+
+
+Pending interview reconciliation can be restored after a browser reload through
+`GET /v1/candidate/runs/{run_id}/interview-reconciliation`. The authenticated,
+read-only projection returns only the schedule event reference, employer, local date,
+local start time, timezone and exact durable state version. It never returns the private
+external-action operation ID or provider payload. The candidate UI restores this intent
+only when its version exactly matches the freshly loaded run status; provider evidence
+still requires explicit independent verification before the existing version-bound POST.
