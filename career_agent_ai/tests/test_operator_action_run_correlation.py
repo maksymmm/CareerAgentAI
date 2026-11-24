@@ -378,6 +378,16 @@ def test_legacy_action_schema_remains_readable_and_migrates_correlation_metadata
     "correlation_id",
     ["", " leading", "trailing ", "x" * 201, "bad\nrun", chr(0xD800)],
 )
+def test_external_action_correlation_is_not_rendered_in_repr():
+    operation = ExternalActionOperation(
+        operation_id="valid-operation",
+        action_type="application.submit",
+        payload={},
+        correlation_id="candidate-run-private-reference",
+    )
+    assert "candidate-run-private-reference" not in repr(operation)
+
+
 def test_external_action_rejects_malformed_correlation_id(correlation_id):
     with pytest.raises((TypeError, ValueError)):
         ExternalActionOperation(
