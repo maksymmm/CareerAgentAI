@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from career_agent_ai.application.external_actions import (
@@ -391,6 +391,48 @@ class SchedulingService:
     def get_operation(self, operation_id: str) -> ExternalActionOperation | None:
         """Return durable calendar operation state without executing it."""
         return self._external_actions.get(operation_id)
+
+    def recover_interrupted_operation(
+        self,
+        operation_id: str,
+        *,
+        now: datetime | None = None,
+        stale_after_seconds: int = 300,
+    ) -> ExternalActionOperation:
+        """Classify only a stale candidate acceptance as interrupted.
+
+        The synchronous SQLite sandbox has no renewable provider lease. A bounded
+        grace period prevents a second tab from converting a live provider request
+        into reconciliation, while allowing a later explicit recovery POST to
+        classify a process-loss window without invoking the provider.
+        """
+        operation_id = validate_schedule_identifier(operation_id, "operation_id")
+        if (
+            type(stale_after_seconds) is not int
+            or not 1 <= stale_after_seconds <= 3600
+        ):
+            raise ValueError("stale_after_seconds must be an integer from 1 to 3600.")
+        current_time = now if now is not None else datetime.now(timezone.utc)
+        if current_time.tzinfo is None or current_time.utcoffset() is None:
+            raise ValueError("now must be timezone-aware.")
+        operation = self.get_operation(operation_id)
+        if operation is None:
+            raise KeyError(f"Unknown calendar operation: {operation_id!r}")
+        if operation.action_type != "calendar.accept":
+            raise ValueError("Only candidate interview acceptance can be recovered here.")
+        if operation.status != ExternalActionStatus.IN_PROGRESS:
+            return operation
+        age = (
+            current_time.astimezone(timezone.utc)
+            - operation.updated_at.astimezone(timezone.utc)
+        ).total_seconds()
+        if age < stale_after_seconds:
+            return operation
+        # ExternalActionService handles IN_PROGRESS with a CAS transition to
+        # RECONCILIATION_REQUIRED before it validates approval or reaches an adapter.
+        return self._external_actions.execute(
+            operation_id, human_approved=True
+        )
 
     def resolve_reconciliation(
         self,
