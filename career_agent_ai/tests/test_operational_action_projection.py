@@ -155,6 +155,7 @@ def test_operational_action_auth_method_and_query_validation_precede_storage(tmp
             "limit=1&limit=2",
             "user_id=another-operator",
             "after=",
+            "after=not-a-cursor",
         ):
             assert _request(runtime, query=query)[0] == "400 Bad Request"
             assert not path.exists()
