@@ -1064,3 +1064,15 @@ stored separately from provider payload/result JSON and indexed for lookup. Filt
 cursors are bound to the exact candidate-run reference and cannot be replayed against a
 different run or an unfiltered query. A legacy database without the reference index
 fails closed for filtered reads; the read-only endpoint never migrates or writes storage.
+
+## Candidate-owned external-action status
+
+The authenticated candidate sandbox exposes
+`GET /v1/candidate/runs/{run_id}/actions` as a read-only, owner-scoped view of
+application submission, communication, and calendar action lifecycle metadata.
+The projection verifies run ownership before querying the indexed correlation
+reference, uses a bounded 25-row keyset page, and binds each cursor to that run.
+It returns stable action references, an allowlisted action family, lifecycle status,
+UTC timestamps, and an `error_present` flag only. Provider payloads, results,
+error text, raw operation IDs, and correlation IDs are never returned. The endpoint
+opens SQLite read-only and cannot retry, reconcile, or mutate an external action.
