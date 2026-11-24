@@ -71,7 +71,8 @@ class SQLiteOperationalProbe:
             return {"items": [], "next_after": None}
         rows = self._database.connection.execute(
             """
-            SELECT operation_id, action_type, status, created_at, updated_at, error
+            SELECT operation_id, action_type, status, created_at, updated_at,
+                   CASE WHEN error IS NULL THEN 0 ELSE 1 END
             FROM external_action_operations
             WHERE status IN ('prepared', 'in_progress', 'failed', 'reconciliation_required')
               AND (? IS NULL OR operation_id > ?)
@@ -82,7 +83,7 @@ class SQLiteOperationalProbe:
         ).fetchall()
         visible = rows[:limit]
         items: list[dict[str, object]] = []
-        for operation_id, action_type, status, created_at, updated_at, error in visible:
+        for operation_id, action_type, status, created_at, updated_at, error_present in visible:
             if (
                 not isinstance(operation_id, str)
                 or not operation_id
@@ -113,7 +114,7 @@ class SQLiteOperationalProbe:
                 "status": status,
                 "created_at": created.isoformat(),
                 "updated_at": updated.isoformat(),
-                "error_present": error is not None,
+                "error_present": bool(error_present),
             })
         next_after = (
             self._encode_action_cursor(visible[-1][0])
