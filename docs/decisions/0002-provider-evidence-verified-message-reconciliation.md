@@ -40,3 +40,17 @@ state version unchanged.
 - Legacy/in-memory compositions remain operator-attested unless they explicitly
   require evidence.
 - Interview/calendar reconciliation remains the next equivalent hardening boundary.
+
+
+## Writer contention and concurrent invocation
+
+Provider writes acquire `BEGIN IMMEDIATE` before binding an operation ID, counting an
+attempt, or recording a delivery. A competing writer lock produces a pre-delivery
+error with no intent, attempt, or delivery; the exact same approved message can be
+retried after the lock is released.
+
+Evidence lookup also acquires a writer lock. A busy database is unavailable evidence,
+not confirmed absence. Concurrent calls with the same operation ID and identical
+message fingerprint serialize to one delivery and one scripted attempt. Concurrent
+conflicting message contents cannot rebind the operation ID or both reach the
+outcome plan.
