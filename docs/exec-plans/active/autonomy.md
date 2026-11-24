@@ -1651,3 +1651,15 @@ coverage includes owner isolation, restart persistence, cursor replay, legacy sc
 redaction, and immutable SQLite bytes.
 Next: expose this projection in the candidate dashboard with strict browser response
 validation and reload-safe pagination; keep the surface read-only.
+
+
+Candidate action-status continuity: when the candidate has loaded the selected run's
+external-action panel, the sandbox now refreshes its first page after approval/decline,
+continue/recovery, and application, message, or interview reconciliation attempts.
+This covers successful, rejected, and ambiguous outcomes without polling or triggering
+provider work: the refresh is read-only, resets pagination to the first page, and runs
+only for the same still-selected run. Refresh failures stay in the action panel and do
+not mask the workflow response. Chromium verifies a reconciliation transition from
+`reconciliation_required` to `succeeded`; static contract assertions cover all five
+mutation paths. Next: add candidate-safe status/action-family filters with cursors
+bound to the exact filter set.

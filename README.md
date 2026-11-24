@@ -1080,5 +1080,8 @@ The candidate sandbox includes a matching "My external actions" panel for the se
 run. It verifies the stable run reference, exact response fields, allowlisted action
 families and lifecycle states, UTC timestamps, and bounded opaque cursor before
 rendering text-only rows. Pagination is invalidated whenever the selected run or
-bearer-token context changes. The panel is discovery-only: it has no retry,
-reconciliation, or provider-execution controls.
+bearer-token context changes. After a decision, continue/recovery, or application,
+message, or interview reconciliation attempt, the panel refreshes its first page when
+the same run's panel was previously loaded. Refresh failure is shown inside the panel
+and never masks the workflow result. The panel remains discovery-only: it has no
+retry, reconciliation, or provider-execution controls.
