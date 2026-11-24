@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import queue
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -24,7 +26,10 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_external_action_repository import (
     SQLiteExternalActionOperationRepository,
 )
-from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import SandboxCalendarOutcome
+from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SQLiteSandboxCalendarProvider,
+    SandboxCalendarOutcome,
+)
 from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
 
 OWNER = "candidate-1"
@@ -274,6 +279,98 @@ def test_distinct_target_post_is_blocked_by_existing_ambiguous_event_operation(
         assert pending["start_at"] == PENDING_START
         assert pending["end_at"] == PENDING_END
     candidate.close()
+
+
+def test_concurrent_distinct_target_posts_create_one_intent_before_provider_io(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "concurrent-distinct-target.sqlite"
+    _seed(path, _event())
+    provider_entered = threading.Event()
+    release_provider = threading.Event()
+    provider_calls = []
+    original_reschedule = SQLiteSandboxCalendarProvider.reschedule
+
+    def blocked_reschedule(provider, *args, **kwargs):
+        provider_calls.append(args[0])
+        provider_entered.set()
+        if not release_provider.wait(timeout=5):
+            raise TimeoutError("Concurrent regression did not release the sandbox provider.")
+        return original_reschedule(provider, *args, **kwargs)
+
+    monkeypatch.setattr(
+        SQLiteSandboxCalendarProvider, "reschedule", blocked_reschedule
+    )
+    candidates = {name: Candidate(path) for name in ("first", "second")}
+    bodies = {
+        "first": _body(
+            start_at="2026-12-02T12:00:00+01:00",
+            end_at="2026-12-02T13:00:00+01:00",
+        ),
+        "second": _body(
+            start_at="2026-12-02T14:00:00+01:00",
+            end_at="2026-12-02T15:00:00+01:00",
+        ),
+    }
+    start_together = threading.Barrier(2)
+    results = queue.Queue()
+
+    def submit(name):
+        try:
+            start_together.wait(timeout=5)
+            results.put((name, candidates[name].reschedule(bodies[name]), None))
+        except Exception as exc:  # surfaced in the main test thread
+            results.put((name, None, exc))
+
+    workers = [threading.Thread(target=submit, args=(name,)) for name in candidates]
+    try:
+        for worker in workers:
+            worker.start()
+        assert provider_entered.wait(timeout=5)
+
+        # The provider winner is held after its durable operation/event claim.
+        # The competing request must return blocked while that provider call is live.
+        loser_name, loser_result, loser_error = results.get(timeout=5)
+        assert loser_error is None
+        assert loser_result == (
+            "202 Accepted",
+            {
+                "schema_version": 1,
+                "outcome": "blocked",
+                "event_id": EVENT_ID,
+            },
+        )
+
+        release_provider.set()
+        winner_name, winner_result, winner_error = results.get(timeout=5)
+        assert winner_error is None
+        assert winner_result[0] == "200 OK"
+        assert winner_result[1]["outcome"] == "completed"
+        assert winner_name != loser_name
+    finally:
+        release_provider.set()
+        for worker in workers:
+            worker.join(timeout=5)
+        for candidate in candidates.values():
+            candidate.close()
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert len(provider_calls) == 1
+    connection = sqlite3.connect(path)
+    try:
+        rows = connection.execute(
+            "SELECT operation_id, status, payload_json "
+            "FROM external_action_operations WHERE action_type = 'calendar.reschedule'"
+        ).fetchall()
+    finally:
+        connection.close()
+    assert len(rows) == 1
+    assert rows[0][1] == ExternalActionStatus.SUCCEEDED.value
+    assert json.loads(rows[0][2])["start_at"] in {
+        datetime.fromisoformat(bodies["first"]["start_at"]).astimezone(timezone.utc).isoformat(),
+        datetime.fromisoformat(bodies["second"]["start_at"]).astimezone(timezone.utc).isoformat(),
+    }
+    assert _effect_count(path) == 1
 
 
 def test_candidate_can_reschedule_owned_interview_and_replay_after_restart(tmp_path):

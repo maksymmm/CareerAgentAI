@@ -500,7 +500,10 @@ class CandidateScheduleActionWSGIApp:
             user_id, event_id, state_version, start_at, end_at, timezone_name
         )
         database, repository, service, operations = self._open_stack()
+        connection = database.connection
         try:
+            # Serialize the event scan with intent preparation and the action claim.
+            connection.execute("BEGIN IMMEDIATE")
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
@@ -598,6 +601,8 @@ class CandidateScheduleActionWSGIApp:
                 },
             )
         finally:
+            if connection.in_transaction:
+                connection.commit()
             database.close()
 
     def _reconcile(

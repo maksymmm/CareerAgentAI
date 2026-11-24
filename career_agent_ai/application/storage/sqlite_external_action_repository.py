@@ -28,8 +28,10 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         if operation.status != ExternalActionStatus.PREPARED:
             raise ValueError("A new external-action operation must be prepared.")
         payload_json = self._dump(operation.payload)
+        connection = self._database.connection
+        owns_transaction = not connection.in_transaction
         try:
-            self._database.connection.execute(
+            connection.execute(
                 """
                 INSERT INTO external_action_operations (
                     operation_id, action_type, payload_json, status, result_json,
@@ -45,7 +47,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                     operation.updated_at.isoformat(),
                 ),
             )
-            self._database.connection.commit()
+            if owns_transaction:
+                connection.commit()
             return operation
         except sqlite3.IntegrityError:
             self._database.connection.rollback()
@@ -136,7 +139,9 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         """Atomically transition one operation using compare-and-swap semantics."""
         self._validate_transition(expected_status, status, result, error)
         result_json = None if result is None else self._dump(result)
-        cursor = self._database.connection.execute(
+        connection = self._database.connection
+        owns_transaction = not connection.in_transaction
+        cursor = connection.execute(
             """
             UPDATE external_action_operations
             SET status = ?, result_json = ?, error = ?, updated_at = ?
@@ -151,11 +156,12 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 expected_status.value,
             ),
         )
-        try:
-            self._database.connection.commit()
-        except Exception:
-            self._database.connection.rollback()
-            raise
+        if owns_transaction:
+            try:
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         if cursor.rowcount != 1:
             raise OperationConflictError(
                 "Operation is missing or no longer has the expected status."

@@ -1606,3 +1606,14 @@ and human-approval boundaries.
 
 
 Active reschedule execution protection: pending GET now distinguishes a recent `in_progress` operation from a stranded one. A five-minute grace from the durable status timestamp keeps concurrent candidate tabs from converting a live provider request into reconciliation-required; the API returns `202 in_progress` and the browser disables new target submission and attestation. Duplicate reschedule POSTs follow the same no-recovery rule: a matching live operation is returned as `202 in_progress`, and the scheduling service does not promote it to reconciliation. The prepared-to-in-progress compare-and-swap loser reloads the winning durable state, so two callers cannot turn one another's live claim into a recovery transition. Once the grace expires, pending GET uses the status compare-and-swap to classify the operation as reconciliation-required. This is scoped to the synchronous local SQLite sandbox provider; future network adapters require a renewable lease or a bounded provider deadline. Regression coverage verifies fresh GET and POST observations preserve in-progress state, concurrent duplicate requests produce one provider effect, stale operations recover without provider replay, and existing partial-commit recovery remains evidence-gated.
+
+
+Candidate reschedule intent-claim atomicity: the authenticated reschedule route now
+holds a SQLite BEGIN IMMEDIATE transaction across the event-scoped ambiguous-operation
+scan, durable PREPARED-to-IN_PROGRESS transition, and event action claim. The claim
+repository commits that transaction before provider I/O, so a concurrent distinct-target
+request cannot pass a stale empty scan or create a second ledger row. External-action
+create/transition writes join the caller-owned transaction instead of committing early.
+A barrier-based HTTP regression races two target slots, holds the winning sandbox provider
+call, and requires the loser to return 202 blocked with exactly one durable operation and
+one provider effect. No network or real calendar action is involved.
