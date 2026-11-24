@@ -355,6 +355,11 @@ _HTML = r"""<!doctype html>
         !usable || !ambiguous || !byId('acceptance-verified').checked ||
         !!byId('acceptance-provider-event-id').value.trim();
     }
+    function markAcceptanceUnknown(message) {
+      acceptanceStatus = null;
+      byId('event-acceptance-state').textContent = message;
+      updateAcceptanceControls();
+    }
     function clearEventDetail() {
       if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
       eventDetailTrigger = null;
@@ -432,13 +437,23 @@ _HTML = r"""<!doctype html>
       if (!eventId(identifier) || !Number.isSafeInteger(version) || version < 1) return;
       const generation = ++acceptanceGeneration;
       byId('event-acceptance-state').textContent = 'Loading durable acceptance state…';
-      const payload = await call('/v1/candidate/schedule-event/acceptance?event_id=' +
-        encodeURIComponent(identifier) + '&event_version=' + encodeURIComponent(String(version)),
-        {}, 'Acceptance status request failed.', true);
+      let payload;
+      try {
+        payload = await call('/v1/candidate/schedule-event/acceptance?event_id=' +
+          encodeURIComponent(identifier) + '&event_version=' + encodeURIComponent(String(version)),
+          {}, 'Acceptance status request failed.', true);
+      } catch (error) {
+        if (generation === acceptanceGeneration && detailGeneration === eventDetailGeneration &&
+            selectedEventId === identifier && selectedEventVersion === version) {
+          markAcceptanceUnknown('Acceptance status is unavailable. Refresh before taking action.');
+        }
+        throw error;
+      }
       if (generation !== acceptanceGeneration || detailGeneration !== eventDetailGeneration ||
           selectedEventId !== identifier || selectedEventVersion !== version) return;
       if (!payload || payload.schema_version !== 1 || payload.event_id !== identifier ||
           payload.event_version !== version || !acceptanceStatuses.includes(payload.status)) {
+        markAcceptanceUnknown('Acceptance status response is invalid. Refresh before taking action.');
         throw new Error('Invalid candidate acceptance status.');
       }
       acceptanceStatus = payload.status;
@@ -478,6 +493,11 @@ _HTML = r"""<!doctype html>
           byId('event-detail-state').textContent =
             'Interview acceptance is confirmed. Reload the event to display the accepted version.';
         }
+      } catch (error) {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          markAcceptanceUnknown('Acceptance outcome is unknown. Refresh durable status before retrying.');
+        }
+        throw error;
       } finally {
         if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
           acceptanceInFlight = false; updateAcceptanceControls();
@@ -501,6 +521,11 @@ _HTML = r"""<!doctype html>
         }
         if (detailGeneration !== eventDetailGeneration || selectedEventId !== identifier) return;
         await loadAcceptanceStatus(identifier, version, detailGeneration);
+      } catch (error) {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          markAcceptanceUnknown('Recovery outcome is unknown. Refresh durable status before retrying.');
+        }
+        throw error;
       } finally {
         if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
           acceptanceInFlight = false; updateAcceptanceControls();
@@ -534,6 +559,11 @@ _HTML = r"""<!doctype html>
         }
         if (detailGeneration !== eventDetailGeneration || selectedEventId !== identifier) return;
         await loadAcceptanceStatus(identifier, version, detailGeneration);
+      } catch (error) {
+        if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
+          markAcceptanceUnknown('Reconciliation outcome is unknown. Refresh status and verify again before retrying.');
+        }
+        throw error;
       } finally {
         if (detailGeneration === eventDetailGeneration && selectedEventId === identifier) {
           acceptanceInFlight = false; updateAcceptanceControls();
