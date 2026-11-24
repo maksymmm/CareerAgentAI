@@ -1626,3 +1626,15 @@ the index fail closed for filtered requests rather than returning false absence.
 Regression coverage includes filtered multi-page retrieval, cursor cross-filter replay,
 invalid references before storage access, legacy-schema behavior, migration backfill,
 and index presence. Exact-head CI and independent review remain required before merge.
+
+Candidate-owned external-action status: the authenticated candidate API now exposes
+a bounded, read-only action projection under the owning run. It verifies durable run
+ownership before querying the indexed correlation reference, binds keyset cursors to
+the stable run reference, and returns only action family, lifecycle status, UTC
+timestamps, a stable operation reference, and an error-present boolean. Legacy
+correlation-ID schemas remain readable when their lookup index exists; malformed
+correlation metadata, timestamps, or missing lookup indexes fail closed. Regression
+coverage includes owner isolation, restart persistence, cursor replay, legacy schema,
+redaction, and immutable SQLite bytes.
+Next: expose this projection in the candidate dashboard with strict browser response
+validation and reload-safe pagination; keep the surface read-only.
