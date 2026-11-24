@@ -1073,3 +1073,42 @@ def test_accept_operation_id_cannot_be_rebound_to_another_approved_version():
 
     assert repository.get("event-1") == accepted
     assert provider.calls == [("accept", "accept:version-bound")]
+
+
+
+@pytest.mark.parametrize(
+    ("age", "expected_status"),
+    [
+        (timedelta(minutes=2), ExternalActionStatus.IN_PROGRESS),
+        (timedelta(minutes=6), ExternalActionStatus.RECONCILIATION_REQUIRED),
+    ],
+)
+def test_candidate_acceptance_recovery_respects_sandbox_execution_grace(
+    age, expected_status
+):
+    database = SQLiteDatabase()
+    service, schedules, operations, provider = stack(database)
+    schedules.create(event())
+    operation_id = "candidate-accept:recovery-test"
+    with pytest.raises(PermissionError):
+        service.accept(
+            operation_id, "event-1", human_approved=False, expected_version=1
+        )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        ((BASE_CREATED - age).isoformat(), operation_id),
+    )
+    database.connection.commit()
+
+    recovered = service.recover_interrupted_operation(
+        operation_id, now=BASE_CREATED, stale_after_seconds=300
+    )
+
+    assert recovered.status == expected_status
+    assert provider.calls == []
+    assert service.get_operation(operation_id).status == expected_status
