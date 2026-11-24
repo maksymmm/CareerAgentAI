@@ -1081,7 +1081,7 @@ def test_candidate_sandbox_browser_recovers_decline_timeout_after_runtime_restar
             page.wait_for_function(
                 "() => !document.querySelector('#decline-reconciliation-verified').disabled"
             )
-            assert page.locator("#decline-panel").is_disabled()
+            assert page.locator("#decline-event").is_disabled()
             assert not page.locator("#decline-reconciliation-verified").is_checked()
 
             page.locator("#decline-reconciliation-verified").check()
