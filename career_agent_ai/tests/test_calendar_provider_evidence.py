@@ -363,7 +363,7 @@ def test_concurrent_conflicting_calendar_intents_cannot_rebind_one_operation_id(
         "WHERE operation_id = ?",
         ("accept:conflict",),
     ).fetchall()
-    effect = verifier.verify_calendar_action("accept:conflict")
+    effect = provider.verify_calendar_action("accept:conflict")
     successful_event = next(value for kind, value in outcomes if kind == "success")
     assert attempts == [(1, SandboxCalendarOutcome.SUCCESS.value)]
     assert effect.state == CalendarEvidenceState.PRESENT
