@@ -156,6 +156,11 @@ def test_operational_action_auth_method_and_query_validation_precede_storage(tmp
             "user_id=another-operator",
             "after=",
             "after=not-a-cursor",
+            "status=unknown",
+            "status=",
+            "action_family=private",
+            "status=failed&status=prepared",
+            "action_family=communication&action_family=calendar",
         ):
             assert _request(runtime, query=query)[0] == "400 Bad Request"
             assert not path.exists()
@@ -228,12 +233,117 @@ def test_operational_action_projection_fails_closed_on_corrupt_timestamps(tmp_pa
         runtime.close()
 
 
+def test_operational_action_filters_bind_keyset_cursor_and_remain_read_only(tmp_path):
+    path = tmp_path / "filtered-operational-actions.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteExternalActionOperationRepository(database)
+    repository.create(ExternalActionOperation(
+        operation_id="operation-communication-second",
+        action_type="communication.send",
+        payload={"private_payload": "second-payload-secret"},
+        created_at=NOW,
+        updated_at=NOW,
+    ))
+    repository.transition(
+        "operation-communication-second",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    repository.transition(
+        "operation-communication-second",
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.FAILED,
+        error="synthetic provider failure",
+    )
+    database.close()
+
+    baseline = path.read_bytes()
+    runtime = RuntimeOperationalApp(database_path=str(path), bearer_token=TOKEN)
+    try:
+        status, _, first = _request(
+            runtime,
+            query="status=failed&action_family=communication&limit=1",
+        )
+        assert status == "200 OK"
+        assert len(first["items"]) == 1
+        assert first["items"][0]["action_family"] == "communication"
+        assert first["items"][0]["status"] == "failed"
+        assert first["next_after"] is not None
+
+        cursor = first["next_after"]
+        status, _, second = _request(
+            runtime,
+            query=(
+                "status=failed&action_family=communication&limit=1&after="
+                + cursor
+            ),
+        )
+        assert status == "200 OK"
+        assert len(second["items"]) == 1
+        assert second["items"][0]["action_family"] == "communication"
+        assert second["items"][0]["status"] == "failed"
+        assert second["next_after"] is None
+
+        status, _, calendar = _request(
+            runtime,
+            query="action_family=calendar",
+        )
+        assert status == "200 OK"
+        assert [item["action_family"] for item in calendar["items"]] == ["calendar"]
+
+        status, _, failed = _request(runtime, query="status=failed")
+        assert status == "200 OK"
+        assert all(item["status"] == "failed" for item in failed["items"])
+
+        for changed_filters in (
+            "status=failed",
+            "status=prepared&action_family=communication",
+            "status=failed&action_family=application_submission",
+        ):
+            status, _, body = _request(
+                runtime,
+                query=changed_filters + "&limit=1&after=" + cursor,
+            )
+            assert status == "400 Bad Request"
+            assert body["error"] == "invalid_request"
+    finally:
+        runtime.close()
+    assert path.read_bytes() == baseline
+
+
+def test_filtered_action_cursor_supports_maximum_multibyte_operation_id():
+    from career_agent_ai.application.observability.action_cursor import (
+        decode_action_cursor,
+        encode_action_cursor,
+    )
+
+    operation_id = "😀" * 200
+    cursor = encode_action_cursor(
+        operation_id,
+        status="failed",
+        action_family="communication",
+    )
+    assert len(cursor) <= 1200
+    assert decode_action_cursor(
+        cursor,
+        status="failed",
+        action_family="communication",
+    ) == operation_id
+
+
 def test_operational_action_openapi_contract_is_bounded_and_minimal():
     operation = openapi_document()["paths"]["/v1/operational/actions"]["get"]
     assert operation["security"] == [{"bearerAuth": []}]
     parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
     assert parameters["limit"]["schema"]["maximum"] == 25
     assert parameters["after"]["schema"]["maxLength"] == 1200
+    assert parameters["status"]["schema"]["enum"] == [
+        "prepared", "in_progress", "failed", "reconciliation_required"
+    ]
+    assert parameters["action_family"]["schema"]["enum"] == [
+        "application_submission", "communication", "calendar", "other"
+    ]
     schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert schema["properties"]["items"]["maxItems"] == 25
     item = schema["properties"]["items"]["items"]
