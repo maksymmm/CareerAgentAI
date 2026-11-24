@@ -577,6 +577,8 @@ def test_openapi_contract_exposes_no_new_sandbox_provider_surface():
     paths = document["paths"]
     route = "/v1/candidate/runs/{run_id}/application-reconciliation"
     methods = set(paths[route]) - {"parameters"}
-    assert methods == {"post"}
+    assert methods == {"get", "post"}
+    assert paths[route]["get"]["operationId"] == "getCandidateApplicationReconciliationIntent"
+    assert "409" in paths[route]["get"]["responses"]
     assert "409" in paths[route]["post"]["responses"]
     assert not [p for p in paths if "ledger" in p or "provider" in p or "sandbox-" in p]

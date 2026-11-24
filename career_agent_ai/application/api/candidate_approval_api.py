@@ -46,6 +46,9 @@ class CandidateApprovalLoop(Protocol):
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def get_candidate_application_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
                           phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
 
@@ -333,10 +336,24 @@ class CandidateApprovalWSGIApp:
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
             if parts[4] == "application-reconciliation":
+                if method == "GET":
+                    if str(environ.get("QUERY_STRING", "")):
+                        return self._respond(
+                            start_response, "400 Bad Request", {"error": "invalid_request"}
+                        )
+                    intent = self._loop.get_candidate_application_reconciliation(
+                        run_id, user_id=user_id
+                    )
+                    if intent is None:
+                        return self._respond(
+                            start_response, "409 Conflict",
+                            {"error": "reconciliation_unavailable"},
+                        )
+                    return self._respond(start_response, "200 OK", intent)
                 if method != "POST":
                     return self._respond(
                         start_response, "405 Method Not Allowed",
-                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                        {"error": "method_not_allowed"}, [("Allow", "GET, POST")],
                     )
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
                 if media_type.strip().casefold() != "application/json":
@@ -835,6 +852,27 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "else": {"not": {"required": ["provider_event_id"]}},
         }],
     }
+    application_reconciliation_intent_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "run_id", "state_version", "application_id", "job_id",
+            "job_title", "company", "candidate_snapshot_sha256", "artifact_sha256",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "state_version": {
+                "type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION,
+            },
+            "application_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "job_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "job_title": {"type": "string", "minLength": 1, "maxLength": 500},
+            "company": {"type": "string", "minLength": 1, "maxLength": 200},
+            "candidate_snapshot_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "artifact_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        },
+        "additionalProperties": False,
+    }
     start_schema = {
         "type": "object",
         "required": [
@@ -1203,6 +1241,27 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
                     },
                 }],
+                "get": {
+                    "operationId": "getCandidateApplicationReconciliationIntent",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Read-only owner-scoped pending application intent; private operation IDs and artifact content are omitted",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content(application_reconciliation_intent_schema),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "Run has no pending application reconciliation",
+                            "content": content(error_schema),
+                        },
+                        "405": {
+                            "description": "GET or POST is required",
+                            "headers": {"Allow": {"schema": {"const": "GET, POST"}}},
+                            "content": content(error_schema),
+                        },
+                    },
+                },
                 "post": {
                     "operationId": "resolveCandidateApplicationReconciliation",
                     "security": [{"bearerAuth": []}],
@@ -1226,7 +1285,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             ),
                             "content": content(approval_conflict_schema),
                         },
-                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "405": {"description": "GET or POST is required", "headers": {"Allow": {"schema": {"const": "GET, POST"}}}, "content": content(error_schema)},
                         "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },
