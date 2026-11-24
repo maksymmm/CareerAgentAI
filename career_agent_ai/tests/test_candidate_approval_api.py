@@ -3165,3 +3165,250 @@ def test_post_approval_accepts_maximum_sqlite_state_version():
     assert status == "200 OK"
     assert response == {"run_id": "run-1", "phase": "message_approval"}
     assert loop.submission.state_version == (1 << 63) - 1
+
+
+
+class ScheduleAcceptanceLoop(Loop):
+    def __init__(self):
+        super().__init__()
+        self.acceptance_calls = []
+        self.acceptance_status_calls = []
+        self.acceptance_recovery_calls = []
+        self.acceptance_reconciliation_calls = []
+
+    def accept_candidate_schedule_event(self, event_id, *, user_id, expected_version):
+        self.acceptance_calls.append((event_id, user_id, expected_version))
+        return {"schema_version": 1, "event_id": event_id,
+                "event_version": expected_version, "status": "succeeded"}
+
+    def get_candidate_schedule_acceptance(self, event_id, *, user_id, expected_version):
+        self.acceptance_status_calls.append((event_id, user_id, expected_version))
+        return {"schema_version": 1, "event_id": event_id,
+                "event_version": expected_version, "status": "not_started"}
+
+    def recover_candidate_schedule_acceptance(self, event_id, *, user_id, expected_version):
+        self.acceptance_recovery_calls.append((event_id, user_id, expected_version))
+        return {"schema_version": 1, "event_id": event_id,
+                "event_version": expected_version, "status": "reconciliation_required"}
+
+    def resolve_candidate_schedule_acceptance(
+        self, event_id, *, user_id, expected_version, completed, provider_event_id=None
+    ):
+        self.acceptance_reconciliation_calls.append(
+            (event_id, user_id, expected_version, completed, provider_event_id)
+        )
+        return {"schema_version": 1, "event_id": event_id,
+                "event_version": expected_version,
+                "status": "succeeded" if completed else "prepared"}
+
+
+def test_candidate_schedule_acceptance_http_contract_is_owner_and_version_bound():
+    loop = ScheduleAcceptanceLoop()
+    body = {"schema_version": 1, "event_id": "event-1", "event_version": 7}
+    (status, headers), accepted = request(
+        app(loop), method="POST",
+        path="/v1/candidate/schedule-event/accept", body=body,
+    )
+    assert status == "200 OK" and ("Cache-Control", "no-store") in headers
+    assert accepted["status"] == "succeeded"
+    assert loop.acceptance_calls == [("event-1", "candidate-1", 7)]
+
+    (status, _), state = request(
+        app(loop), path="/v1/candidate/schedule-event/acceptance",
+        query="event_id=event-1&event_version=7",
+    )
+    assert status == "200 OK" and state["status"] == "not_started"
+    assert loop.acceptance_status_calls == [("event-1", "candidate-1", 7)]
+
+    (status, _), recovered = request(
+        app(loop), method="POST",
+        path="/v1/candidate/schedule-event/acceptance-recovery", body=body,
+    )
+    assert status == "202 Accepted"
+    assert recovered["status"] == "reconciliation_required"
+
+    reconciliation = {
+        **body, "completed": True, "provider_event_id": "sandbox-event-7",
+    }
+    (status, _), resolved = request(
+        app(loop), method="POST",
+        path="/v1/candidate/schedule-event/acceptance-reconciliation",
+        body=reconciliation,
+    )
+    assert status == "200 OK" and resolved["status"] == "succeeded"
+    assert loop.acceptance_reconciliation_calls == [
+        ("event-1", "candidate-1", 7, True, "sandbox-event-7")
+    ]
+
+
+@pytest.mark.parametrize("body", [
+    {"schema_version": 1, "event_id": "event-1", "event_version": 0},
+    {"schema_version": 1, "event_id": "event-1", "event_version": True},
+    {"schema_version": 1, "event_id": "../foreign", "event_version": 1},
+    {"schema_version": 1, "event_id": "event-1", "event_version": 1, "user_id": "candidate-1"},
+])
+def test_candidate_schedule_acceptance_rejects_invalid_or_identity_bearing_body(body):
+    (status, _), _ = request(
+        app(ScheduleAcceptanceLoop()), method="POST",
+        path="/v1/candidate/schedule-event/accept", body=body,
+    )
+    assert status == "400 Bad Request"
+
+
+@pytest.mark.parametrize("query", [
+    "event_id=event-1", "event_version=1", "event_id=event-1&event_version=1&extra=x",
+    "event_id=event-1&event_version=1&event_version=2",
+    "event_id=event-1&event_version=0", "event_id=../bad&event_version=1",
+    "event_id=event-1&event_version=%GG",
+])
+def test_candidate_schedule_acceptance_status_rejects_ambiguous_query(query):
+    (status, _), _ = request(
+        app(ScheduleAcceptanceLoop()),
+        path="/v1/candidate/schedule-event/acceptance", query=query,
+    )
+    assert status == "400 Bad Request"
+
+
+@pytest.mark.parametrize("body", [
+    {"schema_version": 1, "event_id": "event-1", "event_version": 1, "completed": True},
+    {"schema_version": 1, "event_id": "event-1", "event_version": 1,
+     "completed": False, "provider_event_id": "invented"},
+    {"schema_version": 1, "event_id": "event-1", "event_version": 1,
+     "completed": 1},
+])
+def test_candidate_schedule_acceptance_reconciliation_rejects_unverified_body(body):
+    (status, _), _ = request(
+        app(ScheduleAcceptanceLoop()), method="POST",
+        path="/v1/candidate/schedule-event/acceptance-reconciliation", body=body,
+    )
+    assert status == "400 Bad Request"
+
+
+def test_candidate_schedule_acceptance_auth_and_method_boundaries():
+    route = "/v1/candidate/schedule-event/accept"
+    assert request(
+        app(ScheduleAcceptanceLoop()), method="POST", path=route, token=None,
+        body={"schema_version": 1, "event_id": "event-1", "event_version": 1},
+    )[0][0] == "401 Unauthorized"
+    (status, headers), _ = request(app(ScheduleAcceptanceLoop()), path=route)
+    assert status == "405 Method Not Allowed" and ("Allow", "POST") in headers
+
+
+def test_candidate_schedule_acceptance_uses_durable_sqlite_sandbox_provider(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import (
+        ScheduleEvent, ScheduleEventType, ScheduleStatus,
+    )
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import (
+        SQLiteSchedulingRepository,
+    )
+
+    path = tmp_path / "candidate-acceptance.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database).create(ScheduleEvent(
+        event_id="event-accept-1", candidate_id="candidate-1",
+        employer_name="Sandbox GmbH", event_type=ScheduleEventType.INTERVIEW,
+        location="Berlin", start_at=datetime(2026, 11, 24, 10, tzinfo=timezone.utc),
+        end_at=datetime(2026, 11, 24, 11, tzinfo=timezone.utc),
+        timezone_name="UTC", status=ScheduleStatus.PROPOSED,
+    ))
+    database.close()
+    body = {
+        "schema_version": 1, "event_id": "event-accept-1", "event_version": 1,
+    }
+    with RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1"
+    ) as runtime:
+        (status, _), result = request(
+            runtime, method="POST",
+            path="/v1/candidate/schedule-event/accept", body=body,
+        )
+        assert status == "200 OK" and result["status"] == "succeeded"
+        (status, _), state = request(
+            runtime, path="/v1/candidate/schedule-event/acceptance",
+            query="event_id=event-accept-1&event_version=1",
+        )
+        assert status == "200 OK" and state["status"] == "succeeded"
+        event_detail = request(
+            runtime, path="/v1/candidate/schedule-event",
+            query="event_id=event-accept-1",
+        )[1]
+        assert event_detail["event"]["status"] == "accepted"
+        assert event_detail["event"]["state_version"] == 2
+
+    database = SQLiteDatabase(str(path))
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+    ).fetchone()[0] == 1
+    database.close()
+
+    with RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1"
+    ) as restarted:
+        (status, _), replay = request(
+            restarted, method="POST",
+            path="/v1/candidate/schedule-event/accept", body=body,
+        )
+        assert status == "200 OK" and replay["status"] == "succeeded"
+    database = SQLiteDatabase(str(path))
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+    ).fetchone()[0] == 1
+    database.close()
+
+
+def test_candidate_schedule_acceptance_rejects_stale_and_foreign_events_without_effect(tmp_path):
+    from datetime import datetime, timezone
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+
+    path = tmp_path / "candidate-acceptance-isolation.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteSchedulingRepository(database)
+    for event_id, owner in (("owned", "candidate-1"), ("foreign", "candidate-2")):
+        repository.create(ScheduleEvent(
+            event_id=event_id, candidate_id=owner, employer_name="Sandbox GmbH",
+            event_type=ScheduleEventType.INTERVIEW, location="Berlin",
+            start_at=datetime(2026, 11, 24, 10, tzinfo=timezone.utc),
+            timezone_name="UTC",
+        ))
+    database.close()
+    with RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1"
+    ) as runtime:
+        (status, _), _ = request(
+            runtime, method="POST", path="/v1/candidate/schedule-event/accept",
+            body={"schema_version": 1, "event_id": "owned", "event_version": 2},
+        )
+        assert status == "409 Conflict"
+        (status, _), _ = request(
+            runtime, method="POST", path="/v1/candidate/schedule-event/accept",
+            body={"schema_version": 1, "event_id": "foreign", "event_version": 1},
+        )
+        assert status == "404 Not Found"
+    database = SQLiteDatabase(str(path))
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+    ).fetchone()[0] == 0
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM external_action_operations"
+    ).fetchone()[0] == 0
+    database.close()
+
+
+def test_openapi_documents_candidate_schedule_acceptance_and_recovery():
+    document = candidate_approval_openapi_document()
+    accept = document["paths"]["/v1/candidate/schedule-event/accept"]["post"]
+    status = document["paths"]["/v1/candidate/schedule-event/acceptance"]["get"]
+    recovery = document["paths"]["/v1/candidate/schedule-event/acceptance-recovery"]["post"]
+    reconciliation = document["paths"]["/v1/candidate/schedule-event/acceptance-reconciliation"]["post"]
+    assert accept["security"] == [{"bearerAuth": []}]
+    assert status["security"] == [{"bearerAuth": []}]
+    assert recovery["security"] == [{"bearerAuth": []}]
+    assert reconciliation["security"] == [{"bearerAuth": []}]
+    assert "202" in accept["responses"] and "409" in reconciliation["responses"]
+    assert status["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
