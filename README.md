@@ -1072,3 +1072,5 @@ creating schema or invoking a provider.
 
 
 A Chromium end-to-end regression drives a candidate acceptance timeout-after-effect through a real runtime restart, verifies persisted SQLite sandbox calendar evidence, and asserts exactly one durable effect with zero provider replays.
+
+The candidate sandbox runtime exposes a separate `sandbox_calendar_outcome_plan` for deterministic SQLite calendar outcomes. This keeps calendar timeout/evidence tests independent from the application-submission provider plan and exercises acceptance recovery through the same runtime composition used by the dashboard.
