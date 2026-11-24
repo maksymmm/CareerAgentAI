@@ -745,7 +745,7 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         ).fetchall()
     finally:
         database.close()
-    assert operations == [(attempts[0][0][0], ExternalActionStatus.SUCCEEDED.value)]
+    assert operations == [(attempts[0][0], ExternalActionStatus.SUCCEEDED.value)]
 
 
 def test_candidate_http_message_no_effect_retries_once_after_restart(
