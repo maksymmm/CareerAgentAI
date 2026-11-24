@@ -2,6 +2,7 @@
 
 from .models import OperationalIssue, OperationalSeverity
 from .operational_probe import OperationalProbe
+from .references import stable_reference
 from .structured_logging import (
     JsonLogFormatter,
     configure_structured_logging,
@@ -23,4 +24,5 @@ __all__ = [
     "log_event",
     "redact_mapping",
     "redact_text",
+    "stable_reference",
 ]
