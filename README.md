@@ -1069,3 +1069,6 @@ owner-scoped status response can restore the candidate UI state. The dashboard's
 same evidence-backed reconciliation endpoint. Before the first operation, a read-only
 status GET returns `not_started` when the operation ledger table is absent without
 creating schema or invoking a provider.
+
+
+A Chromium end-to-end regression drives a candidate acceptance timeout-after-effect through a real runtime restart, verifies persisted SQLite sandbox calendar evidence, and asserts exactly one durable effect with zero provider replays.
