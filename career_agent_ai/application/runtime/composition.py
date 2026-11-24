@@ -445,7 +445,15 @@ class _RequestCandidateLoop:
             if row is None:
                 status = "not_started"
             else:
-                payload = json.loads(row[1])
+                def unique_object(pairs):
+                    value = {}
+                    for key, item in pairs:
+                        if key in value:
+                            raise ValueError("Persisted candidate acceptance JSON has duplicate keys.")
+                        value[key] = item
+                    return value
+
+                payload = json.loads(row[1], object_pairs_hook=unique_object)
                 if (
                     not isinstance(payload, dict)
                     or row[0] != "calendar.accept"
@@ -455,7 +463,7 @@ class _RequestCandidateLoop:
                 ):
                     raise ValueError("Persisted candidate acceptance intent is malformed.")
                 status = row[2]
-                if status not in {
+                if not isinstance(status, str) or status not in {
                     "prepared", "in_progress", "succeeded", "failed",
                     "reconciliation_required",
                 }:
