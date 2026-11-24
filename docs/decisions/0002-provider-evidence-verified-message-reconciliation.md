@@ -25,9 +25,19 @@ Reconciliation requires provider evidence:
 | `delivered=false` | Reject | Accept | Reject |
 
 Evidence lookup takes a SQLite writer lock, so it cannot mistake an in-flight effect
-for confirmed absence. Existing transactions and lock failures fail closed. Rejection
-uses the existing conflict response and leaves operation, message, loop phase, and
-state version unchanged.
+for confirmed absence. A negative claim is authoritative only when the operation has a
+valid durable intent and a non-empty, contiguous attempt ledger whose every outcome is
+explicitly `NO_EFFECT` or `INTERRUPTED_BEFORE_EFFECT`. Unknown operations, missing or
+gapped attempts, unrecognized outcomes, and a missing delivery after `SUCCESS` or
+`TIMEOUT_AFTER_EFFECT` return `UNKNOWN`, never confirmed absence.
+
+Positive evidence also requires a contiguous attempt ledger with exactly one terminal
+effect outcome, a delivery fingerprint matching the durable intent, an allowlisted
+`send`/`reply` action, and an outbound message whose canonical fingerprint matches
+the intent. Missing messages and malformed or conflicting persisted metadata return
+`UNKNOWN`. Existing transactions and lock failures fail closed. Rejection uses the
+existing conflict response and leaves operation, message, loop phase, and state version
+unchanged.
 
 ## Consequences
 

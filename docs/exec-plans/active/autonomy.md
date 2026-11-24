@@ -1590,3 +1590,17 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Sandbox communication evidence integrity: `verify_delivery` no longer treats an
+unknown operation or a missing delivery row as proof of no effect. Confirmed absence
+requires a valid durable intent plus a non-empty, contiguous attempt ledger containing
+only explicit `NO_EFFECT` or `INTERRUPTED_BEFORE_EFFECT` outcomes. Missing/gapped
+attempts, unknown outcomes, and missing delivery after success/timeout are inconclusive.
+Positive evidence must match the intent fingerprint, allowlisted send/reply action,
+terminal attempt outcome, and exact persisted outbound message. Regressions cover
+unknown operations, missing attempts, gaps, unknown outcomes, deleted effects,
+corrupt delivery metadata, and missing outbound messages. All tests use synthetic
+SQLite messages and no network provider.
+Next: apply the same authoritative evidence contract to sandbox application-submission
+verification, then run exact-head CI and independent code/security review.
