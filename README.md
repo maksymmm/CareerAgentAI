@@ -1041,3 +1041,16 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+### Candidate interview acceptance API
+
+The authenticated candidate sandbox now exposes version-bound interview acceptance
+through the local SQLite calendar provider. The acceptance operation ID is derived
+from the authenticated candidate, event ID and displayed event version. Read-only
+status lookup is separate from explicit recovery; only an in-progress operation
+older than the five-minute synchronous-sandbox grace period can be promoted to
+provider-evidence reconciliation. Reconciliation verifies the sandbox provider's
+authoritative evidence before recording success or returning the same operation to
+prepared for a deliberate retry. The candidate dashboard remains read-only for
+schedule events until its acceptance controls are wired to these endpoints.
