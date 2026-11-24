@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Communication provider writer-contention hardening: the SQLite mailbox now has
+parallel regressions for the calendar provider's lock matrix. A competing
+`BEGIN IMMEDIATE` writer causes a send to fail before intent/attempt/delivery
+persistence, then the same message intent succeeds after lock release. Delivery
+evidence lookup fails closed while another writer holds the database and returns the
+committed message after release. Barrier-based independent connections prove
+same-key/same-message sends produce one delivery and one scripted attempt, while
+concurrent conflicting message bodies cannot rebind the operation ID. ADR 0002
+records these guarantees. Next: expose sanitized operator recovery classification
+across application, communication, and calendar without exposing provider payloads.
