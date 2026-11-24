@@ -152,7 +152,8 @@ class SQLiteSchedulingRepository:
 
         connection = self._database.connection
         try:
-            connection.execute("BEGIN IMMEDIATE")
+            if not connection.in_transaction:
+                connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
                 SELECT event_id, candidate_id, employer_name, event_type, location,
