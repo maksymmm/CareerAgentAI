@@ -3653,3 +3653,45 @@ def test_candidate_sandbox_browser_retries_only_after_verified_acceptance_no_eff
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+
+def test_candidate_sandbox_browser_disables_accept_retry_when_post_outcome_is_unknown():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class UnknownAcceptanceLoop(CandidateScheduleAcceptanceBrowserLoop):
+        def accept_candidate_schedule_event(self, event_id, *, user_id, expected_version):
+            self.acceptance_calls.append((event_id, expected_version))
+            self.status = "in_progress"
+            raise RuntimeError("private provider exception detail")
+
+    loop = UnknownAcceptanceLoop()
+    server, thread = _candidate_acceptance_browser(loop)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.locator("#accept-event").click()
+            page.locator("#result").get_by_text(
+                "Interview acceptance request failed", exact=False
+            ).wait_for()
+            assert page.locator("#accept-event").is_disabled()
+            assert not page.locator("#refresh-acceptance").is_disabled()
+            assert "private provider exception detail" not in page.locator("body").text_content()
+
+            page.locator("#refresh-acceptance").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "Acceptance is still active", exact=False
+            ).wait_for()
+            assert page.locator("#accept-event").is_disabled()
+            assert not page.locator("#recover-acceptance").is_disabled()
+            assert loop.acceptance_calls == [("event-browser-1", 1)]
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
