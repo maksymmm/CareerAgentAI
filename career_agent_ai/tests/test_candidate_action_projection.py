@@ -428,8 +428,9 @@ def test_candidate_action_http_runtime_enforces_owner_and_survives_restart(tmp_p
         assert status == "200 OK"
         assert headers["Cache-Control"] == "no-store"
         assert [item["status"] for item in page["items"]] == [
-            "prepared", "in_progress", "failed", "reconciliation_required", "succeeded"
+            "prepared", "in_progress", "failed", "reconciliation_required", "succeeded", "prepared"
         ]
+        assert page["items"][-1]["action_family"] == "other"
         assert _request(
             runtime,
             path="/v1/candidate/runs/foreign-run/actions",
