@@ -3348,6 +3348,8 @@ def test_candidate_sandbox_browser_lists_external_actions_and_redacts_malformed_
 
             page.locator("#token").fill("changed")
             assert page.locator("#candidate-actions").inner_text() == ""
+            assert page.locator("#list-candidate-actions").is_enabled()
+            page.locator("#token").fill("")
             assert page.locator("#list-candidate-actions").is_disabled()
             browser.close()
     finally:

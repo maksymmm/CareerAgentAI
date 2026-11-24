@@ -714,7 +714,7 @@ _HTML = r"""<!doctype html>
             !(page.next_after === null ||
               (typeof page.next_after === 'string' && page.next_after.length <= 1200 &&
                 /^[A-Za-z0-9_-]+$/.test(page.next_after))) ||
-            (page.next_after !== null && page.items.length === 0)) {
+            (page.next_after !== null && (page.items.length === 0 || page.next_after === after))) {
           throw new Error('Invalid external action page.');
         }
         const refs = new Set();
