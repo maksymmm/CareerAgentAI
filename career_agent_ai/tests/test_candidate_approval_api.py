@@ -3695,3 +3695,45 @@ def test_candidate_sandbox_browser_disables_accept_retry_when_post_outcome_is_un
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+
+def test_candidate_sandbox_browser_clears_unsubmitted_attestation_when_status_changes():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    loop = CandidateScheduleAcceptanceBrowserLoop()
+    loop.status = "reconciliation_required"
+    server, thread = _candidate_acceptance_browser(loop)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.wait_for_function(
+                "() => !document.querySelector('#acceptance-verified').disabled"
+            )
+            page.locator("#acceptance-verified").check()
+            page.locator("#acceptance-provider-event-id").fill("stale-provider-id")
+
+            loop.status = "prepared"
+            page.locator("#refresh-acceptance").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "provider confirmed no calendar effect", exact=False
+            ).wait_for()
+            assert not page.locator("#acceptance-verified").is_checked()
+            assert page.locator("#acceptance-provider-event-id").input_value() == ""
+
+            loop.status = "reconciliation_required"
+            page.locator("#refresh-acceptance").click()
+            page.wait_for_function(
+                "() => !document.querySelector('#acceptance-verified').disabled"
+            )
+            assert not page.locator("#acceptance-verified").is_checked()
+            assert page.locator("#acceptance-provider-event-id").input_value() == ""
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
