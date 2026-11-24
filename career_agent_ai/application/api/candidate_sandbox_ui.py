@@ -1045,13 +1045,18 @@ _HTML = r"""<!doctype html>
         const snapshot = await call(runPath('/status'), {}, 'Status request failed.');
         if (statusContextGeneration !== inputContextGeneration ||
             runId !== byId('run-id').value) return;
-        const statusFields = ['schema_version', 'run_id', 'run_ref', 'state_version', 'phase',
+        const statusFields = ['schema_version', 'run_id', 'state_version', 'phase',
           'waiting_for_human', 'terminal'];
+        // run_ref is additive correlation metadata; accept the prior exact shape during rolling upgrades.
+        const hasRunRef = Boolean(snapshot && typeof snapshot === 'object' &&
+          Object.hasOwn(snapshot, 'run_ref'));
+        const responseFields = hasRunRef ? [...statusFields, 'run_ref'] : statusFields;
         if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
-            Object.keys(snapshot).length !== statusFields.length ||
-            !statusFields.every(field => Object.hasOwn(snapshot, field)) ||
+            Object.keys(snapshot).length !== responseFields.length ||
+            !responseFields.every(field => Object.hasOwn(snapshot, field)) ||
             snapshot.schema_version !== 1 || snapshot.run_id !== runId ||
-            typeof snapshot.run_ref !== 'string' || !/^[a-f0-9]{24}$/.test(snapshot.run_ref) ||
+            (hasRunRef && (typeof snapshot.run_ref !== 'string' ||
+              !/^[a-f0-9]{24}$/.test(snapshot.run_ref))) ||
             !Number.isSafeInteger(snapshot.state_version) || snapshot.state_version < 0 ||
             (selectedRunVersion !== null && snapshot.state_version < selectedRunVersion) ||
             !runPhases.includes(snapshot.phase) || typeof snapshot.waiting_for_human !== 'boolean' ||
@@ -1080,12 +1085,12 @@ _HTML = r"""<!doctype html>
           invalidateApprovalPrompt('Run state changed. Load the current approval prompt.');
         }
         show({status: 200, payload: Object.fromEntries(
-          statusFields.map(field => [field, snapshot[field]])
+          responseFields.map(field => [field, snapshot[field]])
         )});
         const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id +
-          ' · Reference: ' + snapshot.run_ref;
+          (hasRunRef ? ' · Reference: ' + snapshot.run_ref : '');
       } catch (error) {
         if (statusContextGeneration === inputContextGeneration &&
             runId === byId('run-id').value) {
