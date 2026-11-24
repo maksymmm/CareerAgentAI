@@ -1390,7 +1390,8 @@ def test_candidate_sandbox_browser_recovers_reschedule_timeout_after_runtime_res
         assert effect is not None and effect[2] == 0
         effect_event = json.loads(effect[1])
         assert effect_event["status"] == ScheduleStatus.RESCHEDULE_REQUESTED.value
-        assert effect_event["version"] == 2
+        # Provider evidence records the target before the local event version advances.
+        assert effect_event["version"] == 1
         attempts = database.connection.execute(
             "SELECT outcome FROM sandbox_calendar_attempts WHERE operation_id = ?",
             (operation_id,),
