@@ -2221,7 +2221,9 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "loadApplicationDetail(item.application_id, item.state_version, button)" in application_loader
     event_loader = html[html.index("async function loadEvents"):html.index("async function loadApplications")]
     assert "items.length !== 25" not in event_loader
-    assert "page.next_after !== items.at(-1).event_id" in event_loader
+    assert "eventCursorId(page.next_after) !== items.at(-1).event_id" in event_loader
+    assert "selectedType === '' || item.event_type === selectedType" in event_loader
+    assert "&event_type=" in event_loader
     event_detail_loader = html[html.index("async function loadEventDetail"):html.index("async function loadEvents")]
     assert event_detail_loader.index("const versionFloor") < event_detail_loader.index("clearEventDetail()")
     assert "eventVersionFloorId === identifier" in event_detail_loader
