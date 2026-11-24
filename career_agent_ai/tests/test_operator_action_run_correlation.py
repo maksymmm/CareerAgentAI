@@ -396,3 +396,123 @@ def test_external_action_rejects_malformed_correlation_id(correlation_id):
             payload={},
             correlation_id=correlation_id,
         )
+
+
+def test_stable_reference_rejects_empty_and_non_text_sources():
+    from career_agent_ai.application.observability.references import stable_reference
+
+    for value in ("", None, 0):
+        with pytest.raises(ValueError):
+            stable_reference(value)
+
+
+def test_stable_reference_rejects_invalid_unicode():
+    with pytest.raises(ValueError, match="valid Unicode"):
+        stable_reference("\ud800")
+
+
+def test_external_action_rejects_non_text_correlation_metadata():
+    with pytest.raises(TypeError, match="correlation_id must be text"):
+        ExternalActionOperation(
+            operation_id="valid-operation",
+            action_type="application.submit",
+            payload={},
+            correlation_id=object(),
+        )
+
+
+@pytest.mark.parametrize(
+    "correlation_id",
+    [b"candidate-run", "", " padded", "bad\nrun", "x" * 201],
+)
+def test_operator_projection_fails_closed_on_malformed_persisted_correlation(
+    tmp_path, correlation_id
+):
+    database = SQLiteDatabase(str(tmp_path / "malformed-correlation.sqlite"))
+    try:
+        repository = SQLiteExternalActionOperationRepository(database)
+        repository.create(
+            ExternalActionOperation(
+                operation_id="malformed-correlation-operation",
+                action_type="application.submit",
+                payload={},
+                created_at=NOW,
+                updated_at=NOW,
+                correlation_id="valid-candidate-run",
+            )
+        )
+        database.connection.execute(
+            "UPDATE external_action_operations SET correlation_id = ? "
+            "WHERE operation_id = ?",
+            (correlation_id, "malformed-correlation-operation"),
+        )
+        database.connection.commit()
+
+        with pytest.raises(RuntimeError, match="correlation identifier is malformed"):
+            SQLiteOperationalProbe(database).list_action_statuses()
+    finally:
+        database.close()
+
+
+def test_repository_rejects_corrupt_persisted_correlation_metadata(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "corrupt-correlation-row.sqlite"))
+    try:
+        repository = SQLiteExternalActionOperationRepository(database)
+        repository.create(
+            ExternalActionOperation(
+                operation_id="corrupt-correlation-operation",
+                action_type="application.submit",
+                payload={},
+                created_at=NOW,
+                updated_at=NOW,
+                correlation_id="valid-candidate-run",
+            )
+        )
+        database.connection.execute(
+            "UPDATE external_action_operations SET correlation_id = ? "
+            "WHERE operation_id = ?",
+            ("bad\nrun", "corrupt-correlation-operation"),
+        )
+        database.connection.commit()
+
+        with pytest.raises(ValueError, match="Persisted external-action operation is malformed"):
+            repository.get("corrupt-correlation-operation")
+    finally:
+        database.close()
+
+
+def test_operational_action_service_rejects_invalid_projection_boundaries():
+    from career_agent_ai.application.api.operational_api import OperationalApiService
+
+    class Probe:
+        def __init__(self, page=None):
+            self.page = page
+
+        def list_action_statuses(self, **kwargs):
+            return self.page
+
+    with pytest.raises(ValueError, match="limit must be between"):
+        OperationalApiService(Probe({"items": [], "next_after": None}), clock=lambda: NOW).actions(
+            limit=0
+        )
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        OperationalApiService(
+            Probe({"items": [], "next_after": None}),
+            clock=lambda: datetime(2026, 11, 24),
+        ).actions()
+
+    with pytest.raises(RuntimeError, match="projection is unavailable"):
+        OperationalApiService(object(), clock=lambda: NOW).actions()
+
+    with pytest.raises(RuntimeError, match="invalid page"):
+        OperationalApiService(
+            Probe({"items": [1, 2], "next_after": None}),
+            clock=lambda: NOW,
+        ).actions(limit=1)
+
+    with pytest.raises(RuntimeError, match="invalid cursor"):
+        OperationalApiService(
+            Probe({"items": [], "next_after": "not-a-valid-cursor"}),
+            clock=lambda: NOW,
+        ).actions()
