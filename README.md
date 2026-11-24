@@ -1053,3 +1053,14 @@ status response. The raw correlation ID is stored in a dedicated nullable column
 in provider payload or result JSON. Legacy actions remain unlinked, and an idempotent
 replay cannot rebind an existing operation to a different run. The endpoint is
 diagnostic only and cannot retry, reconcile or mutate an external action.
+
+
+## Candidate-run scoped operator action discovery
+
+The authenticated read-only GET /v1/operational/actions endpoint accepts an optional
+candidate_run_ref query parameter copied from the candidate-owned run status response.
+Filtering occurs in SQLite before the bounded keyset page is selected. The reference is
+stored separately from provider payload/result JSON and indexed for lookup. Filtered
+cursors are bound to the exact candidate-run reference and cannot be replayed against a
+different run or an unfiltered query. A legacy database without the reference index
+fails closed for filtered reads; the read-only endpoint never migrates or writes storage.
