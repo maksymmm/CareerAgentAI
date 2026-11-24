@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 from career_agent_ai.application.observability.models import (
@@ -50,6 +54,102 @@ class SQLiteOperationalProbe:
                 ),
             )
         )
+
+
+    def list_action_statuses(
+        self, *, limit: int = 25, after: str | None = None
+    ) -> dict[str, object]:
+        """List bounded non-terminal action metadata without parsing private payloads."""
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 25
+        ):
+            raise ValueError("limit must be between 1 and 25.")
+        cursor = None if after is None else self._decode_action_cursor(after)
+        if not self._table_exists("external_action_operations"):
+            return {"items": [], "next_after": None}
+        rows = self._database.connection.execute(
+            """
+            SELECT operation_id, action_type, status, created_at, updated_at, error
+            FROM external_action_operations
+            WHERE status IN ('prepared', 'in_progress', 'failed', 'reconciliation_required')
+              AND (? IS NULL OR operation_id > ?)
+            ORDER BY operation_id ASC
+            LIMIT ?
+            """,
+            (cursor, cursor, limit + 1),
+        ).fetchall()
+        visible = rows[:limit]
+        items: list[dict[str, object]] = []
+        for operation_id, action_type, status, created_at, updated_at, error in visible:
+            if (
+                not isinstance(operation_id, str)
+                or not operation_id
+                or len(operation_id) > 200
+                or operation_id != operation_id.strip()
+                or any(ord(character) < 32 or ord(character) == 127 for character in operation_id)
+            ):
+                raise ValueError("Persisted external-action identifier is malformed.")
+            if not isinstance(action_type, str) or not action_type or len(action_type) > 100:
+                raise ValueError("Persisted external-action type is malformed.")
+            if status not in {
+                "prepared", "in_progress", "failed", "reconciliation_required"
+            }:
+                raise ValueError("Persisted external-action status is malformed.")
+            created = self._parse_timestamp(created_at, "external action")
+            updated = self._parse_timestamp(updated_at, "external action")
+            if action_type.startswith("application."):
+                family = "application_submission"
+            elif action_type.startswith("communication."):
+                family = "communication"
+            elif action_type.startswith("calendar."):
+                family = "calendar"
+            else:
+                family = "other"
+            items.append({
+                "operation_ref": hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24],
+                "action_family": family,
+                "status": status,
+                "created_at": created.isoformat(),
+                "updated_at": updated.isoformat(),
+                "error_present": error is not None,
+            })
+        next_after = (
+            self._encode_action_cursor(visible[-1][0])
+            if len(rows) > limit and visible
+            else None
+        )
+        return {"items": items, "next_after": next_after}
+
+    @staticmethod
+    def _encode_action_cursor(operation_id: str) -> str:
+        """Encode a stable operation key for keyset pagination."""
+        return base64.urlsafe_b64encode(operation_id.encode("utf-8")).decode("ascii").rstrip("=")
+
+    @classmethod
+    def _decode_action_cursor(cls, value: str) -> str:
+        """Decode and validate an opaque operation keyset cursor."""
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 512
+            or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None
+        ):
+            raise ValueError("after is not a valid operational action cursor.")
+        try:
+            decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise ValueError("after is not a valid operational action cursor.") from exc
+        if (
+            not decoded
+            or len(decoded) > 200
+            or decoded != decoded.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in decoded)
+            or cls._encode_action_cursor(decoded) != value
+        ):
+            raise ValueError("after is not a valid operational action cursor.")
+        return decoded
 
     def _external_action_issues(self, cutoff: datetime) -> list[OperationalIssue]:
         if not self._table_exists("external_action_operations"):
