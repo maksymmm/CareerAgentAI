@@ -54,11 +54,11 @@ class SQLiteCandidateActionProjection:
         if status is not None and (
             not isinstance(status, str) or status not in _ACTION_STATUSES
         ):
-            raise ValueError("status is not a supported candidate action status.")
+            raise ValueError("status filter is not a supported candidate action status.")
         if action_family is not None and (
             not isinstance(action_family, str) or action_family not in _ACTION_FAMILIES
         ):
-            raise ValueError("action_family is not a supported candidate action family.")
+            raise ValueError("action_family filter is not a supported candidate action family.")
         identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
         owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
         if type(limit) is not int or not 1 <= limit <= 25:
@@ -175,7 +175,7 @@ class SQLiteCandidateActionProjection:
         for (
             operation_id,
             action_type,
-            status,
+            action_status,
             created_at,
             updated_at,
             error_present,
@@ -184,12 +184,7 @@ class SQLiteCandidateActionProjection:
             try:
                 # The cursor encoder applies the same strict operation-key bounds
                 # used by the operator projection without exposing that key.
-                encode_action_cursor(
-                    operation_id,
-                    candidate_run_ref=run_ref,
-                    status=status,
-                    action_family=action_family,
-                )
+                encode_action_cursor(operation_id, candidate_run_ref=run_ref)
                 operation_ref = stable_reference(operation_id)
             except (TypeError, ValueError) as exc:
                 raise RuntimeError("Persisted candidate action identifier is malformed.") from exc
@@ -203,7 +198,7 @@ class SQLiteCandidateActionProjection:
                 or any(0xD800 <= ord(character) <= 0xDFFF for character in action_type)
             ):
                 raise RuntimeError("Persisted candidate action type is malformed.")
-            if status not in _ACTION_STATUSES:
+            if action_status not in _ACTION_STATUSES:
                 raise RuntimeError("Persisted candidate action status is malformed.")
             if action_type.startswith("application."):
                 family = "application_submission"
@@ -217,7 +212,7 @@ class SQLiteCandidateActionProjection:
             items.append({
                 "operation_ref": operation_ref,
                 "action_family": family,
-                "status": status,
+                "status": action_status,
                 "created_at": self._timestamp(created_at),
                 "updated_at": self._timestamp(updated_at),
                 "error_present": bool(error_present),
