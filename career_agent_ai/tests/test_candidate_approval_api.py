@@ -3893,3 +3893,153 @@ def test_candidate_acceptance_status_without_ledger_table_is_not_started_and_rea
     }
     assert "external_action_operations" not in tables
     database.close()
+
+def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_restart_without_replay(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from datetime import datetime, timezone
+    from career_agent_ai.application.career.autonomous_career_loop import (
+        _candidate_schedule_accept_operation_id,
+    )
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import (
+        ScheduleEvent, ScheduleEventType, ScheduleStatus,
+    )
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+        SandboxCalendarOutcome,
+    )
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import (
+        SQLiteSchedulingRepository,
+    )
+
+    path = tmp_path / "candidate-acceptance-timeout-restart.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database).create(ScheduleEvent(
+        event_id="event-timeout-1", candidate_id="candidate-1",
+        employer_name="Sandbox GmbH", event_type=ScheduleEventType.INTERVIEW,
+        location="Berlin", start_at=datetime(2026, 11, 24, 10, tzinfo=timezone.utc),
+        end_at=datetime(2026, 11, 24, 11, tzinfo=timezone.utc),
+        timezone_name="UTC", status=ScheduleStatus.PROPOSED,
+    ))
+    database.close()
+
+    def timeout_after_effect(_operation_id, _attempt):
+        return SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+
+    def forbid_provider_replay(_operation_id, _attempt):
+        raise AssertionError("Recovery must not invoke the calendar provider again.")
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    resolve_bearer = lambda token: "candidate-1" if token == "valid" else None
+    runtime1 = RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=resolve_bearer,
+        sandbox_outcome_plan=timeout_after_effect,
+    )
+    server1 = make_server("127.0.0.1", 0, runtime1, handler_class=QuietHandler)
+    thread1 = Thread(target=server1.serve_forever, daemon=True)
+    thread1.start()
+    runtime2 = None
+    server2 = None
+    thread2 = None
+    server1_stopped = False
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server1.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.wait_for_function(
+                "() => !document.querySelector('#accept-event').disabled"
+            )
+            page.locator("#accept-event").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "outcome is ambiguous", exact=False
+            ).wait_for()
+            assert page.locator("#accept-event").is_disabled()
+
+            # Simulate process loss after the provider committed its sandbox effect.
+            server1.shutdown()
+            thread1.join(timeout=5)
+            server1.server_close()
+            runtime1.close()
+            server1_stopped = True
+
+            runtime2 = RuntimeCandidateApp(
+                database_path=str(path), jobs=(), resolve_bearer=resolve_bearer,
+                sandbox_outcome_plan=forbid_provider_replay,
+            )
+            server2 = make_server("127.0.0.1", 0, runtime2, handler_class=QuietHandler)
+            thread2 = Thread(target=server2.serve_forever, daemon=True)
+            thread2.start()
+            page.goto(f"http://127.0.0.1:{server2.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#list-events").click()
+            page.locator("#owned-events button").click()
+            page.wait_for_function(
+                "() => !document.querySelector('#acceptance-verified').disabled"
+            )
+            assert not page.locator("#acceptance-verified").is_checked()
+            assert page.locator("#acceptance-completed").is_disabled()
+
+            page.locator("#acceptance-verified").check()
+            page.locator("#acceptance-provider-event-id").fill("fake-event-timeout-1")
+            page.locator("#acceptance-completed").click()
+            page.locator("#event-acceptance-state").get_by_text(
+                "Interview acceptance is confirmed", exact=False
+            ).wait_for()
+            assert not page.locator("#acceptance-verified").is_checked()
+            assert page.locator("#acceptance-provider-event-id").input_value() == ""
+
+            # The durable event projection is refreshed only after reconciliation.
+            page.locator("#owned-events button").click()
+            page.locator("#event-detail").get_by_text(
+                '"state_version": 2', exact=False
+            ).wait_for()
+            event = json.loads(page.locator("#event-detail").text_content())
+            assert event["status"] == "accepted" and event["state_version"] == 2
+            browser.close()
+    finally:
+        if server2 is not None:
+            server2.shutdown()
+            if thread2 is not None:
+                thread2.join(timeout=5)
+            server2.server_close()
+        if runtime2 is not None:
+            runtime2.close()
+        # server1 may already have been stopped before the simulated restart.
+        if not server1_stopped:
+            server1.shutdown()
+            thread1.join(timeout=5)
+            server1.server_close()
+            runtime1.close()
+
+    operation_id = _candidate_schedule_accept_operation_id(
+        "candidate-1", "event-timeout-1", 1
+    )
+    database = SQLiteDatabase(str(path))
+    operation = database.connection.execute(
+        "SELECT status, result_json FROM external_action_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    assert operation is not None and operation[0] == "succeeded"
+    assert json.loads(operation[1])["provider_event_id"] == "fake-event-timeout-1"
+    effect = database.connection.execute(
+        "SELECT event_json, replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    assert effect is not None and effect[1] == 0
+    assert json.loads(effect[0])["status"] == "accepted"
+    attempts = database.connection.execute(
+        "SELECT outcome FROM sandbox_calendar_attempts WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchall()
+    assert attempts == [("timeout_after_effect",)]
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+    ).fetchone()[0] == 1
+    database.close()
