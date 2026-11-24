@@ -59,6 +59,41 @@ class OperationalApiService:
         }
 
 
+    def actions(self, *, limit: int = 25, after: str | None = None) -> dict[str, Any]:
+        """Return a bounded, read-only projection of non-terminal external actions."""
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 25
+        ):
+            raise ValueError("limit must be between 1 and 25.")
+        if after is not None and (
+            not isinstance(after, str) or not after or len(after) > 512
+        ):
+            raise ValueError("after must be a bounded opaque cursor.")
+        now = self._clock()
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("operational API clock must return a timezone-aware datetime.")
+        projection = getattr(self._probe, "list_action_statuses", None)
+        if not callable(projection):
+            raise RuntimeError("Operational action projection is unavailable.")
+        page = projection(limit=limit, after=after)
+        if (
+            not isinstance(page, dict)
+            or set(page) != {"items", "next_after"}
+            or not isinstance(page["items"], list)
+            or len(page["items"]) > limit
+            or not (page["next_after"] is None or isinstance(page["next_after"], str))
+        ):
+            raise RuntimeError("Operational action projection returned an invalid page.")
+        return {
+            "generated_at": now.astimezone(timezone.utc).isoformat(),
+            "schema_version": 1,
+            "items": page["items"],
+            "next_after": page["next_after"],
+        }
+
+
 class OperationalWSGIApp:
     """Serve the read-only operational API using the standard WSGI contract."""
 
@@ -153,6 +188,62 @@ class OperationalWSGIApp:
                         "500 Internal Server Error",
                         {"error": "internal_error"},
                     )
+            if path == "/v1/operational/actions":
+                authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
+                scheme, separator, credentials = authorization.partition(" ")
+                supplied = (
+                    credentials
+                    if separator and scheme.casefold() == "bearer"
+                    else ""
+                )
+                try:
+                    supplied_bytes = supplied.encode("ascii")
+                except UnicodeEncodeError:
+                    supplied_bytes = b""
+                exact_match = hmac.compare_digest(supplied_bytes, self._bearer_token)
+                token_length = len(self._bearer_token)
+                prefix = supplied_bytes[:-token_length]
+                suffix = supplied_bytes[-token_length:]
+                spaced_match = hmac.compare_digest(suffix, self._bearer_token)
+                spaced_match = spaced_match and bool(prefix) and not prefix.strip(b" ")
+                if not (exact_match or spaced_match):
+                    return self._respond(
+                        start_response,
+                        "401 Unauthorized",
+                        {"error": "unauthorized"},
+                        extra_headers=[("WWW-Authenticate", "Bearer")],
+                    )
+                query = parse_qs(
+                    str(environ.get("QUERY_STRING", "")),
+                    keep_blank_values=True,
+                    max_num_fields=3,
+                    strict_parsing=True,
+                    errors="strict",
+                )
+                if set(query) - {"limit", "after"} or any(
+                    len(values) != 1 for values in query.values()
+                ):
+                    raise ValueError("unknown or duplicate operational action query parameter.")
+                raw_limit = query.get("limit", ["25"])[0]
+                if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 2:
+                    raise ValueError("limit must be between 1 and 25.")
+                limit = int(raw_limit)
+                if not 1 <= limit <= 25:
+                    raise ValueError("limit must be between 1 and 25.")
+                after = query.get("after", [None])[0]
+                if after is not None and (not after or len(after) > 512):
+                    raise ValueError("after must be a bounded opaque cursor.")
+                try:
+                    payload = self._service.actions(limit=limit, after=after)
+                    return self._respond(start_response, "200 OK", payload)
+                except ValueError:
+                    raise
+                except Exception:
+                    return self._respond(
+                        start_response,
+                        "500 Internal Server Error",
+                        {"error": "internal_error"},
+                    )
             return self._respond(
                 start_response,
                 "404 Not Found",
@@ -203,6 +294,28 @@ def openapi_document() -> dict[str, Any]:
             "severity": {"type": "string", "enum": ["warning", "error"]},
             "updated_at": {"type": "string", "format": "date-time"},
             "details": {"type": "object", "additionalProperties": True},
+        },
+        "additionalProperties": False,
+    }
+    action_item_schema = {
+        "type": "object",
+        "required": [
+            "operation_ref", "action_family", "status", "created_at",
+            "updated_at", "error_present",
+        ],
+        "properties": {
+            "operation_ref": {"type": "string", "pattern": "^[a-f0-9]{24}$"},
+            "action_family": {
+                "type": "string",
+                "enum": ["application_submission", "communication", "calendar", "other"],
+            },
+            "status": {
+                "type": "string",
+                "enum": ["prepared", "in_progress", "failed", "reconciliation_required"],
+            },
+            "created_at": {"type": "string", "format": "date-time"},
+            "updated_at": {"type": "string", "format": "date-time"},
+            "error_present": {"type": "boolean"},
         },
         "additionalProperties": False,
     }
@@ -303,6 +416,57 @@ def openapi_document() -> dict[str, Any]:
                                 }
                             },
                         },
+                    },
+                }
+            },
+            "/v1/operational/actions": {
+                "get": {
+                    "operationId": "listOperationalActionStatuses",
+                    "security": [{"bearerAuth": []}],
+                    "parameters": [
+                        {
+                            "name": "limit",
+                            "in": "query",
+                            "required": False,
+                            "schema": {"type": "integer", "minimum": 1, "maximum": 25, "default": 25},
+                        },
+                        {
+                            "name": "after",
+                            "in": "query",
+                            "required": False,
+                            "description": "Opaque keyset cursor; not an authorization credential",
+                            "schema": {"type": "string", "minLength": 1, "maxLength": 512,
+                                       "pattern": "^[A-Za-z0-9_-]+$"},
+                        },
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": (
+                                "Bounded lifecycle metadata for non-terminal external actions; "
+                                "payloads, results, errors and raw operation identifiers are omitted"
+                            ),
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": {"application/json": {"schema": {
+                                "type": "object",
+                                "required": ["generated_at", "schema_version", "items", "next_after"],
+                                "properties": {
+                                    "generated_at": {"type": "string", "format": "date-time"},
+                                    "schema_version": {"const": 1},
+                                    "items": {
+                                        "type": "array", "maxItems": 25,
+                                        "items": action_item_schema,
+                                    },
+                                    "next_after": {
+                                        "type": ["string", "null"], "maxLength": 512,
+                                        "pattern": "^[A-Za-z0-9_-]+$",
+                                    },
+                                },
+                                "additionalProperties": False,
+                            }}},
+                        },
+                        "400": {"description": "Invalid query or cursor"},
+                        "401": {"description": "Missing or invalid bearer token"},
+                        "500": {"description": "Sanitized internal operational error"},
                     },
                 }
             },
