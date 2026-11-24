@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qs
 
 from career_agent_ai.application.observability import OperationalProbe
+from career_agent_ai.application.observability.action_cursor import decode_action_cursor
 
 
 class OperationalApiService:
@@ -67,10 +68,8 @@ class OperationalApiService:
             or not 1 <= limit <= 25
         ):
             raise ValueError("limit must be between 1 and 25.")
-        if after is not None and (
-            not isinstance(after, str) or not after or len(after) > 1200
-        ):
-            raise ValueError("after must be a bounded opaque cursor.")
+        if after is not None:
+            decode_action_cursor(after)
         now = self._clock()
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("operational API clock must return a timezone-aware datetime.")
@@ -83,9 +82,20 @@ class OperationalApiService:
             or set(page) != {"items", "next_after"}
             or not isinstance(page["items"], list)
             or len(page["items"]) > limit
-            or not (page["next_after"] is None or (isinstance(page["next_after"], str) and 0 < len(page["next_after"]) <= 1200))
+            or not (
+                page["next_after"] is None
+                or (
+                    isinstance(page["next_after"], str)
+                    and 0 < len(page["next_after"]) <= 1200
+                )
+            )
         ):
             raise RuntimeError("Operational action projection returned an invalid page.")
+        if page["next_after"] is not None:
+            try:
+                decode_action_cursor(page["next_after"])
+            except ValueError as exc:
+                raise RuntimeError("Operational action projection returned an invalid cursor.") from exc
         return {
             "generated_at": now.astimezone(timezone.utc).isoformat(),
             "schema_version": 1,
