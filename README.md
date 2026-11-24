@@ -358,7 +358,7 @@ next-page/retry and View event detail, and renders allowlisted text-only snapsho
 including exact UTC/local times and both offsets. Page loads/token edits invalidate
 pending details; token edits clear all schedule state. Malformed responses and raw
 backend errors never enter the result pane. No calendar action controls are added.
-Sparse owner/status projections may carry a valid next cursor; the cursor must still
+Sparse owner/status/type projections may carry a valid next cursor; the cursor must still
 identify the final visible event and event IDs must advance strictly without duplicates.
 The browser verifies the IANA zone's local date/time at both UTC instants. Unknown
 zones or browser/server timezone-database disagreement fail closed with a retry hint;
@@ -368,21 +368,24 @@ Authenticated `GET /v1/candidate/schedule-events?limit=25&after=...` exposes own
 ID-keyset pages with strict bounded query validation, bearer-derived ownership,
 no-store, sanitized errors and OpenAPI. It uses existing read-only storage, cannot
 create a database or execute work, and never loads private calendar identifiers.
-The collection's `after` is a range cursor, not an ownership credential. Read-only
-candidate UI discovery/detail is the next delivery unit.
+The collection's `after` is a range cursor, not an ownership credential. Read-only candidate UI discovery/detail is delivered; status and event-type filters are available without calendar actions.
 
-The collection also accepts an optional validated `status` filter (`proposed`,
-`accepted`, `declined`, `reschedule_requested`, or `cancelled`). Filtering remains
-owner-scoped in SQL, preserves event-ID keyset pagination, and is available from the
-read-only candidate dashboard without enabling calendar actions.
+The collection accepts optional validated `status` (`proposed`, `accepted`, `declined`,
+`reschedule_requested`, or `cancelled`) and `event_type` (`interview`, `trial_day`,
+`phone_call`, `video_call`, or `other`) filters. Both are applied in owner-scoped SQL
+before pagination. Filtered continuation cursors are canonical `sc1~` tokens bound to
+the exact status/type pair; cross-filter replay is rejected before storage access.
+Legacy plain-ID cursors remain accepted for unfiltered and status-only rollout compatibility.
+The read-only candidate dashboard clears pages and detail whenever either filter changes.
 
-`RuntimeCandidateApp.list_schedule_events(user_id=..., limit=25, after=None)` reads
-bounded owner-only event snapshots in stable event-ID order (maximum 100), using
-the same minimal exact-time projection as detail. `next_after` is the last returned
-ID when more rows exist, not an ownership credential. Reads never initialize schema,
+`RuntimeCandidateApp.list_schedule_events(user_id=..., limit=25, after=None,
+status=None, event_type=None)` reads bounded owner-only event snapshots in stable
+event-ID order (maximum 100), using the same minimal exact-time projection as detail.
+Filtered `next_after` values are filter-bound cursors, not ownership credentials. Reads never initialize schema,
 load provider/application IDs or action claims, or execute calendar actions. Writable
-repository startup installs/backfills the owner/ID keyset index. HTTP collection and
-candidate discovery UI remain follow-up work.
+repository startup installs/backfills owner/ID, event-type and combined status/type
+keyset indexes. HTTP collection and candidate discovery UI are delivered as read-only
+sandbox surfaces.
 
 `RuntimeCandidateApp.get_schedule_event(event_id, user_id=...)` returns a versioned
 read-only owner-only event snapshot with employer/location, lifecycle status, UTC

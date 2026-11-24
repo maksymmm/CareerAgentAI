@@ -51,7 +51,7 @@ from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
 from career_agent_ai.application.search.search_service import SearchService
 from career_agent_ai.application.scheduling import FakeCalendarAdapter, SchedulingService
-from career_agent_ai.application.scheduling.models import ScheduleStatus
+from career_agent_ai.application.scheduling.models import ScheduleEventType, ScheduleStatus
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
     SQLiteCandidateRunStatusProjection,
     SQLiteCareerLoopRepository,
@@ -220,12 +220,14 @@ class RuntimeCandidateApp:
 
     def list_schedule_events(self, *, user_id: str, limit: int = 25,
                              after: str | None = None,
-                             status: ScheduleStatus | None = None) -> dict[str, Any]:
+                             status: ScheduleStatus | None = None,
+                             event_type: ScheduleEventType | None = None) -> dict[str, Any]:
         """Read trusted caller's owned event pages without writes or calendar actions."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         return SQLiteCandidateSchedule(self._database_path).list_page(
-            user_id=user_id, limit=limit, after=after, status=status)
+            user_id=user_id, limit=limit, after=after, status=status,
+            event_type=event_type)
 
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
@@ -257,10 +259,12 @@ class _RequestCandidateLoop:
 
     def list_schedule_events(self, *, user_id: str, limit: int = 25,
                              after: str | None = None,
-                             status: ScheduleStatus | None = None) -> dict[str, Any]:
+                             status: ScheduleStatus | None = None,
+                             event_type: ScheduleEventType | None = None) -> dict[str, Any]:
         """Read authenticated event pages using request-local read-only storage."""
         return SQLiteCandidateSchedule(self._database_path).list_page(
-            user_id=user_id, limit=limit, after=after, status=status)
+            user_id=user_id, limit=limit, after=after, status=status,
+            event_type=event_type)
 
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's history through request-local read-only storage."""

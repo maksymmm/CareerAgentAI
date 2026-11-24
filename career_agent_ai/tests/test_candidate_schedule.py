@@ -138,7 +138,7 @@ def test_schedule_pages_filter_status_in_sql_and_preserve_cursor(tmp_path):
         second = runtime.list_schedule_events(user_id="owner", status=ScheduleStatus.PROPOSED,
                                               after=first["next_after"], limit=2)
         assert [item["event_id"] for item in first["items"]] == ["a", "c"]
-        assert first["next_after"] == "c"
+        assert first["next_after"].startswith("sc1~.")
         assert [item["event_id"] for item in second["items"]] == ["d"]
         assert second["next_after"] is None
         with pytest.raises(TypeError, match="ScheduleStatus"):
@@ -149,7 +149,8 @@ def test_schedule_pages_filter_status_in_sql_and_preserve_cursor(tmp_path):
 @pytest.mark.parametrize("options", [{"limit": 0}, {"limit": 101}, {"limit": True},
     {"limit": 1.0}, {"limit": "1"}, {"after": ""}, {"after": " padded"},
     {"after": "padded "}, {"after": "a/b"}, {"after": "\ud800"},
-    {"after": "x" * 201}, {"user_id": ""}, {"user_id": "owner/bad"}])
+    {"after": "x" * 201}, {"user_id": ""}, {"user_id": "owner/bad"},
+    {"event_type": "interview"}])
 def test_schedule_page_validation_before_missing_storage(tmp_path, options):
     path = tmp_path / "missing.sqlite"
     with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
@@ -201,4 +202,89 @@ def test_schedule_page_index_backfilled_by_writable_startup_only(tmp_path):
     plan = database.connection.execute("EXPLAIN QUERY PLAN SELECT event_id FROM scheduling_events WHERE candidate_id=? AND event_id>? ORDER BY event_id LIMIT ?", ("owner", "a", 26)).fetchall()
     assert "SEARCH" in str(plan) and "idx_scheduling_candidate_event" in str(plan)
     assert "TEMP B-TREE" not in str(plan)
+    database.close()
+
+
+
+def test_schedule_pages_filter_event_type_in_sql_and_bind_cursors(tmp_path):
+    path = tmp_path / "event-types.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteSchedulingRepository(database)
+    rows = [
+        ("a", ScheduleEventType.INTERVIEW, ScheduleStatus.PROPOSED),
+        ("b", ScheduleEventType.PHONE_CALL, ScheduleStatus.PROPOSED),
+        ("c", ScheduleEventType.INTERVIEW, ScheduleStatus.ACCEPTED),
+        ("d", ScheduleEventType.INTERVIEW, ScheduleStatus.PROPOSED),
+        ("e", ScheduleEventType.INTERVIEW, ScheduleStatus.PROPOSED),
+    ]
+    for identifier, event_type, status in rows:
+        repository.create(ScheduleEvent(
+            event_id=identifier, candidate_id="owner", employer_name="Employer",
+            event_type=event_type, location="Location", start_at=datetime.now(timezone.utc),
+            timezone_name="UTC", status=status,
+        ))
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
+        first = runtime.list_schedule_events(
+            user_id="owner", status=ScheduleStatus.PROPOSED,
+            event_type=ScheduleEventType.INTERVIEW, limit=2,
+        )
+        assert [item["event_id"] for item in first["items"]] == ["a", "d"]
+        assert all(item["event_type"] == "interview" and item["status"] == "proposed"
+                   for item in first["items"])
+        cursor = first["next_after"]
+        assert cursor.startswith("sc1~.")
+        second = runtime.list_schedule_events(
+            user_id="owner", status=ScheduleStatus.PROPOSED,
+            event_type=ScheduleEventType.INTERVIEW, after=cursor, limit=2,
+        )
+        assert [item["event_id"] for item in second["items"]] == ["e"]
+        assert second["next_after"] is None
+        with pytest.raises(ValueError, match="filters do not match"):
+            runtime.list_schedule_events(
+                user_id="owner", status=ScheduleStatus.ACCEPTED,
+                event_type=ScheduleEventType.INTERVIEW, after=cursor,
+            )
+        with pytest.raises(ValueError):
+            runtime.list_schedule_events(user_id="owner", after=cursor)
+        with pytest.raises(ValueError):
+            runtime.list_schedule_events(
+                user_id="owner", event_type=ScheduleEventType.PHONE_CALL, after=cursor,
+            )
+        with pytest.raises(TypeError, match="ScheduleEventType"):
+            runtime.list_schedule_events(user_id="owner", event_type="interview")
+    assert path.read_bytes() == baseline
+
+
+def test_schedule_event_type_indexes_are_backfilled_only_by_writable_startup(tmp_path):
+    path = tmp_path / "event-type-indexes.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database)
+    database.connection.execute("DROP INDEX idx_scheduling_candidate_type_event")
+    database.connection.execute("DROP INDEX idx_scheduling_candidate_status_type_event")
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
+        assert runtime.list_schedule_events(
+            user_id="owner", event_type=ScheduleEventType.INTERVIEW
+        )["items"] == []
+    assert path.read_bytes() == baseline
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database)
+    type_plan = database.connection.execute(
+        "EXPLAIN QUERY PLAN SELECT event_id FROM scheduling_events "
+        "WHERE candidate_id=? AND event_type=? AND event_id>? ORDER BY event_id LIMIT ?",
+        ("owner", "interview", "", 26),
+    ).fetchall()
+    combined_plan = database.connection.execute(
+        "EXPLAIN QUERY PLAN SELECT event_id FROM scheduling_events "
+        "WHERE candidate_id=? AND status=? AND event_type=? AND event_id>? "
+        "ORDER BY event_id LIMIT ?",
+        ("owner", "proposed", "interview", "", 26),
+    ).fetchall()
+    assert "idx_scheduling_candidate_type_event" in str(type_plan)
+    assert "idx_scheduling_candidate_status_type_event" in str(combined_plan)
+    assert "TEMP B-TREE" not in str(type_plan) + str(combined_plan)
     database.close()
