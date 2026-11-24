@@ -122,6 +122,7 @@ _HTML = r"""<!doctype html>
   <fieldset id="interview-reconciliation-panel" tabindex="-1" aria-busy="false">
     <legend>Interview calendar reconciliation</legend>
     <p id="interview-reconciliation-state" role="status">Refresh a run in interview reconciliation before recording independently verified calendar evidence.</p>
+    <p id="interview-reconciliation-intent" class="muted" role="status">No pending interview intent loaded.</p>
     <label>Provider event ID
       <input id="provider-event-id" autocomplete="off" maxlength="1000" disabled>
     </label>
@@ -1040,6 +1041,7 @@ _HTML = r"""<!doctype html>
       interviewReconciliationAvailable = false;
       interviewReconciliationVersion = null;
       byId('interview-reconciliation-state').textContent = message;
+      byId('interview-reconciliation-intent').textContent = 'No pending interview intent loaded.';
       byId('provider-event-id').value = '';
       byId('provider-event-id').disabled = true;
       setReconciliationAttestation('interview-reconciliation-verified', false);
@@ -1055,6 +1057,35 @@ _HTML = r"""<!doctype html>
       setReconciliationAttestation('interview-reconciliation-verified', true);
       byId('confirm-calendar-completed').disabled = true;
       byId('confirm-calendar-not-completed').disabled = true;
+    }
+    async function restoreInterviewReconciliationIntent(runId, version, contextGeneration) {
+      invalidateInterviewReconciliation('Restoring the pending interview details…');
+      try {
+        const intent = await call(runPath('/interview-reconciliation'), {},
+          'Interview reconciliation details request failed.', true);
+        if (contextGeneration !== inputContextGeneration || runId !== byId('run-id').value) return;
+        const fields = ['schema_version', 'run_id', 'state_version', 'event_id', 'employer',
+          'local_date', 'local_start_time', 'timezone'];
+        const employerValid = typeof intent?.employer === 'string' &&
+          intent.employer.length > 0 && intent.employer.length <= 200 &&
+          intent.employer === intent.employer.trim() && !/[\u0000-\u001f\u007f]/.test(intent.employer);
+        if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
+            Object.keys(intent).length !== fields.length || !fields.every(field => Object.hasOwn(intent, field)) ||
+            intent.schema_version !== 1 || intent.run_id !== runId || intent.state_version !== version ||
+            !eventId(intent.event_id) || !employerValid || !calendarDate(intent.local_date) ||
+            !localTime(intent.local_start_time) || !timezoneName(intent.timezone)) {
+          throw new Error('Invalid interview reconciliation intent.');
+        }
+        byId('interview-reconciliation-intent').textContent =
+          intent.employer + ' · ' + intent.local_date + ' ' + intent.local_start_time +
+          ' · ' + intent.timezone + ' · Event reference: ' + intent.event_id;
+        enableInterviewReconciliation(version);
+      } catch {
+        if (contextGeneration === inputContextGeneration && runId === byId('run-id').value) {
+          invalidateInterviewReconciliation(
+            'Pending interview details could not be restored. Refresh run status.');
+        }
+      }
     }
     function bindReconciliationAttestation(id, available, buttons) {
       byId(id).addEventListener('change', event => { const enabled = available() && event.currentTarget.checked;
@@ -1240,7 +1271,7 @@ _HTML = r"""<!doctype html>
           invalidateMessageReconciliation();
         }
         if (snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human) {
-          enableInterviewReconciliation(snapshot.state_version);
+          await restoreInterviewReconciliationIntent(runId, snapshot.state_version, statusContextGeneration);
         } else {
           invalidateInterviewReconciliation();
         }

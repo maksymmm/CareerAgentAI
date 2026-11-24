@@ -30,6 +30,12 @@ class Loop:
         )
         self.submission = None
         self.started = None
+        self.interview_intent = {
+            "schema_version": 1, "run_id": "run-1", "state_version": 17,
+            "event_id": "event-1", "employer": "Sandbox GmbH",
+            "local_date": "2026-11-25", "local_start_time": "10:00:00",
+            "timezone": "Europe/Berlin",
+        }
 
     def start(self, request, *, run_id=None):
         self.started = (request, run_id)
@@ -41,6 +47,10 @@ class Loop:
     def get_candidate_approval_prompt(self, run_id, *, user_id):
         assert (run_id, user_id) == ("run-1", "candidate-1")
         return self.prompt
+
+    def get_candidate_interview_reconciliation(self, run_id, *, user_id):
+        assert (run_id, user_id) == ("run-1", "candidate-1")
+        return self.interview_intent
 
     def resume_candidate_submission(self, *, user_id, submission):
         assert user_id == "candidate-1"
@@ -242,17 +252,57 @@ def test_interview_reconciliation_rejects_ambiguous_or_identity_bearing_body(bod
     assert not hasattr(loop, "interview_reconciliation_call")
 
 
-def test_interview_reconciliation_openapi_is_strict_and_post_only():
+def test_interview_reconciliation_openapi_documents_read_and_write_contracts():
     route = "/v1/candidate/runs/{run_id}/interview-reconciliation"
-    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    path = candidate_approval_openapi_document()["paths"][route]
+    read = path["get"]
+    read_schema = read["responses"]["200"]["content"]["application/json"]["schema"]
+    assert read["security"] == [{"bearerAuth": []}]
+    assert read_schema["additionalProperties"] is False
+    assert set(read_schema["required"]) == {
+        "schema_version", "run_id", "state_version", "event_id", "employer",
+        "local_date", "local_start_time", "timezone",
+    }
+    assert "operation_id" not in read_schema["properties"]
+    assert read["responses"]["405"]["headers"]["Allow"]["schema"]["const"] == "GET, POST"
+    operation = path["post"]
+    assert operation["responses"]["405"]["headers"]["Allow"]["schema"]["const"] == "GET, POST"
     schema = operation["requestBody"]["content"]["application/json"]["schema"]
     assert schema["additionalProperties"] is False
     assert schema["allOf"][0]["then"]["required"] == ["provider_event_id"]
     assert operation["responses"]["409"]["content"]["application/json"]["schema"]["properties"]["error"]["const"] == "approval_conflict"
-    (status, headers), _ = request(app(Loop()), method="GET",
+    (status, headers), body = request(app(Loop()), method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation")
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body["event_id"] == "event-1"
+    assert "operation_id" not in body
+    (status, headers), _ = request(app(Loop()), method="PUT",
         path="/v1/candidate/runs/run-1/interview-reconciliation")
     assert status == "405 Method Not Allowed"
-    assert ("Allow", "POST") in headers
+    assert ("Allow", "GET, POST") in headers
+
+
+def test_candidate_interview_reconciliation_get_rejects_query_before_storage():
+    (status, _), body = request(
+        app(object()), method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation", query="operation_id=private",
+    )
+    assert status == "400 Bad Request"
+    assert body == {"error": "invalid_request"}
+
+
+def test_candidate_interview_reconciliation_get_returns_conflict_without_pending_intent():
+    class NoPendingIntent(Loop):
+        def get_candidate_interview_reconciliation(self, run_id, *, user_id):
+            return None
+
+    (status, _), body = request(
+        app(NoPendingIntent()), method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+    )
+    assert status == "409 Conflict"
+    assert body == {"error": "reconciliation_unavailable"}
 
 
 def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch, tmp_path):
@@ -1793,6 +1843,10 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
                     "state_version": self.status_version,
                     "phase": "interview_reconciliation", "waiting_for_human": True,
                     "terminal": False}
+
+        def get_candidate_interview_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {**self.interview_intent, "state_version": self.status_version}
 
         def resolve_interview_reconciliation(self, run_id, **kwargs):
             self.resolutions.append((run_id, kwargs))
@@ -3562,3 +3616,186 @@ def test_candidate_sandbox_browser_filters_actions_and_resets_pagination():
         ("run-1", "candidate-1", 25, None, "failed", None),
         ("run-1", "candidate-1", 25, None, "failed", "calendar"),
     ]
+
+
+
+def test_candidate_interview_reconciliation_intent_is_owner_scoped_read_only_after_restart(tmp_path):
+    from career_agent_ai.application.career.autonomous_loop_models import (
+        CareerLoopPhase, CareerLoopRequest, CareerLoopState, HumanActionEvent, HumanActionKind,
+    )
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import SQLiteCareerLoopRepository
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+
+    path = tmp_path / "candidate-interview-intent.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+
+    def save_pending(run_id, owner):
+        state = CareerLoopState(
+            run_id=run_id,
+            request=CareerLoopRequest(user_id=owner, keyword="engineer", candidate_profile="Senior engineer"),
+            phase=CareerLoopPhase.INTERVIEW_RECONCILIATION,
+            pending_human_action=HumanActionEvent(
+                kind=HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
+                title="Reconcile ambiguous interview/calendar response",
+                details={
+                    "operation_id": "op-" + run_id,
+                    "event_id": "event-" + run_id,
+                    "employer": "Sandbox GmbH",
+                    "local_date": "2026-11-25",
+                    "local_start_time": "10:00:00",
+                    "timezone": "Europe/Berlin",
+                    "instruction": "private provider verification guidance",
+                    "private_provider_payload": "must never be returned",
+                },
+            ),
+        )
+        repository.save(state)
+
+    save_pending("run-1", "candidate-1")
+    save_pending("run-foreign", "candidate-2")
+    database.close()
+    baseline = path.read_bytes()
+    runtime = RuntimeCandidateApp(
+        database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    route = "/v1/candidate/runs/run-1/interview-reconciliation"
+    (status, headers), body = request(runtime, method="GET", path=route)
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == {
+        "schema_version": 1, "run_id": "run-1", "state_version": 1,
+        "event_id": "event-run-1", "employer": "Sandbox GmbH",
+        "local_date": "2026-11-25", "local_start_time": "10:00:00",
+        "timezone": "Europe/Berlin",
+    }
+    foreign = request(runtime, method="GET",
+        path="/v1/candidate/runs/run-foreign/interview-reconciliation")
+    missing = request(runtime, method="GET",
+        path="/v1/candidate/runs/run-missing/interview-reconciliation")
+    assert foreign == missing
+    assert foreign[0][0] == "404 Not Found"
+    assert "operation_id" not in str(body)
+    assert "private_provider_payload" not in str(body)
+    assert "provider verification guidance" not in str(body)
+    assert path.read_bytes() == baseline
+    runtime.close()
+
+
+def test_candidate_interview_reconciliation_intent_fails_closed_on_malformed_persisted_details(tmp_path):
+    from career_agent_ai.application.career.autonomous_loop_models import (
+        CareerLoopPhase, CareerLoopRequest, CareerLoopState, HumanActionEvent, HumanActionKind,
+    )
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import SQLiteCareerLoopRepository
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+
+    path = tmp_path / "candidate-interview-corrupt.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteCareerLoopRepository(database)
+    state = CareerLoopState(
+        run_id="run-1",
+        request=CareerLoopRequest(user_id="candidate-1", keyword="engineer", candidate_profile="Senior engineer"),
+        phase=CareerLoopPhase.INTERVIEW_RECONCILIATION,
+        pending_human_action=HumanActionEvent(
+            kind=HumanActionKind.RECONCILE_INTERVIEW_RESPONSE,
+            title="Reconcile interview",
+            details={"operation_id": "op-run-1", "event_id": "event-1",
+                     "employer": "Sandbox GmbH", "local_date": "2026-11-25",
+                     "local_start_time": "10:00:00", "timezone": "Europe/Berlin"},
+        ),
+    )
+    repository.save(state)
+    row = database.connection.execute(
+        "SELECT payload_json FROM autonomous_career_loops WHERE run_id = ?", ("run-1",)
+    ).fetchone()
+    payload = json.loads(row[0])
+    payload["pending_human_action"]["details"]["local_date"] = "2026-99-99"
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET payload_json = ? WHERE run_id = ?",
+        (json.dumps(payload), "run-1"),
+    )
+    database.connection.commit()
+    database.close()
+    runtime = RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda token: "candidate-1",
+    )
+    (status, _), body = request(
+        runtime, method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+    )
+    assert status == "500 Internal Server Error"
+    assert body == {"error": "internal_error"}
+    runtime.close()
+
+
+def test_candidate_sandbox_restores_interview_intent_after_reload_and_rejects_stale_version():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class BrowserLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.intent_version = 19
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 19,
+                "phase": "interview_reconciliation", "waiting_for_human": True,
+                "terminal": False,
+            }
+
+        def get_candidate_interview_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                **self.interview_intent,
+                "state_version": self.intent_version,
+            }
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = BrowserLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#interview-reconciliation-intent").get_by_text(
+                "Sandbox GmbH", exact=False
+            ).wait_for()
+            intent_text = page.locator("#interview-reconciliation-intent").text_content()
+            assert "2026-11-25 10:00:00" in intent_text
+            assert "Europe/Berlin" in intent_text
+            assert "event-1" in intent_text
+            assert page.locator("#provider-event-id").input_value() == ""
+            assert not page.locator("#provider-event-id").is_disabled()
+            assert page.locator("#confirm-calendar-completed").is_disabled()
+            page.locator("#provider-event-id").fill("provider-event-confirmed")
+            page.locator("#interview-reconciliation-verified").check()
+            assert not page.locator("#confirm-calendar-completed").is_disabled()
+
+            loop.intent_version = 18
+            page.locator("#status").click()
+            page.locator("#interview-reconciliation-state").get_by_text(
+                "Pending interview details could not be restored", exact=False
+            ).wait_for()
+            assert page.locator("#provider-event-id").input_value() == ""
+            assert page.locator("#provider-event-id").is_disabled()
+            assert page.locator("#confirm-calendar-completed").is_disabled()
+            assert page.locator("#confirm-calendar-not-completed").is_disabled()
+            assert not page.locator("#interview-reconciliation-verified").is_checked()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

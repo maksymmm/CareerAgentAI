@@ -1663,3 +1663,16 @@ multi-page SQLite reads, cross-filter cursor replay, invalid/duplicate query val
 OpenAPI enums, and Chromium filter changes with pagination reset. The endpoint remains
 owner-scoped and read-only. Next: continue the candidate history UI and audit
 cross-collection invalidation under run/token changes.
+
+
+Candidate interview reconciliation intent recovery: the existing POST reconciliation
+route now has an owner-scoped read-only GET projection for restoring the pending
+calendar intent after browser reload. The projection validates the durable run snapshot,
+checks ownership before decoding private state, and returns only the schedule event
+reference, employer, local date/time, timezone and exact state version; the external
+operation ID and provider payload remain private. The browser requires an exact version
+match with a fresh status snapshot and still requires explicit provider-evidence
+attestation before the existing POST. Regressions cover restart persistence, foreign
+run indistinguishability, immutable SQLite bytes, malformed persisted details, OpenAPI,
+and Chromium restoration plus stale-version rejection. Next: complete candidate
+application/interview history linkage and audit cross-collection invalidation.

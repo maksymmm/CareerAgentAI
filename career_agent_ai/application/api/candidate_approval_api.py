@@ -55,6 +55,9 @@ class CandidateApprovalLoop(Protocol):
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def get_candidate_interview_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None: ...
     def list_candidate_action_statuses(
         self,
         run_id: str,
@@ -475,10 +478,24 @@ class CandidateApprovalWSGIApp:
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
             if parts[4] == "interview-reconciliation":
+                if method == "GET":
+                    if str(environ.get("QUERY_STRING", "")):
+                        return self._respond(
+                            start_response, "400 Bad Request", {"error": "invalid_request"}
+                        )
+                    intent = self._loop.get_candidate_interview_reconciliation(
+                        run_id, user_id=user_id
+                    )
+                    if intent is None:
+                        return self._respond(
+                            start_response, "409 Conflict",
+                            {"error": "reconciliation_unavailable"},
+                        )
+                    return self._respond(start_response, "200 OK", intent)
                 if method != "POST":
                     return self._respond(
                         start_response, "405 Method Not Allowed",
-                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                        {"error": "method_not_allowed"}, [("Allow", "GET, POST")],
                     )
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
                 if media_type.strip().casefold() != "application/json":
@@ -918,6 +935,27 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "then": {"required": ["provider_event_id"]},
             "else": {"not": {"required": ["provider_event_id"]}},
         }],
+    }
+    interview_reconciliation_intent_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "run_id", "state_version", "event_id", "employer",
+            "local_date", "local_start_time", "timezone",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
+            "event_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "employer": {"type": "string", "minLength": 1, "maxLength": 200},
+            "local_date": {"type": "string", "format": "date"},
+            "local_start_time": {
+                "type": "string",
+                "pattern": r"^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?$",
+            },
+            "timezone": {"type": "string", "minLength": 1, "maxLength": 100},
+        },
+        "additionalProperties": False,
     }
     start_schema = {
         "type": "object",
@@ -1386,7 +1424,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             ),
                             "content": content(approval_conflict_schema),
                         },
-                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "405": {"description": "GET or POST is required", "headers": {"Allow": {"schema": {"const": "GET, POST"}}}, "content": content(error_schema)},
                         "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },
@@ -1442,6 +1480,21 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                     "schema": {"type": "string", "minLength": 1, "maxLength": 200,
                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"},
                 }],
+                "get": {
+                    "operationId": "getCandidateInterviewReconciliationIntent",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Read-only owner-scoped pending interview intent; private operation IDs are omitted",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content(interview_reconciliation_intent_schema),
+                        },
+                        **common_responses,
+                        "404": {"description": "Missing or foreign candidate run", "content": content(error_schema)},
+                        "409": {"description": "Run has no pending interview reconciliation", "content": content(error_schema)},
+                        "405": {"description": "GET or POST is required", "headers": {"Allow": {"schema": {"const": "GET, POST"}}}, "content": content(error_schema)},
+                    },
+                },
                 "post": {
                     "operationId": "resolveCandidateInterviewReconciliation",
                     "security": [{"bearerAuth": []}],
@@ -1457,7 +1510,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         **common_responses,
                         "409": {"description": "Observed state is stale or another execution owns the run",
                                 "content": content(approval_conflict_schema)},
-                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "405": {"description": "GET or POST is required", "headers": {"Allow": {"schema": {"const": "GET, POST"}}}, "content": content(error_schema)},
                         "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },
