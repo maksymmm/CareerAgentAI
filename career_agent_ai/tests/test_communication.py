@@ -264,6 +264,11 @@ def test_ambiguous_in_flight_send_requires_reconciliation_without_provider_call(
     operations.transition(
         "send:1", ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS
     )
+    database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        ((datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(), "send:1"),
+    )
+    database.connection.commit()
 
     assert service.send("send:1", "message-1", human_approved=True) is None
     assert operations.get("send:1").status == ExternalActionStatus.RECONCILIATION_REQUIRED

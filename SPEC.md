@@ -28,6 +28,9 @@ provider for those actions is not included in this release.
 - Outbound messages and interview accept/decline/reschedule decisions require approval.
 - Interview projections expose employer, location, local date/time, timezone and UTC offset.
 - Stable operation IDs and durable intent/outcome records suppress duplicate actions.
+- A duplicate request leaves a recent `in_progress` operation unchanged during the
+  default five-minute grace; only a stale operation is promoted to
+  `reconciliation_required` through compare-and-swap, without a provider call.
 - Ambiguous provider outcomes stop for reconciliation rather than blind retry.
 - Candidate ownership and durable execution leases protect recovery boundaries.
 - Runtime permission flags default to disabled and do not replace domain approval gates.
@@ -90,7 +93,10 @@ The dependency-free sandbox page includes a read-only "My external actions" pane
 for the selected owner-scoped run. It validates the exact action projection response,
 stable run reference, allowlisted family/status values, UTC timestamps and bounded
 cursor before rendering text-only lifecycle rows. Run or bearer-token changes
-invalidate in-flight pages and clear prior action data. The panel cannot retry,
-reconcile or execute provider work. This is sandbox discovery UI, not the
-deployment-ready candidate web dashboard; production candidate UI and provider
-adapters remain outside the current backend release.
+invalidate in-flight pages and clear prior action data. After a decision,
+continue/recovery, or application, message, or interview reconciliation attempt, the
+panel refreshes its first page only when that run's panel was already loaded; a
+refresh failure remains local to the panel and cannot replace the workflow result.
+The panel cannot retry, reconcile or execute provider work. This is sandbox discovery
+UI, not the deployment-ready candidate web dashboard; production candidate UI and
+provider adapters remain outside the current backend release.

@@ -869,6 +869,14 @@ _HTML = r"""<!doctype html>
       }
       return fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]));
     };
+    async function refreshCandidateActionsIfLoaded(runId) {
+      if (candidateActionRunId !== runId || runId !== byId('run-id').value) return;
+      try {
+        await loadCandidateActions();
+      } catch {
+        // loadCandidateActions already exposes a sanitized retry state in the panel.
+      }
+    }
     async function loadRunList(after = null) {
       clearRunList();
       const generation = listGeneration;
@@ -1241,8 +1249,8 @@ _HTML = r"""<!doctype html>
       byId('decline').disabled = true;
       invalidateAllReconciliation(
         'Recovery may change workflow state. Refresh run status before reconciliation.');
+      const runId = byId('run-id').value;
       try {
-        const runId = byId('run-id').value;
         const requestNumber = latestResultRequest + 1;
         const payload = await call(runPath('/continue'), {method: 'POST'}, 'Recovery request failed.');
         if (requestNumber !== latestResultRequest) return;
@@ -1270,6 +1278,7 @@ _HTML = r"""<!doctype html>
         recoveryInFlight = false;
         byId('continue').disabled = false;
         byId('prompt').disabled = false;
+        void refreshCandidateActionsIfLoaded(runId);
       }
     }));
     byId('prompt').addEventListener('click', () => guarded(async () => {
@@ -1384,6 +1393,7 @@ _HTML = r"""<!doctype html>
         decisionInFlight = false;
         invalidateApprovalPrompt(completionMessage);
         byId('continue').disabled = false;
+        void refreshCandidateActionsIfLoaded(payload.run_id);
       }
     }
     byId('approve').addEventListener('click', () => guarded(() => decide('approve')));
@@ -1447,6 +1457,7 @@ _HTML = r"""<!doctype html>
       } finally {
         reconciliationInFlight = false;
         byId('reconciliation-panel').setAttribute('aria-busy', 'false');
+        void refreshCandidateActionsIfLoaded(runId);
       }
     }
     byId('confirm-submitted').addEventListener('click', () =>
@@ -1487,6 +1498,7 @@ _HTML = r"""<!doctype html>
       } finally {
         reconciliationInFlight = false;
         byId('message-reconciliation-panel').setAttribute('aria-busy', 'false');
+        void refreshCandidateActionsIfLoaded(runId);
       }
     }
     byId('confirm-delivered').addEventListener('click', () =>
@@ -1532,6 +1544,7 @@ _HTML = r"""<!doctype html>
       } finally {
         reconciliationInFlight = false;
         byId('interview-reconciliation-panel').setAttribute('aria-busy', 'false');
+        void refreshCandidateActionsIfLoaded(runId);
       }
     }
     byId('confirm-calendar-completed').addEventListener('click', () =>

@@ -3423,3 +3423,123 @@ def test_candidate_sandbox_browser_discards_external_actions_after_run_switch():
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_candidate_action_status_refreshes_after_reconciliation_and_covers_all_mutations():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from career_agent_ai.application.api.candidate_sandbox_ui import candidate_sandbox_html
+    from career_agent_ai.application.observability.action_cursor import encode_action_cursor
+
+    html = candidate_sandbox_html().decode("utf-8")
+    assert "async function refreshCandidateActionsIfLoaded(runId)" in html
+    mutation_sections = (
+        ("byId('continue').addEventListener", "byId('prompt').addEventListener",
+         "refreshCandidateActionsIfLoaded(runId)"),
+        ("async function decide", "byId('approve').addEventListener",
+         "refreshCandidateActionsIfLoaded(payload.run_id)"),
+        ("async function reconcileApplication", "byId('confirm-submitted').addEventListener",
+         "refreshCandidateActionsIfLoaded(runId)"),
+        ("async function reconcileMessage", "byId('confirm-delivered').addEventListener",
+         "refreshCandidateActionsIfLoaded(runId)"),
+        ("async function reconcileInterview", "byId('confirm-calendar-completed').addEventListener",
+         "refreshCandidateActionsIfLoaded(runId)"),
+    )
+    for start_marker, end_marker, expected in mutation_sections:
+        start = html.index(start_marker)
+        end = html.index(end_marker, start)
+        assert expected in html[start:end]
+
+    class RefreshingActionLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.action_reads = []
+            self.reconciled = False
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1,
+                "run_id": run_id,
+                "run_ref": sha256(run_id.encode("utf-8")).hexdigest()[:24],
+                "state_version": 7,
+                "phase": "application_reconciliation",
+                "waiting_for_human": True,
+                "terminal": False,
+            }
+
+        def list_candidate_action_statuses(self, run_id, *, user_id, limit=25, after=None):
+            assert (run_id, user_id, limit) == ("run-1", "candidate-1", 25)
+            self.action_reads.append(after)
+            run_ref = sha256(run_id.encode("utf-8")).hexdigest()[:24]
+            return {
+                "schema_version": 1,
+                "run_ref": run_ref,
+                "items": [{
+                    "operation_ref": ("b" if self.reconciled else "a") * 24,
+                    "action_family": "application_submission",
+                    "status": "succeeded" if self.reconciled else "reconciliation_required",
+                    "created_at": "2026-11-24T10:00:00+00:00",
+                    "updated_at": (
+                        "2026-11-24T10:02:00+00:00" if self.reconciled
+                        else "2026-11-24T10:01:00+00:00"
+                    ),
+                    "error_present": not self.reconciled,
+                }],
+                "next_after": (
+                    None if self.reconciled
+                    else encode_action_cursor("operation-next", candidate_run_ref=run_ref)
+                ),
+            }
+
+        def resolve_application_reconciliation(
+            self, run_id, *, user_id, submitted, provider_submission_id=None,
+            expected_state_version=None,
+        ):
+            assert (run_id, user_id, submitted, expected_state_version) == (
+                "run-1", "candidate-1", False, 7
+            )
+            self.reconciled = True
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = RefreshingActionLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#list-candidate-actions").click()
+            page.locator("#candidate-actions").get_by_text(
+                "application submission — reconciliation required", exact=False
+            ).wait_for()
+            assert not page.locator("#next-candidate-actions").is_disabled()
+
+            page.locator("#status").click()
+            page.wait_for_function(
+                "() => !document.querySelector('#application-reconciliation-verified').disabled"
+            )
+            page.locator("#application-reconciliation-verified").check()
+            assert page.locator("#application-reconciliation-verified").is_checked()
+            assert not page.locator("#confirm-not-submitted").is_disabled()
+            page.locator("#confirm-not-submitted").click()
+
+            page.locator("#candidate-actions").get_by_text(
+                "application submission — succeeded", exact=False
+            ).wait_for()
+            assert "b" * 24 in page.locator("#candidate-actions").inner_text()
+            assert "a" * 24 not in page.locator("#candidate-actions").inner_text()
+            assert page.locator("#next-candidate-actions").is_disabled()
+            assert loop.action_reads == [None, None]
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

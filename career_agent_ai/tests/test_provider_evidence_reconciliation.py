@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from threading import Barrier, Thread
+from datetime import datetime, timedelta, timezone
+from threading import Barrier, Event, Thread
 
 import pytest
 
@@ -16,6 +17,7 @@ from career_agent_ai.application.career import (
 )
 from career_agent_ai.application.career.application_submission import PreSubmissionError
 from career_agent_ai.application.external_actions import ExternalActionStatus
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_sandbox_submission_provider import (
     SandboxOutcome,
     SQLiteSandboxSubmissionProvider,
@@ -216,6 +218,13 @@ def test_crash_after_committed_effect_recovers_without_second_effect(path):
         crashing.service.submit(OP, **_submit_kwargs())
     assert crashing.status() == ExternalActionStatus.IN_PROGRESS
     crashing.close()
+    stale_database = SQLiteDatabase(str(path))
+    stale_database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        ((datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(), OP),
+    )
+    stale_database.connection.commit()
+    stale_database.close()
 
     recovered = Stack(path, always(OUTCOME.NO_EFFECT), evidence=True)
     recovered.service.resolve_reconciliation(OP, submitted=True, provider_submission_id=PID)
@@ -389,6 +398,53 @@ def test_concurrent_submissions_through_the_service_yield_one_provider_effect(pa
     verifier = Stack(path)
     assert len(verifier.provider.ledger_entries()) == 1
     assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
+    verifier.close()
+
+
+def test_live_duplicate_submission_does_not_promote_in_progress_or_replay_provider(path):
+    provider_entered = Event()
+    release_provider = Event()
+    first_results = []
+    first_errors = []
+
+    class BlockingProvider(SQLiteSandboxSubmissionProvider):
+        def submit(self, *args, **kwargs):
+            provider_entered.set()
+            if not release_provider.wait(timeout=10):
+                raise RuntimeError("Timed out waiting to release sandbox provider.")
+            return super().submit(*args, **kwargs)
+
+    def first_submit():
+        stack = Stack(path, evidence=True, provider_cls=BlockingProvider)
+        try:
+            first_results.append(stack.service.submit(OP, **_submit_kwargs()))
+        except Exception as exc:
+            first_errors.append(exc)
+        finally:
+            stack.close()
+
+    first_thread = Thread(target=first_submit)
+    first_thread.start()
+    try:
+        assert provider_entered.wait(timeout=10)
+        duplicate = Stack(path, evidence=True)
+        try:
+            assert duplicate.service.submit(OP, **_submit_kwargs()) is None
+            assert duplicate.status() == ExternalActionStatus.IN_PROGRESS
+            assert duplicate.provider.attempts(OP) == ()
+        finally:
+            duplicate.close()
+    finally:
+        release_provider.set()
+        first_thread.join(timeout=30)
+
+    assert not first_thread.is_alive()
+    assert first_errors == []
+    assert len(first_results) == 1 and isinstance(first_results[0], dict)
+    verifier = Stack(path, evidence=True)
+    assert verifier.status() == ExternalActionStatus.SUCCEEDED
+    assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
+    assert len(verifier.provider.ledger_entries()) == 1
     verifier.close()
 
 

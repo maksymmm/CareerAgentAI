@@ -1651,3 +1651,31 @@ coverage includes owner isolation, restart persistence, cursor replay, legacy sc
 redaction, and immutable SQLite bytes.
 Next: expose this projection in the candidate dashboard with strict browser response
 validation and reload-safe pagination; keep the surface read-only.
+
+
+Candidate action-status continuity: when the candidate has loaded the selected run's
+external-action panel, the sandbox now refreshes its first page after approval/decline,
+continue/recovery, and application, message, or interview reconciliation attempts.
+This covers successful, rejected, and ambiguous outcomes without polling or triggering
+provider work: the refresh is read-only, resets pagination to the first page, and runs
+only for the same still-selected run. Refresh failures stay in the action panel and do
+not mask the workflow response. Chromium verifies a reconciliation transition from
+`reconciliation_required` to `succeeded`; static contract assertions cover all five
+mutation paths. Next: add candidate-safe status/action-family filters with cursors
+bound to the exact filter set.
+
+
+External-action live-operation grace: duplicate requests now observe a recent
+`in_progress` operation unchanged for the default five-minute grace period. Only
+operations older than the bounded grace are promoted to `reconciliation_required`
+through compare-and-swap, and that path never invokes a provider. Deterministic tests
+cover live duplicate submission with a blocked sandbox provider, stale restart recovery,
+grace/clock validation, and the candidate reconciliation attestation gate. The existing
+concurrent service regression now exercises the same invariant. Next: add candidate-safe
+status/action-family filters with cursors bound to the exact filter set.
+
+
+Stale-recovery fixtures for communication and promotion now explicitly age their
+persisted `in_progress` timestamps beyond the five-minute grace. Recent live
+operations remain unchanged; restart recovery tests now distinguish a genuinely
+stale interrupted action from a duplicate request racing a live provider call.
