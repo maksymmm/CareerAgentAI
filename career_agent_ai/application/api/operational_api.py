@@ -83,7 +83,7 @@ class OperationalApiService:
             or set(page) != {"items", "next_after"}
             or not isinstance(page["items"], list)
             or len(page["items"]) > limit
-            or not (page["next_after"] is None or isinstance(page["next_after"], str))
+            or not (page["next_after"] is None or (isinstance(page["next_after"], str) and 0 < len(page["next_after"]) <= 1200))
         ):
             raise RuntimeError("Operational action projection returned an invalid page.")
         return {
@@ -434,7 +434,7 @@ def openapi_document() -> dict[str, Any]:
                             "name": "after",
                             "in": "query",
                             "required": False,
-                            "description": "Opaque keyset cursor; not an authorization credential",
+                            "description": "URL-safe encoded keyset cursor; not an authorization credential",
                             "schema": {"type": "string", "minLength": 1, "maxLength": 1200,
                                        "pattern": "^[A-Za-z0-9_-]+$"},
                         },
@@ -457,7 +457,7 @@ def openapi_document() -> dict[str, Any]:
                                         "items": action_item_schema,
                                     },
                                     "next_after": {
-                                        "type": ["string", "null"], "maxLength": 512,
+                                        "type": ["string", "null"], "maxLength": 1200,
                                         "pattern": "^[A-Za-z0-9_-]+$",
                                     },
                                 },
