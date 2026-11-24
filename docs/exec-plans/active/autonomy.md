@@ -1615,3 +1615,20 @@ the existing compare-and-swap transition and never replay the provider during re
 HTTP/SQLite regressions cover successful acceptance, restart replay with one sandbox
 effect, stale-version rejection, foreign-event isolation, strict request/query parsing,
 and active-versus-stale recovery. The candidate dashboard is now wired to these endpoints: acceptance is an explicit click, status is restored from the durable operation after reload, stale recovery is a separate action, and every ambiguous reconciliation consumes its independent attestation before the request. Chromium regressions cover reload with a fresh attestation and retry only after provider-confirmed no effect. Next: add an end-to-end browser test against the real SQLite sandbox provider for timeout-after-effect reconciliation and verify the exact CI coverage gate.
+
+
+
+Candidate action live-operation and stale-read hardening: ordinary application,
+communication and calendar execution now preserves a recent `IN_PROGRESS` operation
+instead of treating a duplicate request as proof of process loss. The shared external
+action service applies a bounded five-minute grace and promotes only stale operations
+to `RECONCILIATION_REQUIRED`; the candidate acceptance recovery path passes its
+validated grace window and clock into the same CAS transition. Candidate acceptance,
+recovery and reconciliation POSTs invalidate all earlier status-read generations, and
+a delayed-GET Chromium regression proves a pre-mutation snapshot cannot re-enable
+acceptance after an ambiguous result. A blocking SQLite sandbox-provider regression
+proves a duplicate application submission observes the live operation and creates
+exactly one provider effect. The corrupt-ledger fixture now initializes its schema
+explicitly, and browser assertions match the current candidate UI. Next: exact-head
+CI and independent code/security review for #278, then the end-to-end timeout-after-
+effect acceptance recovery test against the real SQLite sandbox provider.

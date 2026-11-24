@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
 from career_agent_ai.application.observability.structured_logging import redact_text
@@ -63,17 +64,21 @@ class ExternalActionService:
         operation_id: str,
         *,
         human_approved: bool,
-        recover_in_progress: bool = True,
+        stale_after_seconds: int = 300,
+        now: datetime | None = None,
     ) -> ExternalActionOperation:
         """Execute a prepared action once after explicit human approval.
 
-        Recovery callers may promote a previously in-progress operation to
-        ``reconciliation_required``. Ordinary duplicate requests pass
-        ``recover_in_progress=False`` so they observe a live operation without
-        mutating its durable state or invoking the adapter again.
+        A duplicate request observes a live ``in_progress`` operation unchanged
+        during the bounded grace period. Only an operation older than
+        ``stale_after_seconds`` is promoted to ``reconciliation_required``; the
+        recovery transition never invokes the adapter.
         """
-        if not isinstance(recover_in_progress, bool):
-            raise TypeError("recover_in_progress must be a boolean.")
+        if type(stale_after_seconds) is not int or not 1 <= stale_after_seconds <= 3600:
+            raise ValueError("stale_after_seconds must be an integer from 1 to 3600.")
+        current_time = now if now is not None else datetime.now(timezone.utc)
+        if not isinstance(current_time, datetime) or current_time.tzinfo is None or current_time.utcoffset() is None:
+            raise ValueError("now must be a timezone-aware datetime.")
         operation = self._require_operation(operation_id)
         if operation.status in {
             ExternalActionStatus.SUCCEEDED,
@@ -82,7 +87,11 @@ class ExternalActionService:
         }:
             return operation
         if operation.status == ExternalActionStatus.IN_PROGRESS:
-            if not recover_in_progress:
+            age = (
+                current_time.astimezone(timezone.utc)
+                - operation.updated_at.astimezone(timezone.utc)
+            ).total_seconds()
+            if age < stale_after_seconds:
                 return operation
             return self._repository.transition(
                 operation.operation_id,

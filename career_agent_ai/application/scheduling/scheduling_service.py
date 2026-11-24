@@ -431,7 +431,8 @@ class SchedulingService:
         # ExternalActionService handles IN_PROGRESS with a CAS transition to
         # RECONCILIATION_REQUIRED before it validates approval or reaches an adapter.
         return self._external_actions.execute(
-            operation_id, human_approved=True
+            operation_id, human_approved=True,
+            stale_after_seconds=stale_after_seconds, now=current_time,
         )
 
     def resolve_reconciliation(
@@ -908,7 +909,7 @@ class SchedulingService:
         self, operation_id: str, human_approved: bool
     ) -> ScheduleEvent | None:
         operation = self._external_actions.execute(
-            operation_id, human_approved=human_approved, recover_in_progress=False
+            operation_id, human_approved=human_approved
         )
         if operation.status != ExternalActionStatus.SUCCEEDED:
             return None

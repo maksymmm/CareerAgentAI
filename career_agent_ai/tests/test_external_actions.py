@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import pytest
@@ -215,7 +216,7 @@ def test_adapter_failure_is_persisted_and_not_retried():
 
 
 
-def test_live_in_progress_operation_is_observed_without_recovery_when_requested():
+def test_live_in_progress_operation_is_not_promoted_until_grace_expires():
     adapter = RecordingAdapter()
     service, repository = make_service(SQLiteDatabase(), adapter)
     service.prepare("operation-live", "application", {})
@@ -223,12 +224,20 @@ def test_live_in_progress_operation_is_observed_without_recovery_when_requested(
         "operation-live", ExternalActionStatus.PREPARED, ExternalActionStatus.IN_PROGRESS
     )
 
-    observed = service.execute(
-        "operation-live", human_approved=True, recover_in_progress=False
-    )
+    observed = service.execute("operation-live", human_approved=True)
 
     assert observed.status == ExternalActionStatus.IN_PROGRESS
     assert repository.get("operation-live").status == ExternalActionStatus.IN_PROGRESS
+    assert adapter.calls == []
+
+    recovered = service.execute(
+        "operation-live",
+        human_approved=True,
+        stale_after_seconds=1,
+        now=datetime.now(timezone.utc) + timedelta(seconds=2),
+    )
+    assert recovered.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert repository.get("operation-live").status == ExternalActionStatus.RECONCILIATION_REQUIRED
     assert adapter.calls == []
 
 
@@ -242,6 +251,11 @@ def test_restart_marks_in_progress_operation_for_reconciliation(tmp_path):
         ExternalActionStatus.PREPARED,
         ExternalActionStatus.IN_PROGRESS,
     )
+    first_database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        ((datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(), "operation-1"),
+    )
+    first_database.connection.commit()
     first_database.close()
 
     adapter = RecordingAdapter()

@@ -257,7 +257,13 @@ Consequential provider calls are coordinated through a provider-neutral external
 
 Operations move through `prepared`, `in_progress`, `succeeded`, `failed`, and `reconciliation_required` states. Intent is committed before an adapter is invoked and the terminal outcome is committed afterward. Reusing an operation ID with a different intent is rejected, while repeating a completed invocation returns its existing result without another provider call.
 
-An `in_progress` operation found after restart is treated as ambiguous. It moves to `reconciliation_required` and is **not** blindly executed again; a future provider-specific reconciliation workflow must determine the real external outcome. Adapters must also pass the operation ID to providers as their idempotency key.
+An `in_progress` operation is not promoted merely because another tab repeats the same
+request. Ordinary duplicate requests observe it unchanged during a bounded grace period
+(default five minutes). Only an operation older than the configured grace can be moved to
+`reconciliation_required` through the compare-and-swap recovery transition; recovery never
+calls the provider. Provider-specific evidence must determine the real external outcome
+before the operation is completed or deliberately retried. Adapters must also pass the
+operation ID to providers as their idempotency key.
 
 The current capability is infrastructure only: no production communication or application provider is configured, and no real external action is sent.
 
@@ -272,9 +278,9 @@ in SQLite, and retains them across restarts.
 
 Every send and reply—including local dry runs—requires explicit human approval and
 is executed through the crash-safe `ExternalActionService`. Stable operation IDs
-suppress duplicate requests and provider calls. A process restart after an operation
-entered `in_progress` moves it to `reconciliation_required` rather than risking a
-duplicate message. Provider failures are persisted as terminal failed attempts; a
+suppress duplicate requests and provider calls. A duplicate request that observes a recent `in_progress` send leaves it unchanged;
+a stale operation is promoted to `reconciliation_required` only after the bounded
+grace period, rather than risking a duplicate message. Provider failures are persisted as terminal failed attempts; a
 new deliberate attempt must use a new operation ID.
 
 Only persisted drafts can begin a new send operation, so changing the operation ID
@@ -1055,4 +1061,7 @@ authoritative evidence before recording success or returning the same operation 
 prepared for a deliberate retry. The candidate dashboard exposes an explicit acceptance action, read-only operation
 status, stale-operation recovery, and a fresh independent attestation for every
 ambiguous-outcome reconciliation. A confirmed no-effect result permits only a
-deliberate retry of the same event-version operation.
+deliberate retry of the same event-version operation. Acceptance, recovery and
+reconciliation mutations invalidate every earlier status-read generation, so a delayed
+pre-action GET cannot re-enable controls after an unknown POST result; only a fresh
+owner-scoped status response can restore the candidate UI state.
