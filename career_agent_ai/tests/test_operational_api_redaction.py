@@ -86,7 +86,7 @@ def test_operational_issue_projection_redacts_identifiers_and_nested_details() -
     issue = payload["issues"][0]
     assert issue["issue_type"] == "external_action_failed token=[REDACTED]"
     assert issue["entity_id"] == "operation:Bearer [REDACTED]"
-    assert issue["details"]["action_type"] == "calendar.accept api_key=[REDACTED]"
+    assert issue["details"]["action_type"] == 'calendar.accept api_key="[REDACTED]"'
     assert issue["details"]["authorization"] == "[REDACTED]"
     assert issue["details"]["nested"] == {
         "client_secret": "[REDACTED]",
