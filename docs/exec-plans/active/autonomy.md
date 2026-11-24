@@ -1645,3 +1645,15 @@ tests for communication, promotion and application submission age their persiste
 `IN_PROGRESS` rows beyond the five-minute grace, so they test crash recovery rather
 than a still-live action. Next: rerun exact-head CI/coverage for #278 and the real
 SQLite sandbox acceptance restart test in #279.
+
+Candidate interview acceptance timeout-after-effect end-to-end recovery: a Chromium
+test now uses two RuntimeCandidateApp instances over one SQLite file. The first runtime
+commits the sandbox calendar effect and times out; after the runtime is closed, the
+second runtime uses a provider plan that fails if invoked, restores the candidate
+acceptance dashboard, and reconciles only from authoritative persisted calendar
+evidence. The browser confirms the accepted event version and clears its attestation;
+SQLite assertions prove one timeout attempt, one durable effect, zero provider replays,
+and a succeeded external-action operation. Next: exact-head CI/coverage and review for
+the acceptance recovery stack, then continue candidate decline/reschedule parity.
+
+Candidate sandbox provider composition now accepts a dedicated `sandbox_calendar_outcome_plan` independently from the application-submission plan. Runtime request composition passes it through the calendar provider used by candidate interview acceptance, so timeout-after-effect and no-replay recovery are deterministic at the HTTP/runtime boundary. The exact-head Chromium restart regression exercises this path against the same durable SQLite database.
