@@ -40,6 +40,13 @@ _STRICT_START_TEXT_PATTERN = (
     r"[\s\S]+$"
 )
 
+_CANDIDATE_ACTION_STATUSES = frozenset({
+    "prepared", "in_progress", "succeeded", "failed", "reconciliation_required",
+})
+_CANDIDATE_ACTION_FAMILIES = frozenset({
+    "application_submission", "communication", "calendar", "other",
+})
+
 
 class CandidateApprovalLoop(Protocol):
     def start(self, request: CareerLoopRequest, *, run_id: str | None = None): ...
@@ -49,7 +56,14 @@ class CandidateApprovalLoop(Protocol):
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_candidate_action_statuses(
-        self, run_id: str, *, user_id: str, limit: int = 25, after: str | None = None
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        limit: int = 25,
+        after: str | None = None,
+        status: str | None = None,
+        action_family: str | None = None,
     ) -> dict[str, Any]: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
                           phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
@@ -314,17 +328,19 @@ class CandidateApprovalWSGIApp:
                     )
                 try:
                     query = str(environ.get("QUERY_STRING", ""))
-                    if len(query) > 1300 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
+                    if len(query) > 1500 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("invalid action query")
                     pairs = parse_qsl(
                         query,
                         keep_blank_values=True,
                         strict_parsing=True,
-                        max_num_fields=2,
+                        max_num_fields=4,
                         errors="strict",
                     )
                     values = dict(pairs)
-                    if len(values) != len(pairs) or set(values) - {"limit", "after"}:
+                    if len(values) != len(pairs) or set(values) - {
+                        "limit", "after", "status", "action_family"
+                    }:
                         raise ValueError("unknown or duplicate action query parameter")
                     raw_limit = values.get("limit", "25")
                     if (
@@ -336,6 +352,15 @@ class CandidateApprovalWSGIApp:
                     limit = int(raw_limit)
                     if not 1 <= limit <= 25:
                         raise ValueError("invalid action limit")
+                    status = values.get("status")
+                    if status is not None and status not in _CANDIDATE_ACTION_STATUSES:
+                        raise ValueError("invalid action status filter")
+                    action_family = values.get("action_family")
+                    if (
+                        action_family is not None
+                        and action_family not in _CANDIDATE_ACTION_FAMILIES
+                    ):
+                        raise ValueError("invalid action family filter")
                     after = values.get("after")
                     if after is not None:
                         if not after or len(after) > 1200:
@@ -343,17 +368,22 @@ class CandidateApprovalWSGIApp:
                         decode_action_cursor(
                             after,
                             candidate_run_ref=stable_reference(run_id),
+                            status=status,
+                            action_family=action_family,
                         )
                 except (TypeError, ValueError, UnicodeError):
                     return self._respond(
                         start_response, "400 Bad Request", {"error": "invalid_request"}
                     )
+                arguments = {"user_id": user_id, "limit": limit, "after": after}
+                if status is not None:
+                    arguments["status"] = status
+                if action_family is not None:
+                    arguments["action_family"] = action_family
                 return self._respond(
                     start_response,
                     "200 OK",
-                    self._loop.list_candidate_action_statuses(
-                        run_id, user_id=user_id, limit=limit, after=after
-                    ),
+                    self._loop.list_candidate_action_statuses(run_id, **arguments),
                 )
             if parts[4] == "status":
                 if method != "GET":
@@ -1135,9 +1165,15 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         {"name": "limit", "in": "query",
                          "schema": {"type": "integer", "minimum": 1, "maximum": 25, "default": 25}},
                         {"name": "after", "in": "query",
-                         "description": "Opaque keyset cursor bound to this candidate run; not an authorization credential",
+                         "description": "Opaque keyset cursor bound to this candidate run and exact action filters; not an authorization credential",
                          "schema": {"type": "string", "minLength": 1, "maxLength": 1200,
                                     "pattern": "^[A-Za-z0-9_-]+$"}},
+                        {"name": "status", "in": "query",
+                         "description": "Optional lifecycle status filter preserved across pages",
+                         "schema": {"type": "string", "enum": sorted(_CANDIDATE_ACTION_STATUSES)}},
+                        {"name": "action_family", "in": "query",
+                         "description": "Optional action-family filter preserved across pages",
+                         "schema": {"type": "string", "enum": sorted(_CANDIDATE_ACTION_FAMILIES)}},
                     ],
                     "responses": {
                         "200": {

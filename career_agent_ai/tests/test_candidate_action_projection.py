@@ -19,7 +19,10 @@ from career_agent_ai.application.external_actions import (
     ExternalActionOperation,
     ExternalActionStatus,
 )
-from career_agent_ai.application.observability.action_cursor import decode_action_cursor
+from career_agent_ai.application.observability.action_cursor import (
+    decode_action_cursor,
+    encode_action_cursor,
+)
 from career_agent_ai.application.observability.references import stable_reference
 from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
 from career_agent_ai.application.storage.sqlite_candidate_action_projection import (
@@ -447,6 +450,12 @@ def test_candidate_action_openapi_is_bounded_and_minimal():
     parameters = {item["name"]: item for item in operation["parameters"]}
     assert parameters["limit"]["schema"]["maximum"] == 25
     assert parameters["after"]["schema"]["maxLength"] == 1200
+    assert set(parameters["status"]["schema"]["enum"]) == {
+        "prepared", "in_progress", "succeeded", "failed", "reconciliation_required",
+    }
+    assert set(parameters["action_family"]["schema"]["enum"]) == {
+        "application_submission", "communication", "calendar", "other",
+    }
     response = operation["responses"]["200"]
     assert response["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
     schema = response["content"]["application/json"]["schema"]
@@ -616,3 +625,152 @@ def test_candidate_action_projection_rejects_empty_or_naive_timestamps(tmp_path,
             )
     finally:
         database.close()
+
+
+
+def test_candidate_action_projection_filters_before_pagination_and_binds_exact_filters(tmp_path):
+    path = tmp_path / "candidate-action-filtered.sqlite"
+    _seed(path)
+    before = path.read_bytes()
+    run_ref = stable_reference("candidate-run-a")
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        projection = SQLiteCandidateActionProjection(database)
+        first = projection.list_page(
+            "candidate-run-a",
+            user_id="candidate-1",
+            limit=1,
+            action_family="calendar",
+        )
+        second = projection.list_page(
+            "candidate-run-a",
+            user_id="candidate-1",
+            limit=1,
+            after=first["next_after"],
+            action_family="calendar",
+        )
+        failed = projection.list_page(
+            "candidate-run-a",
+            user_id="candidate-1",
+            status="failed",
+        )
+        other = projection.list_page(
+            "candidate-run-a",
+            user_id="candidate-1",
+            action_family="other",
+        )
+        with pytest.raises(ValueError, match="candidate action filters"):
+            projection.list_page(
+                "candidate-run-a",
+                user_id="candidate-1",
+                after=first["next_after"],
+                action_family="communication",
+            )
+        with pytest.raises(ValueError, match="candidate action filters"):
+            projection.list_page(
+                "candidate-run-a",
+                user_id="candidate-1",
+                after=first["next_after"],
+                action_family="calendar",
+                status="succeeded",
+            )
+    finally:
+        database.close()
+
+    assert [item["operation_ref"] for item in first["items"]] == [
+        stable_reference("action-03")
+    ]
+    assert first["items"][0]["status"] == "failed"
+    assert decode_action_cursor(
+        first["next_after"],
+        candidate_run_ref=run_ref,
+        action_family="calendar",
+    ) == "action-03"
+    assert [item["operation_ref"] for item in second["items"]] == [
+        stable_reference("action-04")
+    ]
+    assert second["items"][0]["status"] == "reconciliation_required"
+    assert second["next_after"] is None
+    assert [item["operation_ref"] for item in failed["items"]] == [
+        stable_reference("action-03")
+    ]
+    assert [item["operation_ref"] for item in other["items"]] == [
+        stable_reference("action-06")
+    ]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("status", "action_family"),
+    [("unknown", None), (None, "unknown"), ("", None), (None, "")],
+)
+def test_candidate_action_projection_rejects_invalid_filters(tmp_path, status, action_family):
+    path = tmp_path / "candidate-action-invalid-filter.sqlite"
+    _seed(path)
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(ValueError, match="filter"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a",
+                user_id="candidate-1",
+                status=status,
+                action_family=action_family,
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_http_filters_are_validated_and_cursor_bound():
+    run_id = "candidate-run-a"
+    run_ref = stable_reference(run_id)
+
+    class FilterLoop:
+        def __init__(self):
+            self.calls = []
+
+        def list_candidate_action_statuses(
+            self, run_id, *, user_id, limit=25, after=None,
+            status=None, action_family=None,
+        ):
+            self.calls.append((run_id, user_id, limit, after, status, action_family))
+            return {
+                "schema_version": 1,
+                "run_ref": run_ref,
+                "items": [],
+                "next_after": None,
+            }
+
+    loop = FilterLoop()
+    app = CandidateApprovalWSGIApp(
+        loop,
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    cursor = encode_action_cursor(
+        "action-03",
+        candidate_run_ref=run_ref,
+        status="failed",
+        action_family="calendar",
+    )
+    route = f"/v1/candidate/runs/{run_id}/actions"
+    status_code, _, body = _request(
+        app,
+        path=route,
+        query=f"limit=1&status=failed&action_family=calendar&after={cursor}",
+    )
+    assert status_code == "200 OK"
+    assert body["items"] == []
+    assert loop.calls == [(
+        run_id, "candidate-1", 1, cursor, "failed", "calendar"
+    )]
+
+    invalid_queries = (
+        "status=unknown",
+        "action_family=unknown",
+        "status=failed&status=succeeded",
+        "action_family=calendar&action_family=communication",
+        f"status=failed&action_family=communication&after={cursor}",
+    )
+    for query in invalid_queries:
+        assert _request(app, path=route, query=query)[0] == "400 Bad Request"
+    assert len(loop.calls) == 1

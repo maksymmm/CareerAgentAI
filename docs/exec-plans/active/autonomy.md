@@ -1651,3 +1651,15 @@ coverage includes owner isolation, restart persistence, cursor replay, legacy sc
 redaction, and immutable SQLite bytes.
 Next: expose this projection in the candidate dashboard with strict browser response
 validation and reload-safe pagination; keep the surface read-only.
+
+
+Candidate-owned action filters: the read-only candidate action endpoint and dashboard
+now accept optional lifecycle-status and action-family filters. SQLite applies both
+filters before keyset pagination, and cursors bind the candidate run plus the exact
+status/family pair so they cannot be replayed across filtered or unfiltered queries.
+The browser validates that every returned row matches the selected filters; changing
+a filter clears stale rows and reloads page one. Regression coverage includes filtered
+multi-page SQLite reads, cross-filter cursor replay, invalid/duplicate query values,
+OpenAPI enums, and Chromium filter changes with pagination reset. The endpoint remains
+owner-scoped and read-only. Next: continue the candidate history UI and audit
+cross-collection invalidation under run/token changes.

@@ -140,6 +140,23 @@ _HTML = r"""<!doctype html>
   <section aria-labelledby="candidate-actions-title">
     <h2 id="candidate-actions-title" tabindex="-1">My external actions</h2>
     <p class="muted">Read-only application, communication and calendar lifecycle metadata for the selected run.</p>
+    <label for="candidate-action-status">Status</label>
+    <select id="candidate-action-status">
+      <option value="">All statuses</option>
+      <option value="prepared">Prepared</option>
+      <option value="in_progress">In progress</option>
+      <option value="succeeded">Succeeded</option>
+      <option value="failed">Failed</option>
+      <option value="reconciliation_required">Reconciliation required</option>
+    </select>
+    <label for="candidate-action-family">Action family</label>
+    <select id="candidate-action-family">
+      <option value="">All action families</option>
+      <option value="application_submission">Application submission</option>
+      <option value="communication">Communication</option>
+      <option value="calendar">Calendar</option>
+      <option value="other">Other</option>
+    </select>
     <button id="list-candidate-actions" type="button" disabled>Load actions for selected run</button>
     <ul id="candidate-actions" aria-label="External action status" aria-busy="false"></ul>
     <p id="candidate-actions-state" role="status" aria-live="polite">Select a run and load its external actions.</p>
@@ -219,6 +236,8 @@ _HTML = r"""<!doctype html>
     let actionStatusGeneration = 0;
     let nextCandidateActionCursor = null;
     let candidateActionRunId = null;
+    let candidateActionStatusFilter = null;
+    let candidateActionFamilyFilter = null;
     const byId = (id) => document.getElementById(id);
     const pageSummary = (count, singular, plural, hasMore, instruction = '') =>
       count + ' ' + (count === 1 ? singular : plural) + ' on this page. ' +
@@ -669,6 +688,8 @@ _HTML = r"""<!doctype html>
       actionStatusGeneration += 1;
       nextCandidateActionCursor = null;
       candidateActionRunId = null;
+      candidateActionStatusFilter = null;
+      candidateActionFamilyFilter = null;
       byId('candidate-actions').setAttribute('aria-busy', 'false');
       byId('candidate-actions').replaceChildren();
       byId('candidate-actions-state').textContent = 'Select a run and load its external actions.';
@@ -681,12 +702,19 @@ _HTML = r"""<!doctype html>
           !byId('token').value) {
         throw new Error('Select a run and enter the bearer token first.');
       }
-      if (after !== null && candidateActionRunId !== runId) {
-        throw new Error('Select the run again before loading the next action page.');
+      const selectedStatus = byId('candidate-action-status').value;
+      const selectedFamily = byId('candidate-action-family').value;
+      if (after !== null && (
+          candidateActionRunId !== runId ||
+          candidateActionStatusFilter !== selectedStatus ||
+          candidateActionFamilyFilter !== selectedFamily)) {
+        throw new Error('Select the run and action filters again before loading the next page.');
       }
       const contextGeneration = inputContextGeneration;
       const generation = ++actionStatusGeneration;
       candidateActionRunId = runId;
+      candidateActionStatusFilter = selectedStatus;
+      candidateActionFamilyFilter = selectedFamily;
       nextCandidateActionCursor = null;
       byId('list-candidate-actions').disabled = true;
       byId('candidate-actions').setAttribute('aria-busy', 'true');
@@ -694,8 +722,12 @@ _HTML = r"""<!doctype html>
       byId('candidate-actions-state').textContent = 'Loading external actions…';
       byId('next-candidate-actions').disabled = true;
       try {
+        const query = ['limit=25'];
+        if (selectedStatus !== '') query.push('status=' + encodeURIComponent(selectedStatus));
+        if (selectedFamily !== '') query.push('action_family=' + encodeURIComponent(selectedFamily));
+        if (after !== null) query.push('after=' + encodeURIComponent(after));
         const page = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
-          '/actions?limit=25' + (after === null ? '' : '&after=' + encodeURIComponent(after)),
+          '/actions?' + query.join('&'),
           {}, 'External action status request failed.', true);
         if (generation !== actionStatusGeneration || contextGeneration !== inputContextGeneration ||
             runId !== byId('run-id').value) return;
@@ -726,6 +758,8 @@ _HTML = r"""<!doctype html>
               refs.has(item.operation_ref) ||
               !actionFamilies.includes(item.action_family) ||
               !actionStatuses.includes(item.status) ||
+              (selectedStatus !== '' && item.status !== selectedStatus) ||
+              (selectedFamily !== '' && item.action_family !== selectedFamily) ||
               !validActionTimestamp(item.created_at) ||
               !validActionTimestamp(item.updated_at) ||
               Date.parse(item.updated_at) < Date.parse(item.created_at) ||
@@ -938,6 +972,17 @@ _HTML = r"""<!doctype html>
     byId('next-candidate-actions').addEventListener('click', () => guarded(() => {
       if (nextCandidateActionCursor !== null) return loadCandidateActions(nextCandidateActionCursor);
     }, true));
+    function reloadCandidateActionsForFilterChange() {
+      if (candidateActionRunId !== null && candidateActionRunId === byId('run-id').value) {
+        void guarded(() => loadCandidateActions(), true);
+      } else {
+        clearCandidateActions();
+      }
+    }
+    byId('candidate-action-status').addEventListener(
+      'change', reloadCandidateActionsForFilterChange);
+    byId('candidate-action-family').addEventListener(
+      'change', reloadCandidateActionsForFilterChange);
     byId('run-phase').addEventListener('change', clearRunList);
     byId('token').addEventListener('input', clearRunList);
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {

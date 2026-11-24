@@ -1079,6 +1079,8 @@ opens SQLite read-only and cannot retry, reconcile, or mutate an external action
 The candidate sandbox includes a matching "My external actions" panel for the selected
 run. It verifies the stable run reference, exact response fields, allowlisted action
 families and lifecycle states, UTC timestamps, and bounded opaque cursor before
-rendering text-only rows. Pagination is invalidated whenever the selected run or
-bearer-token context changes. The panel is discovery-only: it has no retry,
-reconciliation, or provider-execution controls.
+rendering text-only rows. Optional lifecycle-status and action-family filters are
+applied in SQLite before keyset pagination; each cursor is bound to the selected run
+and exact filter set. Changing a filter clears the old page and reloads from the
+beginning. Run or bearer-token changes also invalidate prior responses. The panel
+is discovery-only: it has no retry, reconciliation, or provider-execution controls.
