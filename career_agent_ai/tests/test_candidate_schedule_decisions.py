@@ -1056,7 +1056,7 @@ def test_candidate_sandbox_browser_recovers_decline_timeout_after_runtime_restar
             ).wait_for()
             assert page.locator("#decline-event").is_disabled()
 
-            # Simulate process loss after the sandbox calendar effect and event transition committed.
+            # Simulate process loss after the provider effect committed and the decline became ambiguous.
             server1.shutdown()
             thread1.join(timeout=5)
             server1.server_close()
@@ -1077,7 +1077,7 @@ def test_candidate_sandbox_browser_recovers_decline_timeout_after_runtime_restar
             event_button = page.get_by_role("button", name="View event 1: " + EVENT_ID)
             event_button.wait_for()
             event_button.click()
-            page.locator("#event-detail").get_by_text('"state_version": 2').wait_for()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
             page.wait_for_function(
                 "() => !document.querySelector('#decline-reconciliation-verified').disabled"
             )
