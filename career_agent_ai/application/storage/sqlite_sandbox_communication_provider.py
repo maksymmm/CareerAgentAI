@@ -171,26 +171,95 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
         return delivered
 
     def verify_delivery(self, operation_id: str) -> DeliveryEvidence:
+        """Return evidence only when the durable intent and attempt ledger agree."""
         operation_id = validate_identifier(operation_id, "operation_id")
-        if self._database.connection.in_transaction:
+        connection = self._database.connection
+        if connection.in_transaction:
             raise PreDeliveryCommunicationError(
                 "Sandbox delivery evidence cannot be verified inside a transaction."
             )
         self._begin()
         try:
-            row = self._database.connection.execute(
-                "SELECT message_id FROM sandbox_communication_deliveries "
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_communication_intents "
                 "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
-            message = None if row is None else self._load_message(row[0])
+            attempts = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+                "WHERE operation_id = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
+            delivery = connection.execute(
+                "SELECT fingerprint, message_id, action "
+                "FROM sandbox_communication_deliveries WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+
+            unknown = DeliveryEvidence(DeliveryEvidenceState.UNKNOWN)
+            if intent is None or not self._valid_fingerprint(intent[0]) or not attempts:
+                return unknown
+
+            parsed_attempts: list[SandboxCommunicationOutcome] = []
+            for expected_no, (attempt_no, raw_outcome) in enumerate(attempts, start=1):
+                if type(attempt_no) is not int or attempt_no != expected_no:
+                    return unknown
+                try:
+                    parsed_attempts.append(SandboxCommunicationOutcome(raw_outcome))
+                except (TypeError, ValueError):
+                    return unknown
+
+            no_effect_outcomes = {
+                SandboxCommunicationOutcome.NO_EFFECT,
+                SandboxCommunicationOutcome.INTERRUPTED_BEFORE_EFFECT,
+            }
+            effect_outcomes = {
+                SandboxCommunicationOutcome.SUCCESS,
+                SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT,
+            }
+            if delivery is None:
+                if all(outcome in no_effect_outcomes for outcome in parsed_attempts):
+                    return DeliveryEvidence(DeliveryEvidenceState.ABSENT_CONFIRMED)
+                return unknown
+
+            # A delivery must be the terminal provider attempt. Earlier attempts may
+            # prove no effect, but a second attempt after an effect is never safe.
+            if (
+                parsed_attempts[-1] not in effect_outcomes
+                or any(outcome in effect_outcomes for outcome in parsed_attempts[:-1])
+            ):
+                return unknown
+
+            delivery_fingerprint, message_id, action = delivery
+            if (
+                not self._valid_fingerprint(delivery_fingerprint)
+                or delivery_fingerprint != intent[0]
+                or not isinstance(action, str)
+                or action not in {"send", "reply"}
+            ):
+                return unknown
+            try:
+                normalized_message_id = validate_identifier(message_id, "message_id")
+                message = self._load_message(normalized_message_id)
+                if (
+                    message is None
+                    or message.direction != MessageDirection.OUTBOUND
+                    or self._fingerprint(action, message) != intent[0]
+                ):
+                    return unknown
+            except (AttributeError, KeyError, TypeError, UnicodeError, ValueError):
+                return unknown
+            return DeliveryEvidence(DeliveryEvidenceState.PRESENT, message)
         finally:
-            self._database.connection.rollback()
-        if row is None:
-            return DeliveryEvidence(DeliveryEvidenceState.ABSENT_CONFIRMED)
-        if message is None:
-            raise ValueError("Sandbox delivery evidence references a missing message.")
-        return DeliveryEvidence(DeliveryEvidenceState.PRESENT, message)
+            connection.rollback()
+
+    @staticmethod
+    def _valid_fingerprint(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
 
     def delivery_count(self, operation_id: str) -> int:
         return int(

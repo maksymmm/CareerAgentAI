@@ -641,21 +641,23 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         )
         return statuses[0], json.loads(b"".join(response))
 
-    attempts = []
-    original_submit = runtime_composition.SQLiteSandboxSubmissionProvider.submit
-
-    def ambiguous_once(self, *args, **kwargs):
-        attempts.append((args, kwargs))
-        if len(attempts) == 1:
-            raise RuntimeError("sandbox outcome unknown")
-        return original_submit(self, *args, **kwargs)
-
-    monkeypatch.setattr(
-        runtime_composition.SQLiteSandboxSubmissionProvider, "submit", ambiguous_once
+    from career_agent_ai.application.storage.sqlite_sandbox_submission_provider import (
+        SandboxOutcome,
     )
+
+    attempts = []
+
+    def sandbox_outcome_plan(operation_id, attempt_number):
+        attempts.append((operation_id, attempt_number))
+        if attempt_number == 1:
+            return SandboxOutcome.INTERRUPTED_BEFORE_EFFECT
+        return SandboxOutcome.SUCCESS
     resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
     first = build_candidate_sandbox_app_from_env(
-        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+        resolve_bearer=resolve_bearer,
+        jobs=jobs,
+        environ=environ,
+        sandbox_outcome_plan=sandbox_outcome_plan,
     )
     status, started = call(
         first,
@@ -695,7 +697,10 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
     first.close()
 
     second = build_candidate_sandbox_app_from_env(
-        resolve_bearer=resolve_bearer, jobs=jobs, environ=environ
+        resolve_bearer=resolve_bearer,
+        jobs=jobs,
+        environ=environ,
+        sandbox_outcome_plan=sandbox_outcome_plan,
     )
     status_path = f"/v1/candidate/runs/{run_id}/status"
     status, snapshot = call(second, status_path)
@@ -729,7 +734,8 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         },
     ) == ("200 OK", {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value})
     assert len(attempts) == 2
-    assert attempts[0][0][0] == attempts[1][0][0]
+    assert attempts[0][0] == attempts[1][0]
+    assert attempts[0][1] == 1 and attempts[1][1] == 2
     second.close()
 
     database = SQLiteDatabase(database_path)
@@ -739,7 +745,7 @@ def test_candidate_http_no_effect_reconciliation_retries_once_after_restart(
         ).fetchall()
     finally:
         database.close()
-    assert operations == [(attempts[0][0][0], ExternalActionStatus.SUCCEEDED.value)]
+    assert operations == [(attempts[0][0], ExternalActionStatus.SUCCEEDED.value)]
 
 
 def test_candidate_http_message_no_effect_retries_once_after_restart(
@@ -779,17 +785,26 @@ def test_candidate_http_message_no_effect_retries_once_after_restart(
         )
         return statuses[0], json.loads(b"".join(response))
 
-    attempts = []
-    original_send = runtime_composition.FakeCommunicationAdapter.send
+    from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
+        SandboxCommunicationOutcome,
+    )
 
-    def ambiguous_once(self, *args, **kwargs):
-        attempts.append((args, kwargs))
-        if len(attempts) == 1:
-            raise RuntimeError("sandbox delivery outcome unknown")
-        return original_send(self, *args, **kwargs)
+    attempts = []
+    original_init = runtime_composition.SQLiteSandboxCommunicationProvider.__init__
+
+    def scripted_init(self, database, plan=None):
+        def outcome_plan(operation_id, attempt_number):
+            attempts.append((operation_id, attempt_number))
+            if attempt_number == 1:
+                return SandboxCommunicationOutcome.INTERRUPTED_BEFORE_EFFECT
+            return SandboxCommunicationOutcome.SUCCESS
+
+        original_init(self, database, plan=plan or outcome_plan)
 
     monkeypatch.setattr(
-        runtime_composition.FakeCommunicationAdapter, "send", ambiguous_once
+        runtime_composition.SQLiteSandboxCommunicationProvider,
+        "__init__",
+        scripted_init,
     )
     resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
     first = build_candidate_sandbox_app_from_env(
@@ -884,7 +899,8 @@ def test_candidate_http_message_no_effect_retries_once_after_restart(
         },
     ) == ("200 OK", {"run_id": run_id, "phase": CareerLoopPhase.COMPLETE.value})
     assert len(attempts) == 2
-    assert attempts[0][0][0] == attempts[1][0][0]
+    assert attempts[0][0] == attempts[1][0]
+    assert attempts[0][1] == 1 and attempts[1][1] == 2
     second.close()
 
     database = SQLiteDatabase(database_path)

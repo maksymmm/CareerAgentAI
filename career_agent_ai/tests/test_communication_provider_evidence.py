@@ -170,3 +170,143 @@ def test_service_requires_a_verifiable_provider():
         CommunicationService(
             messages, provider, external, require_provider_evidence=True
         )
+
+
+def test_unknown_operation_and_intent_without_attempts_are_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(database)
+
+    assert provider.verify_delivery("never-prepared").state == DeliveryEvidenceState.UNKNOWN
+
+    message = _message()
+    provider.draft(message)
+    fingerprint = provider._fingerprint("send", message)
+    database.connection.execute(
+        "INSERT INTO sandbox_communication_intents VALUES (?, ?)",
+        ("prepared-without-attempt", fingerprint),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_delivery("prepared-without-attempt").state
+        == DeliveryEvidenceState.UNKNOWN
+    )
+    database.close()
+
+
+def test_gapped_communication_attempt_history_is_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(
+        database, lambda _key, _attempt: SandboxCommunicationOutcome.NO_EFFECT
+    )
+    provider.draft(_message())
+    with pytest.raises(PreDeliveryCommunicationError, match="no delivery"):
+        provider.send("send:gapped", _message())
+
+    database.connection.execute(
+        "UPDATE sandbox_communication_attempts SET attempt_no = 2 "
+        "WHERE operation_id = ?",
+        ("send:gapped",),
+    )
+    database.connection.commit()
+    assert provider.verify_delivery("send:gapped").state == DeliveryEvidenceState.UNKNOWN
+    database.close()
+
+
+def test_unrecognized_communication_attempt_outcome_is_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(
+        database, lambda _key, _attempt: SandboxCommunicationOutcome.NO_EFFECT
+    )
+    provider.draft(_message())
+    with pytest.raises(PreDeliveryCommunicationError, match="no delivery"):
+        provider.send("send:unknown-outcome", _message())
+
+    database.connection.execute(
+        "UPDATE sandbox_communication_attempts SET outcome = ? "
+        "WHERE operation_id = ?",
+        ("provider_claimed_absent", "send:unknown-outcome"),
+    )
+    database.connection.commit()
+    assert (
+        provider.verify_delivery("send:unknown-outcome").state
+        == DeliveryEvidenceState.UNKNOWN
+    )
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        SandboxCommunicationOutcome.SUCCESS,
+        SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT,
+    ],
+)
+def test_missing_delivery_after_effect_attempt_is_inconclusive(tmp_path, outcome):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(
+        database, lambda _key, _attempt: outcome
+    )
+    provider.draft(_message())
+    if outcome == SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT:
+        with pytest.raises(TimeoutError, match="after recording delivery"):
+            provider.send("send:missing-effect", _message())
+    else:
+        provider.send("send:missing-effect", _message())
+
+    database.connection.execute(
+        "DELETE FROM sandbox_communication_deliveries WHERE operation_id = ?",
+        ("send:missing-effect",),
+    )
+    database.connection.commit()
+    assert (
+        provider.verify_delivery("send:missing-effect").state
+        == DeliveryEvidenceState.UNKNOWN
+    )
+    database.close()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("fingerprint", "f" * 64),
+        ("action", "unsupported"),
+    ],
+)
+def test_delivery_metadata_must_match_durable_intent(tmp_path, column, value):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(database)
+    message = _message()
+    provider.draft(message)
+    provider.send("send:corrupt-metadata", message)
+
+    database.connection.execute(
+        f"UPDATE sandbox_communication_deliveries SET {column} = ? "
+        "WHERE operation_id = ?",
+        (value, "send:corrupt-metadata"),
+    )
+    database.connection.commit()
+    assert (
+        provider.verify_delivery("send:corrupt-metadata").state
+        == DeliveryEvidenceState.UNKNOWN
+    )
+    database.close()
+
+
+def test_delivery_without_its_outbound_message_is_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(database)
+    message = _message()
+    provider.draft(message)
+    provider.send("send:missing-message", message)
+
+    database.connection.execute(
+        "DELETE FROM sandbox_communication_messages WHERE message_id = ?",
+        (message.message_id,),
+    )
+    database.connection.commit()
+    assert (
+        provider.verify_delivery("send:missing-message").state
+        == DeliveryEvidenceState.UNKNOWN
+    )
+    database.close()
