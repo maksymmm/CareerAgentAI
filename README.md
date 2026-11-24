@@ -1038,3 +1038,5 @@ retain their legacy child and operation IDs, including replay after restart.
 Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
 The ownership check includes retained applications, messages and external-action
 records, so deleting a terminal loop snapshot cannot release its child namespace.
+
+Candidate interview decline recovery can be exercised through `sandbox_calendar_outcome_plan`, independently of the application-submission plan. The runtime passes this plan to the SQLite calendar provider used by the candidate decline API, enabling deterministic timeout-after-effect and no-replay restart tests.
