@@ -16,6 +16,15 @@ are required before the existing relevance PR can merge.
 
 # Autonomous Implementation Plan
 
+Operator-to-candidate action correlation: durable external-action records now carry
+optional non-payload correlation metadata from the candidate run through application
+submission, message delivery and calendar acceptance. The owner-scoped candidate status
+projection exposes a matching stable `run_ref`; the authenticated read-only operator
+projection exposes `candidate_run_ref` without raw run IDs or provider payloads.
+Legacy SQLite action tables are migrated additively and remain readable before migration.
+Idempotent replays preserve the first correlation and cannot rebind an operation.
+Exact-head CI and code/security review are required before integration.
+
 Provider-evidence-verified application, message, and interview reconciliation (ADR 0001/0002/0003): positive claims require matching durable ledger evidence; negative claims require explicit confirmed absence; malformed evidence and lookups inside an existing SQLite transaction fail closed. Candidate submission, mailbox, and calendar providers now persist exactly-once sandbox effects across restart without network access or real-world actions. Next: exact-head CI/review, then audit all three evidence paths for concurrent writer contention and operator-facing recovery observability.
 
 Durable sandbox application provider: the candidate sandbox replaces the per-request in-memory

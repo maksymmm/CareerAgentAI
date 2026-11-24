@@ -1324,6 +1324,7 @@ class AutonomousCareerLoop:
                 artifact_sha256=artifact_digest,
                 candidate_snapshot_sha256=state.selected_job_snapshot_sha256,
                 human_approved=True,
+                correlation_id=state.run_id,
             )
             if replay is None:
                 raise RuntimeError("Confirmed application submission could not be replayed.")
@@ -1370,6 +1371,7 @@ class AutonomousCareerLoop:
                 artifact_sha256=artifact_digest,
                 candidate_snapshot_sha256=state.selected_job_snapshot_sha256,
                 human_approved=True,
+                correlation_id=state.run_id,
             )
         except Exception:
             durable_operation = self._submission.get_operation(operation_id)
@@ -1538,6 +1540,7 @@ class AutonomousCareerLoop:
             operation_id,
             state.message_id,
             human_approved=True,
+            correlation_id=state.run_id,
         )
         if delivered is None:
             durable_operation = self._communication.get_operation(operation_id)
@@ -1700,6 +1703,7 @@ class AutonomousCareerLoop:
             operation_id,
             event_id,
             human_approved=True,
+            correlation_id=state.run_id,
         )
         if accepted is None:
             durable_operation = self._scheduling.get_operation(operation_id)

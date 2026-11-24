@@ -33,8 +33,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 """
                 INSERT INTO external_action_operations (
                     operation_id, action_type, payload_json, status, result_json,
-                    error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
+                    error, created_at, updated_at, correlation_id
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     operation.operation_id,
@@ -43,6 +43,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                     operation.status.value,
                     operation.created_at.isoformat(),
                     operation.updated_at.isoformat(),
+                    operation.correlation_id,
                 ),
             )
             self._database.connection.commit()
@@ -71,7 +72,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         row = self._database.connection.execute(
             """
             SELECT operation_id, action_type, payload_json, status, result_json,
-                   error, created_at, updated_at
+                   error, created_at, updated_at, correlation_id
             FROM external_action_operations WHERE operation_id = ?
             """,
             (normalized,),
@@ -90,6 +91,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 error=row[5],
                 created_at=datetime.fromisoformat(row[6]),
                 updated_at=datetime.fromisoformat(row[7]),
+                correlation_id=row[8],
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("Persisted external-action operation is malformed.") from exc
@@ -223,10 +225,21 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 result_json TEXT,
                 error TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                correlation_id TEXT
             )
             """
         )
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(external_action_operations)"
+            )
+        }
+        if "correlation_id" not in columns:
+            connection.execute(
+                "ALTER TABLE external_action_operations ADD COLUMN correlation_id TEXT"
+            )
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_external_actions_status
                ON external_action_operations(status)"""
@@ -234,6 +247,10 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_external_actions_type_status
                ON external_action_operations(action_type, status)"""
+        )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation
+               ON external_action_operations(correlation_id)"""
         )
         connection.commit()
 

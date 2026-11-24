@@ -43,8 +43,12 @@ The read-only WSGI API exposes public liveness at `/healthz`, bearer-authenticat
 operational issues at `/v1/operational/issues`, and a bounded non-terminal action
 lifecycle projection at `/v1/operational/actions`. The action projection omits raw
 operation IDs, payloads, provider results and error text, and cannot execute or retry
-work. Its schema is OpenAPI 3.1. This operational API is not a candidate-facing
-workflow API.
+work. Candidate-originated actions expose a stable `candidate_run_ref` that matches
+the owner-scoped candidate status `run_ref`; the raw correlation identifier remains
+in a dedicated nullable metadata column and is never copied into provider payloads.
+Legacy action rows remain readable without a correlation reference, and replays cannot
+rebind an existing operation. Its schema is OpenAPI 3.1. This operational API is not
+a candidate-facing workflow API.
 
 Migration sequencing, deployment and rollback constraints are documented in
 `docs/operations/`. Runbooks alone do not establish a deployed service or verified

@@ -172,11 +172,18 @@ def test_candidate_owned_run_pages_are_read_only_and_restart_safe(tmp_path):
         from career_agent_ai.tests.test_candidate_approval_api import request as api_request
         (status, _), collection = api_request(runtime, path="/v1/candidate/run-statuses", query="limit=2")
         assert status == "200 OK"
+        from career_agent_ai.application.observability.references import stable_reference
+
         assert [item["run_id"] for item in collection["items"]] == ["a", "c"]
+        assert collection["items"][0]["run_ref"] == stable_reference("a")
         first = runtime.list_run_statuses(user_id="user-1", limit=2)
         assert [item["run_id"] for item in first["items"]] == ["a", "c"]
         assert first["next_after"] == "c"
-        assert set(first["items"][0]) == {"schema_version", "run_id", "state_version", "phase", "waiting_for_human", "terminal"}
+        assert set(first["items"][0]) == {
+            "schema_version", "run_id", "run_ref", "state_version",
+            "phase", "waiting_for_human", "terminal",
+        }
+        assert first["items"][0]["run_ref"] == stable_reference("a")
         assert runtime.list_run_statuses(user_id="nobody")["items"] == []
         filtered = runtime.list_run_statuses(
             user_id="user-1", limit=2, phase=CareerLoopPhase.SEARCH)
@@ -3903,9 +3910,13 @@ def test_candidate_status_is_restart_safe_private_and_read_only(tmp_path, monkey
         with ThreadPoolExecutor(max_workers=1) as executor:
             meta, payload = executor.submit(_wsgi_call, runtime, path, token='owner').result()
         assert meta['status'] == '200 OK'
+        from career_agent_ai.application.observability.references import stable_reference
+
         assert payload == {
-            'schema_version': 1, 'run_id': state.run_id, 'state_version': before.version,
-            'phase': phase.value, 'waiting_for_human': kind is not None,
+            'schema_version': 1, 'run_id': state.run_id,
+            'run_ref': stable_reference(state.run_id),
+            'state_version': before.version, 'phase': phase.value,
+            'waiting_for_human': kind is not None,
             'terminal': phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
         }
         assert meta['headers']['Cache-Control'] == 'no-store'

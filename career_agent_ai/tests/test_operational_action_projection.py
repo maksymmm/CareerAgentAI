@@ -107,6 +107,7 @@ def test_operational_action_projection_is_bounded_private_and_read_only(tmp_path
             "application_submission", "calendar"
         ]
         assert [item["status"] for item in first["items"]] == ["prepared", "in_progress"]
+        assert all(item["candidate_run_ref"] is None for item in first["items"])
         assert first["next_after"] is not None
         assert first["items"][0]["operation_ref"] == hashlib.sha256(
             b"operation-application"
@@ -119,6 +120,7 @@ def test_operational_action_projection_is_bounded_private_and_read_only(tmp_path
         ]
         assert second["items"][0]["status"] == "failed"
         assert second["items"][0]["error_present"] is True
+        assert all(item["candidate_run_ref"] is None for item in second["items"])
         assert second["next_after"] is None
 
         rendered = json.dumps([first, second])
@@ -238,8 +240,8 @@ def test_operational_action_openapi_contract_is_bounded_and_minimal():
     assert schema["properties"]["items"]["maxItems"] == 25
     item = schema["properties"]["items"]["items"]
     assert set(item["required"]) == {
-        "operation_ref", "action_family", "status", "created_at",
-        "updated_at", "error_present",
+        "operation_ref", "candidate_run_ref", "action_family", "status",
+        "created_at", "updated_at", "error_present",
     }
     assert item["additionalProperties"] is False
     assert "operation_id" not in item["properties"]

@@ -19,6 +19,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopConflictError
 from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRanker
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.observability.references import stable_reference
 
 
 class SQLiteCareerLoopRepository:
@@ -808,6 +809,7 @@ class SQLiteCandidateRunStatusProjection:
         return {
             "schema_version": 1,
             "run_id": identifier,
+            "run_ref": stable_reference(identifier),
             "state_version": payload_version,
             "phase": phase.value,
             "waiting_for_human": payload.get("pending_human_action") is not None,

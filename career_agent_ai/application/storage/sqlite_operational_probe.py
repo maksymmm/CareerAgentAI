@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -15,6 +14,7 @@ from career_agent_ai.application.observability.models import (
     OperationalSeverity,
 )
 from career_agent_ai.application.observability.structured_logging import redact_text
+from career_agent_ai.application.observability.references import stable_reference
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -70,10 +70,18 @@ class SQLiteOperationalProbe:
         cursor = None if after is None else decode_action_cursor(after)
         if not self._table_exists("external_action_operations"):
             return {"items": [], "next_after": None}
+        columns = {
+            row[1]
+            for row in self._database.connection.execute(
+                "PRAGMA table_info(external_action_operations)"
+            )
+        }
+        correlation_expression = "correlation_id" if "correlation_id" in columns else "NULL"
         rows = self._database.connection.execute(
-            """
+            f"""
             SELECT operation_id, action_type, status, created_at, updated_at,
-                   CASE WHEN error IS NULL THEN 0 ELSE 1 END
+                   CASE WHEN error IS NULL THEN 0 ELSE 1 END,
+                   {correlation_expression}
             FROM external_action_operations
             WHERE status IN ('prepared', 'in_progress', 'failed', 'reconciliation_required')
               AND (? IS NULL OR operation_id > ?)
@@ -84,7 +92,10 @@ class SQLiteOperationalProbe:
         ).fetchall()
         visible = rows[:limit]
         items: list[dict[str, object]] = []
-        for operation_id, action_type, status, created_at, updated_at, error_present in visible:
+        for (
+            operation_id, action_type, status, created_at, updated_at,
+            error_present, correlation_id,
+        ) in visible:
             if (
                 not isinstance(operation_id, str)
                 or not operation_id
@@ -112,8 +123,22 @@ class SQLiteOperationalProbe:
                 family = "calendar"
             else:
                 family = "other"
+            if correlation_id is None:
+                candidate_run_ref = None
+            else:
+                if (
+                    not isinstance(correlation_id, str)
+                    or not correlation_id
+                    or len(correlation_id) > 200
+                    or correlation_id != correlation_id.strip()
+                    or any(ord(character) < 32 or ord(character) == 127 for character in correlation_id)
+                    or any(0xD800 <= ord(character) <= 0xDFFF for character in correlation_id)
+                ):
+                    raise RuntimeError("Persisted external-action correlation identifier is malformed.")
+                candidate_run_ref = stable_reference(correlation_id)
             items.append({
-                "operation_ref": hashlib.sha256(operation_id.encode("utf-8")).hexdigest()[:24],
+                "operation_ref": stable_reference(operation_id),
+                "candidate_run_ref": candidate_run_ref,
                 "action_family": family,
                 "status": status,
                 "created_at": created.isoformat(),

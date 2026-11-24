@@ -2024,8 +2024,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert "byId('run-overview').textContent = state" in html
     assert "!runPhases.includes(snapshot.phase)" in html
     assert "!validRunFlags(snapshot)" in html
-    assert "Object.keys(snapshot).length !== statusFields.length" in html
-    assert "!statusFields.every(field => Object.hasOwn(snapshot, field))" in html
+    assert "const responseFields = hasRunRef ? [...statusFields, 'run_ref'] : statusFields;" in html
+    assert "Object.keys(snapshot).length !== responseFields.length" in html
+    assert "!responseFields.every(field => Object.hasOwn(snapshot, field))" in html
+    assert "/^[a-f0-9]{24}$/.test(snapshot.run_ref)" in html
     assert "snapshot.state_version < selectedRunVersion" in html
     assert "const approvalPhases = {" in html
     assert "snapshot.state_version !== approvalPrompt.state_version" in html
