@@ -1410,3 +1410,40 @@ def test_candidate_sandbox_browser_recovers_reschedule_timeout_after_runtime_res
     finally:
         database.close()
 
+@pytest.mark.parametrize(
+    ("environ", "message"),
+    [
+        ({"CONTENT_LENGTH": None}, "Content-Length"),
+        ({"CONTENT_LENGTH": "１２"}, "Content-Length"),
+        ({"CONTENT_LENGTH": "1000000"}, "Content-Length"),
+        ({"CONTENT_LENGTH": "0", "wsgi.input": io.BytesIO(b"")}, "body size"),
+        (
+            {
+                "CONTENT_LENGTH": "16385",
+                "wsgi.input": io.BytesIO(b"x" * 16385),
+            },
+            "body size",
+        ),
+        ({"CONTENT_LENGTH": "2"}, "stream is unavailable"),
+        (
+            {"CONTENT_LENGTH": "2", "wsgi.input": io.BytesIO(b"{")},
+            "body is incomplete",
+        ),
+        (
+            {"CONTENT_LENGTH": "1", "wsgi.input": io.BytesIO(b"\xff")},
+            "UTF-8 JSON",
+        ),
+        (
+            {"CONTENT_LENGTH": "2", "wsgi.input": io.BytesIO(b"[]")},
+            "JSON object",
+        ),
+    ],
+)
+def test_schedule_action_json_reader_rejects_malformed_envelopes(tmp_path, environ, message):
+    app = CandidateScheduleActionWSGIApp(
+        database_path=str(tmp_path / "request-parser.sqlite"),
+        resolve_bearer=TOKENS.get,
+    )
+    with pytest.raises(ValueError, match=message):
+        app._read_json(environ)
+
