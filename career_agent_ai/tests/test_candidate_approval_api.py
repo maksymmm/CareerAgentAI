@@ -3590,6 +3590,9 @@ def test_candidate_sandbox_browser_recovers_acceptance_after_reload_with_fresh_a
             page.locator("#list-events").click()
             page.locator("#owned-events button").click()
             page.locator("#acceptance-reconciliation-panel").wait_for(state="visible")
+            page.wait_for_function(
+                "() => !document.querySelector('#acceptance-verified').disabled"
+            )
             assert not page.locator("#acceptance-verified").is_checked()
             assert page.locator("#acceptance-completed").is_disabled()
             assert page.locator("#acceptance-provider-event-id").input_value() == ""
