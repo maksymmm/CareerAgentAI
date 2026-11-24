@@ -21,3 +21,18 @@ unchanged.
 - Provider evidence supplies the durable provider event ID; callers cannot invent one.
 - All effects remain local sandbox records. No production credential, invitation response,
   appointment, or real calendar is created or modified.
+
+
+## Writer contention and concurrent invocation
+
+Provider writes acquire `BEGIN IMMEDIATE` before binding an operation ID, counting an
+attempt, or recording an effect. If another SQLite connection holds the writer lock,
+the action fails as a pre-effect error: no intent, attempt, or effect is recorded, and
+the same approved intent may be retried after the lock is released.
+
+Evidence lookup also acquires a writer lock. A busy database is an unavailable-evidence
+error, never confirmed absence; a later lookup after the lock is released returns the
+durable effect. Concurrent calls using the same operation ID and identical intent
+serialize to one committed effect and one scripted provider attempt. Concurrent
+conflicting intents cannot rebind the operation ID; only the winning fingerprint may
+reach the outcome plan.
