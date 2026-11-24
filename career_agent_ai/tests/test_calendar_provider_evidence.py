@@ -199,3 +199,109 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
     with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
         service.resolve_reconciliation("accept:evidence", completed=True)
     assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+
+def test_unknown_calendar_operation_is_not_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+
+    evidence = provider.verify_calendar_action("never-attempted")
+
+    assert evidence.state == CalendarEvidenceState.UNKNOWN
+
+
+def test_missing_calendar_attempt_history_is_not_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(
+        database, lambda _key, _attempt: SandboxCalendarOutcome.NO_EFFECT
+    )
+    with pytest.raises(PreCalendarActionError, match="no calendar effect"):
+        provider.decline("decline:missing-attempt", _event())
+    database.connection.execute(
+        "DELETE FROM sandbox_calendar_attempts WHERE operation_id = ?",
+        ("decline:missing-attempt",),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("decline:missing-attempt").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_missing_effect_after_recorded_timeout_is_not_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    service, provider, operations = _stack(
+        database,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    service.add_event(_event())
+    assert service.accept(
+        "accept:missing-effect", "interview-evidence", human_approved=True
+    ) is None
+    database.connection.execute(
+        "DELETE FROM sandbox_calendar_effects WHERE operation_id = ?",
+        ("accept:missing-effect",),
+    )
+    database.connection.commit()
+
+    with pytest.raises(
+        CalendarReconciliationEvidenceError, match="inconclusive"
+    ):
+        service.resolve_reconciliation("accept:missing-effect", completed=False)
+    assert (
+        operations.get("accept:missing-effect").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+
+
+def test_calendar_effect_fingerprint_must_match_durable_intent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    provider.accept("accept:fingerprint", _event())
+    database.connection.execute(
+        "UPDATE sandbox_calendar_intents SET fingerprint = ? WHERE operation_id = ?",
+        ("0" * 64, "accept:fingerprint"),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("accept:fingerprint").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_calendar_effect_action_must_match_delivered_event_state(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    provider.accept("accept:action", _event())
+    database.connection.execute(
+        "UPDATE sandbox_calendar_effects SET action = ? WHERE operation_id = ?",
+        ("decline", "accept:action"),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("accept:action").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_gapped_calendar_attempt_history_is_not_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(
+        database, lambda _key, _attempt: SandboxCalendarOutcome.NO_EFFECT
+    )
+    with pytest.raises(PreCalendarActionError, match="no calendar effect"):
+        provider.decline("decline:gapped-attempt", _event())
+    database.connection.execute(
+        "INSERT INTO sandbox_calendar_attempts VALUES (?, ?, ?)",
+        ("decline:gapped-attempt", 3, SandboxCalendarOutcome.NO_EFFECT.value),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("decline:gapped-attempt").state
+        == CalendarEvidenceState.UNKNOWN
+    )

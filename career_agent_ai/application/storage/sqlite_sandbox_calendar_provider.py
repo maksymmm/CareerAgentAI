@@ -162,22 +162,99 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
         return delivered
 
     def verify_calendar_action(self, operation_id: str) -> CalendarEvidence:
+        """Verify effects only when the durable intent and complete attempt ledger agree."""
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
-        if self._database.connection.in_transaction:
+        connection = self._database.connection
+        if connection.in_transaction:
             raise PreCalendarActionError(
                 "Sandbox calendar evidence cannot be verified inside a transaction."
             )
         self._begin()
         try:
-            row = self._database.connection.execute(
-                "SELECT event_json FROM sandbox_calendar_effects WHERE operation_id = ?",
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_calendar_intents WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            attempts = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+                "WHERE operation_id = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
+            effect = connection.execute(
+                "SELECT fingerprint, action, event_json FROM sandbox_calendar_effects "
+                "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
         finally:
-            self._database.connection.rollback()
-        if row is None:
-            return CalendarEvidence(CalendarEvidenceState.ABSENT_CONFIRMED)
-        return CalendarEvidence(CalendarEvidenceState.PRESENT, self._decode_event(row[0]))
+            connection.rollback()
+
+        # An unknown key or incomplete attempt ledger is not proof of absence. In
+        # particular, a missing effect row after a recorded success/timeout is
+        # corruption, not permission to retry a potentially completed action.
+        if intent is None or not attempts:
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+        intent_fingerprint = intent[0]
+        if (
+            not isinstance(intent_fingerprint, str)
+            or len(intent_fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in intent_fingerprint)
+        ):
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+
+        attempt_numbers = [row[0] for row in attempts]
+        if attempt_numbers != list(range(1, len(attempts) + 1)):
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+        try:
+            outcomes = [SandboxCalendarOutcome(row[1]) for row in attempts]
+        except (TypeError, ValueError):
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+
+        if effect is None:
+            if all(
+                outcome
+                in {
+                    SandboxCalendarOutcome.NO_EFFECT,
+                    SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+                }
+                for outcome in outcomes
+            ):
+                return CalendarEvidence(CalendarEvidenceState.ABSENT_CONFIRMED)
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+
+        effect_fingerprint, action, event_json = effect
+        if effect_fingerprint != intent_fingerprint:
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+        if (
+            any(
+                outcome
+                not in {
+                    SandboxCalendarOutcome.NO_EFFECT,
+                    SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT,
+                }
+                for outcome in outcomes[:-1]
+            )
+            or outcomes[-1]
+            not in {
+                SandboxCalendarOutcome.SUCCESS,
+                SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+            }
+        ):
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+
+        expected_status = {
+            "accept": ScheduleStatus.ACCEPTED,
+            "decline": ScheduleStatus.DECLINED,
+            "reschedule": ScheduleStatus.RESCHEDULE_REQUESTED,
+        }.get(action)
+        if expected_status is None or not isinstance(event_json, str):
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+        try:
+            event = self._decode_event(event_json)
+        except (KeyError, TypeError, ValueError):
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+        if event.status != expected_status:
+            return CalendarEvidence(CalendarEvidenceState.UNKNOWN)
+        return CalendarEvidence(CalendarEvidenceState.PRESENT, event)
 
     def effect_count(self, operation_id: str) -> int:
         return int(
