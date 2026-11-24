@@ -3295,7 +3295,7 @@ def test_candidate_schedule_acceptance_auth_and_method_boundaries():
 
 
 def test_candidate_schedule_acceptance_uses_durable_sqlite_sandbox_provider(tmp_path):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
     from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
     from career_agent_ai.application.scheduling.models import (
         ScheduleEvent, ScheduleEventType, ScheduleStatus,
@@ -3412,3 +3412,58 @@ def test_openapi_documents_candidate_schedule_acceptance_and_recovery():
     assert reconciliation["security"] == [{"bearerAuth": []}]
     assert "202" in accept["responses"] and "409" in reconciliation["responses"]
     assert status["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
+
+
+
+def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys(tmp_path):
+    from datetime import datetime, timezone
+    from career_agent_ai.application.career.autonomous_career_loop import (
+        _candidate_schedule_accept_operation_id,
+    )
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+
+    path = tmp_path / "candidate-acceptance-corrupt-ledger.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database).create(ScheduleEvent(
+        event_id="event-corrupt", candidate_id="candidate-1",
+        employer_name="Sandbox GmbH", event_type=ScheduleEventType.INTERVIEW,
+        location="Berlin", start_at=datetime(2026, 11, 24, 10, tzinfo=timezone.utc),
+        timezone_name="UTC",
+    ))
+    database.close()
+    with RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1"
+    ) as runtime:
+        database = SQLiteDatabase(str(path))
+        operation_id = _candidate_schedule_accept_operation_id(
+            "candidate-1", "event-corrupt", 1
+        )
+        timestamp = datetime.now(timezone.utc).isoformat()
+        database.connection.execute(
+            "INSERT INTO external_action_operations "
+            "(operation_id, action_type, payload_json, status, result_json, error, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
+            (
+                operation_id, "calendar.accept",
+                '{"event_id":"event-corrupt","event_version":1,"event_version":2}',
+                "prepared", timestamp, timestamp,
+            ),
+        )
+        database.connection.commit()
+        database.close()
+
+        (status, _), response = request(
+            runtime, path="/v1/candidate/schedule-event/acceptance",
+            query="event_id=event-corrupt&event_version=1",
+        )
+        assert status == "500 Internal Server Error"
+        assert response["error"] == "internal_error"
+
+    database = SQLiteDatabase(str(path))
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+    ).fetchone()[0] == 0
+    database.close()
