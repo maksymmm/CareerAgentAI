@@ -12,7 +12,7 @@ from threading import Barrier, Thread
 import pytest
 
 from career_agent_ai.application.api import candidate_approval_openapi_document
-from career_agent_ai.application.career import ApplicationSubmissionService
+from career_agent_ai.application.career import ApplicationSubmissionService, EvidenceState
 from career_agent_ai.application.career.application_submission import PreSubmissionError
 from career_agent_ai.application.external_actions import (
     ExternalActionService,
