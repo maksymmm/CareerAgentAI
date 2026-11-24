@@ -1597,7 +1597,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "completed": {"type": "boolean"},
             "provider_event_id": {
                 "type": "string", "minLength": 1, "maxLength": 1000,
-                "pattern": r"^(?![\\s\\S]*[\\u0000-\\u001F\\u007F\\uD800-\\uDFFF])[^\\s]+$",
+                "pattern": r"^(?![\s\S]*[\u0000-\u001F\u007F\uD800-\uDFFF])[^\s]+$",
             },
         },
         "allOf": [
