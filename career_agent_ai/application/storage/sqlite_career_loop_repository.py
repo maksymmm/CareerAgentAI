@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from math import isfinite
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from career_agent_ai.application.career.autonomous_loop_models import (
@@ -15,9 +16,15 @@ from career_agent_ai.application.career.autonomous_loop_models import (
     HumanActionEvent,
     HumanActionKind,
     candidate_snapshot_sha256,
+    validate_loop_identifier,
 )
 from career_agent_ai.application.career.autonomous_loop_repository import CareerLoopConflictError
 from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRanker
+from career_agent_ai.application.scheduling.models import (
+    sanitize_schedule_text,
+    validate_schedule_identifier,
+    validate_timezone_name,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 
@@ -769,6 +776,183 @@ class SQLiteCandidateRunStatusProjection:
             raise ValueError("Persisted autonomous-loop phase projection is malformed.")
         return {"schema_version": 1, "items": items,
                 "next_after": rows[limit - 1][0] if len(rows) > limit else None}
+
+    def list_pending_interview_actions(
+        self,
+        *,
+        user_id: str,
+        limit: int = 25,
+        after: str | None = None,
+    ) -> dict[str, Any]:
+        """Return bounded, owner-only interview actions without exposing provider keys."""
+        owner = validate_loop_identifier(user_id, "user_id")
+        if type(limit) is not int or not 1 <= limit <= 25:
+            raise ValueError("limit must be an integer between 1 and 25.")
+        cursor = "" if after is None else validate_loop_identifier(after, "after")
+        if after is not None and cursor != after:
+            raise ValueError("after must be a canonical run identity.")
+        rows = self._database.connection.execute(
+            """
+            SELECT run_id, owner_user_id, phase, payload_json, version
+            FROM autonomous_career_loops
+            WHERE owner_user_id = ? AND phase IN (?, ?) AND run_id > ?
+            ORDER BY run_id LIMIT ?
+            """,
+            (
+                owner,
+                CareerLoopPhase.INTERVIEW_APPROVAL.value,
+                CareerLoopPhase.INTERVIEW_RECONCILIATION.value,
+                cursor,
+                limit + 1,
+            ),
+        ).fetchall()
+        items = [
+            self._interview_action_from_row(row[0], row[1:], owner=owner)
+            for row in rows[:limit]
+        ]
+        return {
+            "schema_version": 1,
+            "items": items,
+            "next_after": items[-1]["run_id"] if len(rows) > limit else None,
+        }
+
+    @classmethod
+    def _interview_action_from_row(
+        cls,
+        identifier: str,
+        row: tuple[Any, ...],
+        *,
+        owner: str,
+    ) -> dict[str, Any]:
+        """Validate one owned durable action and emit only its candidate-safe summary."""
+        if row[0] != owner:
+            raise KeyError("Unknown autonomous career loop for this user.")
+        try:
+            run_id = validate_loop_identifier(identifier, "run_id", maximum=200)
+            if run_id != identifier:
+                raise ValueError("Persisted run identity is not canonical.")
+            payload = json.loads(
+                row[2],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
+            state = SQLiteCareerLoopRepository._deserialize(
+                payload, storage_version=row[3]
+            )
+            if (
+                state.run_id != run_id
+                or state.request.user_id != owner
+                or state.version != row[3]
+                or state.phase.value != row[1]
+                or state.request.schedule_event_id is None
+            ):
+                raise ValueError("Persisted interview action identity is inconsistent.")
+            action = state.pending_human_action
+            if action is None:
+                raise ValueError("Persisted interview action is missing.")
+            details = dict(action.details)
+            if state.phase == CareerLoopPhase.INTERVIEW_APPROVAL:
+                expected_kind = HumanActionKind.APPROVE_INTERVIEW
+                expected_title = "Approve interview/trial-day calendar response"
+                expected_fields = {
+                    "event_id", "employer", "event_type", "location", "local_date",
+                    "local_start_time", "local_end_date", "local_end_time", "timezone",
+                    "utc_offset", "end_utc_offset", "status",
+                }
+                if (
+                    action.kind != expected_kind
+                    or action.title != expected_title
+                    or set(details) != expected_fields
+                    or details["event_type"] not in {
+                        "interview", "trial_day", "phone_call", "video_call", "other"
+                    }
+                    or details["status"] not in {"proposed", "reschedule_requested"}
+                ):
+                    raise ValueError("Persisted interview approval is malformed.")
+                location = sanitize_schedule_text(
+                    details["location"], "location", maximum=2_000
+                )
+                if location != details["location"]:
+                    raise ValueError("Persisted interview location is not canonical.")
+                offset = details["utc_offset"]
+                if not isinstance(offset, str) or re.fullmatch(
+                    r"[+-]\d{2}:\d{2}(?::\d{2})?", offset
+                ) is None:
+                    raise ValueError("Persisted interview offset is malformed.")
+                end_values = (
+                    details["local_end_date"],
+                    details["local_end_time"],
+                    details["end_utc_offset"],
+                )
+                if not all(value is None for value in end_values):
+                    if not all(isinstance(value, str) for value in end_values):
+                        raise ValueError("Persisted interview end time is incomplete.")
+                    if date.fromisoformat(end_values[0]).isoformat() != end_values[0]:
+                        raise ValueError("Persisted interview end date is malformed.")
+                    if time.fromisoformat(end_values[1]).isoformat() != end_values[1]:
+                        raise ValueError("Persisted interview end time is malformed.")
+                    if re.fullmatch(
+                        r"[+-]\d{2}:\d{2}(?::\d{2})?", end_values[2]
+                    ) is None:
+                        raise ValueError("Persisted interview end offset is malformed.")
+            elif state.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION:
+                expected_kind = HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
+                expected_title = "Reconcile ambiguous interview/calendar response"
+                expected_fields = {
+                    "operation_id", "event_id", "employer", "local_date",
+                    "local_start_time", "timezone", "instruction",
+                }
+                if (
+                    action.kind != expected_kind
+                    or action.title != expected_title
+                    or set(details) != expected_fields
+                    or details["instruction"] != (
+                        "Verify with the calendar provider whether the interview "
+                        "acceptance was recorded before continuing."
+                    )
+                ):
+                    raise ValueError("Persisted interview reconciliation is malformed.")
+                validate_loop_identifier(details["operation_id"], "operation_id")
+            else:
+                raise ValueError("Persisted run is not awaiting an interview action.")
+
+            event_id = validate_schedule_identifier(details["event_id"], "event_id")
+            if (
+                event_id != details["event_id"]
+                or event_id != state.request.schedule_event_id
+            ):
+                raise ValueError("Persisted interview event identity is inconsistent.")
+            employer = sanitize_schedule_text(
+                details["employer"], "employer", maximum=500
+            )
+            if employer != details["employer"]:
+                raise ValueError("Persisted interview employer is not canonical.")
+            local_date = details["local_date"]
+            local_start_time = details["local_start_time"]
+            if (
+                not isinstance(local_date, str)
+                or date.fromisoformat(local_date).isoformat() != local_date
+                or not isinstance(local_start_time, str)
+                or time.fromisoformat(local_start_time).isoformat() != local_start_time
+            ):
+                raise ValueError("Persisted interview local time is malformed.")
+            timezone_name = validate_timezone_name(details["timezone"])
+            if timezone_name != details["timezone"]:
+                raise ValueError("Persisted interview timezone is not canonical.")
+            return {
+                "run_id": run_id,
+                "state_version": state.version,
+                "phase": state.phase.value,
+                "action_kind": action.kind.value,
+                "event_id": event_id,
+                "employer": employer,
+                "local_date": local_date,
+                "local_start_time": local_start_time,
+                "timezone": timezone_name,
+            }
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Persisted candidate interview action is malformed.") from exc
 
     def get(self, run_id: str, *, user_id: str) -> dict[str, Any]:
         """Return status after checking trusted ownership metadata before JSON parsing."""

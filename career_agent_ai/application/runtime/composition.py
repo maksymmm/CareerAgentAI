@@ -189,6 +189,22 @@ class RuntimeCandidateApp:
         finally:
             database.close()
 
+    def list_pending_interview_actions(
+        self, *, user_id: str, limit: int = 25, after: str | None = None
+    ) -> dict[str, Any]:
+        """List owned pending interview actions using a read-only connection."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(
+                database
+            ).list_pending_interview_actions(
+                user_id=user_id, limit=limit, after=after
+            )
+        finally:
+            database.close()
+
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
                           status: JobApplicationStatus | None = None) -> dict[str, Any]:
@@ -286,6 +302,20 @@ class _RequestCandidateLoop:
         try:
             return SQLiteCandidateRunStatusProjection(database).list_page(
                 user_id=user_id, limit=limit, after=after, phase=phase)
+        finally:
+            database.close()
+
+    def list_pending_interview_actions(
+        self, *, user_id: str, limit: int = 25, after: str | None = None
+    ) -> dict[str, Any]:
+        """Read owned pending interview actions without writable storage or execution."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(
+                database
+            ).list_pending_interview_actions(
+                user_id=user_id, limit=limit, after=after
+            )
         finally:
             database.close()
 

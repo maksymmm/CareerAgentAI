@@ -86,6 +86,14 @@ _HTML = r"""<!doctype html>
       <button id="continue" type="button">Continue recovery</button>
     </div>
   </fieldset>
+  <fieldset id="pending-interview-actions-panel" tabindex="-1" aria-busy="false">
+    <legend>Pending interview actions</legend>
+    <p class="muted">Rediscover your pending interview approvals and calendar reconciliations after a reload. Selecting an item does not approve or change a calendar event.</p>
+    <button id="list-interview-actions" type="button">Find pending interview actions</button>
+    <ul id="pending-interview-actions" aria-label="My pending interview actions" aria-busy="false"></ul>
+    <p id="pending-interview-actions-state" role="status"></p>
+    <button id="next-interview-actions" type="button" disabled>Next interview actions page</button>
+  </fieldset>
   <fieldset id="decision-panel" tabindex="-1">
     <legend>Pending candidate decision</legend>
     <p id="action-title">Load a prompt before deciding.</p>
@@ -205,6 +213,8 @@ _HTML = r"""<!doctype html>
     let inputContextGeneration = 0;
     let listGeneration = 0;
     let nextRunCursor = null;
+    let interviewActionsGeneration = 0;
+    let nextInterviewActionsCursor = null;
     let selectedRunVersion = null;
     const byId = (id) => document.getElementById(id);
     const pageSummary = (count, singular, plural, hasMore, instruction = '') =>
@@ -822,6 +832,118 @@ _HTML = r"""<!doctype html>
     }, true));
     byId('run-phase').addEventListener('change', clearRunList);
     byId('token').addEventListener('input', clearRunList);
+    function clearPendingInterviewActions() {
+      interviewActionsGeneration += 1;
+      nextInterviewActionsCursor = null;
+      byId('list-interview-actions').disabled = false;
+      byId('pending-interview-actions').setAttribute('aria-busy', 'false');
+      byId('pending-interview-actions').replaceChildren();
+      byId('pending-interview-actions-state').textContent = '';
+      byId('next-interview-actions').disabled = true;
+    }
+    const pendingInterviewActionFields = [
+      'run_id', 'state_version', 'phase', 'action_kind', 'event_id',
+      'employer', 'local_date', 'local_start_time', 'timezone',
+    ];
+    const validPendingInterviewAction = item =>
+      hasExactFields(item, pendingInterviewActionFields) &&
+      typeof item.run_id === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(item.run_id) &&
+      Number.isSafeInteger(item.state_version) && item.state_version >= 1 &&
+      ((item.phase === 'interview_approval' && item.action_kind === 'approve_interview') ||
+       (item.phase === 'interview_reconciliation' &&
+        item.action_kind === 'reconcile_interview_response')) &&
+      eventId(item.event_id) &&
+      validApprovalText(item.employer, 500) && item.employer.length > 0 &&
+      item.employer.trim() === item.employer &&
+      calendarDate(item.local_date) && localTime(item.local_start_time) &&
+      timezoneName(item.timezone);
+    async function loadPendingInterviewActions(after = null) {
+      clearPendingInterviewActions();
+      const generation = interviewActionsGeneration;
+      byId('list-interview-actions').disabled = true;
+      byId('pending-interview-actions-panel').setAttribute('aria-busy', 'true');
+      byId('pending-interview-actions').setAttribute('aria-busy', 'true');
+      byId('pending-interview-actions-state').textContent = 'Loading…';
+      try {
+        const page = await call('/v1/candidate/pending-interview-actions?limit=25' +
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Pending interview actions request failed.', true);
+        if (generation !== interviewActionsGeneration) return;
+        const validId = value => typeof value === 'string' &&
+          /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+        if (!page || typeof page !== 'object' || Array.isArray(page) ||
+            Object.keys(page).length !== 3 ||
+            !['schema_version', 'items', 'next_after'].every(field => Object.hasOwn(page, field)) ||
+            page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || validId(page.next_after)) ||
+            !page.items.every(validPendingInterviewAction)) {
+          throw new Error('Invalid pending interview actions page.');
+        }
+        if (!page.items.every((item, index) =>
+              item.run_id > (index ? page.items[index - 1].run_id : (after || ''))) ||
+            (page.next_after !== null &&
+              (!page.items.length || page.next_after !== page.items.at(-1).run_id))) {
+          throw new Error('Invalid pending interview actions cursor.');
+        }
+        for (const item of page.items) {
+          const row = document.createElement('li');
+          row.append(document.createTextNode(
+            item.employer + ' — ' + item.local_date + ' ' + item.local_start_time +
+            ' ' + item.timezone + ' — ' + item.phase.replaceAll('_', ' ') +
+            ' — ' + item.event_id + ' '
+          ));
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = item.action_kind === 'approve_interview'
+            ? 'Inspect approval' : 'Inspect reconciliation';
+          button.setAttribute(
+            'aria-label',
+            'Inspect pending interview action for ' + item.employer + ' on ' + item.local_date
+          );
+          button.addEventListener('click', () => {
+            if (generation !== interviewActionsGeneration) return;
+            latestStartRequest += 1;
+            selectRun(item.run_id, item.state_version);
+            byId('result').textContent = item.action_kind === 'approve_interview'
+              ? 'Pending interview approval selected. Load its current approval prompt before deciding.'
+              : 'Pending interview reconciliation selected. Refresh status before recording independently verified calendar evidence.';
+          });
+          row.append(button);
+          byId('pending-interview-actions').append(row);
+        }
+        nextInterviewActionsCursor = page.next_after;
+        byId('next-interview-actions').disabled = nextInterviewActionsCursor === null;
+        byId('pending-interview-actions-state').textContent = pageSummary(
+          page.items.length, 'pending interview action', 'pending interview actions',
+          nextInterviewActionsCursor !== null,
+          page.items.length ? 'Select an item, then refresh status or load its current prompt.' : ''
+        );
+      } catch (error) {
+        if (generation === interviewActionsGeneration) {
+          clearPendingInterviewActions();
+          nextInterviewActionsCursor = after;
+          byId('next-interview-actions').disabled = after === null;
+          byId('pending-interview-actions-state').textContent =
+            after === null ? 'Load pending interview actions to retry.' :
+              'Next page failed. Retry the next interview actions page.';
+          throw error;
+        }
+      } finally {
+        if (generation === interviewActionsGeneration) {
+          byId('list-interview-actions').disabled = false;
+          byId('pending-interview-actions-panel').setAttribute('aria-busy', 'false');
+          byId('pending-interview-actions').setAttribute('aria-busy', 'false');
+        }
+      }
+    }
+    byId('list-interview-actions').addEventListener(
+      'click', () => guarded(() => loadPendingInterviewActions(), true));
+    byId('next-interview-actions').addEventListener('click', () => guarded(() => {
+      if (nextInterviewActionsCursor !== null) {
+        return loadPendingInterviewActions(nextInterviewActionsCursor);
+      }
+    }, true));
     function invalidateApprovalPrompt(message = 'Load the current approval prompt.') {
       approvalPromptGeneration += 1;
       approvalPrompt = null;
@@ -1019,6 +1141,7 @@ _HTML = r"""<!doctype html>
       invalidateApplicationReconciliation();
       invalidateMessageReconciliation();
       invalidateInterviewReconciliation();
+      clearPendingInterviewActions();
       byId('result').textContent = 'Inputs changed. Reload the current state.';
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
@@ -1028,7 +1151,7 @@ _HTML = r"""<!doctype html>
     }
     byId('clear-session').addEventListener('click', () => {
       for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'run-phase', 'application-status', 'event-status']) byId(id).value = '';
-      clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
+      clearEvents(); clearApplications(); clearRunList(); clearPendingInterviewActions(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });
     byId('status').addEventListener('click', () => guarded(async () => {
