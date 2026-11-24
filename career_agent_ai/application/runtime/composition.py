@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
@@ -22,6 +23,7 @@ from career_agent_ai.application.career import (
     ApplicationSubmissionService,
     AutonomousCareerLoop,
 )
+from career_agent_ai.application.career.autonomous_career_loop import _candidate_schedule_accept_operation_id
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
@@ -51,7 +53,7 @@ from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
 from career_agent_ai.application.search.search_service import SearchService
 from career_agent_ai.application.scheduling import FakeCalendarAdapter, SchedulingService
-from career_agent_ai.application.scheduling.models import ScheduleStatus
+from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
     SQLiteCandidateRunStatusProjection,
     SQLiteCareerLoopRepository,
@@ -397,6 +399,110 @@ class _RequestCandidateLoop:
                 user_id=user_id,
                 delivered=delivered,
                 expected_state_version=expected_state_version,
+            )
+        finally:
+            database.close()
+
+    def accept_candidate_schedule_event(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Accept an owned event using request-local sandbox provider storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).accept_candidate_schedule_event(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        finally:
+            database.close()
+
+    def get_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Read an owned acceptance intent without schema writes or provider I/O."""
+        event_id = validate_schedule_identifier(event_id, "event_id")
+        if (
+            type(expected_version) is not int
+            or not 1 <= expected_version <= (1 << 63) - 1
+        ):
+            raise ValueError("event_version must be a positive SQLite-safe integer.")
+        # Ownership is established before operation-ledger lookup. The projection
+        # uses its own read-only connection and returns no provider/private fields.
+        SQLiteCandidateSchedule(self._database_path).get_snapshot(
+            event_id, user_id=user_id
+        )
+        operation_id = _candidate_schedule_accept_operation_id(
+            validate_loop_identifier(user_id, "user_id"), event_id, expected_version
+        )
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            row = database.connection.execute(
+                "SELECT action_type, payload_json, status "
+                "FROM external_action_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                status = "not_started"
+            else:
+                def unique_object(pairs):
+                    value = {}
+                    for key, item in pairs:
+                        if key in value:
+                            raise ValueError("Persisted candidate acceptance JSON has duplicate keys.")
+                        value[key] = item
+                    return value
+
+                payload = json.loads(row[1], object_pairs_hook=unique_object)
+                if (
+                    not isinstance(payload, dict)
+                    or row[0] != "calendar.accept"
+                    or payload.get("event_id") != event_id
+                    or type(payload.get("event_version")) is not int
+                    or payload.get("event_version") != expected_version
+                ):
+                    raise ValueError("Persisted candidate acceptance intent is malformed.")
+                status = row[2]
+                if not isinstance(status, str) or status not in {
+                    "prepared", "in_progress", "succeeded", "failed",
+                    "reconciliation_required",
+                }:
+                    raise ValueError("Persisted candidate acceptance status is malformed.")
+            return {
+                "schema_version": 1,
+                "event_id": event_id,
+                "event_version": expected_version,
+                "status": status,
+            }
+        finally:
+            database.close()
+
+    def recover_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Classify a stale acceptance through request-local SQLite storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).recover_candidate_schedule_acceptance(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        finally:
+            database.close()
+
+    def resolve_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int,
+        completed: bool, provider_event_id: str | None = None,
+    ):
+        """Reconcile an owned acceptance using sandbox provider evidence."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).resolve_candidate_schedule_acceptance(
+                event_id, user_id=user_id, expected_version=expected_version,
+                completed=completed, provider_event_id=provider_event_id,
             )
         finally:
             database.close()

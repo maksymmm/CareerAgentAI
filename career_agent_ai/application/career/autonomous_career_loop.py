@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Mapping
 from datetime import timezone
@@ -59,6 +60,7 @@ from career_agent_ai.application.jobs.adaptive_job_ranker import AdaptiveJobRank
 from career_agent_ai.application.jobs.job_filter import JobFilter
 from career_agent_ai.application.memory.memory_snapshot import MemorySnapshot
 from career_agent_ai.application.observability.structured_logging import redact_text
+from career_agent_ai.application.scheduling.models import validate_schedule_identifier
 from career_agent_ai.application.scheduling import (
     CalendarReconciliationEvidenceError,
     ScheduleStatus,
@@ -82,6 +84,30 @@ def _bounded_run_child_id(run_id: str, suffix: str) -> str:
     if len(bounded) > _MAX_DERIVED_IDENTIFIER_LENGTH:
         raise ValueError("Derived run child identifier exceeds its storage budget.")
     return bounded
+
+
+def _candidate_schedule_accept_operation_id(
+    user_id: str, event_id: str, event_version: int
+) -> str:
+    """Derive one stable operation key from the authenticated owner and exact slot."""
+    material = json.dumps(
+        [user_id, event_id, event_version],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"candidate-accept:{sha256(material.encode('utf-8')).hexdigest()}"
+
+
+def _candidate_schedule_acceptance_snapshot(
+    event_id: str, event_version: int, operation
+) -> dict[str, Any]:
+    """Expose only the minimal durable acceptance lifecycle to its candidate."""
+    return {
+        "schema_version": 1,
+        "event_id": event_id,
+        "event_version": event_version,
+        "status": "not_started" if operation is None else operation.status.value,
+    }
 
 
 class _RecoverableCareerLoopError(RuntimeError):
@@ -1666,6 +1692,115 @@ class AutonomousCareerLoop:
                 "status": view.status.value,
             },
         )
+
+    def _candidate_schedule_acceptance_context(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ):
+        """Resolve an owned event and its deterministic, version-bound acceptance."""
+        caller = validate_loop_identifier(user_id, "user_id")
+        identifier = validate_schedule_identifier(event_id, "event_id")
+        if (
+            type(expected_version) is not int
+            or not 1 <= expected_version <= (1 << 63) - 1
+        ):
+            raise ValueError("event_version must be a positive SQLite-safe integer.")
+        event = self._scheduling.get_event(identifier)
+        if event.candidate_id != caller:
+            raise KeyError("Unknown scheduling event for this candidate.")
+        operation_id = _candidate_schedule_accept_operation_id(
+            caller, identifier, expected_version
+        )
+        operation = self._scheduling.get_operation(operation_id)
+        if operation is not None and (
+            operation.action_type != "calendar.accept"
+            or operation.payload.get("event_id") != identifier
+            or operation.payload.get("event_version") != expected_version
+        ):
+            raise ValueError("Candidate acceptance intent does not match this event version.")
+        return identifier, expected_version, operation_id, operation
+
+    def accept_candidate_schedule_event(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ) -> dict[str, Any]:
+        """Accept one candidate-owned event using the displayed event version."""
+        identifier, version, operation_id, operation = (
+            self._candidate_schedule_acceptance_context(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        )
+        if operation is not None:
+            if operation.status == ExternalActionStatus.IN_PROGRESS:
+                operation = self._scheduling.recover_interrupted_operation(operation_id)
+                if operation.status == ExternalActionStatus.IN_PROGRESS:
+                    return _candidate_schedule_acceptance_snapshot(
+                        identifier, version, operation
+                    )
+                return _candidate_schedule_acceptance_snapshot(
+                    identifier, version, operation
+                )
+            if operation.status in {
+                ExternalActionStatus.SUCCEEDED,
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+            }:
+                return _candidate_schedule_acceptance_snapshot(
+                    identifier, version, operation
+                )
+        self._scheduling.accept(
+            operation_id,
+            identifier,
+            human_approved=True,
+            expected_version=version,
+        )
+        operation = self._scheduling.get_operation(operation_id)
+        return _candidate_schedule_acceptance_snapshot(identifier, version, operation)
+
+    def get_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ) -> dict[str, Any]:
+        """Read an owner's exact acceptance operation without recovery or provider I/O."""
+        identifier, version, _operation_id, operation = (
+            self._candidate_schedule_acceptance_context(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        )
+        return _candidate_schedule_acceptance_snapshot(identifier, version, operation)
+
+    def recover_candidate_schedule_acceptance(
+        self, event_id: str, *, user_id: str, expected_version: int
+    ) -> dict[str, Any]:
+        """Promote only an expired in-progress acceptance to evidence-gated recovery."""
+        identifier, version, operation_id, operation = (
+            self._candidate_schedule_acceptance_context(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        )
+        if operation is not None:
+            operation = self._scheduling.recover_interrupted_operation(operation_id)
+        return _candidate_schedule_acceptance_snapshot(identifier, version, operation)
+
+    def resolve_candidate_schedule_acceptance(
+        self,
+        event_id: str,
+        *,
+        user_id: str,
+        expected_version: int,
+        completed: bool,
+        provider_event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve an ambiguous acceptance only against authoritative provider evidence."""
+        identifier, version, operation_id, operation = (
+            self._candidate_schedule_acceptance_context(
+                event_id, user_id=user_id, expected_version=expected_version
+            )
+        )
+        if operation is None:
+            raise KeyError("No candidate acceptance operation exists.")
+        resolved = self._scheduling.resolve_reconciliation(
+            operation_id,
+            completed=completed,
+            provider_event_id=provider_event_id,
+        )
+        return _candidate_schedule_acceptance_snapshot(identifier, version, resolved)
 
     def _accept_interview(self, state: CareerLoopState) -> None:
         event_id = state.request.schedule_event_id
