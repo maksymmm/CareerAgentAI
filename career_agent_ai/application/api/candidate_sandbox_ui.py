@@ -706,7 +706,7 @@ _HTML = r"""<!doctype html>
         const actionStatuses = ['prepared', 'in_progress', 'succeeded', 'failed', 'reconciliation_required'];
         const validActionTimestamp = value => typeof value === 'string' && value.length <= 64 &&
           value.slice(0, 4) !== '0000' &&
-          /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?\\+00:00$/.test(value) &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?\+00:00$/.test(value) &&
           Number.isFinite(Date.parse(value));
         if (!hasExactFields(page, ['schema_version', 'run_ref', 'items', 'next_after']) ||
             page.schema_version !== 1 || page.run_ref !== expectedRunRef ||

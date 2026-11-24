@@ -3328,11 +3328,14 @@ def test_candidate_sandbox_browser_lists_external_actions_and_redacts_malformed_
             ).wait_for()
             assert "b" * 24 not in page.locator("#candidate-actions").inner_text()
             assert page.locator("#next-candidate-actions").is_disabled()
+            expected_cursor = encode_action_cursor(
+                "operation-2",
+                candidate_run_ref=sha256(b"run-1").hexdigest()[:24],
+            )
             assert loop.action_reads[:2] == [
                 ("run-1", "candidate-1", 25, None),
-                ("run-1", "candidate-1", 25, loop.action_reads[1][3]),
+                ("run-1", "candidate-1", 25, expected_cursor),
             ]
-            assert loop.action_reads[1][3] is not None
 
             page.locator("#run-id").fill("other-run")
             assert page.locator("#candidate-actions").inner_text() == ""
