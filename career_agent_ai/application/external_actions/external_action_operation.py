@@ -29,6 +29,7 @@ class ExternalActionOperation:
     error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    correlation_id: str | None = None
 
     def __post_init__(self) -> None:
         operation_id = self.operation_id.strip()
@@ -47,6 +48,20 @@ class ExternalActionOperation:
             raise ValueError("A succeeded operation must contain a result.")
         if self.status == ExternalActionStatus.FAILED and not self.error:
             raise ValueError("A failed operation must contain an error.")
+        correlation_id = self.correlation_id
+        if correlation_id is not None:
+            if not isinstance(correlation_id, str):
+                raise TypeError("correlation_id must be text or None.")
+            normalized_correlation = correlation_id.strip()
+            if (
+                not normalized_correlation
+                or normalized_correlation != correlation_id
+                or len(normalized_correlation) > 200
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in normalized_correlation)
+                or any(0xD800 <= ord(ch) <= 0xDFFF for ch in normalized_correlation)
+            ):
+                raise ValueError("correlation_id is malformed.")
+            object.__setattr__(self, "correlation_id", normalized_correlation)
         object.__setattr__(self, "operation_id", operation_id)
         object.__setattr__(self, "action_type", action_type)
         object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
