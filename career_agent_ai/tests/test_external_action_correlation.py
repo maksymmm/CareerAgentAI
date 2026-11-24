@@ -137,7 +137,7 @@ def test_legacy_schema_migrates_additively_and_preserves_existing_rows(tmp_path)
     assert "correlation_id" in columns
     assert "idx_external_actions_correlation" in indexes
 
-    correlated = service = ExternalActionService(repository, NoopAdapter())
+    service = ExternalActionService(repository, NoopAdapter())
     created = service.prepare(
         "new-operation",
         "application.submit",
