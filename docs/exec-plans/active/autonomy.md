@@ -1603,3 +1603,16 @@ reopens the same operation and the second runtime permits only attempt 2 to deli
 The HTTP regression asserts the run completes, one durable operation has the ordered
 interrupted/success attempts, exactly one outbound message exists, and no delivery replay
 occurred. All message effects remain in SQLiteSandboxCommunicationProvider.
+
+
+Candidate recruiter-message timeout-after-delivery recovery: the production-composed
+candidate runtime now has a restart regression for a sandbox message provider that
+commits its outbound delivery and then times out. Runtime 1 leaves the owner-scoped run
+at the message-reconciliation gate; Runtime 2 reopens the same SQLite database and uses
+a provider plan that fails if delivery is invoked again. A fresh state-version-bound
+delivered=true observation completes only after the SQLite provider verifies the exact
+persisted outbound message. The regression asserts one operation, one timeout attempt,
+one provider delivery with zero replays, and the outbound message in both provider and
+candidate repositories. No network adapter or real recipient is used.
+Next: exact-head CI/review, then audit concurrent writer contention and operator-facing
+recovery observability across application, communication and calendar evidence paths.
