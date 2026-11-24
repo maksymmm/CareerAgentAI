@@ -1064,4 +1064,8 @@ ambiguous-outcome reconciliation. A confirmed no-effect result permits only a
 deliberate retry of the same event-version operation. Acceptance, recovery and
 reconciliation mutations invalidate every earlier status-read generation, so a delayed
 pre-action GET cannot re-enable controls after an unknown POST result; only a fresh
-owner-scoped status response can restore the candidate UI state.
+owner-scoped status response can restore the candidate UI state. The dashboard's
+"Confirm event recorded" and "Confirm no calendar effect" controls are wired to the
+same evidence-backed reconciliation endpoint. Before the first operation, a read-only
+status GET returns `not_started` when the operation ledger table is absent without
+creating schema or invoking a provider.

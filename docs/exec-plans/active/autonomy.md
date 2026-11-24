@@ -1632,3 +1632,16 @@ exactly one provider effect. The corrupt-ledger fixture now initializes its sche
 explicitly, and browser assertions match the current candidate UI. Next: exact-head
 CI and independent code/security review for #278, then the end-to-end timeout-after-
 effect acceptance recovery test against the real SQLite sandbox provider.
+
+
+
+Candidate acceptance workflow hardening follow-up: wire both candidate reconciliation
+buttons to the evidence-backed POST, and make the read-only acceptance status endpoint
+return `not_started` when the durable operation table has not yet been created. The
+empty-ledger regression proves this GET does not create schema; the corrupt-ledger
+fixture initializes both operation and sandbox-calendar tables before asserting no
+provider effect. Browser tests now assert the actual success copy. Restart/recovery
+tests for communication, promotion and application submission age their persisted
+`IN_PROGRESS` rows beyond the five-minute grace, so they test crash recovery rather
+than a still-live action. Next: rerun exact-head CI/coverage for #278 and the real
+SQLite sandbox acceptance restart test in #279.

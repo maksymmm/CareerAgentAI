@@ -638,6 +638,10 @@ _HTML = r"""<!doctype html>
       () => loadAcceptanceStatus(), true));
     byId('recover-acceptance').addEventListener('click', () => guarded(
       () => recoverEventAcceptance(), true));
+    byId('acceptance-completed').addEventListener('click', () => guarded(
+      () => reconcileEventAcceptance(true), true));
+    byId('acceptance-no-effect').addEventListener('click', () => guarded(
+      () => reconcileEventAcceptance(false), true));
     byId('acceptance-verified').addEventListener('change', updateAcceptanceControls);
     byId('acceptance-provider-event-id').addEventListener('input', updateAcceptanceControls);
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents(), true));

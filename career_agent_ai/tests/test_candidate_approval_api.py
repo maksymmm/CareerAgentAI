@@ -3425,6 +3425,7 @@ def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys
     from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
     from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
     from career_agent_ai.application.storage.sqlite_external_action_repository import SQLiteExternalActionOperationRepository
+    from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import SQLiteSandboxCalendarProvider
 
     path = tmp_path / "candidate-acceptance-corrupt-ledger.sqlite"
     database = SQLiteDatabase(str(path))
@@ -3440,6 +3441,7 @@ def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys
     ) as runtime:
         database = SQLiteDatabase(str(path))
         SQLiteExternalActionOperationRepository(database)
+        SQLiteSandboxCalendarProvider(database)
         operation_id = _candidate_schedule_accept_operation_id(
             "candidate-1", "event-corrupt", 1
         )
@@ -3604,7 +3606,7 @@ def test_candidate_sandbox_browser_recovers_acceptance_after_reload_with_fresh_a
             assert not page.locator("#acceptance-completed").is_disabled()
             page.locator("#acceptance-completed").click()
             page.locator("#event-acceptance-state").get_by_text(
-                "Acceptance is confirmed", exact=False
+                "Interview acceptance is confirmed", exact=False
             ).wait_for()
             assert not page.locator("#acceptance-verified").is_checked()
             assert page.locator("#acceptance-provider-event-id").input_value() == ""
@@ -3853,3 +3855,41 @@ def test_candidate_sandbox_browser_discards_status_get_started_before_unknown_ac
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+
+def test_candidate_acceptance_status_without_ledger_table_is_not_started_and_read_only(tmp_path):
+    from datetime import datetime, timezone
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+    from career_agent_ai.application.storage.sqlite_scheduling_repository import SQLiteSchedulingRepository
+
+    path = tmp_path / "candidate-acceptance-empty-ledger.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteSchedulingRepository(database).create(ScheduleEvent(
+        event_id="event-no-ledger", candidate_id="candidate-1",
+        employer_name="Sandbox GmbH", event_type=ScheduleEventType.INTERVIEW,
+        location="Berlin", start_at=datetime(2026, 11, 24, 10, tzinfo=timezone.utc),
+        timezone_name="UTC",
+    ))
+    database.close()
+
+    with RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda _: "candidate-1"
+    ) as runtime:
+        (status, _), response = request(
+            runtime, path="/v1/candidate/schedule-event/acceptance",
+            query="event_id=event-no-ledger&event_version=1",
+        )
+        assert status == "200 OK"
+        assert response["status"] == "not_started"
+
+    database = SQLiteDatabase(str(path))
+    tables = {
+        row[0] for row in database.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert "external_action_operations" not in tables
+    database.close()
