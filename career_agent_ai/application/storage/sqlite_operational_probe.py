@@ -133,7 +133,7 @@ class SQLiteOperationalProbe:
         if (
             not isinstance(value, str)
             or not value
-            or len(value) > 512
+            or len(value) > 1200
             or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None
         ):
             raise ValueError("after is not a valid operational action cursor.")
