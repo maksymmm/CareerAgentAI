@@ -3902,11 +3902,11 @@ def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_r
     )
     server1 = make_server("127.0.0.1", 0, runtime1, handler_class=QuietHandler)
     thread1 = Thread(target=server1.serve_forever, daemon=True)
-    server1.start_thread = thread1
     thread1.start()
     runtime2 = None
     server2 = None
     thread2 = None
+    server1_stopped = False
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
@@ -3929,6 +3929,7 @@ def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_r
             thread1.join(timeout=5)
             server1.server_close()
             runtime1.close()
+            server1_stopped = True
 
             runtime2 = RuntimeCandidateApp(
                 database_path=str(path), jobs=(), resolve_bearer=resolve_bearer,
@@ -3973,7 +3974,7 @@ def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_r
         if runtime2 is not None:
             runtime2.close()
         # server1 may already have been stopped before the simulated restart.
-        if not runtime1._closed:
+        if not server1_stopped:
             server1.shutdown()
             thread1.join(timeout=5)
             server1.server_close()
