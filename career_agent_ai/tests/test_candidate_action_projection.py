@@ -132,6 +132,8 @@ def _seed(path):
                 ExternalActionStatus.RECONCILIATION_REQUIRED)
     _add_action(actions, "action-05", "application.submit", "candidate-run-a",
                 ExternalActionStatus.SUCCEEDED)
+    _add_action(actions, "action-06", "custom.workflow", "candidate-run-a",
+                ExternalActionStatus.PREPARED)
     _add_action(actions, "other-run-action", "communication.send", "candidate-run-b",
                 ExternalActionStatus.FAILED)
     _add_action(actions, "foreign-action", "calendar.accept", "foreign-run",
@@ -174,7 +176,8 @@ def test_candidate_action_projection_is_owner_scoped_bounded_and_restart_safe(tm
         "failed", "reconciliation_required"
     ]
     assert [item["error_present"] for item in second["items"]] == [True, True]
-    assert [item["status"] for item in third["items"]] == ["succeeded"]
+    assert [item["status"] for item in third["items"]] == ["succeeded", "prepared"]
+    assert third["items"][1]["action_family"] == "other"
     assert third["next_after"] is None
     assert all(
         set(item) == {
@@ -458,3 +461,157 @@ def test_candidate_action_openapi_is_bounded_and_minimal():
     assert "payload" not in item["properties"]
     assert "result" not in item["properties"]
     assert "error" not in item["properties"]
+
+def test_candidate_action_projection_rejects_memory_storage():
+    database = SQLiteDatabase()
+    try:
+        with pytest.raises(ValueError, match="durable storage"):
+            SQLiteCandidateActionProjection(database)
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_fails_closed_when_action_table_is_missing(tmp_path):
+    path = tmp_path / "candidate-action-missing-table.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute("DROP TABLE external_action_operations")
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="storage is unavailable"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_fails_closed_when_required_schema_is_missing(tmp_path):
+    path = tmp_path / "candidate-action-missing-column.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute("DROP INDEX idx_external_actions_correlation")
+    database.connection.execute(
+        "ALTER TABLE external_action_operations DROP COLUMN correlation_id"
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="schema is unavailable"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_rejects_malformed_persisted_operation_id(tmp_path):
+    path = tmp_path / "candidate-action-operation-id.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE external_action_operations SET operation_id = ? WHERE operation_id = ?",
+        (" action-01", "action-01"),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="identifier is malformed"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_rejects_reference_collision_or_tampering(tmp_path):
+    path = tmp_path / "candidate-action-correlation-mismatch.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE external_action_operations SET correlation_id = ? WHERE operation_id = ?",
+        ("candidate-run-b", "action-01"),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="correlation is inconsistent"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_rejects_malformed_action_type(tmp_path):
+    path = tmp_path / "candidate-action-type.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE external_action_operations SET action_type = ? WHERE operation_id = ?",
+        ("", "action-01"),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="action type is malformed"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_rejects_unknown_persisted_status(tmp_path):
+    path = tmp_path / "candidate-action-status.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute("PRAGMA ignore_check_constraints = ON")
+    database.connection.execute(
+        "UPDATE external_action_operations SET status = ? WHERE operation_id = ?",
+        ("unknown", "action-01"),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="action status is malformed"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("timestamp", ["", "2026-11-24T12:00:00"])
+def test_candidate_action_projection_rejects_empty_or_naive_timestamps(tmp_path, timestamp):
+    path = tmp_path / "candidate-action-naive-timestamp.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE external_action_operations SET created_at = ? WHERE operation_id = ?",
+        (timestamp, "action-01"),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="timestamp"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1"
+            )
+    finally:
+        database.close()
