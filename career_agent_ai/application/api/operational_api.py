@@ -310,11 +310,15 @@ def openapi_document() -> dict[str, Any]:
     action_item_schema = {
         "type": "object",
         "required": [
-            "operation_ref", "action_family", "status", "created_at",
-            "updated_at", "error_present",
+            "operation_ref", "candidate_run_ref", "action_family", "status",
+            "created_at", "updated_at", "error_present",
         ],
         "properties": {
             "operation_ref": {"type": "string", "pattern": "^[a-f0-9]{24}$"},
+            "candidate_run_ref": {
+                "type": ["string", "null"],
+                "pattern": "^[a-f0-9]{24}$",
+            },
             "action_family": {
                 "type": "string",
                 "enum": ["application_submission", "communication", "calendar", "other"],
