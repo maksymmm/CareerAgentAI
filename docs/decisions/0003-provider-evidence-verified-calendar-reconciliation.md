@@ -21,3 +21,18 @@ unchanged.
 - Provider evidence supplies the durable provider event ID; callers cannot invent one.
 - All effects remain local sandbox records. No production credential, invitation response,
   appointment, or real calendar is created or modified.
+
+
+## Evidence completeness hardening
+
+A missing effect row is not, by itself, proof that a calendar action had no effect.
+The sandbox verifier now requires a durable intent and a contiguous, recognized attempt
+history before returning any authoritative result. Confirmed absence is limited to
+histories in which every recorded attempt explicitly ended before an effect. A missing
+intent, missing/gapped attempt, unknown outcome, or missing effect after a recorded
+success/timeout returns `UNKNOWN` and therefore blocks a retry.
+
+When an effect exists, its fingerprint must match the durable intent, the final attempt
+must record success or timeout-after-effect, earlier attempts must be definite no-effect
+outcomes, and the stored action must agree with the delivered event state. Inconsistent
+evidence is inconclusive; it is never converted into a negative observation.

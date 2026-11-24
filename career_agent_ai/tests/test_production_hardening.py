@@ -947,17 +947,24 @@ def test_candidate_http_calendar_no_effect_retries_once_after_restart(
         )
         return statuses[0], json.loads(b"".join(response))
 
-    attempts = []
-    original_accept = runtime_composition.FakeCalendarAdapter.accept
+    from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+        SandboxCalendarOutcome,
+    )
 
-    def ambiguous_once(self, *args, **kwargs):
-        attempts.append((args, kwargs))
-        if len(attempts) == 1:
-            raise RuntimeError("sandbox calendar outcome unknown")
-        return original_accept(self, *args, **kwargs)
+    attempts = []
+    original_deliver = runtime_composition.SQLiteSandboxCalendarProvider._deliver
+
+    def interrupted_once(self, action, operation_id, delivered, **kwargs):
+        attempts.append(((operation_id,), {}))
+        self._plan = lambda _key, attempt: (
+            SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT
+            if attempt == 1
+            else SandboxCalendarOutcome.SUCCESS
+        )
+        return original_deliver(self, action, operation_id, delivered, **kwargs)
 
     monkeypatch.setattr(
-        runtime_composition.FakeCalendarAdapter, "accept", ambiguous_once
+        runtime_composition.SQLiteSandboxCalendarProvider, "_deliver", interrupted_once
     )
     resolve_bearer = lambda token: "candidate-1" if token == "owner" else None
     first = build_candidate_sandbox_app_from_env(
