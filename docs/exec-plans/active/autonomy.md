@@ -1632,3 +1632,15 @@ exactly one provider effect. The corrupt-ledger fixture now initializes its sche
 explicitly, and browser assertions match the current candidate UI. Next: exact-head
 CI and independent code/security review for #278, then the end-to-end timeout-after-
 effect acceptance recovery test against the real SQLite sandbox provider.
+
+
+
+Candidate interview acceptance timeout-after-effect end-to-end recovery: a Chromium
+test now uses two RuntimeCandidateApp instances over one SQLite file. The first runtime
+commits the sandbox calendar effect and times out; after the runtime is closed, the
+second runtime uses a provider plan that fails if invoked, restores the candidate
+acceptance dashboard, and reconciles only from authoritative persisted calendar
+evidence. The browser confirms the accepted event version and clears its attestation;
+SQLite assertions prove one timeout attempt, one durable effect, zero provider replays,
+and a succeeded external-action operation. Next: exact-head CI/coverage and review for
+the acceptance recovery stack, then continue candidate decline/reschedule parity.

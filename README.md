@@ -1061,7 +1061,7 @@ authoritative evidence before recording success or returning the same operation 
 prepared for a deliberate retry. The candidate dashboard exposes an explicit acceptance action, read-only operation
 status, stale-operation recovery, and a fresh independent attestation for every
 ambiguous-outcome reconciliation. A confirmed no-effect result permits only a
-deliberate retry of the same event-version operation. Acceptance, recovery and
+deliberate retry of the same event-version operation. A Chromium end-to-end regression drives a timeout-after-effect through a real runtime restart, verifies provider evidence in the SQLite sandbox calendar, and asserts exactly one durable calendar effect with no replay. Acceptance, recovery and
 reconciliation mutations invalidate every earlier status-read generation, so a delayed
 pre-action GET cannot re-enable controls after an unknown POST result; only a fresh
 owner-scoped status response can restore the candidate UI state.
