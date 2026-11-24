@@ -357,6 +357,8 @@ _HTML = r"""<!doctype html>
     }
     function markAcceptanceUnknown(message) {
       acceptanceStatus = null;
+      byId('acceptance-verified').checked = false;
+      byId('acceptance-provider-event-id').value = '';
       byId('event-acceptance-state').textContent = message;
       updateAcceptanceControls();
     }
@@ -455,6 +457,10 @@ _HTML = r"""<!doctype html>
           payload.event_version !== version || !acceptanceStatuses.includes(payload.status)) {
         markAcceptanceUnknown('Acceptance status response is invalid. Refresh before taking action.');
         throw new Error('Invalid candidate acceptance status.');
+      }
+      if (payload.status !== 'reconciliation_required') {
+        byId('acceptance-verified').checked = false;
+        byId('acceptance-provider-event-id').value = '';
       }
       acceptanceStatus = payload.status;
       const messages = {
