@@ -652,7 +652,12 @@ class SchedulingService:
         return delivered.provider_event_id
 
     def accept(
-        self, operation_id: str, event_id: str, *, human_approved: bool
+        self,
+        operation_id: str,
+        event_id: str,
+        *,
+        human_approved: bool,
+        correlation_id: str | None = None,
     ) -> ScheduleEvent | None:
         """Accept one exact persisted slot after explicit human approval.
 
@@ -686,7 +691,10 @@ class SchedulingService:
                 "Event conflicts with another committed scheduling event."
             )
         payload = {"event_id": event.event_id, **self._source_snapshot(event)}
-        self._external_actions.prepare(operation_id, "calendar.accept", payload)
+        self._external_actions.prepare(
+            operation_id, "calendar.accept", payload,
+            correlation_id=correlation_id,
+        )
         return self._execute(operation_id, human_approved)
 
     def decline(
