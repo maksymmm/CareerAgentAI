@@ -1160,7 +1160,7 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
             ).count() == 1
             assert page.locator("#next-events").is_disabled()
             page.locator("#owned-events button").first.click()
-            page.locator("#event-detail-state").get_by_text("Read-only event detail.").wait_for()
+            page.locator("#event-detail-state").get_by_text("Event detail loaded. Acceptance requires an explicit candidate action.").wait_for()
             detail = json.loads(page.locator("#event-detail").text_content())
             assert detail["event_id"] == "event-025" and detail["local_start_time"] == "02:30:00.123456"
             assert detail["utc_offset"] == "+02:00" and detail["end_utc_offset"] == "+01:00"
@@ -1187,7 +1187,7 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
                 route.fulfill(status=200, json=payload)
             page.route("**/v1/candidate/schedule-event?*", expanded_detail)
             page.locator("#owned-events button").first.click()
-            page.locator("#event-detail-state").get_by_text("Read-only event detail.").wait_for()
+            page.locator("#event-detail-state").get_by_text("Event detail loaded. Acceptance requires an explicit candidate action.").wait_for()
             assert "private" not in page.locator("body").text_content()
             page.unroute("**/v1/candidate/schedule-event?*")
             for replacement in ({"event_id": "wrong"}, {"state_version": True}, {"status": "invalid"}, {"utc_offset": "bad"},
@@ -1228,7 +1228,7 @@ def test_candidate_schedule_browser_read_only_restart_and_privacy(tmp_path):
                     route.fulfill(status=200, json=payload)
                 page.route("**/v1/candidate/schedule-event?*", valid_precision_detail)
                 page.locator("#owned-events button").first.click()
-                page.locator("#event-detail-state").get_by_text("Read-only event detail.").wait_for()
+                page.locator("#event-detail-state").get_by_text("Event detail loaded. Acceptance requires an explicit candidate action.").wait_for()
                 assert json.loads(page.locator("#event-detail").text_content())["utc_offset"] == offset
                 page.unroute("**/v1/candidate/schedule-event?*")
             page.route("**/v1/candidate/schedule-event?*", lambda route: route.fulfill(status=200, content_type="application/json", body="private-malformed-secret"))

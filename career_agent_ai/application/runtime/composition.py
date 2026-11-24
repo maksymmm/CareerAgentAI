@@ -437,7 +437,11 @@ class _RequestCandidateLoop:
         )
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
-            row = database.connection.execute(
+            ledger_exists = database.connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'external_action_operations'"
+            ).fetchone()
+            row = None if ledger_exists is None else database.connection.execute(
                 "SELECT action_type, payload_json, status "
                 "FROM external_action_operations WHERE operation_id = ?",
                 (operation_id,),
