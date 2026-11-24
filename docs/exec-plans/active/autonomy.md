@@ -1673,3 +1673,9 @@ cover live duplicate submission with a blocked sandbox provider, stale restart r
 grace/clock validation, and the candidate reconciliation attestation gate. The existing
 concurrent service regression now exercises the same invariant. Next: add candidate-safe
 status/action-family filters with cursors bound to the exact filter set.
+
+
+Stale-recovery fixtures for communication and promotion now explicitly age their
+persisted `in_progress` timestamps beyond the five-minute grace. Recent live
+operations remain unchanged; restart recovery tests now distinguish a genuinely
+stale interrupted action from a duplicate request racing a live provider call.
