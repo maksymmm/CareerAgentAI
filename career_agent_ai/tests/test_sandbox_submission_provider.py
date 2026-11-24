@@ -184,6 +184,8 @@ def test_verify_submission_returns_unknown_for_unknown_or_incomplete_history(pat
     stack = Stack(path, always(OUTCOME.INTERRUPTED_BEFORE_EFFECT))
     assert stack.provider.verify_submission("missing").state is EvidenceState.UNKNOWN
     assert stack.provider.verify_submission("").state is EvidenceState.UNKNOWN
+    assert stack.provider.verify_submission(None).state is EvidenceState.UNKNOWN
+    assert stack.provider.verify_submission(" " + "x" * 200).state is EvidenceState.UNKNOWN
     with pytest.raises(ConnectionError):
         stack.provider.submit(
             OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
@@ -192,6 +194,18 @@ def test_verify_submission_returns_unknown_for_unknown_or_incomplete_history(pat
         "DELETE FROM sandbox_submission_attempts WHERE idempotency_key = ?",
         (OP,),
     )
+    stack.database.connection.commit()
+    assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
+    stack.close()
+
+
+def test_verify_submission_rejects_existing_transaction_and_missing_schema(path):
+    stack = Stack(path)
+    stack.database.connection.execute("BEGIN")
+    with pytest.raises(PreSubmissionError):
+        stack.provider.verify_submission(OP)
+    stack.database.connection.rollback()
+    stack.database.connection.execute("DROP TABLE sandbox_submission_attempts")
     stack.database.connection.commit()
     assert stack.provider.verify_submission(OP).state is EvidenceState.UNKNOWN
     stack.close()
@@ -251,6 +265,18 @@ def test_verify_submission_returns_unknown_when_effect_record_is_missing(path, o
         (
             "UPDATE sandbox_submission_ledger SET fingerprint = ? WHERE idempotency_key = ?",
             ("0" * 64, OP),
+        ),
+        (
+            "UPDATE sandbox_submission_intents SET fingerprint = ? WHERE idempotency_key = ?",
+            ("z" * 64, OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET job_id = ? WHERE idempotency_key = ?",
+            ("bad\x00job", OP),
+        ),
+        (
+            "UPDATE sandbox_submission_ledger SET provider_submission_id = ? WHERE idempotency_key = ?",
+            ("fake:\x00", OP),
         ),
         (
             "UPDATE sandbox_submission_ledger SET job_id = ? WHERE idempotency_key = ?",
