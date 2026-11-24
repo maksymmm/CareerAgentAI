@@ -1617,3 +1617,6 @@ create/transition writes join the caller-owned transaction instead of committing
 A barrier-based HTTP regression races two target slots, holds the winning sandbox provider
 call, and requires the loser to return 202 blocked with exactly one durable operation and
 one provider effect. No network or real calendar action is involved.
+
+Candidate reschedule crash-after-effect recovery: the composed candidate runtime now has an end-to-end Chromium regression using the SQLite sandbox calendar provider. Runtime 1 records the approved reschedule effect and returns TIMEOUT_AFTER_EFFECT; the process is closed, the durable operation is aged beyond the bounded recovery grace, and Runtime 2 restores the same SQLite ledger. Fresh candidate attestation reconciles from provider evidence while a second-runtime outcome plan fails on any provider invocation. The test asserts one effect, zero replays, one timeout attempt, the exact target slot, and the final event version/status. Next: exact-head full CI with the 90% coverage gate and independent code/security review.
+
