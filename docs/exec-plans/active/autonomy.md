@@ -1620,3 +1620,14 @@ one provider effect. No network or real calendar action is involved.
 
 Candidate reschedule crash-after-effect recovery: the composed candidate runtime now has an end-to-end Chromium regression using the SQLite sandbox calendar provider. Runtime 1 records the approved reschedule effect and returns TIMEOUT_AFTER_EFFECT; the process is closed, the durable operation is aged beyond the bounded recovery grace, and Runtime 2 restores the same SQLite ledger. Fresh candidate attestation reconciles from provider evidence while a second-runtime outcome plan fails on any provider invocation. The test asserts one effect, zero replays, one timeout attempt, the exact target slot, and the final event version/status. Next: exact-head full CI with the 90% coverage gate and independent code/security review.
 Provider evidence for a reschedule captures the provider's target snapshot before the local event repository advances its version. After evidence-backed reconciliation, the durable local event advances from source version 1 to version 2; the single provider effect remains a version-1 evidence snapshot and must never be replayed.
+
+
+Candidate reschedule no-effect restart retry: the composed RuntimeCandidateApp now has a
+Chromium regression for an interrupted SQLite calendar attempt that records no effect.
+The first runtime is closed, the durable operation is aged beyond the recovery grace, and
+a second runtime restores the exact target and requires fresh candidate attestation.
+Only provider-confirmed absence returns the same operation to a retryable state; the
+second runtime's provider plan fails unless the next attempt number is exactly two.
+The test asserts the original operation ID, one successful effect, zero replays, the
+two ordered attempts, and the exact target/event version after retry. Pending lookup and
+reconciliation cannot invoke the provider. All effects remain in the local SQLite sandbox.

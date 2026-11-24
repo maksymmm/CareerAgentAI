@@ -1447,3 +1447,190 @@ def test_schedule_action_json_reader_rejects_malformed_envelopes(tmp_path, envir
     with pytest.raises(ValueError, match=message):
         app._read_json(environ)
 
+
+
+def test_candidate_sandbox_browser_retries_reschedule_after_no_effect_across_runtime_restart(
+    tmp_path,
+):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-reschedule-no-effect-restart.sqlite"
+    _seed(path, _event())
+
+    def interrupted_before_effect(_operation_id, attempt):
+        assert attempt == 1
+        return SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT
+
+    def successful_retry(_operation_id, attempt):
+        # A pending lookup or evidence reconciliation must never reach this plan.
+        assert attempt == 2
+        return SandboxCalendarOutcome.SUCCESS
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    runtime1 = build_candidate_sandbox_app_from_env(
+        resolve_bearer=TOKENS.get,
+        environ={"CAREER_AGENT_DB_PATH": str(path), **ENV},
+        sandbox_calendar_outcome_plan=interrupted_before_effect,
+    )
+    server1 = make_server("127.0.0.1", 0, runtime1, handler_class=QuietHandler)
+    thread1 = Thread(target=server1.serve_forever, daemon=True)
+    thread1.start()
+    runtime2 = None
+    server2 = None
+    thread2 = None
+    server1_stopped = False
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server1.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            event_button = page.get_by_role("button", name="View event 1: " + EVENT_ID)
+            event_button.wait_for()
+            event_button.click()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
+
+            page.locator("#reschedule-start").fill(START)
+            page.locator("#reschedule-end").fill(END)
+            page.locator("#reschedule-timezone").fill(ZONE)
+            page.locator("#request-reschedule").click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "Provider outcome is uncertain", exact=False
+            ).wait_for()
+            assert page.locator("#request-reschedule").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+
+            # The first provider attempt records an interruption but no effect.
+            server1.shutdown()
+            thread1.join(timeout=5)
+            server1.server_close()
+            runtime1.close()
+            server1_stopped = True
+
+            connection = sqlite3.connect(path)
+            try:
+                rows = connection.execute(
+                    "SELECT operation_id, status FROM external_action_operations "
+                    "WHERE action_type = 'calendar.reschedule'"
+                ).fetchall()
+            finally:
+                connection.close()
+            assert len(rows) == 1
+            operation_id = rows[0][0]
+            _mark_operation_stale(path, operation_id)
+
+            # The second runtime may call the provider only for the deliberate retry.
+            runtime2 = build_candidate_sandbox_app_from_env(
+                resolve_bearer=TOKENS.get,
+                environ={"CAREER_AGENT_DB_PATH": str(path), **ENV},
+                sandbox_calendar_outcome_plan=successful_retry,
+            )
+            server2 = make_server("127.0.0.1", 0, runtime2, handler_class=QuietHandler)
+            thread2 = Thread(target=server2.serve_forever, daemon=True)
+            thread2.start()
+
+            page.goto(f"http://127.0.0.1:{server2.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            event_button = page.get_by_role("button", name="View event 1: " + EVENT_ID)
+            event_button.wait_for()
+            event_button.click()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage", exact=False
+            ).wait_for()
+
+            assert page.locator("#reschedule-start").input_value() == PENDING_START
+            assert page.locator("#reschedule-end").input_value() == PENDING_END
+            assert page.locator("#reschedule-timezone").input_value() == ZONE
+            assert not page.locator("#reschedule-reconciliation-verified").is_checked()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+
+            page.locator("#reschedule-reconciliation-verified").check()
+            page.locator("#confirm-reschedule-no-effect").click()
+            page.locator("#reschedule-state").get_by_text(
+                "Provider evidence confirmed no calendar change", exact=False
+            ).wait_for()
+            assert page.locator("#reschedule-start").is_disabled()
+            assert page.locator("#reschedule-end").is_disabled()
+            assert page.locator("#reschedule-timezone").is_disabled()
+            assert page.locator("#request-reschedule").text_content() == "Retry same approved slot"
+            assert _effect_count(path) == 0
+
+            # Only the same durable operation and exact approved slot may be retried.
+            page.locator("#request-reschedule").click()
+            page.locator("#reschedule-state").get_by_text(
+                "Sandbox reschedule completed", exact=False
+            ).wait_for()
+            event_snapshot = page.locator("#event-detail").text_content()
+            assert '"status": "reschedule_requested"' in event_snapshot
+            assert '"state_version": 2' in event_snapshot
+            assert f'"start_at": "{PENDING_START}"' in event_snapshot
+            assert f'"end_at": "{PENDING_END}"' in event_snapshot
+            browser.close()
+    finally:
+        if server2 is not None:
+            server2.shutdown()
+            if thread2 is not None:
+                thread2.join(timeout=5)
+            server2.server_close()
+        if runtime2 is not None:
+            runtime2.close()
+        if not server1_stopped:
+            server1.shutdown()
+            thread1.join(timeout=5)
+            server1.server_close()
+            runtime1.close()
+
+    database = SQLiteDatabase(str(path))
+    try:
+        operations = database.connection.execute(
+            "SELECT operation_id, status FROM external_action_operations "
+            "WHERE action_type = 'calendar.reschedule'"
+        ).fetchall()
+        assert len(operations) == 1
+        assert operations[0][0] == operation_id
+        assert operations[0][1] == ExternalActionStatus.SUCCEEDED.value
+
+        attempts = database.connection.execute(
+            "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_no",
+            (operation_id,),
+        ).fetchall()
+        assert attempts == [
+            (1, SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT.value),
+            (2, SandboxCalendarOutcome.SUCCESS.value),
+        ]
+
+        effects = database.connection.execute(
+            "SELECT action, event_json, replays FROM sandbox_calendar_effects "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall()
+        assert len(effects) == 1
+        assert effects[0][2] == 0
+        effect_event = json.loads(effects[0][1])
+        assert effect_event["status"] == ScheduleStatus.RESCHEDULE_REQUESTED.value
+        assert effect_event["version"] == 1
+        assert effect_event["start_at"] == datetime.fromisoformat(PENDING_START).isoformat()
+        assert effect_event["end_at"] == datetime.fromisoformat(PENDING_END).isoformat()
+        assert database.connection.execute(
+            "SELECT COUNT(*) FROM sandbox_calendar_effects"
+        ).fetchone()[0] == 1
+
+        event = SQLiteSchedulingRepository(database).get(EVENT_ID)
+        assert event is not None
+        assert event.status == ScheduleStatus.RESCHEDULE_REQUESTED
+        assert event.version == 2
+        assert event.start_at == datetime.fromisoformat(PENDING_START)
+        assert event.end_at == datetime.fromisoformat(PENDING_END)
+        assert event.timezone_name == ZONE
+    finally:
+        database.close()
