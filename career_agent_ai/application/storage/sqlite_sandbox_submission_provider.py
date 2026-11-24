@@ -466,6 +466,21 @@ class SQLiteSandboxSubmissionProvider:
         }
 
 
+def _valid_identifier(value: object, *, maximum: int) -> bool:
+    """Validate bounded persisted identifiers without accepting control/surrogate text."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= maximum
+        and value == value.strip()
+        and not any(
+            ord(character) < 32
+            or ord(character) == 127
+            or 0xD800 <= ord(character) <= 0xDFFF
+            for character in value
+        )
+    )
+
+
 def _fingerprint(*parts: str) -> str:
     if not all(isinstance(part, str) for part in parts):
         raise TypeError("Sandbox intent fingerprint fields must be strings.")
