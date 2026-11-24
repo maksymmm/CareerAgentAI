@@ -17,6 +17,7 @@ from career_agent_ai.application.career import (
 )
 from career_agent_ai.application.career.application_submission import PreSubmissionError
 from career_agent_ai.application.external_actions import ExternalActionStatus
+from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_sandbox_submission_provider import (
     SandboxOutcome,
     SQLiteSandboxSubmissionProvider,
