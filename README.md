@@ -1052,5 +1052,7 @@ status lookup is separate from explicit recovery; only an in-progress operation
 older than the five-minute synchronous-sandbox grace period can be promoted to
 provider-evidence reconciliation. Reconciliation verifies the sandbox provider's
 authoritative evidence before recording success or returning the same operation to
-prepared for a deliberate retry. The candidate dashboard remains read-only for
-schedule events until its acceptance controls are wired to these endpoints.
+prepared for a deliberate retry. The candidate dashboard exposes an explicit acceptance action, read-only operation
+status, stale-operation recovery, and a fresh independent attestation for every
+ambiguous-outcome reconciliation. A confirmed no-effect result permits only a
+deliberate retry of the same event-version operation.
