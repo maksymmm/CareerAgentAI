@@ -71,3 +71,14 @@ commit and CI run; a review of an older commit is not final review of the curren
 
 These remain product work. Core coverage or eight completed execution-plan items
 must not be reported as a measured completion percentage for the entire product.
+
+
+## Candidate-run scoped operator action discovery
+
+GET /v1/operational/actions may be filtered by the 24-character lowercase hexadecimal
+candidate_run_ref exposed by the owner-scoped candidate status projection. The filter
+is applied in SQLite before keyset pagination and uses a separately indexed reference
+column. Cursors are bound to the exact filter; cross-filter and filtered-to-unfiltered
+reuse is rejected. Read-only requests never migrate legacy storage. If the indexed
+reference column is absent, filtered discovery fails closed rather than claiming that
+no matching actions exist.

@@ -1615,3 +1615,14 @@ shape. Listing is diagnostic only and provides no retry or reconciliation action
 Next: exact-head CI/coverage and independent code/security review, then assess
 operator-safe correlation between candidate runs and action references without
 exposing provider payloads or adding mutation routes.
+
+
+Candidate-run scoped operator discovery: GET /v1/operational/actions now accepts the
+stable candidate_run_ref from the owner-scoped candidate status response. A separately
+indexed correlation reference is backfilled by the writable SQLite repository migration;
+read-only operator requests never migrate storage. Filtering precedes keyset pagination,
+and cursors are bound to the exact candidate-run reference. Legacy databases without
+the index fail closed for filtered requests rather than returning false absence.
+Regression coverage includes filtered multi-page retrieval, cursor cross-filter replay,
+invalid references before storage access, legacy-schema behavior, migration backfill,
+and index presence. Exact-head CI and independent review remain required before merge.

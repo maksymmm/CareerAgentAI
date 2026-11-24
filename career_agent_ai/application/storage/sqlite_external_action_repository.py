@@ -14,6 +14,7 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     OperationConflictError,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.observability.references import stable_reference
 
 
 class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository):
@@ -33,8 +34,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 """
                 INSERT INTO external_action_operations (
                     operation_id, action_type, payload_json, status, result_json,
-                    error, created_at, updated_at, correlation_id
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+                    error, created_at, updated_at, correlation_id, correlation_ref
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
                 """,
                 (
                     operation.operation_id,
@@ -44,6 +45,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                     operation.created_at.isoformat(),
                     operation.updated_at.isoformat(),
                     operation.correlation_id,
+                    None if operation.correlation_id is None else stable_reference(operation.correlation_id),
                 ),
             )
             self._database.connection.commit()
@@ -72,7 +74,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         row = self._database.connection.execute(
             """
             SELECT operation_id, action_type, payload_json, status, result_json,
-                   error, created_at, updated_at, correlation_id
+                   error, created_at, updated_at, correlation_id, correlation_ref
             FROM external_action_operations WHERE operation_id = ?
             """,
             (normalized,),
@@ -82,6 +84,11 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         try:
             payload = self._load_object(row[2], "payload_json")
             result = None if row[4] is None else self._load_object(row[4], "result_json")
+            expected_correlation_ref = (
+                None if row[8] is None else stable_reference(row[8])
+            )
+            if row[9] != expected_correlation_ref:
+                raise ValueError("Persisted external-action correlation reference is inconsistent.")
             return ExternalActionOperation(
                 operation_id=row[0],
                 action_type=row[1],
@@ -226,7 +233,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                correlation_id TEXT
+                correlation_id TEXT,
+                correlation_ref TEXT
             )
             """
         )
@@ -240,6 +248,27 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             connection.execute(
                 "ALTER TABLE external_action_operations ADD COLUMN correlation_id TEXT"
             )
+        if "correlation_ref" not in columns:
+            connection.execute(
+                "ALTER TABLE external_action_operations ADD COLUMN correlation_ref TEXT"
+            )
+            if "correlation_id" in columns:
+                rows = connection.execute(
+                    "SELECT operation_id, correlation_id FROM external_action_operations "
+                    "WHERE correlation_id IS NOT NULL"
+                ).fetchall()
+                for operation_id, correlation_id in rows:
+                    try:
+                        correlation_ref = stable_reference(correlation_id)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            "Persisted external-action correlation metadata is malformed."
+                        ) from exc
+                    connection.execute(
+                        "UPDATE external_action_operations SET correlation_ref = ? "
+                        "WHERE operation_id = ?",
+                        (correlation_ref, operation_id),
+                    )
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_external_actions_status
                ON external_action_operations(status)"""
@@ -251,6 +280,10 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation
                ON external_action_operations(correlation_id)"""
+        )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_ref
+               ON external_action_operations(correlation_ref)"""
         )
         connection.commit()
 
