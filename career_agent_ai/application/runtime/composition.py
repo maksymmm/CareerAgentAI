@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
@@ -22,6 +23,7 @@ from career_agent_ai.application.career import (
     ApplicationSubmissionService,
     AutonomousCareerLoop,
 )
+from career_agent_ai.application.career.autonomous_career_loop import _candidate_schedule_accept_operation_id
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
@@ -418,15 +420,52 @@ class _RequestCandidateLoop:
     def get_candidate_schedule_acceptance(
         self, event_id: str, *, user_id: str, expected_version: int
     ):
-        """Read an owned acceptance intent without provider I/O or recovery."""
+        """Read an owned acceptance intent without schema writes or provider I/O."""
+        event_id = validate_schedule_identifier(event_id, "event_id")
+        if (
+            type(expected_version) is not int
+            or not 1 <= expected_version <= (1 << 63) - 1
+        ):
+            raise ValueError("event_version must be a positive SQLite-safe integer.")
+        # Ownership is established before operation-ledger lookup. The projection
+        # uses its own read-only connection and returns no provider/private fields.
+        SQLiteCandidateSchedule(self._database_path).get_snapshot(
+            event_id, user_id=user_id
+        )
+        operation_id = _candidate_schedule_accept_operation_id(
+            validate_loop_identifier(user_id, "user_id"), event_id, expected_version
+        )
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
-            loop = _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
-            )
-            return loop.get_candidate_schedule_acceptance(
-                event_id, user_id=user_id, expected_version=expected_version
-            )
+            row = database.connection.execute(
+                "SELECT action_type, payload_json, status "
+                "FROM external_action_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                status = "not_started"
+            else:
+                payload = json.loads(row[1])
+                if (
+                    not isinstance(payload, dict)
+                    or row[0] != "calendar.accept"
+                    or payload.get("event_id") != event_id
+                    or type(payload.get("event_version")) is not int
+                    or payload.get("event_version") != expected_version
+                ):
+                    raise ValueError("Persisted candidate acceptance intent is malformed.")
+                status = row[2]
+                if status not in {
+                    "prepared", "in_progress", "succeeded", "failed",
+                    "reconciliation_required",
+                }:
+                    raise ValueError("Persisted candidate acceptance status is malformed.")
+            return {
+                "schema_version": 1,
+                "event_id": event_id,
+                "event_version": expected_version,
+                "status": status,
+            }
         finally:
             database.close()
 
