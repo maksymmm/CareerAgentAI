@@ -388,7 +388,7 @@ def _run_parallel(path, work):
 def test_concurrent_submissions_through_the_service_yield_one_provider_effect(path):
     Stack(path).close()
     outcomes = _run_parallel(path, lambda s: s.service.submit(OP, **_submit_kwargs()))
-    assert any(isinstance(o, dict) for o in outcomes)
+    assert any(isinstance(o, dict) for o in outcomes), outcomes
     verifier = Stack(path)
     assert len(verifier.provider.ledger_entries()) == 1
     assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
