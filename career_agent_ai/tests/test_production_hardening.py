@@ -1623,8 +1623,8 @@ def test_candidate_sandbox_browser_uses_durable_safe_composition(tmp_path):
             assert page.url.endswith("#dashboard-content")
             page.locator("#token").fill("sandbox-token")
             navigation = page.get_by_role("navigation", name="Candidate dashboard")
-            targets = ("start-panel", "inspect-panel", "decision-panel", "overview-title",
-                       "applications-title", "schedule-title")
+            targets = ("start-panel", "inspect-panel", "pending-interview-actions-panel",
+                       "decision-panel", "overview-title", "applications-title", "schedule-title")
             assert navigation.get_by_role("link").count() == len(targets)
             for target in targets:
                 navigation.locator(f'a[href="#{target}"]').click()
