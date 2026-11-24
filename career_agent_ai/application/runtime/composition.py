@@ -552,13 +552,19 @@ class _RequestSQLiteOperationalProbe:
             database.close()
 
     def list_action_statuses(
-        self, *, limit: int = 25, after: str | None = None
+        self,
+        *,
+        limit: int = 25,
+        after: str | None = None,
+        candidate_run_ref: str | None = None,
     ) -> dict[str, object]:
-        """Read action lifecycle metadata through request-local read-only SQLite."""
+        """Read filtered action metadata through request-local read-only SQLite."""
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteOperationalProbe(database).list_action_statuses(
-                limit=limit, after=after
+                limit=limit,
+                after=after,
+                candidate_run_ref=candidate_run_ref,
             )
         finally:
             database.close()
