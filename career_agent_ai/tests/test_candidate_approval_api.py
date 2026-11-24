@@ -3471,7 +3471,7 @@ def test_candidate_acceptance_status_fails_closed_on_duplicate_durable_json_keys
 
 
 class CandidateScheduleAcceptanceBrowserLoop(Loop):
-    def __init__(self, no_effect_first=False):
+    def __init__(self):
         super().__init__()
         self.status = "not_started"
         self.no_effect_first = no_effect_first
@@ -3615,7 +3615,7 @@ def test_candidate_sandbox_browser_recovers_acceptance_after_reload_with_fresh_a
 
 def test_candidate_sandbox_browser_retries_only_after_verified_acceptance_no_effect():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
-    loop = CandidateScheduleAcceptanceBrowserLoop(no_effect_first=True)
+    loop = CandidateScheduleAcceptanceBrowserLoop()
     server, thread = _candidate_acceptance_browser(loop)
     try:
         with sync_playwright() as playwright:
