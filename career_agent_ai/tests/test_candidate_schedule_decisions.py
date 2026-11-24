@@ -1009,3 +1009,126 @@ def test_pending_rejects_detached_ambiguous_decline_before_event_transition(tmp_
     )
     assert _stored_event(path).status == ScheduleStatus.PROPOSED
     assert _effect_count(path) == 0
+
+def test_candidate_sandbox_browser_recovers_decline_timeout_after_runtime_restart_without_replay(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "candidate-decline-timeout-restart.sqlite"
+    _seed(path, _event())
+
+    def timeout_after_effect(_operation_id, _attempt):
+        return SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+
+    def forbid_provider_replay(_operation_id, _attempt):
+        raise AssertionError("Decline recovery must not invoke the calendar provider again.")
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    resolve_bearer = lambda token: OWNER if token == "owner-token" else None
+    runtime1 = build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer,
+        environ={"CAREER_AGENT_DB_PATH": str(path), **ENV},
+        sandbox_calendar_outcome_plan=timeout_after_effect,
+    )
+    server1 = make_server("127.0.0.1", 0, runtime1, handler_class=QuietHandler)
+    thread1 = Thread(target=server1.serve_forever, daemon=True)
+    thread1.start()
+    runtime2 = None
+    server2 = None
+    thread2 = None
+    server1_stopped = False
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server1.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            event_button = page.get_by_role("button", name="View event 1: " + EVENT_ID)
+            event_button.wait_for()
+            event_button.click()
+            page.locator("#event-detail").get_by_text('"state_version": 1').wait_for()
+            page.locator("#decline-confirmed").check()
+            page.locator("#decline-event").click()
+            page.locator("#decline-state").get_by_text(
+                "Decline is awaiting provider reconciliation.", exact=True
+            ).wait_for()
+            assert page.locator("#decline-event").is_disabled()
+
+            # Simulate process loss after the sandbox calendar effect and event transition committed.
+            server1.shutdown()
+            thread1.join(timeout=5)
+            server1.server_close()
+            runtime1.close()
+            server1_stopped = True
+
+            runtime2 = build_candidate_sandbox_app_from_env(
+                resolve_bearer=resolve_bearer,
+                environ={"CAREER_AGENT_DB_PATH": str(path), **ENV},
+                sandbox_calendar_outcome_plan=forbid_provider_replay,
+            )
+            server2 = make_server("127.0.0.1", 0, runtime2, handler_class=QuietHandler)
+            thread2 = Thread(target=server2.serve_forever, daemon=True)
+            thread2.start()
+            page.goto(f"http://127.0.0.1:{server2.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            event_button = page.get_by_role("button", name="View event 1: " + EVENT_ID)
+            event_button.wait_for()
+            event_button.click()
+            page.locator("#event-detail").get_by_text('"state_version": 2').wait_for()
+            page.wait_for_function(
+                "() => !document.querySelector('#decline-reconciliation-verified').disabled"
+            )
+            assert page.locator("#decline-panel").is_disabled()
+            assert not page.locator("#decline-reconciliation-verified").is_checked()
+
+            page.locator("#decline-reconciliation-verified").check()
+            page.locator("#confirm-decline-completed").click()
+            page.locator("#decline-reconciliation-state").get_by_text(
+                "Provider evidence confirmed the interview decline.", exact=True
+            ).wait_for()
+            assert not page.locator("#decline-reconciliation-verified").is_checked()
+            assert page.locator("#confirm-decline-completed").is_disabled()
+            assert '"status": "declined"' in page.locator("#event-detail").text_content()
+            assert '"state_version": 2' in page.locator("#event-detail").text_content()
+            browser.close()
+    finally:
+        if server2 is not None:
+            server2.shutdown()
+            if thread2 is not None:
+                thread2.join(timeout=5)
+            server2.server_close()
+        if runtime2 is not None:
+            runtime2.close()
+        if not server1_stopped:
+            server1.shutdown()
+            thread1.join(timeout=5)
+            server1.server_close()
+            runtime1.close()
+
+    database = SQLiteDatabase(str(path))
+    operation = database.connection.execute(
+        "SELECT operation_id, status FROM external_action_operations"
+    ).fetchone()
+    assert operation is not None and operation[1] == "succeeded"
+    operation_id = operation[0]
+    effect = database.connection.execute(
+        "SELECT action, event_json, replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    assert effect is not None and effect[0] == "decline" and effect[2] == 0
+    assert json.loads(effect[1])["status"] == "declined"
+    attempts = database.connection.execute(
+        "SELECT outcome FROM sandbox_calendar_attempts WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchall()
+    assert attempts == [("timeout_after_effect",)]
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+    ).fetchone()[0] == 1
+    event = SQLiteSchedulingRepository(database).get(EVENT_ID)
+    assert event is not None and event.status == ScheduleStatus.DECLINED
+    assert event.version == 2
+    database.close()
