@@ -1603,3 +1603,17 @@ Regressions prove a concurrent reschedule between prompt validation and service 
 cannot prepare an acceptance operation or invoke the acceptance provider. Next: expose
 acceptance through an authenticated candidate endpoint with durable pending/reconciliation
 recovery and sandbox-only provider effects.
+
+
+Candidate-owned interview acceptance API groundwork delivered: authenticated POST
+acceptance is bound to the exact displayed event version and an owner-derived
+deterministic operation ID. Read-only status lookup, explicit stale-operation recovery,
+and provider-evidence reconciliation use the durable SQLite sandbox calendar provider.
+A five-minute execution grace keeps duplicate tabs from converting a live synchronous
+provider request into restart recovery; stale in-progress operations are promoted with
+the existing compare-and-swap transition and never replay the provider during recovery.
+HTTP/SQLite regressions cover successful acceptance, restart replay with one sandbox
+effect, stale-version rejection, foreign-event isolation, strict request/query parsing,
+and active-versus-stale recovery. Next: wire the candidate dashboard's selected event
+and fresh attestation controls to these acceptance endpoints, then add Chromium
+acceptance and ambiguous-outcome UI recovery coverage.
