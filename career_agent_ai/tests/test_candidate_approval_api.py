@@ -3958,7 +3958,7 @@ def test_candidate_sandbox_browser_recovers_timeout_after_effect_after_runtime_r
             )
             page.locator("#accept-event").click()
             page.locator("#event-acceptance-state").get_by_text(
-                "outcome is ambiguous", exact=False
+                "The outcome is ambiguous.", exact=False
             ).wait_for()
             assert page.locator("#accept-event").is_disabled()
 
