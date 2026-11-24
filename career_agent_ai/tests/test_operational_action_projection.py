@@ -248,3 +248,247 @@ def test_operational_action_openapi_contract_is_bounded_and_minimal():
     assert "payload" not in item["properties"]
     assert "result" not in item["properties"]
     assert "error" not in item["properties"]
+
+
+def test_candidate_run_filter_paginates_only_matching_operations_without_mutation(tmp_path):
+    from career_agent_ai.application.observability.references import stable_reference
+
+    path = tmp_path / "candidate-run-filter.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteExternalActionOperationRepository(database)
+    records = (
+        ("a-operation-1", "candidate-run-a"),
+        ("a-operation-2", "candidate-run-a"),
+        ("b-operation-1", "candidate-run-b"),
+        ("a-operation-3", "candidate-run-a"),
+    )
+    for operation_id, run_id in records:
+        repository.create(
+            ExternalActionOperation(
+                operation_id=operation_id,
+                action_type="application.submit",
+                payload={"private": "must-not-be-returned"},
+                created_at=NOW,
+                updated_at=NOW,
+                correlation_id=run_id,
+            )
+        )
+    database.close()
+    baseline = path.read_bytes()
+    run_ref = stable_reference("candidate-run-a")
+    runtime = RuntimeOperationalApp(database_path=str(path), bearer_token=TOKEN)
+    try:
+        status, _, first = _request(
+            runtime, query=f"limit=1&candidate_run_ref={run_ref}"
+        )
+        assert status == "200 OK"
+        assert len(first["items"]) == 1
+        assert first["items"][0]["candidate_run_ref"] == run_ref
+        assert first["next_after"] is not None
+
+        status, _, second = _request(
+            runtime,
+            query=f"limit=1&candidate_run_ref={run_ref}&after={first['next_after']}",
+        )
+        assert status == "200 OK"
+        assert len(second["items"]) == 1
+        assert second["items"][0]["candidate_run_ref"] == run_ref
+        assert second["next_after"] is not None
+
+        status, _, third = _request(
+            runtime,
+            query=f"limit=1&candidate_run_ref={run_ref}&after={second['next_after']}",
+        )
+        assert status == "200 OK"
+        assert len(third["items"]) == 1
+        assert third["items"][0]["candidate_run_ref"] == run_ref
+        assert third["next_after"] is None
+
+        rendered = json.dumps([first, second, third])
+        assert "candidate-run-a" not in rendered
+        assert "candidate-run-b" not in rendered
+        assert "a-operation-" not in rendered
+        assert "private" not in rendered
+    finally:
+        runtime.close()
+    assert path.read_bytes() == baseline
+
+
+def test_candidate_run_cursor_cannot_be_reused_with_another_filter_or_unfiltered(tmp_path):
+    from career_agent_ai.application.observability.references import stable_reference
+
+    path = tmp_path / "candidate-run-cursor-binding.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteExternalActionOperationRepository(database)
+    for operation_id in ("a-operation-1", "a-operation-2"):
+        repository.create(
+            ExternalActionOperation(
+                operation_id=operation_id,
+                action_type="communication.send",
+                payload={},
+                created_at=NOW,
+                updated_at=NOW,
+                correlation_id="candidate-run-a",
+            )
+        )
+    database.close()
+    baseline = path.read_bytes()
+    run_ref_a = stable_reference("candidate-run-a")
+    run_ref_b = stable_reference("candidate-run-b")
+    runtime = RuntimeOperationalApp(database_path=str(path), bearer_token=TOKEN)
+    try:
+        status, _, first = _request(
+            runtime, query=f"limit=1&candidate_run_ref={run_ref_a}"
+        )
+        assert status == "200 OK"
+        cursor = first["next_after"]
+        assert cursor is not None
+
+        status, _, body = _request(
+            runtime, query=f"limit=1&candidate_run_ref={run_ref_b}&after={cursor}"
+        )
+        assert status == "400 Bad Request"
+        assert body["error"] == "invalid_request"
+
+        status, _, body = _request(runtime, query=f"limit=1&after={cursor}")
+        assert status == "400 Bad Request"
+        assert body["error"] == "invalid_request"
+    finally:
+        runtime.close()
+    assert path.read_bytes() == baseline
+
+
+def test_candidate_run_filter_rejects_invalid_values_before_storage(tmp_path):
+    path = tmp_path / "not-created-for-invalid-run-filter.sqlite"
+    runtime = RuntimeOperationalApp(database_path=str(path), bearer_token=TOKEN)
+    try:
+        for query in (
+            "candidate_run_ref=",
+            "candidate_run_ref=short",
+            "candidate_run_ref=" + "A" * 24,
+            "candidate_run_ref=" + "g" * 24,
+            "candidate_run_ref=" + "a" * 24 + "&candidate_run_ref=" + "b" * 24,
+        ):
+            assert _request(runtime, query=query)[0] == "400 Bad Request"
+            assert not path.exists()
+    finally:
+        runtime.close()
+
+
+def test_candidate_run_filter_fails_closed_on_legacy_schema_without_reference_index(tmp_path):
+    path = tmp_path / "legacy-correlation-filter.sqlite"
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        """
+        CREATE TABLE external_action_operations (
+            operation_id TEXT PRIMARY KEY,
+            action_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_json TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            correlation_id TEXT
+        )
+        """
+    )
+    database.connection.execute(
+        """
+        INSERT INTO external_action_operations (
+            operation_id, action_type, payload_json, status,
+            created_at, updated_at, correlation_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy-correlated-operation",
+            "application.submit",
+            "{}",
+            "prepared",
+            NOW.isoformat(),
+            NOW.isoformat(),
+            "candidate-run-a",
+        ),
+    )
+    database.connection.commit()
+    database.close()
+    baseline = path.read_bytes()
+    from career_agent_ai.application.observability.references import stable_reference
+
+    runtime = RuntimeOperationalApp(database_path=str(path), bearer_token=TOKEN)
+    try:
+        status, _, body = _request(
+            runtime,
+            query="candidate_run_ref=" + stable_reference("candidate-run-a"),
+        )
+        assert status == "500 Internal Server Error"
+        assert body == {"error": "internal_error"}
+    finally:
+        runtime.close()
+    assert path.read_bytes() == baseline
+
+
+def test_correlation_reference_migration_backfills_and_indexes_existing_rows(tmp_path):
+    from career_agent_ai.application.observability.references import stable_reference
+
+    path = tmp_path / "correlation-reference-migration.sqlite"
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        """
+        CREATE TABLE external_action_operations (
+            operation_id TEXT PRIMARY KEY,
+            action_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result_json TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            correlation_id TEXT
+        )
+        """
+    )
+    database.connection.execute(
+        """
+        INSERT INTO external_action_operations (
+            operation_id, action_type, payload_json, status,
+            created_at, updated_at, correlation_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy-correlated-operation",
+            "application.submit",
+            "{}",
+            "prepared",
+            NOW.isoformat(),
+            NOW.isoformat(),
+            "candidate-run-a",
+        ),
+    )
+    database.connection.commit()
+
+    SQLiteExternalActionOperationRepository(database)
+    row = database.connection.execute(
+        "SELECT correlation_ref FROM external_action_operations WHERE operation_id = ?",
+        ("legacy-correlated-operation",),
+    ).fetchone()
+    indexes = {
+        record[1]
+        for record in database.connection.execute(
+            "PRAGMA index_list(external_action_operations)"
+        )
+    }
+    database.close()
+
+    assert row == (stable_reference("candidate-run-a"),)
+    assert "idx_external_actions_correlation_ref" in indexes
+
+
+def test_candidate_run_filter_is_documented_as_a_stable_reference():
+    operation = openapi_document()["paths"]["/v1/operational/actions"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+    reference = parameters["candidate_run_ref"]
+    assert reference["required"] is False
+    assert reference["schema"]["minLength"] == 24
+    assert reference["schema"]["maxLength"] == 24
+    assert reference["schema"]["pattern"] == "^[a-f0-9]{24}$"
