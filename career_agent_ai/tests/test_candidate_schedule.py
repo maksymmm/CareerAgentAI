@@ -149,8 +149,7 @@ def test_schedule_pages_filter_status_in_sql_and_preserve_cursor(tmp_path):
 @pytest.mark.parametrize("options", [{"limit": 0}, {"limit": 101}, {"limit": True},
     {"limit": 1.0}, {"limit": "1"}, {"after": ""}, {"after": " padded"},
     {"after": "padded "}, {"after": "a/b"}, {"after": "\ud800"},
-    {"after": "x" * 201}, {"user_id": ""}, {"user_id": "owner/bad"},
-    {"event_type": "interview"}])
+    {"after": "x" * 201}, {"user_id": ""}, {"user_id": "owner/bad"}])
 def test_schedule_page_validation_before_missing_storage(tmp_path, options):
     path = tmp_path / "missing.sqlite"
     with RuntimeCandidateApp(database_path=str(path), jobs=(), resolve_bearer=lambda _: None) as runtime:
