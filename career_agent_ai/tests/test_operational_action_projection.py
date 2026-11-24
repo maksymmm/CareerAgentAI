@@ -492,3 +492,24 @@ def test_candidate_run_filter_is_documented_as_a_stable_reference():
     assert reference["schema"]["minLength"] == 24
     assert reference["schema"]["maxLength"] == 24
     assert reference["schema"]["pattern"] == "^[a-f0-9]{24}$"
+
+
+def test_candidate_run_filter_rejects_non_text_values_at_service_and_probe_boundaries(tmp_path):
+    import pytest
+
+    from career_agent_ai.application.api.operational_api import OperationalApiService
+    from career_agent_ai.application.storage.sqlite_operational_probe import SQLiteOperationalProbe
+
+    class Probe:
+        def list_action_statuses(self, **kwargs):
+            return {"items": [], "next_after": None}
+
+    with pytest.raises(ValueError, match="candidate_run_ref"):
+        OperationalApiService(Probe(), clock=lambda: NOW).actions(candidate_run_ref=123)
+
+    database = SQLiteDatabase(str(tmp_path / "invalid-reference-type.sqlite"))
+    try:
+        with pytest.raises(ValueError, match="candidate_run_ref"):
+            SQLiteOperationalProbe(database).list_action_statuses(candidate_run_ref=123)
+    finally:
+        database.close()
