@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
+import sqlite3
+from threading import Barrier, Lock
 
 import pytest
 
@@ -199,3 +202,170 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
     with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
         service.resolve_reconciliation("accept:evidence", completed=True)
     assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+
+def test_busy_calendar_writer_lock_records_no_attempt_and_allows_same_intent_retry(tmp_path):
+    path = str(tmp_path / "calendar-busy-writer.db")
+    database = SQLiteDatabase(path)
+    provider = SQLiteSandboxCalendarProvider(database)
+    database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(PreCalendarActionError, match="busy; nothing was attempted"):
+            provider.accept("accept:busy-writer", _event())
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_intents WHERE operation_id = ?",
+        ("accept:busy-writer",),
+    ).fetchone()[0] == 0
+    assert database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_calendar_attempts WHERE operation_id = ?",
+        ("accept:busy-writer",),
+    ).fetchone()[0] == 0
+    assert provider.effect_count("accept:busy-writer") == 0
+    assert provider.verify_calendar_action(
+        "accept:busy-writer"
+    ).state == CalendarEvidenceState.ABSENT_CONFIRMED
+
+    accepted = provider.accept("accept:busy-writer", _event())
+    assert accepted.status == ScheduleStatus.ACCEPTED
+    assert provider.effect_count("accept:busy-writer") == 1
+    attempt_rows = database.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+        "WHERE operation_id = ?",
+        ("accept:busy-writer",),
+    ).fetchall()
+    assert attempt_rows == [(1, SandboxCalendarOutcome.SUCCESS.value)]
+    database.close()
+
+
+def test_calendar_evidence_lookup_fails_closed_while_another_connection_holds_writer_lock(
+    tmp_path,
+):
+    path = str(tmp_path / "calendar-evidence-busy.db")
+    database = SQLiteDatabase(path)
+    provider = SQLiteSandboxCalendarProvider(database)
+    event = provider.accept("accept:evidence-busy", _event())
+    database.connection.execute("PRAGMA busy_timeout = 0")
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(PreCalendarActionError, match="busy; nothing was attempted"):
+            provider.verify_calendar_action("accept:evidence-busy")
+    finally:
+        holder.rollback()
+        holder.close()
+
+    evidence = provider.verify_calendar_action("accept:evidence-busy")
+    assert evidence.state == CalendarEvidenceState.PRESENT
+    assert evidence.event == event
+    assert provider.effect_count("accept:evidence-busy") == 1
+    database.close()
+
+
+def test_concurrent_same_key_calendar_calls_observe_one_committed_effect(tmp_path):
+    path = str(tmp_path / "calendar-concurrent-same-key.db")
+    initialized = SQLiteDatabase(path)
+    SQLiteSandboxCalendarProvider(initialized)
+    initialized.close()
+
+    barrier = Barrier(2)
+    setup_lock = Lock()
+    plan_lock = Lock()
+    plan_calls = []
+
+    def plan(operation_id, attempt):
+        with plan_lock:
+            plan_calls.append((operation_id, attempt))
+        return SandboxCalendarOutcome.SUCCESS
+
+    def deliver():
+        database = SQLiteDatabase(path)
+        try:
+            with setup_lock:
+                provider = SQLiteSandboxCalendarProvider(database, plan)
+            barrier.wait(timeout=10)
+            return provider.accept("accept:concurrent", _event())
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(deliver) for _ in range(2)]
+        results = [future.result(timeout=30) for future in futures]
+
+    assert results[0] == results[1]
+    assert plan_calls == [("accept:concurrent", 1)]
+
+    verifier = SQLiteDatabase(path)
+    provider = SQLiteSandboxCalendarProvider(verifier)
+    attempts = verifier.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+        "WHERE operation_id = ? ORDER BY attempt_no",
+        ("accept:concurrent",),
+    ).fetchall()
+    effects = verifier.connection.execute(
+        "SELECT action, replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+        ("accept:concurrent",),
+    ).fetchall()
+    assert attempts == [(1, SandboxCalendarOutcome.SUCCESS.value)]
+    assert effects == [("accept", 1)]
+    assert provider.effect_count("accept:concurrent") == 1
+    verifier.close()
+
+
+def test_concurrent_conflicting_calendar_intents_cannot_rebind_one_operation_id(tmp_path):
+    path = str(tmp_path / "calendar-concurrent-conflict.db")
+    initialized = SQLiteDatabase(path)
+    SQLiteSandboxCalendarProvider(initialized)
+    initialized.close()
+
+    barrier = Barrier(2)
+    setup_lock = Lock()
+    plan_lock = Lock()
+    plan_calls = []
+
+    def plan(operation_id, attempt):
+        with plan_lock:
+            plan_calls.append((operation_id, attempt))
+        return SandboxCalendarOutcome.SUCCESS
+
+    def deliver(source):
+        database = SQLiteDatabase(path)
+        try:
+            with setup_lock:
+                provider = SQLiteSandboxCalendarProvider(database, plan)
+            barrier.wait(timeout=10)
+            try:
+                return ("success", provider.accept("accept:conflict", source))
+            except PreCalendarActionError:
+                return ("conflict", None)
+        finally:
+            database.close()
+
+    sources = (_event(), replace(_event(), location="Different approved location"))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(deliver, source) for source in sources]
+        outcomes = [future.result(timeout=30) for future in futures]
+
+    assert sorted(kind for kind, _value in outcomes) == ["conflict", "success"]
+    assert plan_calls == [("accept:conflict", 1)]
+
+    verifier = SQLiteDatabase(path)
+    provider = SQLiteSandboxCalendarProvider(verifier)
+    assert provider.effect_count("accept:conflict") == 1
+    attempts = verifier.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+        "WHERE operation_id = ?",
+        ("accept:conflict",),
+    ).fetchall()
+    effect = provider.verify_calendar_action("accept:conflict")
+    successful_event = next(value for kind, value in outcomes if kind == "success")
+    assert attempts == [(1, SandboxCalendarOutcome.SUCCESS.value)]
+    assert effect.state == CalendarEvidenceState.PRESENT
+    assert effect.event == successful_event
+    verifier.close()
