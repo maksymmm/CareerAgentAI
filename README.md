@@ -587,8 +587,10 @@ stored payload. It returns only the run ID, durable state version, event identit
 minimal employer/local-time summary; internal operation IDs and provider evidence are
 never exposed. The sandbox renders this list and selecting an item only selects its run.
 The candidate must still refresh the owned status and load the current approval prompt
-or provide a fresh independent reconciliation attestation. The collection cannot
-approve an interview or modify a calendar event.
+or provide a fresh independent reconciliation attestation. A listed state version
+is discovery metadata, not authority to approve or reconcile; stale versions are
+rejected by the existing decision boundary. The collection cannot approve an interview
+or modify a calendar event.
 
 Interview reconciliation is exposed through the same authenticated, owner-scoped boundary.
 Completed calendar actions require independently verified provider event evidence; confirmed
