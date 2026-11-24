@@ -257,7 +257,7 @@ Consequential provider calls are coordinated through a provider-neutral external
 
 Operations move through `prepared`, `in_progress`, `succeeded`, `failed`, and `reconciliation_required` states. Intent is committed before an adapter is invoked and the terminal outcome is committed afterward. Reusing an operation ID with a different intent is rejected, while repeating a completed invocation returns its existing result without another provider call.
 
-An `in_progress` operation found after restart is treated as ambiguous. It moves to `reconciliation_required` and is **not** blindly executed again; a future provider-specific reconciliation workflow must determine the real external outcome. Adapters must also pass the operation ID to providers as their idempotency key.
+An `in_progress` operation is not promoted merely because another tab repeats the same request. Duplicate requests observe it unchanged during a bounded five-minute grace period. Only an operation older than the grace is moved to `reconciliation_required` through compare-and-swap; that recovery transition never calls the provider. Provider evidence must resolve the outcome before completion or deliberate retry. Adapters must pass the operation ID to providers as their idempotency key.
 
 The current capability is infrastructure only: no production communication or application provider is configured, and no real external action is sent.
 
@@ -272,10 +272,10 @@ in SQLite, and retains them across restarts.
 
 Every send and reply—including local dry runs—requires explicit human approval and
 is executed through the crash-safe `ExternalActionService`. Stable operation IDs
-suppress duplicate requests and provider calls. A process restart after an operation
-entered `in_progress` moves it to `reconciliation_required` rather than risking a
-duplicate message. Provider failures are persisted as terminal failed attempts; a
-new deliberate attempt must use a new operation ID.
+suppress duplicate requests and provider calls. A duplicate request that observes a
+recent `in_progress` send leaves it unchanged; only a stale operation older than the
+bounded grace moves to `reconciliation_required`. Provider failures are persisted as
+terminal failed attempts; a new deliberate attempt must use a new operation ID.
 
 Only persisted drafts can begin a new send operation, so changing the operation ID
 cannot resend an already-outbound message. Provider delivery responses must preserve

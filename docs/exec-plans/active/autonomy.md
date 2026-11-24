@@ -1663,3 +1663,13 @@ not mask the workflow response. Chromium verifies a reconciliation transition fr
 `reconciliation_required` to `succeeded`; static contract assertions cover all five
 mutation paths. Next: add candidate-safe status/action-family filters with cursors
 bound to the exact filter set.
+
+
+External-action live-operation grace: duplicate requests now observe a recent
+`in_progress` operation unchanged for the default five-minute grace period. Only
+operations older than the bounded grace are promoted to `reconciliation_required`
+through compare-and-swap, and that path never invokes a provider. Deterministic tests
+cover live duplicate submission with a blocked sandbox provider, stale restart recovery,
+grace/clock validation, and the candidate reconciliation attestation gate. The existing
+concurrent service regression now exercises the same invariant. Next: add candidate-safe
+status/action-family filters with cursors bound to the exact filter set.

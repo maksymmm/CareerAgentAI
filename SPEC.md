@@ -28,6 +28,9 @@ provider for those actions is not included in this release.
 - Outbound messages and interview accept/decline/reschedule decisions require approval.
 - Interview projections expose employer, location, local date/time, timezone and UTC offset.
 - Stable operation IDs and durable intent/outcome records suppress duplicate actions.
+- A duplicate request leaves a recent `in_progress` operation unchanged during the
+  default five-minute grace; only a stale operation is promoted to
+  `reconciliation_required` through compare-and-swap, without a provider call.
 - Ambiguous provider outcomes stop for reconciliation rather than blind retry.
 - Candidate ownership and durable execution leases protect recovery boundaries.
 - Runtime permission flags default to disabled and do not replace domain approval gates.

@@ -3523,7 +3523,11 @@ def test_candidate_action_status_refreshes_after_reconciliation_and_covers_all_m
             assert not page.locator("#next-candidate-actions").is_disabled()
 
             page.locator("#status").click()
-            page.locator("#confirm-not-submitted").wait_for(state="visible")
+            page.wait_for_function(
+                "() => !document.querySelector('#application-reconciliation-verified').disabled"
+            )
+            page.locator("#application-reconciliation-verified").check()
+            assert page.locator("#application-reconciliation-verified").is_checked()
             assert not page.locator("#confirm-not-submitted").is_disabled()
             page.locator("#confirm-not-submitted").click()
 
