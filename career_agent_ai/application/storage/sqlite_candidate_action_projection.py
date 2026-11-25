@@ -94,7 +94,7 @@ class SQLiteCandidateActionProjection:
         if has_reference:
             if "idx_external_actions_correlation_ref" not in indexes:
                 raise RuntimeError("Candidate external-action reference index is unavailable.")
-            cursor_index = "idx_external_actions_correlation_ref_operation_ref"
+            cursor_index = "idx_external_actions_correlation_ref_operation_id"
             inconsistent = self._database.connection.execute(
                 """
                 SELECT operation_id
@@ -112,12 +112,13 @@ class SQLiteCandidateActionProjection:
         else:
             # Read-only compatibility for pre-reference schemas. The raw correlation
             # column is already indexed and is never included in the response.
-            cursor_index = "idx_external_actions_correlation_operation_ref"
+            cursor_index = "idx_external_actions_correlation_operation_id"
             where = "correlation_id = ?"
             filter_value = identifier
         if cursor_index not in indexes:
             raise RuntimeError("Candidate external-action cursor index is unavailable.")
 
+        cursor_operation_id = None
         if cursor_ref is not None:
             cursor_row = self._database.connection.execute(
                 f"""
@@ -129,14 +130,15 @@ class SQLiteCandidateActionProjection:
             ).fetchone()
             if cursor_row is None:
                 raise ValueError("after cursor does not belong to the selected candidate run.")
-            if stable_reference(cursor_row[0]) != cursor_ref:
+            cursor_operation_id = cursor_row[0]
+            if stable_reference(cursor_operation_id) != cursor_ref:
                 raise RuntimeError("Persisted candidate action operation reference is inconsistent.")
 
-        cursor_clause = "" if cursor_ref is None else " AND operation_ref > ?"
+        cursor_clause = "" if cursor_operation_id is None else " AND operation_id > ?"
         parameters: tuple[object, ...] = (
             (filter_value, limit + 1)
-            if cursor_ref is None
-            else (filter_value, cursor_ref, limit + 1)
+            if cursor_operation_id is None
+            else (filter_value, cursor_operation_id, limit + 1)
         )
         rows = self._database.connection.execute(
             f"""
@@ -145,7 +147,7 @@ class SQLiteCandidateActionProjection:
                    correlation_id
             FROM external_action_operations
             WHERE {where}{cursor_clause}
-            ORDER BY operation_ref ASC
+            ORDER BY operation_id ASC
             LIMIT ?
             """,
             parameters,
