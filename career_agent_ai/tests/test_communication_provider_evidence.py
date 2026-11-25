@@ -170,3 +170,105 @@ def test_service_requires_a_verifiable_provider():
         CommunicationService(
             messages, provider, external, require_provider_evidence=True
         )
+
+
+
+def test_communication_provider_initialization_rejects_ambient_transaction(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    connection = database.connection
+    connection.execute(
+        "CREATE TABLE caller_transaction_probe (value TEXT NOT NULL)"
+    )
+    connection.commit()
+    connection.execute(
+        "INSERT INTO caller_transaction_probe(value) VALUES ('pending')"
+    )
+    assert connection.in_transaction
+
+    with pytest.raises(
+        PreDeliveryCommunicationError, match="initialize inside an existing SQLite transaction"
+    ):
+        SQLiteSandboxCommunicationProvider(database)
+
+    assert connection.in_transaction
+    provider_tables = connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+        "AND name LIKE 'sandbox_communication_%'"
+    ).fetchone()[0]
+    assert provider_tables == 0
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM caller_transaction_probe"
+    ).fetchone()[0] == 0
+
+    provider = SQLiteSandboxCommunicationProvider(database)
+    assert provider.delivery_count("unused") == 0
+    database.close()
+
+
+def test_communication_draft_rejects_ambient_transaction_without_committing_it(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    provider = SQLiteSandboxCommunicationProvider(database)
+    connection = database.connection
+    connection.execute(
+        "CREATE TABLE caller_transaction_probe (value TEXT NOT NULL)"
+    )
+    connection.commit()
+    connection.execute(
+        "INSERT INTO caller_transaction_probe(value) VALUES ('pending')"
+    )
+
+    with pytest.raises(
+        PreDeliveryCommunicationError, match="draft cannot run inside an existing SQLite transaction"
+    ):
+        provider.draft(_message())
+
+    assert connection.in_transaction
+    assert connection.execute(
+        "SELECT COUNT(*) FROM sandbox_communication_messages"
+    ).fetchone()[0] == 0
+    assert provider.calls == []
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM caller_transaction_probe"
+    ).fetchone()[0] == 0
+    database.close()
+
+
+def test_communication_delivery_rejects_ambient_transaction_before_provider_work(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "messages.db"))
+    planned = []
+    provider = SQLiteSandboxCommunicationProvider(
+        database,
+        lambda operation_id, attempt: planned.append((operation_id, attempt))
+        or SandboxCommunicationOutcome.SUCCESS,
+    )
+    connection = database.connection
+    connection.execute(
+        "CREATE TABLE caller_transaction_probe (value TEXT NOT NULL)"
+    )
+    connection.commit()
+    connection.execute(
+        "INSERT INTO caller_transaction_probe(value) VALUES ('pending')"
+    )
+
+    with pytest.raises(
+        PreDeliveryCommunicationError, match="cannot run inside an existing SQLite transaction"
+    ):
+        provider.send("send:caller-transaction", _message())
+
+    assert connection.in_transaction
+    assert planned == []
+    assert provider.calls == []
+    for table in (
+        "sandbox_communication_intents",
+        "sandbox_communication_attempts",
+        "sandbox_communication_deliveries",
+        "sandbox_communication_messages",
+    ):
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM caller_transaction_probe"
+    ).fetchone()[0] == 0
+    database.close()

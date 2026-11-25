@@ -47,6 +47,10 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
         self._database = database
         self._plan = plan or (lambda _key, _attempt: SandboxCommunicationOutcome.SUCCESS)
         connection = database.connection
+        if connection.in_transaction:
+            raise PreDeliveryCommunicationError(
+                "Sandbox communication provider cannot initialize inside an existing SQLite transaction."
+            )
         connection.execute(
             """CREATE TABLE IF NOT EXISTS sandbox_communication_messages (
                 message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
@@ -79,8 +83,8 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
     def draft(self, message: CommunicationMessage) -> CommunicationMessage:
         if message.direction != MessageDirection.DRAFT:
             raise ValueError("Sandbox communication drafts must have draft direction.")
-        self.calls.append(("draft", message.message_id))
         self._save_message(message)
+        self.calls.append(("draft", message.message_id))
         return message
 
     def read(self, message_id: str) -> CommunicationMessage:
@@ -201,14 +205,24 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
         )
 
     def _begin(self) -> None:
+        connection = self._database.connection
+        if connection.in_transaction:
+            raise PreDeliveryCommunicationError(
+                "Sandbox communication provider cannot run inside an existing SQLite transaction."
+            )
         try:
-            self._database.connection.execute("BEGIN IMMEDIATE")
+            connection.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as exc:
             raise PreDeliveryCommunicationError(
                 "Sandbox communication provider is busy; nothing was attempted."
             ) from exc
 
     def _save_message(self, message: CommunicationMessage, *, commit: bool = True) -> None:
+        connection = self._database.connection
+        if commit and connection.in_transaction:
+            raise PreDeliveryCommunicationError(
+                "Sandbox communication draft cannot run inside an existing SQLite transaction."
+            )
         existing = self._load_message(message.message_id)
         if existing is not None:
             if replace(existing, direction=message.direction) != message:
