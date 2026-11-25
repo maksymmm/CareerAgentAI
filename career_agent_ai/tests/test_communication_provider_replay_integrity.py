@@ -13,6 +13,7 @@ from career_agent_ai.application.communication import (
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
+    SandboxCommunicationOutcome,
     SQLiteSandboxCommunicationProvider,
 )
 
