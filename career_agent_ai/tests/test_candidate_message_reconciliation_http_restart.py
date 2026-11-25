@@ -11,7 +11,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 from career_agent_ai.application.jobs.company import Company
 from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.jobs.location import Location
-from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+from career_agent_ai.application.runtime.composition import build_candidate_sandbox_app_from_env
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
     SandboxCommunicationOutcome,
@@ -34,6 +34,19 @@ def _request(app, *, method: str, path: str, body: dict | None = None, token: st
         app(environ, lambda status, headers: statuses.append((status, headers)))
     )
     return statuses[0], json.loads(response)
+
+
+def _runtime(database_path, job, resolve_bearer, outcome_plan):
+    return build_candidate_sandbox_app_from_env(
+        resolve_bearer=resolve_bearer,
+        jobs=(job,),
+        environ={
+            "CAREER_AGENT_DB_PATH": str(database_path),
+            "CAREER_AGENT_CANDIDATE_SANDBOX": "true",
+            "CAREER_AGENT_CANDIDATE_ID_CUTOVER": "drain-and-replace-scoped-v2",
+        },
+        communication_outcome_plan=outcome_plan,
+    )
 
 
 def _approve_current_action(app, run_id: str) -> dict:
@@ -89,11 +102,8 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
         recipient="recruiter@example.test",
     )
     resolve_owner = lambda token: "candidate-1" if token == "valid" else None
-    first_runtime = RuntimeCandidateApp(
-        database_path=str(database_path),
-        jobs=(job,),
-        resolve_bearer=resolve_owner,
-        communication_outcome_plan=timeout_after_delivery,
+    first_runtime = _runtime(
+        database_path, job, resolve_owner, timeout_after_delivery
     )
 
     started = first_runtime.start(request, run_id=run_id)
@@ -123,8 +133,10 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
             (operation_id, 1, SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT.value)
         ]
         assert len(deliveries_before) == 1
-        assert deliveries_before[0] == (operation_id, deliveries_before[0][1], "send", 0)
+        assert deliveries_before[0][0] == operation_id
+        assert deliveries_before[0][2:] == ("send", 0)
         message_id = deliveries_before[0][1]
+        assert message_id
         assert database.connection.execute(
             "SELECT direction FROM sandbox_communication_messages WHERE message_id = ?",
             (message_id,),
@@ -132,11 +144,8 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
     finally:
         database.close()
 
-    restarted_runtime = RuntimeCandidateApp(
-        database_path=str(database_path),
-        jobs=(job,),
-        resolve_bearer=resolve_owner,
-        communication_outcome_plan=timeout_after_delivery,
+    restarted_runtime = _runtime(
+        database_path, job, resolve_owner, timeout_after_delivery
     )
     reconciliation_path = (
         f"/v1/candidate/runs/{run_id}/message-reconciliation"
@@ -157,10 +166,11 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
     assert "body" not in intent
     assert database_path.read_bytes() == before_read
 
-    foreign_runtime = RuntimeCandidateApp(
-        database_path=str(database_path),
-        jobs=(job,),
-        resolve_bearer=lambda token: "different-candidate" if token == "valid" else None,
+    foreign_runtime = _runtime(
+        database_path,
+        job,
+        lambda token: "different-candidate" if token == "valid" else None,
+        timeout_after_delivery,
     )
     (status, _), foreign_body = _request(
         foreign_runtime, method="GET", path=reconciliation_path
