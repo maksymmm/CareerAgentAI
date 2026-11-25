@@ -74,3 +74,9 @@ allowlisted action family/status, UTC timestamps, and bounded opaque cursor befo
 rendering text-only rows. Run/token changes and workflow mutations invalidate in-flight
 pages and clear prior action data. The panel cannot retry, reconcile, or execute provider
 actions. The raw correlation identifier remains outside provider payload/result JSON.
+
+
+External-action duplicate/restart policy: a recent `in_progress` operation remains
+in progress during the default five-minute grace period. Only an older operation may
+move to `reconciliation_required` through compare-and-swap, and recovery never invokes
+the provider. Future timestamps are treated conservatively as live.
