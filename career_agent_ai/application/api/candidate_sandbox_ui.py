@@ -652,6 +652,13 @@ _HTML = r"""<!doctype html>
       byId('list-state').textContent = '';
       byId('next-runs').disabled = true;
     }
+    function invalidateCandidateCollections() {
+      // Any workflow write may change run, application, or schedule projections.
+      // Advance their generations before the request so late reads cannot repaint stale data.
+      clearApplications();
+      clearEvents();
+      clearRunList();
+    }
     const runPhases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
       'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
       'message_send', 'message_reconciliation', 'track', 'interview_coordination',
@@ -983,6 +990,7 @@ _HTML = r"""<!doctype html>
       const requestNumber = ++latestStartRequest;
       const startContextGeneration = inputContextGeneration;
       const requestedRunId = byId('start-run-id').value;
+      invalidateCandidateCollections();
       try {
         const payload = await call('/v1/candidate/runs', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1057,7 +1065,11 @@ _HTML = r"""<!doctype html>
             typeof snapshot.terminal !== 'boolean' || !validRunFlags(snapshot)) {
           throw new Error('Invalid status snapshot.');
         }
+        const previousRunVersion = selectedRunVersion;
         selectedRunVersion = snapshot.state_version;
+        if (previousRunVersion !== null && snapshot.state_version > previousRunVersion) {
+          invalidateCandidateCollections();
+        }
         if (snapshot.phase === 'application_reconciliation' && snapshot.waiting_for_human) {
           enableApplicationReconciliation(snapshot.state_version);
         } else {
@@ -1114,6 +1126,7 @@ _HTML = r"""<!doctype html>
       byId('decline').disabled = true;
       invalidateAllReconciliation(
         'Recovery may change workflow state. Refresh run status before reconciliation.');
+      invalidateCandidateCollections();
       try {
         const runId = byId('run-id').value;
         const requestNumber = latestResultRequest + 1;
@@ -1189,7 +1202,11 @@ _HTML = r"""<!doctype html>
             !['approve', 'decline'].every(value => loadedPrompt.allowed_decisions.includes(value))) {
           throw new Error('Invalid approval prompt. Load it again.');
         }
+        const previousRunVersion = selectedRunVersion;
         selectedRunVersion = loadedPrompt.state_version;
+        if (previousRunVersion !== null && selectedRunVersion > previousRunVersion) {
+          invalidateCandidateCollections();
+        }
         invalidateReconciliationForVersion(selectedRunVersion);
         approvalPrompt = loadedPrompt;
         byId('action-title').textContent = loadedPrompt.title;
@@ -1233,6 +1250,7 @@ _HTML = r"""<!doctype html>
       let completionMessage = 'Decision result is uncertain. Load the current approval prompt.';
       invalidateAllReconciliation(
         'Decision may change workflow state. Refresh run status before reconciliation.');
+      invalidateCandidateCollections();
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)}, 'Decision request failed.');
@@ -1298,6 +1316,7 @@ _HTML = r"""<!doctype html>
       reconciliationInFlight = true;
       byId('reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateApplicationReconciliation('Recording verified provider evidence…');
+      invalidateCandidateCollections();
       try {
         const request = {schema_version: 1, state_version: observedVersion, submitted};
         if (submitted) request.provider_submission_id = providerSubmissionId;
@@ -1340,6 +1359,7 @@ _HTML = r"""<!doctype html>
       reconciliationInFlight = true;
       byId('message-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateMessageReconciliation('Recording verified provider outcome…');
+      invalidateCandidateCollections();
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
           '/message-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1384,6 +1404,7 @@ _HTML = r"""<!doctype html>
       reconciliationInFlight = true;
       byId('interview-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateInterviewReconciliation('Recording verified calendar-provider evidence…');
+      invalidateCandidateCollections();
       try {
         const request = {schema_version: 1, state_version: observedVersion, completed};
         if (completed) request.provider_event_id = providerEventId;
