@@ -170,7 +170,7 @@ class RuntimeCandidateApp:
                 raise ValueError("run_id must match the published identifier pattern.")
         database = SQLiteDatabase(self._database_path)
         try:
-            loop = _build_candidate_loop(
+            loop = _build_candidate_loop_with_plans(
                 database,
                 self._jobs,
                 self._sandbox_outcome_plan,
@@ -318,7 +318,7 @@ class _RequestCandidateLoop:
         """Start one authenticated sandbox run using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).start(
                 request, run_id=run_id
@@ -332,7 +332,7 @@ class _RequestCandidateLoop:
         """Replay an owned legacy start using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).replay_existing_start(
                 request, run_id=run_id, user_id=user_id
@@ -364,7 +364,7 @@ class _RequestCandidateLoop:
         """Load one owner-scoped prompt using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).get_candidate_approval_prompt(run_id, user_id=user_id)
         finally:
@@ -374,7 +374,7 @@ class _RequestCandidateLoop:
         """Resume one owner-scoped run using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resume_candidate_submission(user_id=user_id, submission=submission)
         finally:
@@ -384,7 +384,7 @@ class _RequestCandidateLoop:
         """Recover one owner-scoped non-human phase using request-thread storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).continue_run(
                 run_id, user_id=user_id
@@ -404,7 +404,7 @@ class _RequestCandidateLoop:
         """Resolve one owner-scoped provider observation using request storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_application_reconciliation(
                 run_id,
@@ -427,7 +427,7 @@ class _RequestCandidateLoop:
         """Resolve one owner-scoped message observation using request storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_message_reconciliation(
                 run_id,
@@ -446,7 +446,7 @@ class _RequestCandidateLoop:
         """Resolve one owner-scoped calendar observation using request storage."""
         database = SQLiteDatabase(self._database_path)
         try:
-            return _build_candidate_loop(
+            return _build_candidate_loop_with_plans(
                 database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_interview_reconciliation(
                 run_id, user_id=user_id, completed=completed,
@@ -455,6 +455,21 @@ class _RequestCandidateLoop:
             )
         finally:
             database.close()
+
+
+
+def _build_candidate_loop_with_plans(
+    database: SQLiteDatabase,
+    jobs: tuple[Job, ...],
+    outcome_plan: SandboxOutcomePlan | None,
+    communication_outcome_plan: SandboxCommunicationOutcomePlan | None,
+) -> AutonomousCareerLoop:
+    """Preserve the legacy three-argument builder call when no communication plan is set."""
+    if communication_outcome_plan is None:
+        return _build_candidate_loop(database, jobs, outcome_plan)
+    return _build_candidate_loop(
+        database, jobs, outcome_plan, communication_outcome_plan
+    )
 
 
 def build_candidate_sandbox_app_from_env(
@@ -478,7 +493,7 @@ def build_candidate_sandbox_app_from_env(
     try:
         if database.is_memory:
             raise ValueError("Candidate sandbox requires durable SQLite storage.")
-        _build_candidate_loop(
+        _build_candidate_loop_with_plans(
             database,
             configured_jobs,
             sandbox_outcome_plan,
