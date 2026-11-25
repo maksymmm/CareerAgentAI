@@ -1590,3 +1590,23 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Full candidate sandbox-provider recovery round trip:
+
+A single candidate run now has an integration regression that exercises the
+application-submission, communication-delivery, and calendar providers in sequence.
+Each provider commits exactly one `TIMEOUT_AFTER_EFFECT` result before the runtime is
+closed. A fresh `RuntimeCandidateApp` is opened over the same SQLite file before
+version-bound reconciliation of that provider's durable evidence. The workflow then
+continues through the next approval gate until the run reaches terminal `COMPLETE`.
+
+The regression asserts one provider attempt and one durable effect per provider,
+zero provider replays, all three external actions in `SUCCEEDED`, one outbound
+sandbox message, and an accepted calendar event whose provider ID came from the
+durable effect record. The CI workflow now runs the independent coverage CLI gate
+after pytest coverage, so the two >=90% checks are both required on each PR head.
+
+Next: add the same all-provider round trip to the browser acceptance path after
+owner-scoped intent discovery is integrated; keep all providers local and deterministic.
