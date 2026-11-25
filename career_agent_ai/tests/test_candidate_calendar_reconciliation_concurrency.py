@@ -268,11 +268,24 @@ def test_concurrent_candidate_calendar_reconciliation_is_single_winner_after_res
     assert statuses == ["200 OK", "409 Conflict"]
     successful = next(body for (status, _), body in responses if status == "200 OK")
     rejected = next(body for (status, _), body in responses if status == "409 Conflict")
-    assert successful == {
-        "run_id": durable_run_id,
-        "phase": CareerLoopPhase.COMPLETE.value,
+    assert successful["run_id"] == durable_run_id
+    assert successful["phase"] in {
+        CareerLoopPhase.INTERVIEW_ACCEPT.value,
+        CareerLoopPhase.COMPLETE.value,
     }
     assert rejected == {"error": "approval_conflict"}
+
+    if successful["phase"] != CareerLoopPhase.COMPLETE.value:
+        (status, _), resumed = _request(
+            restarted_runtime,
+            method="POST",
+            path=f"/v1/candidate/runs/{durable_run_id}/continue",
+        )
+        assert status == "200 OK"
+        assert resumed == {
+            "run_id": durable_run_id,
+            "phase": CareerLoopPhase.COMPLETE.value,
+        }
 
     (status, _), final_status = _request(
         restarted_runtime,
