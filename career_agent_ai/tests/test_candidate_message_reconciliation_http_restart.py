@@ -108,11 +108,12 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
 
     started = first_runtime.start(request, run_id=run_id)
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    durable_run_id = started.run_id
 
-    message_gate = _approve_current_action(first_runtime, run_id)
+    message_gate = _approve_current_action(first_runtime, durable_run_id)
     assert message_gate["phase"] == CareerLoopPhase.MESSAGE_APPROVAL.value
 
-    ambiguous = _approve_current_action(first_runtime, run_id)
+    ambiguous = _approve_current_action(first_runtime, durable_run_id)
     assert ambiguous["phase"] == CareerLoopPhase.MESSAGE_RECONCILIATION.value
     assert len(provider_attempts) == 1
     assert provider_attempts[0][1] == 1
@@ -148,7 +149,7 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
         database_path, job, resolve_owner, timeout_after_delivery
     )
     reconciliation_path = (
-        f"/v1/candidate/runs/{run_id}/message-reconciliation"
+        f"/v1/candidate/runs/{durable_run_id}/message-reconciliation"
     )
     before_read = database_path.read_bytes()
     (status, headers), intent = _request(
@@ -157,7 +158,7 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
     assert status == "200 OK"
     assert ("Cache-Control", "no-store") in headers
     assert intent["schema_version"] == 1
-    assert intent["run_id"] == run_id
+    assert intent["run_id"] == durable_run_id
     assert intent["sender"] == "candidate@example.test"
     assert intent["recipient"] == "recruiter@example.test"
     assert intent["subject"] == "Application follow-up"
@@ -204,14 +205,14 @@ def test_candidate_message_reconciliation_completes_over_http_after_restart(
     )
     assert status == "200 OK"
     assert completed == {
-        "run_id": run_id,
+        "run_id": durable_run_id,
         "phase": CareerLoopPhase.COMPLETE.value,
     }
 
     (status, _), final_status = _request(
         restarted_runtime,
         method="GET",
-        path=f"/v1/candidate/runs/{run_id}/status",
+        path=f"/v1/candidate/runs/{durable_run_id}/status",
     )
     assert status == "200 OK"
     assert final_status["phase"] == CareerLoopPhase.COMPLETE.value
