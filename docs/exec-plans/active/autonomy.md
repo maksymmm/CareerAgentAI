@@ -1594,12 +1594,14 @@ owner-scoped intent discovery after browser reload and version-bound reconciliat
 
 Candidate owner-collection invalidation: candidate run, application, and schedule-event
 projections are cleared before every workflow-changing request, including start, decision,
-recovery, and all three provider-reconciliation submissions. This is deliberately
-pre-request so uncertain/lost responses cannot leave old owner-scoped rows presented as
-current; collection generations also discard any late in-flight read. A status or approval
-snapshot that advances beyond the previously selected run version invalidates the same
-collections because another actor may have changed related application or calendar state.
-Chromium and static contract regressions cover the version-advance and recovery boundaries.
+recovery, and all three provider-reconciliation submissions. Collection controls are
+disabled while the mutation is in flight, and the loaders reject programmatic attempts;
+the collections are cleared again after settlement so reads cannot race the commit and
+repaint stale rows. Collection generations discard reads that were already in flight.
+A status or approval snapshot that advances beyond the previously selected run version
+invalidates the same collections because another actor may have changed related
+application or calendar state. Chromium and static regressions cover version advancement,
+pre/post mutation invalidation, and the disabled-read boundary.
 Next: extend the same stale-projection audit to the candidate external-action status panel
 when its integration lands, and verify message/application/interview cross-collection
 refresh behavior against the durable runtime.
