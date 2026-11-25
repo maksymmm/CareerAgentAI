@@ -196,6 +196,214 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
     )
     database.connection.commit()
 
-    with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
+    with pytest.raises(CalendarReconciliationEvidenceError, match="inconclusive"):
         service.resolve_reconciliation("accept:evidence", completed=True)
     assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+
+def test_unknown_calendar_operation_is_not_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+
+    assert (
+        provider.verify_calendar_action("never-attempted").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_missing_calendar_attempt_history_is_not_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(
+        database, lambda _key, _attempt: SandboxCalendarOutcome.NO_EFFECT
+    )
+    with pytest.raises(PreCalendarActionError, match="no calendar effect"):
+        provider.decline("decline:missing-attempt", _event())
+    database.connection.execute(
+        "DELETE FROM sandbox_calendar_attempts WHERE operation_id = ?",
+        ("decline:missing-attempt",),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("decline:missing-attempt").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_missing_effect_after_recorded_timeout_is_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    service, provider, operations = _stack(
+        database,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    service.add_event(_event())
+    assert service.accept(
+        "accept:missing-effect", "interview-evidence", human_approved=True
+    ) is None
+    database.connection.execute(
+        "DELETE FROM sandbox_calendar_effects WHERE operation_id = ?",
+        ("accept:missing-effect",),
+    )
+    database.connection.commit()
+
+    with pytest.raises(CalendarReconciliationEvidenceError, match="inconclusive"):
+        service.resolve_reconciliation("accept:missing-effect", completed=False)
+    assert (
+        operations.get("accept:missing-effect").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+
+
+def test_calendar_intent_payload_is_rehashed_even_if_both_fingerprints_match(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    provider.accept("accept:rewritten-fingerprint", _event())
+    database.connection.execute(
+        "UPDATE sandbox_calendar_intents SET fingerprint = ? WHERE operation_id = ?",
+        ("0" * 64, "accept:rewritten-fingerprint"),
+    )
+    database.connection.execute(
+        "UPDATE sandbox_calendar_effects SET fingerprint = ? WHERE operation_id = ?",
+        ("0" * 64, "accept:rewritten-fingerprint"),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("accept:rewritten-fingerprint").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_calendar_intent_payload_tampering_is_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    provider.accept("accept:tampered-intent", _event())
+    row = database.connection.execute(
+        "SELECT intent_json FROM sandbox_calendar_intents WHERE operation_id = ?",
+        ("accept:tampered-intent",),
+    ).fetchone()
+    payload = json.loads(row[0])
+    payload[1]["location"] = "Tampered location"
+    database.connection.execute(
+        "UPDATE sandbox_calendar_intents SET intent_json = ? WHERE operation_id = ?",
+        (
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            "accept:tampered-intent",
+        ),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("accept:tampered-intent").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_calendar_effect_must_match_the_canonical_delivered_event(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    provider.accept("accept:tampered-effect", _event())
+    row = database.connection.execute(
+        "SELECT event_json FROM sandbox_calendar_effects WHERE operation_id = ?",
+        ("accept:tampered-effect",),
+    ).fetchone()
+    event = json.loads(row[0])
+    event["location"] = "Tampered location"
+    database.connection.execute(
+        "UPDATE sandbox_calendar_effects SET event_json = ? WHERE operation_id = ?",
+        (
+            json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            "accept:tampered-effect",
+        ),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("accept:tampered-effect").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_calendar_attempt_after_effect_makes_evidence_inconclusive(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    provider.accept("accept:attempt-after-effect", _event())
+    database.connection.execute(
+        "INSERT INTO sandbox_calendar_attempts VALUES (?, ?, ?)",
+        (
+            "accept:attempt-after-effect",
+            2,
+            SandboxCalendarOutcome.NO_EFFECT.value,
+        ),
+    )
+    database.connection.commit()
+
+    assert (
+        provider.verify_calendar_action("accept:attempt-after-effect").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_calendar_replay_refuses_a_corrupt_attempt_ledger(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    source = _event()
+    provider.accept("accept:missing-ledger", source)
+    database.connection.execute(
+        "DELETE FROM sandbox_calendar_attempts WHERE operation_id = ?",
+        ("accept:missing-ledger",),
+    )
+    database.connection.commit()
+
+    with pytest.raises(PreCalendarActionError, match="no attempt history"):
+        provider.accept("accept:missing-ledger", source)
+    assert provider.effect_count("accept:missing-ledger") == 1
+    assert (
+        provider.verify_calendar_action("accept:missing-ledger").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+
+
+def test_legacy_calendar_intent_without_canonical_payload_fails_closed(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    database.connection.execute(
+        "CREATE TABLE sandbox_calendar_intents ("
+        "operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)"
+    )
+    database.connection.execute(
+        "INSERT INTO sandbox_calendar_intents(operation_id, fingerprint) VALUES (?, ?)",
+        ("accept:legacy", "0" * 64),
+    )
+    database.connection.commit()
+    provider = SQLiteSandboxCalendarProvider(database)
+
+    assert (
+        provider.verify_calendar_action("accept:legacy").state
+        == CalendarEvidenceState.UNKNOWN
+    )
+    with pytest.raises(PreCalendarActionError, match="incomplete or corrupt"):
+        provider.accept("accept:legacy", _event())
+
+
+def test_calendar_reschedule_evidence_binds_the_exact_target_slot(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    source = _event()
+    target_start = source.start_at + timedelta(days=2)
+    target_end = target_start + timedelta(hours=1)
+
+    delivered = provider.reschedule(
+        "reschedule:canonical-target",
+        source,
+        target_start,
+        target_end,
+        "Europe/Berlin",
+    )
+    evidence = provider.verify_calendar_action("reschedule:canonical-target")
+
+    assert evidence.state == CalendarEvidenceState.PRESENT
+    assert evidence.event == delivered
+    assert evidence.event.start_at == target_start
+    assert evidence.event.end_at == target_end
+    assert evidence.event.timezone_name == "Europe/Berlin"
