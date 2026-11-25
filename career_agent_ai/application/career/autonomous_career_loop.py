@@ -519,6 +519,17 @@ class AutonomousCareerLoop:
             lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
         try:
+            if not completed:
+                event_id = state.request.schedule_event_id
+                if not isinstance(event_id, str) or not event_id:
+                    raise CareerLoopConflictError(
+                        "Interview reconciliation has no durable event identity."
+                    )
+                current_event = self._scheduling.get_event(event_id)
+                if current_event.status == ScheduleStatus.ACCEPTED:
+                    raise CareerLoopConflictError(
+                        "An accepted interview cannot be reconciled as no calendar effect."
+                    )
             try:
                 self._scheduling.resolve_reconciliation(
                     operation_id,

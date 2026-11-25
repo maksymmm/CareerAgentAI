@@ -1588,5 +1588,9 @@ fractional/negative values, non-finite JSON constants and values above the stora
 range return sanitized 400 responses without reaching a provider resolver. OpenAPI
 publishes the same bound; HTTP regressions cover all three reconciliation routes,
 including the maximum accepted value. No provider I/O or durable mutation is added.
-Next: finish durable recovery for pending candidate interview actions, including
-owner-scoped intent discovery after browser reload and version-bound reconciliation.
+Owner-scoped interview-intent discovery after browser reload is implemented in PR #309
+with a single read-only SQLite snapshot. A separate safety guard now rejects a
+not-completed reconciliation when the local interview event is already accepted, so a
+direct API caller cannot convert a durable accepted event into a no-effect retry.
+Next: exact-head CI and independent review, then cross-provider restart/concurrency
+acceptance for application, communication and calendar.
