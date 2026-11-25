@@ -1605,9 +1605,12 @@ synthetic TIMEOUT_AFTER_EFFECT calendar result. It closes and reopens the runtim
 rejects mismatched provider-event evidence without changing the run, event,
 external-action operation, attempts, effect, or replay count, then races two
 same-version evidence-backed reconciliation requests through independent request
-connections. Exactly one request completes the candidate run and the other receives
-a sanitized conflict. The accepted event and succeeded external action remain bound
-to the single durable provider effect. No network calendar, production credential,
+connections. Exactly one request wins reconciliation and the other receives a
+sanitized conflict. If the winning response remains at the recoverable interview_accept
+phase while post-effect application tracking is pending, an authenticated continue
+request after the race completes the candidate run. The accepted event and succeeded
+external action remain bound to the single durable provider effect. No network
+calendar, production credential,
 real invitation, application submission, or outbound message is used.
 
 Next: extend the single-winner matrix to communication reconciliation and reconcile
