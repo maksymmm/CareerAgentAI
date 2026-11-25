@@ -855,7 +855,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             },
             "subject": {
                 "type": "string", "minLength": 1, "maxLength": 500,
-                "pattern": r"^(?![\\s\\S]*[\\u0000-\\u001F\\u007F\\uD800-\\uDFFF])\\S(?:[\\s\\S]*\\S)?$",
+                "pattern": r"^(?![\s\S]*[\u0000-\u001F\u007F\uD800-\uDFFF])\S(?:[\s\S]*\S)?$",
             },
             "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         },
