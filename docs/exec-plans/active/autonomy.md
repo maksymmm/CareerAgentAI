@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate interview completion HTTP restart acceptance: an authenticated WSGI
+regression now drives the SQLite sandbox calendar provider through a timeout-after-
+effect, closes the first runtime, and resolves the same durable operation after restart.
+A mismatched provider event ID must return a sanitized 409 without changing the run,
+schedule row, attempt history, or replay counter. The matching provider evidence then
+completes the candidate workflow through the same HTTP boundary without another
+provider attempt or replay. The test asserts one durable effect, one attempt, the
+accepted schedule event, and a completed owner-scoped run.
+Next: apply the same authenticated restart acceptance boundary to application and
+communication reconciliation, then add concurrent HTTP retry coverage.
