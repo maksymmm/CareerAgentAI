@@ -74,6 +74,10 @@ from career_agent_ai.application.storage.sqlite_job_application_repository impor
 from career_agent_ai.application.storage.sqlite_scheduling_repository import (
     SQLiteSchedulingRepository,
 )
+from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SandboxCalendarOutcome,
+    SQLiteSandboxCalendarProvider,
+)
 
 
 CREATED = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
@@ -92,6 +96,7 @@ def build_stack(
     job_title: str = "Logistics Coordinator",
     company_id: str = "company-1",
     max_iterations: int = AutonomousCareerLoop.DEFAULT_MAX_ITERATIONS,
+    calendar_outcome_plan=None,
 ):
     database = SQLiteDatabase(path)
 
@@ -141,7 +146,11 @@ def build_stack(
     )
 
     schedules = SQLiteSchedulingRepository(database)
-    calendar_provider = FakeCalendarAdapter()
+    calendar_provider = (
+        FakeCalendarAdapter()
+        if calendar_outcome_plan is None
+        else SQLiteSandboxCalendarProvider(database, calendar_outcome_plan)
+    )
     scheduling = SchedulingService(
         schedules,
         calendar_provider,
@@ -149,6 +158,7 @@ def build_stack(
             operations,
             SchedulingService.action_adapter(calendar_provider, schedules),
         ),
+        require_provider_evidence=calendar_outcome_plan is not None,
     )
     loop = AutonomousCareerLoop(
         agent_factory=factory,
@@ -4155,4 +4165,153 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
         restored.selected_job_snapshot_sha256
     )
     database.close()
+
+
+def test_candidate_http_reconciles_sqlite_calendar_timeout_after_restart(tmp_path):
+    import json
+    from io import BytesIO
+
+    from career_agent_ai.application.api.candidate_approval_api import (
+        CandidateApprovalWSGIApp,
+    )
+
+    path = str(tmp_path / "candidate-calendar-evidence-http-restart.sqlite")
+    run_id = "candidate-calendar-evidence-http-restart"
+    planned_attempts = []
+
+    def timeout_after_effect(operation_id, attempt):
+        planned_attempts.append((operation_id, attempt))
+        return SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(
+        path,
+        calendar_outcome_plan=timeout_after_effect,
+    )
+    add_interview(scheduling, f"{run_id}:application")
+    loop.start(request(), run_id=run_id)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == (
+        CareerLoopPhase.MESSAGE_APPROVAL
+    )
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == (
+        CareerLoopPhase.INTERVIEW_APPROVAL
+    )
+
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    operation_id = ambiguous.human_action.details["operation_id"]
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    assert planned_attempts == [(operation_id, 1)]
+    assert calendar_provider.effect_count(operation_id) == 1
+    assert scheduling.get_event("interview-1").status == ScheduleStatus.PROPOSED
+    assert scheduling.get_operation(operation_id).status == (
+        ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+    database.close()
+
+    restarted_database, restarted_loop, _, _, restarted_scheduling, _, _, restarted_provider = (
+        build_stack(
+            path,
+            calendar_outcome_plan=lambda _operation_id, _attempt: (
+                SandboxCalendarOutcome.SUCCESS
+            ),
+        )
+    )
+    operation_before = restarted_scheduling.get_operation(operation_id)
+    assert operation_before.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+    candidate_app = CandidateApprovalWSGIApp(
+        restarted_loop,
+        resolve_bearer=lambda token: "user-1" if token == "valid" else None,
+    )
+
+    def post_reconciliation(provider_event_id):
+        payload = {
+            "schema_version": 1,
+            "state_version": observed_version,
+            "completed": True,
+            "provider_event_id": provider_event_id,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        responses = []
+        environ = {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": (
+                f"/v1/candidate/runs/{run_id}/interview-reconciliation"
+            ),
+            "QUERY_STRING": "",
+            "HTTP_AUTHORIZATION": "Bearer valid",
+            "CONTENT_LENGTH": str(len(body)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": BytesIO(body),
+        }
+        response = b"".join(
+            candidate_app(
+                environ,
+                lambda status, headers: responses.append((status, dict(headers))),
+            )
+        )
+        assert len(responses) == 1
+        return responses[0], json.loads(response)
+
+    rejected, rejection_body = post_reconciliation("wrong-provider-event")
+    assert rejected[0] == "409 Conflict"
+    assert rejection_body == {"error": "approval_conflict"}
+    assert rejected[1]["Cache-Control"] == "no-store"
+    assert restarted_scheduling.get_operation(operation_id) == operation_before
+    assert restarted_scheduling.get_event("interview-1").status == (
+        ScheduleStatus.PROPOSED
+    )
+    assert restarted_loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"] == observed_version
+    assert restarted_provider.calls == []
+    assert restarted_provider.effect_count(operation_id) == 1
+
+    attempts = restarted_database.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+        "WHERE operation_id = ? ORDER BY attempt_no",
+        (operation_id,),
+    ).fetchall()
+    assert attempts == [
+        (1, SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT.value)
+    ]
+    replay_count = restarted_database.connection.execute(
+        "SELECT replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    assert replay_count == (0,)
+
+    accepted, accepted_body = post_reconciliation("fake-interview-1")
+    assert accepted[0] == "200 OK"
+    assert accepted[1]["Cache-Control"] == "no-store"
+    assert accepted_body == {
+        "run_id": run_id,
+        "phase": CareerLoopPhase.COMPLETE.value,
+    }
+
+    final_event = restarted_scheduling.get_event("interview-1")
+    assert final_event.status == ScheduleStatus.ACCEPTED
+    assert final_event.provider_event_id == "fake-interview-1"
+    final_operation = restarted_scheduling.get_operation(operation_id)
+    assert final_operation.status == ExternalActionStatus.SUCCEEDED
+    assert final_operation.result["provider_event_id"] == "fake-interview-1"
+    final_status = restarted_loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )
+    assert final_status["phase"] == CareerLoopPhase.COMPLETE.value
+    assert final_status["waiting_for_human"] is False
+    assert restarted_provider.calls == []
+    assert restarted_provider.effect_count(operation_id) == 1
+    assert restarted_database.connection.execute(
+        "SELECT replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone() == (0,)
+    assert restarted_database.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+        "WHERE operation_id = ? ORDER BY attempt_no",
+        (operation_id,),
+    ).fetchall() == attempts
+    restarted_database.close()
 
