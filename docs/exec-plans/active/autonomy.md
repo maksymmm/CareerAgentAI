@@ -1590,3 +1590,18 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Candidate interview reconciliation intent recovery: an authenticated owner-scoped GET
+restores the pending calendar intent only when the durable run snapshot, calendar.accept
+operation and scheduling-event action claim agree in one read-only SQLite transaction.
+The projection validates the local event time against its IANA timezone, returns only
+the minimal event reference/employer/local date/time/timezone and exact state version,
+and never exposes the private operation ID or provider payload. The candidate browser
+requires an exact version match and still requires independent provider attestation
+before the existing version-bound POST. Regression coverage exercises the real ambiguous
+sandbox calendar flow, owner isolation, immutable SQLite bytes, operation-payload and
+event-claim tampering, strict OpenAPI/HTTP behavior and Chromium stale-version rejection.
+Next: audit cross-collection invalidation across application, message, interview and
+external-action status projections.

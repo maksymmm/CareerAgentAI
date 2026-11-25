@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from math import isfinite
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from collections.abc import Mapping
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
@@ -785,6 +787,212 @@ class SQLiteCandidateRunStatusProjection:
         if row is None or row[0] != owner:
             raise KeyError("Unknown autonomous career loop for this user.")
         return self._status_from_row(identifier, row, owner=owner)
+
+    def get_interview_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
+        """Restore an owned pending interview intent only when all durable evidence agrees."""
+        identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
+        owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
+        connection = self._database.connection
+        if connection.in_transaction:
+            raise RuntimeError("Interview intent projection requires a request-local transaction.")
+        connection.execute("BEGIN")
+        try:
+            row = connection.execute(
+                """SELECT owner_user_id, payload_json, version
+                   FROM autonomous_career_loops WHERE run_id = ?""",
+                (identifier,),
+            ).fetchone()
+            if row is None or row[0] != owner:
+                raise KeyError("Unknown autonomous career loop for this user.")
+
+            def unique_object(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError("Persisted JSON contains duplicate members.")
+                    value[key] = item
+                return value
+
+            def strict_object(raw):
+                value = json.loads(
+                    raw,
+                    object_pairs_hook=unique_object,
+                    parse_constant=lambda token: (_ for _ in ()).throw(
+                        ValueError(f"Invalid JSON constant: {token}.")
+                    ),
+                )
+                if not isinstance(value, dict):
+                    raise ValueError("Persisted JSON must be an object.")
+                return value
+
+            try:
+                payload = strict_object(row[1])
+                state = SQLiteCareerLoopRepository._deserialize(
+                    payload, storage_version=row[2]
+                )
+                if (
+                    state.run_id != identifier
+                    or state.request.user_id != owner
+                    or type(row[2]) is not int
+                    or state.version != row[2]
+                ):
+                    raise ValueError("Persisted interview run identity or version is malformed.")
+                if state.phase is not CareerLoopPhase.INTERVIEW_RECONCILIATION:
+                    connection.commit()
+                    return None
+                action = state.pending_human_action
+                if (
+                    action is None
+                    or action.kind is not HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
+                    or not isinstance(action.details, Mapping)
+                ):
+                    raise ValueError("Pending interview reconciliation action is malformed.")
+                details = action.details
+                raw_operation_id = details.get("operation_id")
+                raw_event_id = details.get("event_id")
+                operation_id = SQLiteCareerLoopRepository._identifier(
+                    raw_operation_id, "operation_id"
+                )
+                event_id = SQLiteCareerLoopRepository._identifier(raw_event_id, "event_id")
+                for raw_identifier in (raw_operation_id, raw_event_id):
+                    if raw_identifier != raw_identifier.strip() or any(
+                        ord(character) < 32 or ord(character) == 127
+                        or 0xD800 <= ord(character) <= 0xDFFF
+                        for character in raw_identifier
+                    ):
+                        raise ValueError("Persisted interview identifier is malformed.")
+
+                employer = details.get("employer")
+                local_date = details.get("local_date")
+                local_start_time = details.get("local_start_time")
+                timezone_name = details.get("timezone")
+                if (
+                    not isinstance(employer, str)
+                    or not employer
+                    or len(employer) > 200
+                    or employer != employer.strip()
+                    or any(ord(character) < 32 or ord(character) == 127
+                           or 0xD800 <= ord(character) <= 0xDFFF for character in employer)
+                ):
+                    raise ValueError("Persisted interview employer is malformed.")
+                if (
+                    not isinstance(local_date, str)
+                    or len(local_date) != 10
+                    or date.fromisoformat(local_date).isoformat() != local_date
+                ):
+                    raise ValueError("Persisted interview date is malformed.")
+                if not isinstance(local_start_time, str) or len(local_start_time) > 32:
+                    raise ValueError("Persisted interview local time is malformed.")
+                parsed_time = time.fromisoformat(local_start_time)
+                if parsed_time.tzinfo is not None or parsed_time.isoformat() != local_start_time:
+                    raise ValueError("Persisted interview local time is malformed.")
+                if (
+                    not isinstance(timezone_name, str)
+                    or not timezone_name
+                    or len(timezone_name) > 100
+                    or timezone_name != timezone_name.strip()
+                    or any(ord(character) < 32 or ord(character) == 127
+                           or 0xD800 <= ord(character) <= 0xDFFF for character in timezone_name)
+                ):
+                    raise ValueError("Persisted interview timezone is malformed.")
+                zone = ZoneInfo(timezone_name)
+                application_id = SQLiteCareerLoopRepository._identifier(
+                    state.application_id, "application_id"
+                )
+
+                operation_row = connection.execute(
+                    """SELECT action_type, payload_json, status, result_json
+                       FROM external_action_operations WHERE operation_id = ?""",
+                    (operation_id,),
+                ).fetchone()
+                if (
+                    operation_row is None
+                    or operation_row[0] != "calendar.accept"
+                    or operation_row[2] != "reconciliation_required"
+                    or operation_row[3] is not None
+                ):
+                    raise ValueError("Persisted calendar operation does not match pending intent.")
+                operation_payload = strict_object(operation_row[1])
+                expected_keys = {
+                    "event_id", "event_version", "event_start_at", "event_end_at",
+                    "event_timezone_name", "event_status",
+                }
+                if set(operation_payload) != expected_keys:
+                    raise ValueError("Persisted calendar operation payload is malformed.")
+                event_version = operation_payload["event_version"]
+                event_status = operation_payload["event_status"]
+                event_start_at = operation_payload["event_start_at"]
+                event_end_at = operation_payload["event_end_at"]
+                event_timezone = operation_payload["event_timezone_name"]
+                if (
+                    operation_payload["event_id"] != event_id
+                    or type(event_version) is not int
+                    or event_version < 1
+                    or event_status not in {"proposed", "reschedule_requested"}
+                    or not isinstance(event_start_at, str)
+                    or (event_end_at is not None and not isinstance(event_end_at, str))
+                    or event_timezone != timezone_name
+                ):
+                    raise ValueError("Persisted calendar operation does not match pending intent.")
+
+                event_row = connection.execute(
+                    """SELECT candidate_id, employer_name, event_type, start_at, end_at,
+                              timezone_name, status, provider_event_id, application_id,
+                              version, active_action_operation_id
+                       FROM scheduling_events WHERE event_id = ?""",
+                    (event_id,),
+                ).fetchone()
+                if (
+                    event_row is None
+                    or event_row[0] != owner
+                    or event_row[1] != employer
+                    or event_row[2] != "interview"
+                    or event_row[3] != event_start_at
+                    or event_row[4] != event_end_at
+                    or event_row[5] != timezone_name
+                    or event_row[6] != event_status
+                    or event_row[7] is not None
+                    or event_row[8] != application_id
+                    or event_row[9] != event_version
+                    or event_row[10] != operation_id
+                ):
+                    raise ValueError("Persisted schedule event does not match pending operation.")
+
+                start = datetime.fromisoformat(event_start_at)
+                if start.tzinfo is None or start.utcoffset() is None:
+                    raise ValueError("Persisted interview start must be timezone-aware.")
+                local_start = start.astimezone(zone)
+                if (
+                    local_start.date().isoformat() != local_date
+                    or local_start.time().isoformat() != local_start_time
+                ):
+                    raise ValueError("Persisted interview local time does not match event.")
+                if event_end_at is not None:
+                    end = datetime.fromisoformat(event_end_at)
+                    if end.tzinfo is None or end.utcoffset() is None or end <= start:
+                        raise ValueError("Persisted interview end is malformed.")
+
+                result = {
+                    "schema_version": 1,
+                    "run_id": identifier,
+                    "state_version": state.version,
+                    "event_id": event_id,
+                    "employer": employer,
+                    "local_date": local_date,
+                    "local_start_time": local_start_time,
+                    "timezone": timezone_name,
+                }
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "Persisted candidate interview reconciliation is malformed."
+                ) from exc
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
 
     @staticmethod
     def _status_from_row(identifier: str, row: tuple[Any, ...], *, owner: str) -> dict[str, Any]:

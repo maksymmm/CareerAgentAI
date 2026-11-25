@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -4156,3 +4157,110 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+
+
+
+def _create_ambiguous_interview_intent_database(path, monkeypatch):
+    run_id = "interview-intent-recovery"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    def ambiguous_accept(*args, **kwargs):
+        raise RuntimeError("synthetic ambiguous calendar response")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    state = SQLiteCareerLoopRepository(database).get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    operation_id = state.pending_human_action.details["operation_id"]
+    version = state.version
+    database.close()
+    return run_id, operation_id, version
+
+
+def test_candidate_interview_intent_projection_binds_calendar_operation_and_event_read_only(
+    tmp_path, monkeypatch
+):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+
+    path = tmp_path / "interview-intent-projection.sqlite"
+    run_id, operation_id, version = _create_ambiguous_interview_intent_database(str(path), monkeypatch)
+    baseline = path.read_bytes()
+    runtime = RuntimeCandidateApp(
+        database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "user-1" if token == "valid" else "user-2",
+    )
+    intent = runtime.get_candidate_interview_reconciliation(run_id, user_id="user-1")
+    assert intent == {
+        "schema_version": 1,
+        "run_id": run_id,
+        "state_version": version,
+        "event_id": "interview-1",
+        "employer": "Acme Logistics",
+        "local_date": "2026-11-12",
+        "local_start_time": "10:00:00",
+        "timezone": "Europe/Berlin",
+    }
+    assert operation_id not in str(intent)
+    with pytest.raises(KeyError) as foreign:
+        runtime.get_candidate_interview_reconciliation(run_id, user_id="user-2")
+    with pytest.raises(KeyError) as missing:
+        runtime.get_candidate_interview_reconciliation("missing-run", user_id="user-1")
+    assert str(foreign.value) == str(missing.value)
+    assert path.read_bytes() == baseline
+    runtime.close()
+
+
+def test_candidate_interview_intent_projection_rejects_mismatched_calendar_operation(
+    tmp_path, monkeypatch
+):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+
+    path = tmp_path / "interview-intent-operation-corrupt.sqlite"
+    run_id, operation_id, _ = _create_ambiguous_interview_intent_database(str(path), monkeypatch)
+    connection = sqlite3.connect(path)
+    row = connection.execute(
+        "SELECT payload_json FROM external_action_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    payload = json.loads(row[0])
+    payload["event_id"] = "different-event"
+    connection.execute(
+        "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+        (json.dumps(payload), operation_id),
+    )
+    connection.commit()
+    connection.close()
+
+    runtime = RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda token: "user-1",
+    )
+    with pytest.raises(ValueError, match="Persisted candidate interview reconciliation is malformed"):
+        runtime.get_candidate_interview_reconciliation(run_id, user_id="user-1")
+    runtime.close()
+
+
+def test_candidate_interview_intent_projection_rejects_lost_calendar_action_claim(
+    tmp_path, monkeypatch
+):
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+
+    path = tmp_path / "interview-intent-claim-corrupt.sqlite"
+    run_id, _, _ = _create_ambiguous_interview_intent_database(str(path), monkeypatch)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "UPDATE scheduling_events SET active_action_operation_id = NULL WHERE event_id = ?",
+        ("interview-1",),
+    )
+    connection.commit()
+    connection.close()
+
+    runtime = RuntimeCandidateApp(
+        database_path=str(path), jobs=(), resolve_bearer=lambda token: "user-1",
+    )
+    with pytest.raises(ValueError, match="Persisted candidate interview reconciliation is malformed"):
+        runtime.get_candidate_interview_reconciliation(run_id, user_id="user-1")
+    runtime.close()
