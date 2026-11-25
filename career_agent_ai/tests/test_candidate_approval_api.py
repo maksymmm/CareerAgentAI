@@ -1844,6 +1844,10 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
                     "phase": "interview_reconciliation", "waiting_for_human": True,
                     "terminal": False}
 
+        def get_candidate_interview_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {**self.interview_intent, "state_version": self.status_version}
+
         def resolve_interview_reconciliation(self, run_id, **kwargs):
             self.resolutions.append((run_id, kwargs))
             return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
@@ -3243,9 +3247,7 @@ def test_candidate_sandbox_restores_interview_intent_after_reload_and_rejects_st
             page.locator("#token").fill("valid")
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
-            page.wait_for_function(
-                "document.querySelector('#interview-reconciliation-intent').textContent.includes('Sandbox GmbH')"
-            )
+            page.get_by_text("Sandbox GmbH", exact=False).wait_for()
             intent_text = page.locator("#interview-reconciliation-intent").text_content()
             assert "2026-11-25 10:00:00" in intent_text
             assert "Europe/Berlin" in intent_text
@@ -3259,9 +3261,7 @@ def test_candidate_sandbox_restores_interview_intent_after_reload_and_rejects_st
 
             loop.intent_version = 18
             page.locator("#status").click()
-            page.wait_for_function(
-                "document.querySelector('#interview-reconciliation-state').textContent.includes('Pending interview details could not be restored')"
-            )
+            page.get_by_text("Pending interview details could not be restored", exact=False).wait_for()
             assert page.locator("#provider-event-id").input_value() == ""
             assert page.locator("#provider-event-id").is_disabled()
             assert page.locator("#confirm-calendar-completed").is_disabled()
