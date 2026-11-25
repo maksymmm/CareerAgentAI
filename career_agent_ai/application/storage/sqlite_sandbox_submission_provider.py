@@ -174,7 +174,7 @@ class SQLiteSandboxSubmissionProvider:
                 ).fetchone()
                 if intent is None or intent[0] != fingerprint:
                     raise PreSubmissionError(
-                        "Sandbox provider replay is missing or conflicts with its durable intent."
+                        "Sandbox provider replay has a missing durable intent or a different submission intent."
                     )
                 result = self._replay(existing, fingerprint)
                 connection.commit()
