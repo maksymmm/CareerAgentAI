@@ -1868,7 +1868,16 @@ def test_candidate_sandbox_invalidates_all_owner_collections_before_state_change
     ):
         start = html.index(handler)
         post = html.index(request, start)
-        assert html.index("invalidateCandidateCollections();", start, post) < post
+        assert html.index("beginCandidateMutation();", start, post) < post
+    assert html.count("beginCandidateMutation();") == 6
+    assert html.count("finishCandidateMutation();") == 6
+
+    begin_helper = html[html.index("function beginCandidateMutation"):html.index("function selectRun")]
+    assert "candidateMutationInFlight = true" in begin_helper
+    assert "candidateMutationInFlight = false" in begin_helper
+    for loader in ("async function loadApplications", "async function loadEvents", "async function loadRunList"):
+        section_start = html.index(loader)
+        assert "if (candidateMutationInFlight)" in html[section_start:section_start + 250]
 
     status_start = html.index("byId('status').addEventListener")
     status_end = html.index("byId('continue').addEventListener", status_start)
@@ -1876,6 +1885,10 @@ def test_candidate_sandbox_invalidates_all_owner_collections_before_state_change
     assert "const previousRunVersion = selectedRunVersion" in status_handler
     assert "snapshot.state_version > previousRunVersion" in status_handler
     assert "invalidateCandidateCollections();" in status_handler
+
+    prompt_start = html.index("byId('prompt').addEventListener")
+    prompt_get = html.index("const loadedPrompt = await call", prompt_start)
+    assert "invalidateCandidateCollections();" in html[prompt_get:html.index("promptInFlight = false", prompt_get)]
 
 
 def test_candidate_sandbox_invalidates_owner_collections_after_workflow_advance():
@@ -1885,6 +1898,14 @@ def test_candidate_sandbox_invalidates_owner_collections_after_workflow_advance(
         def __init__(self):
             super().__init__()
             self.version = 1
+            self.continue_entered = Event()
+            self.continue_release = Event()
+
+        def continue_run(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            self.continue_entered.set()
+            assert self.continue_release.wait(timeout=5)
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
         def get_candidate_run_status(self, run_id, *, user_id):
             assert (run_id, user_id) == ("run-1", "candidate-1")
@@ -1940,11 +1961,18 @@ def test_candidate_sandbox_invalidates_owner_collections_after_workflow_advance(
             assert_collections_cleared()
 
             seed_stale_collections()
-            page.locator("#continue").click()
+            page.evaluate("document.querySelector('#continue').click()")
+            assert loop.continue_entered.wait(timeout=5)
+            for identifier in ("list-applications", "list-events", "list-runs"):
+                assert page.locator(f"#{identifier}").is_disabled()
+            loop.continue_release.set()
             page.locator("#result").get_by_text('"phase": "complete"').wait_for()
             assert_collections_cleared()
+            for identifier in ("list-applications", "list-events", "list-runs"):
+                assert not page.locator(f"#{identifier}").is_disabled()
             browser.close()
     finally:
+        loop.continue_release.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
