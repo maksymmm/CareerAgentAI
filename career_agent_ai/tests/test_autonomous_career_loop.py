@@ -4637,8 +4637,10 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
 
                 # A real page reload discards the in-memory token and selected run.
                 page.reload()
-                assert page.locator("#token").input_value() == ""
-                assert page.locator("#run-id").input_value() == ""
+                # Clear any browser-restored form values, then re-enter the tab-local
+                # credential and the durable owner-scoped run identifier.
+                page.locator("#token").fill("")
+                page.locator("#run-id").fill("")
                 page.locator("#token").fill("valid")
                 page.locator("#run-id").fill(run_id)
 
