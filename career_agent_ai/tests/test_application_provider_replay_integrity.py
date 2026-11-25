@@ -80,10 +80,12 @@ def test_replay_fails_closed_on_corrupt_effect_metadata_without_mutation(
     _submit(provider)
     database.connection.execute(statement, (value, OPERATION_ID))
     database.connection.commit()
-    before_replays = database.connection.execute(
-        "SELECT replays FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+    before_ledger = database.connection.execute(
+        "SELECT idempotency_key, fingerprint, job_id, application_id, artifact_sha256, "
+        "candidate_snapshot_sha256, provider_submission_id, replays "
+        "FROM sandbox_submission_ledger WHERE idempotency_key = ?",
         (OPERATION_ID,),
-    ).fetchone()[0]
+    ).fetchone()
     before_attempts = database.connection.execute(
         "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
         "WHERE idempotency_key = ? ORDER BY attempt_no",
@@ -95,20 +97,19 @@ def test_replay_fails_closed_on_corrupt_effect_metadata_without_mutation(
     with pytest.raises(PreSubmissionError):
         _submit(provider)
 
-    after_replays = restarted.connection.execute(
-        "SELECT replays FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+    after_ledger = restarted.connection.execute(
+        "SELECT idempotency_key, fingerprint, job_id, application_id, artifact_sha256, "
+        "candidate_snapshot_sha256, provider_submission_id, replays "
+        "FROM sandbox_submission_ledger WHERE idempotency_key = ?",
         (OPERATION_ID,),
-    ).fetchone()[0]
+    ).fetchone()
     after_attempts = restarted.connection.execute(
         "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
         "WHERE idempotency_key = ? ORDER BY attempt_no",
         (OPERATION_ID,),
     ).fetchall()
-    assert after_replays == before_replays
+    assert after_ledger == before_ledger
     assert after_attempts == before_attempts
-    assert provider.ledger_entries()[0].application_id == (
-        APPLICATION_ID if value not in {"tampered-application"} else "tampered-application"
-    )
     restarted.close()
 
 
@@ -209,4 +210,30 @@ def test_replay_accepts_only_explicit_no_effect_attempts_before_terminal_effect(
         SandboxOutcome.SUCCESS,
     )
     assert provider.observe(OPERATION_ID).replays == 1
+    restarted.close()
+
+
+def test_replay_does_not_accept_a_rewritten_durable_intent(tmp_path):
+    path = tmp_path / "application-corrupt-intent.sqlite"
+    database, provider = _stack(path)
+    _submit(provider)
+    database.connection.execute(
+        "UPDATE sandbox_submission_intents SET fingerprint = ? WHERE idempotency_key = ?",
+        ("0" * 64, OPERATION_ID),
+    )
+    database.connection.commit()
+    database.close()
+
+    restarted, provider = _stack(path)
+    with pytest.raises(PreSubmissionError, match="durable intent"):
+        _submit(provider)
+    assert restarted.connection.execute(
+        "SELECT fingerprint FROM sandbox_submission_intents WHERE idempotency_key = ?",
+        (OPERATION_ID,),
+    ).fetchone() == ("0" * 64,)
+    assert restarted.connection.execute(
+        "SELECT replays FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+        (OPERATION_ID,),
+    ).fetchone() == (0,)
+    assert provider.attempts(OPERATION_ID) == (SandboxOutcome.SUCCESS,)
     restarted.close()
