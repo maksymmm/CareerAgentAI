@@ -333,7 +333,7 @@ def test_interview_reconciliation_rejects_ambiguous_or_identity_bearing_body(bod
     assert not hasattr(loop, "interview_reconciliation_call")
 
 
-def test_interview_reconciliation_openapi_is_strict_and_post_only():
+def test_interview_reconciliation_openapi_is_strict_for_get_and_post():
     route = "/v1/candidate/runs/{run_id}/interview-reconciliation"
     document_route = candidate_approval_openapi_document()["paths"][route]
     operation = document_route["post"]
@@ -349,10 +349,11 @@ def test_interview_reconciliation_openapi_is_strict_and_post_only():
     assert "operation_id" not in intent_schema["properties"]
     assert "provider_event_id" not in intent_schema["properties"]
     assert "provider_event_id" not in event_schema["properties"]
-    (status, headers), _ = request(app(Loop()), method="GET",
+    (status, headers), body = request(app(Loop()), method="GET",
         path="/v1/candidate/runs/run-1/interview-reconciliation")
-    assert status == "405 Method Not Allowed"
-    assert ("Allow", "POST") in headers
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body["state_version"] == 17
 
 
 def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch, tmp_path):
@@ -416,9 +417,14 @@ def test_runtime_candidate_app_delegates_message_reconciliation(monkeypatch, tmp
     }
 
 
-def test_runtime_candidate_app_delegates_interview_reconciliation_intent(monkeypatch, tmp_path):
+def test_runtime_candidate_app_reads_interview_intent_without_schema_mutation(
+    monkeypatch, tmp_path
+):
     from career_agent_ai.application.runtime import composition
 
+    path = str(tmp_path / "runtime-interview-intent.sqlite")
+    setup = composition.SQLiteDatabase(path)
+    setup.close()
     observed = {}
     expected = {
         "schema_version": 1, "run_id": "run-1", "state_version": 23,
@@ -426,23 +432,43 @@ def test_runtime_candidate_app_delegates_interview_reconciliation_intent(monkeyp
         "event": {"event_id": "interview-1", "employer_name": "Acme Logistics"},
     }
 
-    class DurableLoop:
-        def get_candidate_interview_reconciliation(self, run_id, **kwargs):
-            observed.update(run_id=run_id, **kwargs)
-            return expected
+    def project(loop, run_id, *, user_id):
+        observed.update(run_id=run_id, user_id=user_id)
+        assert isinstance(loop._states, composition.SQLiteCareerLoopRepository)
+        assert isinstance(loop._scheduling, composition._ReadOnlyCandidateInterviewScheduling)
+        return expected
 
-    monkeypatch.setattr(composition, "_build_candidate_loop", lambda database, jobs, plan=None: DurableLoop())
+    monkeypatch.setattr(
+        composition.AutonomousCareerLoop,
+        "get_candidate_interview_reconciliation",
+        project,
+    )
+    monkeypatch.setattr(
+        composition,
+        "_build_candidate_loop",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("read-only recovery must not build writable repositories")
+        ),
+    )
     runtime = composition.RuntimeCandidateApp(
-        database_path=str(tmp_path / "runtime-interview-intent.sqlite"), jobs=(),
+        database_path=path, jobs=(),
         resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
     )
     (status, _), body = request(
         runtime, path="/v1/candidate/runs/run-1/interview-reconciliation",
     )
     runtime.close()
+
+    check = composition.SQLiteDatabase.open_read_only(path)
+    tables = check.connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    ).fetchall()
+    check.close()
+
     assert status == "200 OK"
     assert body == expected
     assert observed == {"run_id": "run-1", "user_id": "candidate-1"}
+    assert tables == []
 
 
 def test_runtime_candidate_app_delegates_interview_reconciliation(monkeypatch, tmp_path):

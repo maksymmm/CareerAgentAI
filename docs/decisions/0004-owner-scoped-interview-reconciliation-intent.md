@@ -25,6 +25,7 @@ Add an authenticated, read-only
 - returns only the run state version, local event details and allowed reconciliation
   outcomes;
 - never returns the internal operation ID or provider event ID;
+- opens existing SQLite storage in read-only mode without schema setup;
 - performs no provider I/O and does not retry the action;
 - restricts the no-effect outcome once the local event is already accepted.
 

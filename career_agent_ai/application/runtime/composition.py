@@ -238,6 +238,27 @@ class RuntimeCandidateApp:
         self.close()
 
 
+class _ReadOnlyCandidateInterviewScheduling:
+    """Expose only event and operation reads over an existing read-only connection."""
+
+    def __init__(self, database: SQLiteDatabase) -> None:
+        self._operations = object.__new__(SQLiteExternalActionOperationRepository)
+        self._operations._database = database
+        self._events = object.__new__(SQLiteSchedulingRepository)
+        self._events._database = database
+
+    def get_operation(self, operation_id: str):
+        """Load one validated durable calendar operation without schema setup."""
+        return self._operations.get(operation_id)
+
+    def get_event(self, event_id: str):
+        """Load one validated event or hide a missing event behind the same boundary."""
+        event = self._events.get(event_id)
+        if event is None:
+            raise KeyError(f"Unknown scheduling event: {event_id!r}")
+        return event
+
+
 class _RequestCandidateLoop:
     """Open durable storage only after the API authenticates and routes a request."""
 
@@ -404,12 +425,17 @@ class _RequestCandidateLoop:
     def get_candidate_interview_reconciliation(
         self, run_id: str, *, user_id: str
     ) -> dict[str, Any]:
-        """Read the owned pending interview intent using request-local storage."""
-        database = SQLiteDatabase(self._database_path)
+        """Read the owned pending intent without schema writes or provider composition."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
         try:
-            return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
-            ).get_candidate_interview_reconciliation(run_id, user_id=user_id)
+            states = object.__new__(SQLiteCareerLoopRepository)
+            states._database = database
+            loop = object.__new__(AutonomousCareerLoop)
+            loop._states = states
+            loop._scheduling = _ReadOnlyCandidateInterviewScheduling(database)
+            return loop.get_candidate_interview_reconciliation(
+                run_id, user_id=user_id
+            )
         finally:
             database.close()
 

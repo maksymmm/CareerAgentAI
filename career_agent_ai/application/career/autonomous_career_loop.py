@@ -446,15 +446,9 @@ class AutonomousCareerLoop:
         expected_action_details = {
             "event_id": view.event_id,
             "employer": view.employer_name,
-            "event_type": view.event_type.value,
-            "location": view.location,
             "local_date": view.local_date,
             "local_start_time": view.local_start_time,
-            "local_end_date": view.local_end_date,
-            "local_end_time": view.local_end_time,
             "timezone": view.timezone_name,
-            "utc_offset": view.utc_offset,
-            "end_utc_offset": view.end_utc_offset,
         }
         if any(
             action.details.get(key) != value

@@ -74,5 +74,6 @@ allowlisted local event details and only outcomes supported by the current durab
 It never returns the private provider operation ID or provider event ID. The candidate
 must independently verify the calendar provider outcome before using the existing POST
 reconciliation endpoint; the submitted state version is checked before durable resolution.
-The GET path performs no provider I/O. This is sandbox recovery functionality, not a
-production candidate dashboard or live calendar integration.
+The GET path opens existing SQLite storage in read-only mode, performs no schema writes
+or provider I/O, and never composes a writable provider workflow. This is sandbox recovery
+functionality, not a production candidate dashboard or live calendar integration.
