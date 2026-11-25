@@ -1621,3 +1621,21 @@ replays. No network calendar or real-world action is used.
 
 Next: complete browser-level acceptance for the restored intent and its explicit
 provider-attestation gate, then reconcile the stacked interview recovery PRs.
+
+
+Candidate browser interview recovery after reload:
+
+A Chromium acceptance now drives the actual RuntimeCandidateApp and SQLite
+sandbox calendar ledger. It starts from one persisted TIMEOUT_AFTER_EFFECT
+calendar effect, reloads the page (requiring the candidate to re-enter the
+in-memory bearer token and durable run ID), rejects a stale intent version,
+restores the exact current owner-scoped intent, and keeps both reconciliation
+buttons disabled until the candidate supplies provider evidence and explicitly
+checks the independent-attestation gate. The browser then posts the version-bound
+evidence, continues the recoverable interview-accept phase when needed, and
+requires the terminal COMPLETE view. Durable assertions prove the provider effect,
+single attempt and zero replay count are unchanged by browser recovery. No
+network calendar or real-world action is used.
+
+Next: reconcile the stacked interview recovery PRs and continue independent
+candidate workflow hardening while external review remains pending.

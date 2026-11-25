@@ -4545,3 +4545,202 @@ def test_candidate_interview_intent_round_trip_reconciles_timeout_after_effect_f
         assert final[4] == [(operation_id, 1, "timeout_after_effect")]
     finally:
         runtime.close()
+
+
+def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider_evidence(
+    tmp_path, monkeypatch
+):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+        SandboxCalendarOutcome,
+        SQLiteSandboxCalendarProvider,
+    )
+
+    path = tmp_path / "candidate-browser-interview-recovery.sqlite"
+    run_id, operation_id, _ = _create_ambiguous_interview_intent_database(
+        str(path), monkeypatch
+    )
+
+    database = SQLiteDatabase(str(path))
+    try:
+        event = SQLiteSchedulingRepository(database).get("interview-1")
+        assert event is not None
+        provider = SQLiteSandboxCalendarProvider(
+            database,
+            lambda _operation_id, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+        )
+        with pytest.raises(TimeoutError, match="timed out after recording the effect"):
+            provider.accept(operation_id, event)
+        effect_before = database.connection.execute(
+            "SELECT event_json, replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall()
+        attempts_before = database.connection.execute(
+            "SELECT operation_id, attempt_no, outcome FROM sandbox_calendar_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_no",
+            (operation_id,),
+        ).fetchall()
+        assert len(effect_before) == 1
+        assert effect_before[0][1] == 0
+        assert attempts_before == [(operation_id, 1, "timeout_after_effect")]
+        provider_event_id = json.loads(effect_before[0][0])["provider_event_id"]
+        assert provider_event_id == "fake-interview-1"
+    finally:
+        database.close()
+
+    runtime = RuntimeCandidateApp(
+        database_path=str(path),
+        jobs=(),
+        resolve_bearer=lambda token: "user-1" if token == "valid" else None,
+    )
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, runtime, handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(
+                    f"http://127.0.0.1:{server.server_port}/sandbox/candidate"
+                )
+                page.locator("#token").fill("valid")
+                page.locator("#run-id").fill(run_id)
+                page.locator("#status").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#interview-reconciliation-intent')"
+                    ".textContent.includes('Acme Logistics')"
+                )
+                assert page.locator("#provider-event-id").input_value() == ""
+                assert page.locator("#provider-event-id").is_enabled()
+                assert not page.locator(
+                    "#interview-reconciliation-verified"
+                ).is_checked()
+                assert page.locator("#confirm-calendar-completed").is_disabled()
+
+                # A real page reload discards the in-memory token and selected run.
+                page.reload()
+                assert page.locator("#token").input_value() == ""
+                assert page.locator("#run-id").input_value() == ""
+                page.locator("#token").fill("valid")
+                page.locator("#run-id").fill(run_id)
+
+                # A stale intent version must fail closed even when status is current.
+                def stale_intent_response(route):
+                    response = route.fetch()
+                    payload = response.json()
+                    payload["state_version"] -= 1
+                    route.fulfill(response=response, json=payload)
+
+                page.route("**/interview-reconciliation", stale_intent_response)
+                page.locator("#status").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#interview-reconciliation-state')"
+                    ".textContent.includes('could not be restored')"
+                )
+                assert page.locator("#provider-event-id").input_value() == ""
+                assert page.locator("#provider-event-id").is_disabled()
+                assert page.locator("#confirm-calendar-completed").is_disabled()
+                assert page.locator("#confirm-calendar-not-completed").is_disabled()
+                assert not page.locator(
+                    "#interview-reconciliation-verified"
+                ).is_checked()
+                page.unroute("**/interview-reconciliation", stale_intent_response)
+
+                # A fresh exact-version read restores the public intent, not provider evidence.
+                page.locator("#status").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#interview-reconciliation-intent')"
+                    ".textContent.includes('Acme Logistics')"
+                )
+                intent_text = page.locator(
+                    "#interview-reconciliation-intent"
+                ).text_content()
+                assert "2026-11-12 10:00:00" in intent_text
+                assert "Europe/Berlin" in intent_text
+                assert "interview-1" in intent_text
+                assert provider_event_id not in intent_text
+                assert page.locator("#provider-event-id").input_value() == ""
+                assert page.locator("#confirm-calendar-completed").is_disabled()
+
+                page.locator("#provider-event-id").fill(provider_event_id)
+                assert page.locator("#confirm-calendar-completed").is_disabled()
+                page.locator("#interview-reconciliation-verified").check()
+                assert not page.locator("#confirm-calendar-completed").is_disabled()
+
+                page.locator("#confirm-calendar-completed").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#interview-reconciliation-state')"
+                    ".textContent.includes('Reconciliation finished')"
+                )
+                assert page.locator("#provider-event-id").is_disabled()
+                assert page.locator("#confirm-calendar-completed").is_disabled()
+                assert not page.locator(
+                    "#interview-reconciliation-verified"
+                ).is_checked()
+
+                page.locator("#status").click()
+                page.wait_for_function(
+                    "() => document.querySelector('#run-overview')"
+                    ".textContent.includes('version')"
+                )
+                overview = page.locator("#run-overview").text_content()
+                if "complete" not in overview.lower():
+                    assert "interview accept" in overview.lower()
+                    page.locator("#continue").click()
+                    page.locator("#status").click()
+                    page.wait_for_function(
+                        "() => document.querySelector('#run-overview')"
+                        ".textContent.includes('Finished') && "
+                        "document.querySelector('#run-overview')"
+                        ".textContent.includes('complete')"
+                    )
+                    overview = page.locator("#run-overview").text_content()
+                assert "Finished" in overview
+                assert "complete" in overview.lower()
+                assert page.locator("#provider-event-id").is_disabled()
+                assert page.locator("#confirm-calendar-completed").is_disabled()
+                assert page.locator("#confirm-calendar-not-completed").is_disabled()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        runtime.close()
+
+    database = SQLiteDatabase(str(path))
+    try:
+        state = SQLiteCareerLoopRepository(database).get(run_id)
+        assert state is not None
+        assert state.phase == CareerLoopPhase.COMPLETE
+        event = SQLiteSchedulingRepository(database).get("interview-1")
+        assert event is not None
+        assert event.status == ScheduleStatus.ACCEPTED
+        assert event.provider_event_id == provider_event_id
+        assert database.connection.execute(
+            "SELECT status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone() == ("succeeded",)
+        assert database.connection.execute(
+            "SELECT event_json, replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall() == effect_before
+        assert database.connection.execute(
+            "SELECT operation_id, attempt_no, outcome FROM sandbox_calendar_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_no",
+            (operation_id,),
+        ).fetchall() == attempts_before
+    finally:
+        database.close()
