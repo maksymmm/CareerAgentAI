@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import sqlite3
 from math import isfinite
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from career_agent_ai.application.communication.models import (
+    CommunicationMessage,
+    MessageDirection,
+)
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
@@ -785,6 +790,168 @@ class SQLiteCandidateRunStatusProjection:
         if row is None or row[0] != owner:
             raise KeyError("Unknown autonomous career loop for this user.")
         return self._status_from_row(identifier, row, owner=owner)
+
+    def get_message_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
+        """Restore a minimal owned message intent from one consistent read-only snapshot."""
+        identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
+        owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
+        connection = self._database.connection
+        connection.execute("BEGIN")
+        try:
+            row = connection.execute(
+                """
+                SELECT owner_user_id, payload_json, version
+                FROM autonomous_career_loops
+                WHERE run_id = ?
+                """,
+                (identifier,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise ValueError(
+                "Persisted candidate message reconciliation is malformed."
+            ) from exc
+        if row is None or row[0] != owner:
+            connection.execute("ROLLBACK")
+            raise KeyError("Unknown autonomous career loop for this user.")
+        try:
+            payload = json.loads(
+                row[1],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
+            state = SQLiteCareerLoopRepository._deserialize(
+                payload, storage_version=row[2]
+            )
+            if state.run_id != identifier or state.request.user_id != owner:
+                raise ValueError("Persisted message intent ownership is malformed.")
+            if state.phase is not CareerLoopPhase.MESSAGE_RECONCILIATION:
+                connection.execute("COMMIT")
+                return None
+            action = state.pending_human_action
+            if (
+                action is None
+                or action.kind is not HumanActionKind.RECONCILE_MESSAGE_DELIVERY
+            ):
+                raise ValueError("Pending message reconciliation action is malformed.")
+            details = action.details
+
+            def validated_identifier(value: Any, field: str) -> str:
+                normalized = SQLiteCareerLoopRepository._identifier(value, field)
+                if value != normalized or any(
+                    ord(character) < 32
+                    or ord(character) == 127
+                    or 0xD800 <= ord(character) <= 0xDFFF
+                    for character in normalized
+                ):
+                    raise ValueError(f"Persisted {field} is malformed.")
+                return normalized
+
+            operation_id = validated_identifier(
+                details.get("operation_id"), "operation_id"
+            )
+            message_id = validated_identifier(details.get("message_id"), "message_id")
+            operation_row = connection.execute(
+                """
+                SELECT action_type, payload_json, status
+                FROM external_action_operations
+                WHERE operation_id = ?
+                """,
+                (operation_id,),
+            ).fetchone()
+            if operation_row is None:
+                raise ValueError("Persisted message operation is missing.")
+            operation_payload = json.loads(
+                operation_row[1],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
+            if (
+                operation_row[0] != "communication.send"
+                or operation_row[2] != "reconciliation_required"
+                or operation_payload != {"message_id": message_id}
+            ):
+                raise ValueError("Persisted message operation does not match the pending intent.")
+            if state.message_id is None or message_id != state.message_id:
+                raise ValueError("Pending message identity does not match the run.")
+
+            message_row = connection.execute(
+                """
+                SELECT message_id, thread_id, sender, recipient, subject, body,
+                       direction, created_at, in_reply_to, delivery_operation_id
+                FROM communication_messages
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            ).fetchone()
+            if message_row is None:
+                raise ValueError("Persisted pending message is missing.")
+            message = CommunicationMessage(
+                message_id=message_row[0],
+                thread_id=message_row[1],
+                sender=message_row[2],
+                recipient=message_row[3],
+                subject=message_row[4],
+                body=message_row[5],
+                direction=MessageDirection(message_row[6]),
+                created_at=datetime.fromisoformat(message_row[7]),
+                in_reply_to=message_row[8],
+            )
+            if (
+                message.message_id != message_row[0]
+                or message.thread_id != message_row[1]
+                or message.sender != message_row[2]
+                or message.recipient != message_row[3]
+                or message.subject != message_row[4]
+                or message.body != message_row[5]
+                or message.direction not in {
+                    MessageDirection.DRAFT, MessageDirection.OUTBOUND,
+                }
+                or message_row[9] != operation_id
+                or message.message_id != state.message_id
+                or message.sender != state.request.sender
+                or message.recipient != state.request.recipient
+                or message.subject != state.request.message_subject
+                or message.body != state.request.message_body
+                or message.created_at != state.created_at
+                or details.get("sender") != message.sender
+                or details.get("recipient") != message.recipient
+                or details.get("subject") != message.subject
+                or details.get("body") != message.body
+            ):
+                raise ValueError("Persisted message does not match the pending intent.")
+
+            content_digest = sha256(
+                (
+                    message.sender + "\n" + message.recipient + "\n"
+                    + message.subject + "\n" + message.body
+                ).encode("utf-8")
+            ).hexdigest()
+            if details.get("content_sha256") != content_digest:
+                raise ValueError("Pending message content digest is malformed.")
+
+            result = {
+                "schema_version": 1,
+                "run_id": identifier,
+                "state_version": state.version,
+                "sender": message.sender,
+                "recipient": message.recipient,
+                "subject": message.subject,
+                "content_sha256": content_digest,
+            }
+            connection.execute("COMMIT")
+            return result
+        except (KeyError, TypeError, ValueError, UnicodeError, sqlite3.Error) as exc:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise ValueError(
+                "Persisted candidate message reconciliation is malformed."
+            ) from exc
 
     @staticmethod
     def _status_from_row(identifier: str, row: tuple[Any, ...], *, owner: str) -> dict[str, Any]:

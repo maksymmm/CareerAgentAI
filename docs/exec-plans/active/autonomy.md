@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate message reconciliation intent recovery: an authenticated owner-scoped GET
+restores only the minimum persisted message identity needed to verify an ambiguous
+delivery after browser reload. One read-only SQLite transaction binds the run snapshot,
+pending operation, message row, delivery claim, sender/recipient/subject and canonical
+content digest. The projection omits the message body, message ID and private operation
+ID; the browser accepts it only for the exact selected run and state version, then still
+requires explicit independent provider attestation before the existing version-bound
+POST. Regression coverage includes owner-before-parse, immutable read-only storage,
+message-row tampering, HTTP/OpenAPI, runtime composition and Chromium version races.
+Next: exact-head full CI and independent code/security review, then audit remaining
+candidate workflow restart paths.
