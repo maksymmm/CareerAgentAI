@@ -1859,6 +1859,16 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert ("Referrer-Policy", "no-referrer") in headers
     assert any(name == "Content-Security-Policy" for name, _ in headers)
     assert "/v1/candidate/runs" in html
+    assert 'id="candidate-actions-title"' in html
+    assert 'id="list-candidate-actions"' in html
+    assert 'id="next-candidate-actions"' in html
+    assert "async function loadCandidateActions(after = null)" in html
+    assert "generation !== actionStatusGeneration" in html
+    assert "contextGeneration !== inputContextGeneration" in html
+    assert "hasExactFields(page, ['schema_version', 'run_ref', 'items', 'next_after'])" in html
+    assert "guarded(() => loadCandidateActions(), true)" in html
+    assert "loadCandidateActions(nextCandidateActionCursor)" in html
+    assert "clearCandidateActions();" in html[html.index("function selectRun"):html.index("async function call")]
     assert "const resultRequest = ++latestResultRequest" in html
     assert (
         "async function call(path, options = {}, safeError = null, preserveOverview = false)"
@@ -3154,3 +3164,258 @@ def test_post_approval_accepts_maximum_sqlite_state_version():
     assert status == "200 OK"
     assert response == {"run_id": "run-1", "phase": "message_approval"}
     assert loop.submission.state_version == (1 << 63) - 1
+
+
+def test_candidate_action_status_route_binds_owner_cursor_and_rejects_invalid_queries():
+    from career_agent_ai.application.observability.action_cursor import encode_action_cursor
+
+    class ActionLoop:
+        def __init__(self):
+            self.calls = []
+
+        def list_candidate_action_statuses(self, run_id, *, user_id, limit=25, after=None):
+            self.calls.append((run_id, user_id, limit, after))
+            return {
+                "schema_version": 1,
+                "run_ref": sha256(run_id.encode("utf-8")).hexdigest()[:24],
+                "items": [],
+                "next_after": None,
+            }
+
+    loop = ActionLoop()
+    run_ref = sha256(b"run-1").hexdigest()[:24]
+    cursor = encode_action_cursor("operation-1", candidate_run_ref=run_ref)
+    (status, headers), body = request(
+        app(loop),
+        path="/v1/candidate/runs/run-1/actions",
+        query=f"limit=10&after={cursor}",
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == {
+        "schema_version": 1,
+        "run_ref": run_ref,
+        "items": [],
+        "next_after": None,
+    }
+    assert loop.calls == [("run-1", "candidate-1", 10, cursor)]
+
+    wrong_cursor = encode_action_cursor("operation-1", candidate_run_ref="0" * 24)
+    (status, _), _ = request(
+        app(loop),
+        path="/v1/candidate/runs/run-1/actions",
+        query=f"after={wrong_cursor}",
+    )
+    assert status == "400 Bad Request"
+    (status, _), _ = request(
+        app(loop),
+        path="/v1/candidate/runs/run-1/actions",
+        query="limit=10&limit=20",
+    )
+    assert status == "400 Bad Request"
+    (status, _), _ = request(
+        app(loop),
+        token="invalid",
+        path="/v1/candidate/runs/run-1/actions",
+        query="limit=10",
+    )
+    assert status == "401 Unauthorized"
+    (status, headers), _ = request(
+        app(loop),
+        method="POST",
+        path="/v1/candidate/runs/run-1/actions",
+    )
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "GET") in headers
+    assert loop.calls == [("run-1", "candidate-1", 10, cursor)]
+
+
+def test_candidate_sandbox_browser_lists_external_actions_and_redacts_malformed_pages():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from career_agent_ai.application.observability.action_cursor import encode_action_cursor
+
+    class BrowserActionLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.action_reads = []
+
+        def list_candidate_action_statuses(self, run_id, *, user_id, limit=25, after=None):
+            self.action_reads.append((run_id, user_id, limit, after))
+            run_ref = sha256(run_id.encode("utf-8")).hexdigest()[:24]
+            if run_id == "other-run":
+                return {
+                    "schema_version": 1,
+                    "run_ref": run_ref,
+                    "items": [],
+                    "next_after": None,
+                    "private_provider_payload": "must never reach the dashboard",
+                }
+            cursor = encode_action_cursor("operation-2", candidate_run_ref=run_ref)
+            if after is None:
+                return {
+                    "schema_version": 1,
+                    "run_ref": run_ref,
+                    "items": [
+                        {
+                            "operation_ref": "a" * 24,
+                            "action_family": "application_submission",
+                            "status": "reconciliation_required",
+                            "created_at": "2026-11-24T10:00:00+00:00",
+                            "updated_at": "2026-11-24T10:01:00+00:00",
+                            "error_present": True,
+                        },
+                        {
+                            "operation_ref": "b" * 24,
+                            "action_family": "communication",
+                            "status": "in_progress",
+                            "created_at": "2026-11-24T10:02:00+00:00",
+                            "updated_at": "2026-11-24T10:02:00+00:00",
+                            "error_present": False,
+                        },
+                    ],
+                    "next_after": cursor,
+                }
+            assert after == cursor
+            return {
+                "schema_version": 1,
+                "run_ref": run_ref,
+                "items": [
+                    {
+                        "operation_ref": "c" * 24,
+                        "action_family": "calendar",
+                        "status": "succeeded",
+                        "created_at": "2026-11-24T10:03:00+00:00",
+                        "updated_at": "2026-11-24T10:04:00+00:00",
+                        "error_present": False,
+                    }
+                ],
+                "next_after": None,
+            }
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = BrowserActionLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#list-candidate-actions").click()
+            page.locator("#candidate-actions-state").get_by_text(
+                "2 actions on this page", exact=False
+            ).wait_for()
+            first_page = page.locator("#candidate-actions").inner_text()
+            assert "application submission — reconciliation required" in first_page
+            assert "communication — in progress" in first_page
+            assert "a" * 24 in first_page
+            assert "Error recorded" in first_page
+            assert not page.locator("#next-candidate-actions").is_disabled()
+
+            page.locator("#next-candidate-actions").click()
+            page.locator("#candidate-actions").get_by_text(
+                "calendar — succeeded", exact=False
+            ).wait_for()
+            assert "b" * 24 not in page.locator("#candidate-actions").inner_text()
+            assert page.locator("#next-candidate-actions").is_disabled()
+            expected_cursor = encode_action_cursor(
+                "operation-2",
+                candidate_run_ref=sha256(b"run-1").hexdigest()[:24],
+            )
+            assert loop.action_reads[:2] == [
+                ("run-1", "candidate-1", 25, None),
+                ("run-1", "candidate-1", 25, expected_cursor),
+            ]
+
+            page.locator("#run-id").fill("other-run")
+            assert page.locator("#candidate-actions").inner_text() == ""
+            assert page.locator("#next-candidate-actions").is_disabled()
+            page.locator("#list-candidate-actions").click()
+            page.locator("#result").get_by_text("Invalid external action page.").wait_for()
+            assert "private_provider_payload" not in page.locator("body").text_content()
+            assert "must never reach the dashboard" not in page.locator("body").text_content()
+            assert page.locator("#candidate-actions").inner_text() == ""
+
+            page.locator("#token").fill("changed")
+            assert page.locator("#candidate-actions").inner_text() == ""
+            assert page.locator("#list-candidate-actions").is_enabled()
+            page.locator("#token").fill("")
+            assert page.locator("#list-candidate-actions").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert loop.action_reads[0][:3] == ("run-1", "candidate-1", 25)
+    assert loop.action_reads[1][:3] == ("run-1", "candidate-1", 25)
+    assert loop.action_reads[2][:3] == ("other-run", "candidate-1", 25)
+
+
+def test_candidate_sandbox_browser_discards_external_actions_after_run_switch():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    started = Event()
+    release = Event()
+    finished = Event()
+
+    class BlockingActionLoop(Loop):
+        def list_candidate_action_statuses(self, run_id, *, user_id, limit=25, after=None):
+            assert (run_id, user_id, limit, after) == ("run-1", "candidate-1", 25, None)
+            started.set()
+            try:
+                assert release.wait(timeout=5)
+                return {
+                    "schema_version": 1,
+                    "run_ref": sha256(run_id.encode("utf-8")).hexdigest()[:24],
+                    "items": [{
+                        "operation_ref": "d" * 24,
+                        "action_family": "calendar",
+                        "status": "failed",
+                        "created_at": "2026-11-24T10:00:00+00:00",
+                        "updated_at": "2026-11-24T10:01:00+00:00",
+                        "error_present": True,
+                    }],
+                    "next_after": None,
+                }
+            finally:
+                finished.set()
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = BlockingActionLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#list-candidate-actions").click()
+            assert started.wait(timeout=5)
+            page.locator("#run-id").fill("run-2")
+            release.set()
+            assert finished.wait(timeout=5)
+            page.wait_for_timeout(100)
+            assert page.locator("#candidate-actions").inner_text() == ""
+            assert page.locator("#next-candidate-actions").is_disabled()
+            assert page.locator("#candidate-actions-state").text_content() == (
+                "Select a run and load its external actions."
+            )
+            browser.close()
+    finally:
+        release.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
