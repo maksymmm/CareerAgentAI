@@ -30,6 +30,12 @@ class Loop:
         )
         self.submission = None
         self.started = None
+        self.message_intent_reads = []
+        self.message_intent = {
+            "schema_version": 1, "run_id": "run-1", "state_version": 11,
+            "sender": "candidate@example.test", "recipient": "recruiter@example.test",
+            "subject": "Logistics application follow-up", "content_sha256": "c" * 64,
+        }
 
     def start(self, request, *, run_id=None):
         self.started = (request, run_id)
@@ -59,6 +65,11 @@ class Loop:
             run_id, user_id, submitted, provider_submission_id, expected_state_version
         )
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+    def get_candidate_message_reconciliation(self, run_id, *, user_id):
+        assert (run_id, user_id) == ("run-1", "candidate-1")
+        self.message_intent_reads.append((run_id, user_id))
+        return self.message_intent
 
     def resolve_message_reconciliation(
         self, run_id, *, user_id, delivered, expected_state_version=None,
@@ -175,6 +186,42 @@ def test_message_reconciliation_binds_owner_and_observed_state_version():
     assert loop.message_reconciliation_call == ("run-1", "candidate-1", True, 11)
 
 
+def test_message_reconciliation_get_restores_minimal_owned_intent():
+    loop = Loop()
+    (status, headers), body = request(
+        app(loop), method="GET",
+        path="/v1/candidate/runs/run-1/message-reconciliation",
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == loop.message_intent
+    assert loop.message_intent_reads == [("run-1", "candidate-1")]
+    assert "operation_id" not in body
+    assert "message_id" not in body
+    assert "body" not in body
+
+    (status, _), _ = request(
+        app(loop), method="GET",
+        path="/v1/candidate/runs/run-1/message-reconciliation", query="unexpected=1",
+    )
+    assert status == "400 Bad Request"
+    assert loop.message_intent_reads == [("run-1", "candidate-1")]
+
+
+def test_message_reconciliation_get_reports_missing_pending_intent_as_conflict():
+    class NoIntentLoop(Loop):
+        def get_candidate_message_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return None
+
+    (status, _), body = request(
+        app(NoIntentLoop()), method="GET",
+        path="/v1/candidate/runs/run-1/message-reconciliation",
+    )
+    assert status == "409 Conflict"
+    assert body == {"error": "reconciliation_unavailable"}
+
+
 @pytest.mark.parametrize("body", [
     {"schema_version": 1, "state_version": 11},
     {"schema_version": 1, "state_version": 11, "delivered": 1},
@@ -202,6 +249,22 @@ def test_message_reconciliation_openapi_documents_conflict_and_strict_body():
     assert schema["additionalProperties"] is False
     conflict = operation["responses"]["409"]["content"]["application/json"]["schema"]
     assert conflict["properties"]["error"]["const"] == "approval_conflict"
+    get_operation = candidate_approval_openapi_document()["paths"][route]["get"]
+    get_schema = get_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert get_operation["security"] == [{"bearerAuth": []}]
+    assert get_schema["required"] == [
+        "schema_version", "run_id", "state_version", "sender", "recipient",
+        "subject", "content_sha256",
+    ]
+    assert get_schema["additionalProperties"] is False
+    assert get_operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
+    (status, headers), body = request(
+        app(Loop()), method="PUT",
+        path="/v1/candidate/runs/run-1/message-reconciliation",
+    )
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "GET, POST") in headers
+    assert body == {"error": "method_not_allowed"}
 
 
 def test_interview_reconciliation_binds_owner_version_and_provider_evidence():
@@ -314,6 +377,51 @@ def test_runtime_candidate_app_delegates_message_reconciliation(monkeypatch, tmp
         "run_id": "run-1", "user_id": "candidate-1", "delivered": False,
         "expected_state_version": 13,
     }
+
+
+def test_runtime_candidate_app_reads_message_intent_through_read_only_projection(
+    monkeypatch, tmp_path
+):
+    from career_agent_ai.application.runtime import composition
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+    from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+
+    path = str(tmp_path / "runtime-message-intent.sqlite")
+    database = SQLiteDatabase(path)
+    database.close()
+    expected = {
+        "schema_version": 1, "run_id": "run-1", "state_version": 13,
+        "sender": "candidate@example.test", "recipient": "recruiter@example.test",
+        "subject": "Logistics application follow-up", "content_sha256": "c" * 64,
+    }
+    observed = []
+
+    def project(self, run_id, *, user_id):
+        observed.append((run_id, user_id))
+        return expected
+
+    monkeypatch.setattr(
+        SQLiteCandidateRunStatusProjection, "get_message_reconciliation", project
+    )
+    runtime = composition.RuntimeCandidateApp(
+        database_path=path, jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    (status, _), body = request(
+        runtime, method="GET",
+        path="/v1/candidate/runs/run-1/message-reconciliation",
+    )
+    result = runtime.get_candidate_message_reconciliation(
+        "run-1", user_id="candidate-1"
+    )
+    runtime.close()
+
+    assert status == "200 OK"
+    assert body == expected
+    assert result == expected
+    assert observed == [("run-1", "candidate-1"), ("run-1", "candidate-1")]
 
 
 def test_runtime_candidate_app_delegates_interview_reconciliation(monkeypatch, tmp_path):
@@ -1721,6 +1829,7 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             super().__init__()
             self.resolutions = []
             self.status_version = 13
+            self.intent_version = None
 
         def get_candidate_run_status(self, run_id, *, user_id):
             assert (run_id, user_id) == ("run-1", "candidate-1")
@@ -1728,6 +1837,15 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
                     "state_version": self.status_version,
                     "phase": "message_reconciliation", "waiting_for_human": True,
                     "terminal": False}
+
+        def get_candidate_message_reconciliation(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id,
+                "state_version": self.status_version if self.intent_version is None else self.intent_version,
+                "sender": "candidate@example.test", "recipient": "recruiter@example.test",
+                "subject": "Logistics application follow-up", "content_sha256": "c" * 64,
+            }
 
         def resolve_message_reconciliation(self, run_id, **kwargs):
             self.resolutions.append((run_id, kwargs))
@@ -1752,14 +1870,33 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             page.locator("#message-reconciliation-state").get_by_text(
                 "Verify the provider outcome outside this sandbox", exact=False
             ).wait_for()
+            page.locator("#message-reconciliation-intent").get_by_text(
+                "Logistics application follow-up", exact=False
+            ).wait_for()
+            assert page.locator("#message-reconciliation-intent").get_by_text(
+                "candidate@example.test", exact=False
+            ).count() == 1
             assert page.locator("#confirm-delivered").is_disabled()
             page.locator("#message-reconciliation-verified").check()
             loop.status_version = 18
+            loop.intent_version = 17
+            page.locator("#status").click()
+            page.locator("#message-reconciliation-state").get_by_text(
+                "Pending message details could not be restored", exact=False
+            ).wait_for()
+            assert page.locator("#confirm-delivered").is_disabled()
+            assert page.locator("#confirm-not-delivered").is_disabled()
+            assert page.locator("#message-reconciliation-intent").text_content() == "No pending message intent loaded."
+            loop.intent_version = None
             page.locator("#status").click()
             page.locator("#run-overview").get_by_text("version 18").wait_for()
+            page.locator("#message-reconciliation-intent").get_by_text(
+                "Logistics application follow-up", exact=False
+            ).wait_for()
             page.locator("#run-id").fill("run-2")
             assert page.locator("#confirm-delivered").is_disabled()
             assert page.locator("#confirm-not-delivered").is_disabled()
+            assert page.locator("#message-reconciliation-intent").text_content() == "No pending message intent loaded."
             page.locator("#run-id").fill("run-1")
             page.locator("#status").click()
             page.locator("#message-reconciliation-verified").check(); page.locator("#confirm-not-delivered").click()
