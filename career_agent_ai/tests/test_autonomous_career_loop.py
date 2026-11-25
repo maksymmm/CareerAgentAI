@@ -4258,6 +4258,41 @@ def test_candidate_message_reconciliation_projection_rejects_tampered_message(
         database.close()
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("action_type", "calendar.accept"),
+        ("payload_json", '{"message_id":"foreign-message"}'),
+        ("status", "succeeded"),
+    ],
+)
+def test_candidate_message_reconciliation_projection_rejects_tampered_operation(
+    tmp_path, monkeypatch, column, value
+):
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    run_id = "message-reconciliation-operation-tampered"
+    path, database, state = _prepare_ambiguous_message_reconciliation_projection(
+        tmp_path, monkeypatch, run_id
+    )
+    operation_id = state.pending_human_action.details["operation_id"]
+    database.connection.execute(
+        f"UPDATE external_action_operations SET {column} = ? WHERE operation_id = ?",
+        (value, operation_id),
+    )
+    database.connection.commit()
+    readonly = SQLiteDatabase.open_read_only(path)
+    try:
+        projection = SQLiteCandidateRunStatusProjection(readonly)
+        with pytest.raises(ValueError, match="Persisted candidate message reconciliation is malformed"):
+            projection.get_message_reconciliation(run_id, user_id="user-1")
+    finally:
+        readonly.close()
+        database.close()
+
+
 def test_candidate_message_reconciliation_checks_owner_before_parsing_corrupt_snapshot(
     tmp_path, monkeypatch
 ):
