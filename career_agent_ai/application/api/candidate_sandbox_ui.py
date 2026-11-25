@@ -652,6 +652,15 @@ _HTML = r"""<!doctype html>
       byId('list-state').textContent = '';
       byId('next-runs').disabled = true;
     }
+    // Any workflow mutation can change more than the run snapshot: application
+    // tracking and schedule projections are separate owner-scoped collections.
+    // Clear them before sending the mutation so late in-flight reads cannot
+    // repopulate a projection from the pre-mutation state.
+    function invalidateCandidateProjections() {
+      clearRunList();
+      clearApplications();
+      clearEvents();
+    }
     const runPhases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
       'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
       'message_send', 'message_reconciliation', 'track', 'interview_coordination',
@@ -978,6 +987,7 @@ _HTML = r"""<!doctype html>
         throw new Error('Wait for the current workflow request to finish.');
       }
       startInFlight = true;
+      invalidateCandidateProjections();
       byId('start').disabled = true;
       byId('start-panel').setAttribute('aria-busy', 'true');
       const requestNumber = ++latestStartRequest;
@@ -1108,6 +1118,7 @@ _HTML = r"""<!doctype html>
       if (recoveryInFlight) throw new Error('Recovery is already running.');
       if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       recoveryInFlight = true;
+      invalidateCandidateProjections();
       byId('continue').disabled = true;
       byId('prompt').disabled = true;
       byId('approve').disabled = true;
@@ -1222,6 +1233,7 @@ _HTML = r"""<!doctype html>
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
       if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       decisionInFlight = true;
+      invalidateCandidateProjections();
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       byId('prompt').disabled = true;
@@ -1296,6 +1308,7 @@ _HTML = r"""<!doctype html>
         throw new Error('A valid provider submission ID is required.');
       }
       reconciliationInFlight = true;
+      invalidateCandidateProjections();
       byId('reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateApplicationReconciliation('Recording verified provider evidence…');
       try {
@@ -1338,6 +1351,7 @@ _HTML = r"""<!doctype html>
       const runId = byId('run-id').value;
       const observedVersion = messageReconciliationVersion;
       reconciliationInFlight = true;
+      invalidateCandidateProjections();
       byId('message-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateMessageReconciliation('Recording verified provider outcome…');
       try {
@@ -1382,6 +1396,7 @@ _HTML = r"""<!doctype html>
         throw new Error('A valid provider event ID is required.');
       }
       reconciliationInFlight = true;
+      invalidateCandidateProjections();
       byId('interview-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateInterviewReconciliation('Recording verified calendar-provider evidence…');
       try {
