@@ -1533,12 +1533,16 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
         server.server_close()
 
 
-def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrently():
+def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads_during_mutation():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     start_entered = Event()
     release_start = Event()
 
     class DelayedStartLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.list_calls = 0
+
         def start(self, request, *, run_id=None):
             self.started = (request, run_id)
             start_entered.set()
@@ -1548,6 +1552,7 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             )
 
         def list_run_statuses(self, **kwargs):
+            self.list_calls += 1
             assert kwargs == {
                 "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
             }
@@ -1576,14 +1581,23 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             page.locator("#profile").fill("Senior Python engineer")
             page.locator("#start").click()
             assert start_entered.wait(timeout=5)
-            with page.expect_request("**/v1/candidate/run-statuses?*"):
-                page.locator("#list-runs").dispatch_event("click")
+
+            assert page.locator("#list-runs").is_disabled()
+            page.locator("#list-runs").dispatch_event("click")
+            assert loop.list_calls == 0
+
             release_start.set()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             assert loop.started is not None
             assert page.locator("#run-id").input_value() == loop.started[1]
+            assert not page.locator("#list-runs").is_disabled()
+
+            with page.expect_request("**/v1/candidate/run-statuses?*"):
+                page.locator("#list-runs").click()
+            assert loop.list_calls == 1
             browser.close()
     finally:
+        release_start.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
