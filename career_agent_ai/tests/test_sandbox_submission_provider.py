@@ -580,3 +580,42 @@ def test_openapi_contract_exposes_no_new_sandbox_provider_surface():
     assert methods == {"post"}
     assert "409" in paths[route]["post"]["responses"]
     assert not [p for p in paths if "ledger" in p or "provider" in p or "sandbox-" in p]
+
+
+
+def test_provider_initialization_rejects_ambient_transaction_without_committing_it(path):
+    database = SQLiteDatabase(str(path))
+    connection = database.connection
+    connection.execute("CREATE TABLE caller_owned (value TEXT NOT NULL)")
+    connection.commit()
+    connection.execute("INSERT INTO caller_owned(value) VALUES ('pending')")
+    assert connection.in_transaction
+
+    with pytest.raises(
+        PreSubmissionError,
+        match="cannot initialize inside an existing SQLite transaction",
+    ):
+        SQLiteSandboxSubmissionProvider(database)
+
+    assert connection.in_transaction
+    assert connection.execute(
+        "SELECT value FROM caller_owned"
+    ).fetchall() == [("pending",)]
+    provider_tables = {
+        "sandbox_submission_intents",
+        "sandbox_submission_attempts",
+        "sandbox_submission_ledger",
+    }
+    existing_tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert provider_tables.isdisjoint(existing_tables)
+
+    connection.rollback()
+    assert connection.execute(
+        "SELECT value FROM caller_owned"
+    ).fetchall() == []
+    database.close()

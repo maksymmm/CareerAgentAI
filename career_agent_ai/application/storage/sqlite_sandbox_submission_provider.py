@@ -127,11 +127,16 @@ class SQLiteSandboxSubmissionProvider:
         database: SQLiteDatabase,
         plan: SandboxOutcomePlan | None = None,
     ) -> None:
+        connection = database.connection
+        if connection.in_transaction:
+            raise PreSubmissionError(
+                "Sandbox provider cannot initialize inside an existing SQLite transaction."
+            )
         self._database = database
         self._plan: SandboxOutcomePlan = plan or always(SandboxOutcome.SUCCESS)
         for statement in _SCHEMA:
-            self._database.connection.execute(statement)
-        self._database.connection.commit()
+            connection.execute(statement)
+        connection.commit()
 
     @property
     def is_dry_run(self) -> bool:
