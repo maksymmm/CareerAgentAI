@@ -266,6 +266,7 @@ class ApplicationSubmissionService:
         artifact_sha256: str,
         candidate_snapshot_sha256: str,
         human_approved: bool,
+        correlation_id: str | None = None,
     ) -> Mapping[str, Any] | None:
         """Submit one exact approved application artifact after explicit human approval."""
         if not isinstance(human_approved, bool):
@@ -312,7 +313,10 @@ class ApplicationSubmissionService:
                 )
                 legacy_intent = False
         else:
-            self._external_actions.prepare(operation_id, "application.submit", payload)
+            self._external_actions.prepare(
+                operation_id, "application.submit", payload,
+                correlation_id=correlation_id,
+            )
         operation = self._external_actions.execute(
             operation_id, human_approved=human_approved
         )
