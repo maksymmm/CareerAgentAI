@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Sandbox provider transaction ownership: communication and calendar providers now reject
+schema initialization while a caller-owned SQLite transaction is active. Communication
+draft and delivery, plus calendar actions, also reject ambient transactions before
+provider SQL or outcome-plan execution. Their provider-owned transactions remain
+BEGIN IMMEDIATE / commit units; they never join or commit unrelated caller work.
+Regression tests prove caller writes remain uncommitted and are rolled back by the
+caller, with provider ledgers and outcome plans untouched. CI now enforces the
+independent `python -m coverage report --fail-under=90` gate after pytest.
+Next: audit application-provider initialization for the same constructor boundary,
+then run exact-head full CI and independent code/security review.

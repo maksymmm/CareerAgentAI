@@ -199,3 +199,69 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
     with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
         service.resolve_reconciliation("accept:evidence", completed=True)
     assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+
+def test_calendar_provider_initialization_rejects_ambient_transaction(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    connection = database.connection
+    connection.execute(
+        "CREATE TABLE caller_transaction_probe (value TEXT NOT NULL)"
+    )
+    connection.commit()
+    connection.execute(
+        "INSERT INTO caller_transaction_probe(value) VALUES ('pending')"
+    )
+    assert connection.in_transaction
+
+    with pytest.raises(
+        PreCalendarActionError, match="initialize inside an existing SQLite transaction"
+    ):
+        SQLiteSandboxCalendarProvider(database)
+
+    assert connection.in_transaction
+    provider_tables = connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' "
+        "AND name LIKE 'sandbox_calendar_%'"
+    ).fetchone()[0]
+    assert provider_tables == 0
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM caller_transaction_probe"
+    ).fetchone()[0] == 0
+
+    provider = SQLiteSandboxCalendarProvider(database)
+    assert provider.effect_count("unused") == 0
+    database.close()
+
+
+def test_calendar_action_rejects_ambient_transaction_before_provider_work(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "calendar.db"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    connection = database.connection
+    connection.execute(
+        "CREATE TABLE caller_transaction_probe (value TEXT NOT NULL)"
+    )
+    connection.commit()
+    connection.execute(
+        "INSERT INTO caller_transaction_probe(value) VALUES ('pending')"
+    )
+
+    with pytest.raises(
+        PreCalendarActionError, match="cannot run inside an existing SQLite transaction"
+    ):
+        provider.accept("accept:caller-transaction", _event())
+
+    assert connection.in_transaction
+    assert provider.calls == []
+    for table in (
+        "sandbox_calendar_intents",
+        "sandbox_calendar_attempts",
+        "sandbox_calendar_effects",
+    ):
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM caller_transaction_probe"
+    ).fetchone()[0] == 0
+    database.close()

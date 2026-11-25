@@ -46,6 +46,10 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
         self._database = database
         self._plan = plan or (lambda _key, _attempt: SandboxCalendarOutcome.SUCCESS)
         connection = database.connection
+        if connection.in_transaction:
+            raise PreCalendarActionError(
+                "Sandbox calendar provider cannot initialize inside an existing SQLite transaction."
+            )
         connection.execute(
             """CREATE TABLE IF NOT EXISTS sandbox_calendar_intents (
                 operation_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL
@@ -188,8 +192,13 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
         )
 
     def _begin(self) -> None:
+        connection = self._database.connection
+        if connection.in_transaction:
+            raise PreCalendarActionError(
+                "Sandbox calendar provider cannot run inside an existing SQLite transaction."
+            )
         try:
-            self._database.connection.execute("BEGIN IMMEDIATE")
+            connection.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as exc:
             raise PreCalendarActionError(
                 "Sandbox calendar provider is busy; nothing was attempted."
