@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+External-action concurrency recovery: duplicate execution requests now observe a live
+`in_progress` operation without changing its state for a bounded five-minute grace.
+Only older operations move to `reconciliation_required`, and recovery never invokes
+the provider. A timezone-aware injectable clock makes the boundary deterministic;
+future timestamps remain live under clock skew. If a stale compare-and-swap loses to
+the original worker's terminal result, the service returns the durable winning state
+instead of surfacing a false recovery conflict. Regression tests use separate SQLite
+connections to reproduce a duplicate during the provider call and cover stale expiry,
+clock skew, invalid bounds and concurrent terminal completion.
+Next: exact-head full CI and independent code/security review, then continue sandbox
+provider evidence hardening without coupling to unrelated correlation metadata.
