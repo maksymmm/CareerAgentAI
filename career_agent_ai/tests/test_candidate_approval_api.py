@@ -1882,7 +1882,7 @@ def test_candidate_sandbox_browser_submits_versioned_message_reconciliation():
             loop.intent_version = 17
             page.locator("#status").click()
             page.locator("#message-reconciliation-state").get_by_text(
-                "Pending message details could not be restored", exact=False
+                "Status could not be verified. Refresh run status.", exact=False
             ).wait_for()
             assert page.locator("#confirm-delivered").is_disabled()
             assert page.locator("#confirm-not-delivered").is_disabled()
