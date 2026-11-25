@@ -488,10 +488,18 @@ def test_candidate_action_http_runtime_enforces_owner_and_survives_restart(tmp_p
         status, headers, page = _request(runtime, path=route, token="owner")
         assert status == "200 OK"
         assert headers["Cache-Control"] == "no-store"
-        assert [item["status"] for item in page["items"]] == [
-            "prepared", "in_progress", "failed", "reconciliation_required", "succeeded", "prepared"
-        ]
-        assert page["items"][-1]["action_family"] == "other"
+        expected = {
+            "action-01": ("prepared", "application_submission"),
+            "action-02": ("in_progress", "communication"),
+            "action-03": ("failed", "calendar"),
+            "action-04": ("reconciliation_required", "calendar"),
+            "action-05": ("succeeded", "application_submission"),
+            "action-06": ("prepared", "other"),
+        }
+        expected_ids = sorted(expected, key=stable_reference)
+        assert [
+            (item["status"], item["action_family"]) for item in page["items"]
+        ] == [expected[operation_id] for operation_id in expected_ids]
         assert _request(
             runtime,
             path="/v1/candidate/runs/foreign-run/actions",
@@ -556,6 +564,7 @@ def test_candidate_action_projection_fails_closed_when_required_schema_is_missin
     _seed(path)
     database = SQLiteDatabase(str(path))
     database.connection.execute("DROP INDEX idx_external_actions_correlation")
+    database.connection.execute("DROP INDEX idx_external_actions_correlation_operation_ref")
     database.connection.execute(
         "ALTER TABLE external_action_operations DROP COLUMN correlation_id"
     )
