@@ -27,6 +27,8 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 from .candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+from career_agent_ai.application.observability.action_cursor import decode_action_cursor
+from career_agent_ai.application.observability.references import stable_reference
 
 
 _STRICT_START_TEXT_PATTERN = (
@@ -48,6 +50,9 @@ class CandidateApprovalLoop(Protocol):
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
                           phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
+    def list_candidate_action_statuses(
+        self, run_id: str, *, user_id: str, limit: int = 25, after: str | None = None
+    ) -> dict[str, Any]: ...
 
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
@@ -150,7 +155,7 @@ class CandidateApprovalWSGIApp:
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
-            and parts[4] in {"approval", "continue", "status", "application-reconciliation",
+            and parts[4] in {"approval", "continue", "status", "actions", "application-reconciliation",
                              "message-reconciliation", "interview-reconciliation"}
         )
         if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
@@ -300,6 +305,55 @@ class CandidateApprovalWSGIApp:
                     start_response,
                     "201 Created",
                     {"run_id": result.run_id, "phase": result.phase.value},
+                )
+            if parts[4] == "actions":
+                if method != "GET":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "GET")],
+                    )
+                try:
+                    query = str(environ.get("QUERY_STRING", ""))
+                    if len(query) > 1300 or re.search(r"%(?![0-9A-Fa-f]{2})", query):
+                        raise ValueError("invalid action query")
+                    pairs = parse_qsl(
+                        query,
+                        keep_blank_values=True,
+                        strict_parsing=True,
+                        max_num_fields=2,
+                        errors="strict",
+                    )
+                    values = dict(pairs)
+                    if len(values) != len(pairs) or set(values) - {"limit", "after"}:
+                        raise ValueError("unknown or duplicate action query parameter")
+                    raw_limit = values.get("limit", "25")
+                    if (
+                        not raw_limit.isascii()
+                        or not raw_limit.isdecimal()
+                        or len(raw_limit) > 2
+                    ):
+                        raise ValueError("invalid action limit")
+                    limit = int(raw_limit)
+                    if not 1 <= limit <= 25:
+                        raise ValueError("invalid action limit")
+                    after = values.get("after")
+                    if after is not None:
+                        if not after or len(after) > 1200:
+                            raise ValueError("invalid action cursor")
+                        decode_action_cursor(
+                            after,
+                            candidate_run_ref=stable_reference(run_id),
+                        )
+                except (TypeError, ValueError, UnicodeError):
+                    return self._respond(
+                        start_response, "400 Bad Request", {"error": "invalid_request"}
+                    )
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    self._loop.list_candidate_action_statuses(
+                        run_id, user_id=user_id, limit=limit, after=after
+                    ),
                 )
             if parts[4] == "status":
                 if method != "GET":
@@ -1061,6 +1115,75 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         },
                         "415": {
                             "description": "Request body is not application/json",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
+            },
+            "/v1/candidate/runs/{run_id}/actions": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {
+                        "type": "string", "minLength": 1, "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
+                }],
+                "get": {
+                    "operationId": "listCandidateRunActions",
+                    "security": [{"bearerAuth": []}],
+                    "parameters": [
+                        {"name": "limit", "in": "query",
+                         "schema": {"type": "integer", "minimum": 1, "maximum": 25, "default": 25}},
+                        {"name": "after", "in": "query",
+                         "description": "Opaque keyset cursor bound to this candidate run; not an authorization credential",
+                         "schema": {"type": "string", "minLength": 1, "maxLength": 1200,
+                                    "pattern": "^[A-Za-z0-9_-]+$"}},
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Bounded owner-only external-action lifecycle metadata; provider payloads, results, operation IDs and error text are omitted",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content({
+                                "type": "object",
+                                "required": ["schema_version", "run_ref", "items", "next_after"],
+                                "properties": {
+                                    "schema_version": {"type": "integer", "const": 1},
+                                    "run_ref": {"type": "string", "pattern": "^[a-f0-9]{24}$"},
+                                    "items": {
+                                        "type": "array", "maxItems": 25,
+                                        "items": {
+                                            "type": "object",
+                                            "required": ["operation_ref", "action_family", "status", "created_at",
+                                                         "updated_at", "error_present"],
+                                            "properties": {
+                                                "operation_ref": {"type": "string", "pattern": "^[a-f0-9]{24}$"},
+                                                "action_family": {"type": "string", "enum": [
+                                                    "application_submission", "communication", "calendar", "other"
+                                                ]},
+                                                "status": {"type": "string", "enum": [
+                                                    "prepared", "in_progress", "succeeded", "failed",
+                                                    "reconciliation_required"
+                                                ]},
+                                                "created_at": {"type": "string", "format": "date-time"},
+                                                "updated_at": {"type": "string", "format": "date-time"},
+                                                "error_present": {"type": "boolean"},
+                                            },
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                    "next_after": {
+                                        "type": ["string", "null"], "maxLength": 1200,
+                                        "pattern": "^[A-Za-z0-9_-]+$",
+                                    },
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "400": {"description": "Invalid action pagination query", "content": content(error_schema)},
+                        "405": {
+                            "description": "Only GET is allowed",
+                            "headers": {"Allow": {"schema": {"const": "GET"}}},
                             "content": content(error_schema),
                         },
                     },
