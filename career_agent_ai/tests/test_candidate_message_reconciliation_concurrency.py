@@ -41,9 +41,9 @@ def _request(app, *, method: str, path: str, body: dict | None = None):
     return statuses[0], json.loads(response)
 
 
-def _runtime(database_path, job, outcome_plan):
+def _runtime(database_path, job, outcome_plan, *, owner_id: str = "candidate-1"):
     return build_candidate_sandbox_app_from_env(
-        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+        resolve_bearer=lambda token: owner_id if token == "valid" else None,
         jobs=(job,),
         environ={
             "CAREER_AGENT_DB_PATH": str(database_path),
@@ -158,12 +158,11 @@ def test_concurrent_candidate_message_reconciliation_is_single_winner_after_rest
         unexpected_provider_calls.append((operation_id, attempt))
         return SandboxCommunicationOutcome.SUCCESS
 
-    restarted_runtime = _runtime(
-        database_path, job, unexpected_provider_retry
-    )
+    restarted_runtime = _runtime(database_path, job, unexpected_provider_retry)
     reconciliation_path = (
         f"/v1/candidate/runs/{durable_run_id}/message-reconciliation"
     )
+    database_bytes_before_read = database_path.read_bytes()
     (status, headers), intent = _request(
         restarted_runtime, method="GET", path=reconciliation_path
     )
@@ -177,14 +176,13 @@ def test_concurrent_candidate_message_reconciliation_is_single_winner_after_rest
     assert "operation_id" not in intent
     assert "message_id" not in intent
     assert "body" not in intent
+    assert database_path.read_bytes() == database_bytes_before_read
 
     foreign_runtime = _runtime(
         database_path,
         job,
         lambda _operation_id, _attempt: SandboxCommunicationOutcome.SUCCESS,
-    )
-    foreign_runtime._resolve_bearer = (
-        lambda token: "different-candidate" if token == "valid" else None
+        owner_id="different-candidate",
     )
     (status, _), foreign_body = _request(
         foreign_runtime, method="GET", path=reconciliation_path
