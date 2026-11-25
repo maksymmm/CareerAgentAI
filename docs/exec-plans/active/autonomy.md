@@ -1590,3 +1590,20 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Communication provider replay integrity:
+
+A persisted delivery row is not sufficient to authorize an idempotent replay. Before
+returning a prior delivery or incrementing replay accounting, the sandbox provider
+now verifies the persisted action, message identifier, outbound direction, and
+recomputed message fingerprint against the original request. Missing or corrupted
+delivery evidence fails closed without consuming another attempt or changing the
+replay count. Regression coverage corrupts each persisted binding independently and
+restarts the provider before replay.
+A two-connection regression also holds the first provider inside its writer transaction
+while a duplicate request starts, then proves the durable ledger contains one provider
+attempt, one delivery, and exactly one replay after the first commit.
+
+Next: exact-head full CI with both >=90% coverage gates and independent code/security
+review; then continue bounded communication-provider contention and evidence-ledger
+hardening.
