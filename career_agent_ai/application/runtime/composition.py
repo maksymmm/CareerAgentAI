@@ -401,6 +401,18 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def get_candidate_interview_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]:
+        """Read the owned pending interview intent using request-local storage."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).get_candidate_interview_reconciliation(run_id, user_id=user_id)
+        finally:
+            database.close()
+
     def resolve_interview_reconciliation(
         self, run_id: str, *, user_id: str, completed: bool,
         provider_event_id: str | None = None,

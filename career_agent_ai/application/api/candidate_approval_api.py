@@ -45,6 +45,9 @@ class CandidateApprovalLoop(Protocol):
         self, request: CareerLoopRequest, *, run_id: str, user_id: str
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
+    def get_candidate_interview_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]: ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
                           phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
@@ -391,10 +394,17 @@ class CandidateApprovalWSGIApp:
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
             if parts[4] == "interview-reconciliation":
+                if method == "GET":
+                    return self._respond(
+                        start_response, "200 OK",
+                        self._loop.get_candidate_interview_reconciliation(
+                            run_id, user_id=user_id
+                        ),
+                    )
                 if method != "POST":
                     return self._respond(
                         start_response, "405 Method Not Allowed",
-                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                        {"error": "method_not_allowed"}, [("Allow", "GET, POST")],
                     )
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
                 if media_type.strip().casefold() != "application/json":
@@ -835,6 +845,66 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "else": {"not": {"required": ["provider_event_id"]}},
         }],
     }
+    interview_reconciliation_intent_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "run_id", "state_version", "allowed_outcomes", "event",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "state_version": {
+                "type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION,
+            },
+            "allowed_outcomes": {
+                "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": True,
+                "items": {"type": "string", "enum": ["completed", "not_completed"]},
+            },
+            "event": {
+                "type": "object", "additionalProperties": False,
+                "required": [
+                    "event_id", "employer_name", "event_type", "location", "status",
+                    "event_version", "local_date", "local_start_time", "local_end_date",
+                    "local_end_time", "timezone_name", "utc_offset", "end_utc_offset",
+                ],
+                "properties": {
+                    "event_id": {
+                        "type": "string", "minLength": 1, "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
+                    "employer_name": {"type": "string", "maxLength": 500},
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["interview", "trial_day", "phone_call", "video_call", "other"],
+                    },
+                    "location": {"type": "string", "maxLength": 2000},
+                    "status": {
+                        "type": "string",
+                        "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"],
+                    },
+                    "event_version": {
+                        "type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION,
+                    },
+                    "local_date": {"type": "string", "format": "date"},
+                    "local_start_time": {
+                        "type": "string", "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$",
+                    },
+                    "local_end_date": {"type": ["string", "null"], "format": "date"},
+                    "local_end_time": {
+                        "type": ["string", "null"],
+                        "pattern": r"^\d{2}:\d{2}:\d{2}(\.\d{6})?$",
+                    },
+                    "timezone_name": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "utc_offset": {"type": "string", "pattern": r"^[+-]\d{2}:\d{2}(:\d{2})?$"},
+                    "end_utc_offset": {
+                        "type": ["string", "null"],
+                        "pattern": r"^[+-]\d{2}:\d{2}(:\d{2})?$",
+                    },
+                },
+            },
+        },
+        "additionalProperties": False,
+    }
     start_schema = {
         "type": "object",
         "required": [
@@ -884,6 +954,16 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "required": ["error"],
         "properties": {"error": {"const": "approval_conflict"}},
         "additionalProperties": False,
+    }
+    interview_reconciliation_read_conflict_schema = {
+        "oneOf": [
+            approval_conflict_schema,
+            {
+                "type": "object", "required": ["error"],
+                "properties": {"error": {"const": "approval_unavailable"}},
+                "additionalProperties": False,
+            },
+        ]
     }
 
     def content(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -1282,6 +1362,27 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                     "schema": {"type": "string", "minLength": 1, "maxLength": 200,
                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"},
                 }],
+                "get": {
+                    "operationId": "getCandidateInterviewReconciliationIntent",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Owner-scoped, redacted durable calendar intent for restart recovery; no provider operation identifiers",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content(interview_reconciliation_intent_schema),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "No pending interview reconciliation or durable intent conflict",
+                            "content": content(interview_reconciliation_read_conflict_schema),
+                        },
+                        "405": {
+                            "description": "Only GET is accepted by this operation",
+                            "headers": {"Allow": {"schema": {"const": "GET, POST"}}},
+                            "content": content(error_schema),
+                        },
+                    },
+                },
                 "post": {
                     "operationId": "resolveCandidateInterviewReconciliation",
                     "security": [{"bearerAuth": []}],
@@ -1297,7 +1398,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         **common_responses,
                         "409": {"description": "Observed state is stale or another execution owns the run",
                                 "content": content(approval_conflict_schema)},
-                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "405": {"description": "POST is required for this operation", "headers": {"Allow": {"schema": {"const": "GET, POST"}}}, "content": content(error_schema)},
                         "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },

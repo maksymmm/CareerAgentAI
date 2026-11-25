@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
-from datetime import timezone
+from datetime import datetime, timezone
 from hashlib import sha256
 from math import isfinite
 from numbers import Real
@@ -63,6 +63,11 @@ from career_agent_ai.application.scheduling import (
     CalendarReconciliationEvidenceError,
     ScheduleStatus,
     SchedulingService,
+)
+from career_agent_ai.application.scheduling.models import (
+    HumanScheduleView,
+    normalize_aware_datetime,
+    validate_timezone_name,
 )
 
 
@@ -296,6 +301,195 @@ class AutonomousCareerLoop:
             "terminal": state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
         }
 
+    def get_candidate_interview_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]:
+        """Return the owned, redacted calendar intent needed after a browser reload."""
+        state = self._owned_state(run_id, user_id)
+        action = state.pending_human_action
+        if (
+            state.phase != CareerLoopPhase.INTERVIEW_RECONCILIATION
+            or action is None
+            or action.kind != HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
+        ):
+            raise CandidateApprovalUnavailableError(
+                "Career loop has no pending interview reconciliation."
+            )
+
+        event_id = state.request.schedule_event_id
+        operation_id = action.details.get("operation_id")
+        if (
+            not isinstance(event_id, str)
+            or not event_id
+            or action.details.get("event_id") != event_id
+            or not isinstance(operation_id, str)
+            or not operation_id
+        ):
+            raise CareerLoopConflictError("Pending interview intent is malformed.")
+
+        operation = self._scheduling.get_operation(operation_id)
+        if (
+            operation is None
+            or operation.action_type != "calendar.accept"
+            or operation.status
+            not in {
+                ExternalActionStatus.RECONCILIATION_REQUIRED,
+                ExternalActionStatus.SUCCEEDED,
+            }
+            or operation.payload.get("event_id") != event_id
+        ):
+            raise CareerLoopConflictError(
+                "Pending calendar operation no longer matches the run."
+            )
+
+        event = self._scheduling.get_event(event_id)
+        if event.candidate_id != state.request.user_id:
+            raise KeyError("Unknown scheduling event for this user.")
+        if (
+            event.application_id is not None
+            and event.application_id != state.application_id
+        ):
+            raise CareerLoopConflictError(
+                "Interview event is linked to a different application."
+            )
+
+        payload = operation.payload
+        try:
+            source_version = payload["event_version"]
+            if (
+                not isinstance(source_version, int)
+                or isinstance(source_version, bool)
+                or source_version < 1
+            ):
+                raise ValueError("invalid event_version")
+            source_status = ScheduleStatus(payload["event_status"])
+            source_start = normalize_aware_datetime(
+                datetime.fromisoformat(payload["event_start_at"]),
+                "event_start_at",
+            )
+            raw_end = payload.get("event_end_at")
+            source_end = (
+                None
+                if raw_end is None
+                else normalize_aware_datetime(
+                    datetime.fromisoformat(raw_end), "event_end_at"
+                )
+            )
+            source_timezone = validate_timezone_name(
+                payload["event_timezone_name"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CareerLoopConflictError(
+                "Prepared calendar intent is malformed."
+            ) from exc
+
+        if source_status not in {
+            ScheduleStatus.PROPOSED,
+            ScheduleStatus.RESCHEDULE_REQUESTED,
+        }:
+            raise CareerLoopConflictError(
+                "Prepared calendar intent has an unsupported source status."
+            )
+        same_slot = (
+            event.start_at == source_start
+            and event.end_at == source_end
+            and event.timezone_name == source_timezone
+        )
+        source_current = (
+            event.version == source_version
+            and event.status == source_status
+            and same_slot
+        )
+        accepted_current = (
+            event.version == source_version + 1
+            and event.status == ScheduleStatus.ACCEPTED
+            and same_slot
+        )
+        if not source_current and not accepted_current:
+            raise CareerLoopConflictError(
+                "Interview event no longer matches the durable calendar intent."
+            )
+
+        if operation.status == ExternalActionStatus.SUCCEEDED:
+            result = operation.result
+            snapshot = (
+                result.get("event_snapshot")
+                if isinstance(result, Mapping)
+                else None
+            )
+            if (
+                not accepted_current
+                or not isinstance(result, Mapping)
+                or result.get("event_id") != event_id
+                or result.get("status") != ScheduleStatus.ACCEPTED.value
+                or result.get("provider_event_id") != event.provider_event_id
+                or not isinstance(snapshot, Mapping)
+                or snapshot.get("event_id") != event.event_id
+                or snapshot.get("candidate_id") != event.candidate_id
+                or snapshot.get("employer_name") != event.employer_name
+                or snapshot.get("event_type") != event.event_type.value
+                or snapshot.get("location") != event.location
+                or snapshot.get("start_at") != event.start_at.isoformat()
+                or snapshot.get("end_at")
+                != (None if event.end_at is None else event.end_at.isoformat())
+                or snapshot.get("timezone_name") != event.timezone_name
+                or snapshot.get("status") != event.status.value
+                or snapshot.get("provider_event_id") != event.provider_event_id
+                or snapshot.get("application_id") != event.application_id
+                or snapshot.get("version") != event.version
+            ):
+                raise CareerLoopConflictError(
+                    "Succeeded calendar evidence does not match the current event."
+                )
+
+        view = HumanScheduleView.from_event(event)
+        expected_action_details = {
+            "event_id": view.event_id,
+            "employer": view.employer_name,
+            "event_type": view.event_type.value,
+            "location": view.location,
+            "local_date": view.local_date,
+            "local_start_time": view.local_start_time,
+            "local_end_date": view.local_end_date,
+            "local_end_time": view.local_end_time,
+            "timezone": view.timezone_name,
+            "utc_offset": view.utc_offset,
+            "end_utc_offset": view.end_utc_offset,
+        }
+        if any(
+            action.details.get(key) != value
+            for key, value in expected_action_details.items()
+        ):
+            raise CareerLoopConflictError(
+                "Pending interview details no longer match the durable event."
+            )
+
+        return {
+            "schema_version": 1,
+            "run_id": state.run_id,
+            "state_version": state.version,
+            "allowed_outcomes": (
+                ["completed"]
+                if accepted_current
+                else ["completed", "not_completed"]
+            ),
+            "event": {
+                "event_id": view.event_id,
+                "employer_name": view.employer_name,
+                "event_type": view.event_type.value,
+                "location": view.location,
+                "status": view.status.value,
+                "event_version": event.version,
+                "local_date": view.local_date,
+                "local_start_time": view.local_start_time,
+                "local_end_date": view.local_end_date,
+                "local_end_time": view.local_end_time,
+                "timezone_name": view.timezone_name,
+                "utc_offset": view.utc_offset,
+                "end_utc_offset": view.end_utc_offset,
+            },
+        }
+
     def get_candidate_approval_prompt(
         self, run_id: str, *, user_id: str
     ) -> CandidateApprovalPrompt:
@@ -519,6 +713,17 @@ class AutonomousCareerLoop:
             lease_seconds=self.EXECUTION_LEASE_SECONDS,
         )
         try:
+            if not completed:
+                event_id = state.request.schedule_event_id
+                if not isinstance(event_id, str) or not event_id:
+                    raise CareerLoopConflictError(
+                        "Interview reconciliation has no durable event identity."
+                    )
+                current_event = self._scheduling.get_event(event_id)
+                if current_event.status == ScheduleStatus.ACCEPTED:
+                    raise CareerLoopConflictError(
+                        "An accepted interview cannot be reconciled as no calendar effect."
+                    )
             try:
                 self._scheduling.resolve_reconciliation(
                     operation_id,

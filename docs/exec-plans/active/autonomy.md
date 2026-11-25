@@ -1588,5 +1588,14 @@ fractional/negative values, non-finite JSON constants and values above the stora
 range return sanitized 400 responses without reaching a provider resolver. OpenAPI
 publishes the same bound; HTTP regressions cover all three reconciliation routes,
 including the maximum accepted value. No provider I/O or durable mutation is added.
-Next: finish durable recovery for pending candidate interview actions, including
-owner-scoped intent discovery after browser reload and version-bound reconciliation.
+Candidate interview reconciliation recovery is now implemented on an isolated feature
+branch: `GET /v1/candidate/runs/{run_id}/interview-reconciliation` returns the
+owner-scoped, version-bound event intent and only outcomes supported by durable state.
+The projection validates the persisted calendar operation and current event snapshot,
+redacts private operation/provider IDs, and remains recoverable after restart. The browser
+reload path discovers the intent from the selected owner-scoped run, renders only
+allowlisted event fields, and binds reconciliation to the returned run state version.
+Static, API, runtime, restart and Chromium regressions cover ownership, redaction, stale
+intent and forbidden outcomes.
+Next: exact-head CI and independent review, then finish cross-provider restart/concurrency
+acceptance for application, communication and calendar.

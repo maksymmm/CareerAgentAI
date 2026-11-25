@@ -64,3 +64,15 @@ commit and CI run; a review of an older commit is not final review of the curren
 
 These remain product work. Core coverage or eight completed execution-plan items
 must not be reported as a measured completion percentage for the entire product.
+
+## Candidate interview reconciliation recovery
+
+The sandbox candidate interface exposes the authenticated GET endpoint
+`/v1/candidate/runs/{run_id}/interview-reconciliation` to restore a pending interview
+intent after browser reload. It is owner-scoped, returns the durable run state version,
+allowlisted local event details and only outcomes supported by the current durable state.
+It never returns the private provider operation ID or provider event ID. The candidate
+must independently verify the calendar provider outcome before using the existing POST
+reconciliation endpoint; the submitted state version is checked before durable resolution.
+The GET path performs no provider I/O. This is sandbox recovery functionality, not a
+production candidate dashboard or live calendar integration.

@@ -3458,6 +3458,101 @@ def test_interview_reconciliation_rejects_stale_observation_before_provider_retr
     database.close()
 
 
+
+def test_candidate_interview_reconciliation_intent_survives_restart_without_private_ids(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-reconciliation-intent.sqlite")
+    run_id = "interview-intent-recovery"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    loop.start(request(), run_id=run_id)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    def ambiguous_accept(*args, **kwargs):
+        raise RuntimeError("calendar outcome unknown")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    operation_id = ambiguous.human_action.details["operation_id"]
+
+    intent = loop.get_candidate_interview_reconciliation(run_id, user_id="user-1")
+    assert intent["schema_version"] == 1
+    assert intent["run_id"] == run_id
+    assert intent["state_version"] == loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    assert intent["allowed_outcomes"] == ["completed", "not_completed"]
+    assert intent["event"]["event_id"] == "interview-1"
+    assert intent["event"]["employer_name"] == "Acme Logistics"
+    assert intent["event"]["status"] == "proposed"
+    assert intent["event"]["event_version"] == 1
+    assert operation_id not in repr(intent)
+    assert "provider_event_id" not in repr(intent)
+
+    with pytest.raises(KeyError, match="for this user"):
+        loop.get_candidate_interview_reconciliation(run_id, user_id="other-user")
+
+    original_get_operation = scheduling.get_operation
+    monkeypatch.setattr(scheduling, "get_operation", lambda _: None)
+    with pytest.raises(CareerLoopConflictError, match="calendar operation"):
+        loop.get_candidate_interview_reconciliation(run_id, user_id="user-1")
+    monkeypatch.setattr(scheduling, "get_operation", original_get_operation)
+    database.close()
+
+    database, restarted, *_ = build_stack(path)
+    assert restarted.get_candidate_interview_reconciliation(
+        run_id, user_id="user-1"
+    ) == intent
+    database.close()
+
+
+def test_interview_reconciliation_disallows_no_effect_after_local_acceptance(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-reconciliation-accepted-event.sqlite")
+    run_id = "interview-accepted-before-reconciliation"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    loop.start(request(), run_id=run_id)
+    loop.resume(run_id, approved=True, user_id="user-1")
+    loop.resume(run_id, approved=True, user_id="user-1")
+
+    attempts = {"count": 0}
+
+    def ambiguous_accept(*args, **kwargs):
+        attempts["count"] += 1
+        raise RuntimeError("calendar outcome unknown")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+
+    operation_id = ambiguous.human_action.details["operation_id"]
+    proposed = scheduling.get_event("interview-1")
+    accepted = proposed.transition(
+        ScheduleStatus.ACCEPTED,
+        provider_event_id="provider-event-confirmed",
+    )
+    scheduling._repository.complete_action(
+        accepted, operation_id, expected_version=proposed.version
+    )
+
+    intent = loop.get_candidate_interview_reconciliation(run_id, user_id="user-1")
+    assert intent["allowed_outcomes"] == ["completed"]
+    assert intent["event"]["status"] == "accepted"
+    with pytest.raises(CareerLoopConflictError, match="cannot be reconciled as no calendar effect"):
+        loop.resolve_interview_reconciliation(
+            run_id, user_id="user-1", completed=False,
+            expected_state_version=intent["state_version"],
+        )
+    assert attempts["count"] == 1
+    assert loop.get_candidate_run_status(run_id, user_id="user-1")["phase"] == "interview_reconciliation"
+    database.close()
+
+
 @pytest.mark.parametrize("expected", [True, -1, 3.0, "3"])
 def test_reconciliation_version_validation_rejects_non_integer_contract(expected):
     state = SimpleNamespace(version=3)

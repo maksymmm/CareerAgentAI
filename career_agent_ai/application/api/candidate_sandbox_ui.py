@@ -121,6 +121,7 @@ _HTML = r"""<!doctype html>
   <fieldset id="interview-reconciliation-panel" tabindex="-1" aria-busy="false">
     <legend>Interview calendar reconciliation</legend>
     <p id="interview-reconciliation-state" role="status">Refresh a run in interview reconciliation before recording independently verified calendar evidence.</p>
+    <pre id="interview-reconciliation-details"></pre>
     <label>Provider event ID
       <input id="provider-event-id" autocomplete="off" maxlength="1000" disabled>
     </label>
@@ -199,6 +200,7 @@ _HTML = r"""<!doctype html>
     let messageReconciliationVersion = null;
     let interviewReconciliationAvailable = false;
     let interviewReconciliationVersion = null;
+    let interviewReconciliationAllowedOutcomes = [];
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -876,30 +878,39 @@ _HTML = r"""<!doctype html>
       'Refresh a run in interview reconciliation before recording independently verified calendar evidence.') {
       interviewReconciliationAvailable = false;
       interviewReconciliationVersion = null;
+      interviewReconciliationAllowedOutcomes = [];
       byId('interview-reconciliation-state').textContent = message;
+      byId('interview-reconciliation-details').textContent = '';
       byId('provider-event-id').value = '';
       byId('provider-event-id').disabled = true;
       setReconciliationAttestation('interview-reconciliation-verified', false);
       byId('confirm-calendar-completed').disabled = true; byId('confirm-calendar-not-completed').disabled = true;
     }
-    function enableInterviewReconciliation(version) {
+    function enableInterviewReconciliation(version, intent) {
       if (interviewReconciliationVersion !== version) byId('provider-event-id').value = '';
       interviewReconciliationAvailable = true;
       interviewReconciliationVersion = version;
+      interviewReconciliationAllowedOutcomes = [...intent.allowed_outcomes];
+      const event = intent.event;
       byId('interview-reconciliation-state').textContent =
-        'Verify the calendar provider outcome outside this sandbox, then record one result for the displayed version.';
+        'Pending ' + event.event_type.replaceAll('_', ' ') + ' for ' + event.employer_name +
+        ' on ' + event.local_date + ' at ' + event.local_start_time + ' (' +
+        event.timezone_name + ', UTC ' + event.utc_offset + '). Verify the calendar provider outcome outside this sandbox.';
+      byId('interview-reconciliation-details').textContent = JSON.stringify(event, null, 2);
       byId('provider-event-id').disabled = false;
       setReconciliationAttestation('interview-reconciliation-verified', true);
       byId('confirm-calendar-completed').disabled = true;
       byId('confirm-calendar-not-completed').disabled = true;
     }
-    function bindReconciliationAttestation(id, available, buttons) {
+    function bindReconciliationAttestation(id, available, buttons, allowed = () => true) {
       byId(id).addEventListener('change', event => { const enabled = available() && event.currentTarget.checked;
-        for (const button of buttons) byId(button).disabled = !enabled; });
+        for (const button of buttons) byId(button).disabled = !enabled || !allowed(button); });
     }
     bindReconciliationAttestation('application-reconciliation-verified', () => reconciliationAvailable, ['confirm-submitted', 'confirm-not-submitted']);
     bindReconciliationAttestation('message-reconciliation-verified', () => messageReconciliationAvailable, ['confirm-delivered', 'confirm-not-delivered']);
-    bindReconciliationAttestation('interview-reconciliation-verified', () => interviewReconciliationAvailable, ['confirm-calendar-completed', 'confirm-calendar-not-completed']);
+    bindReconciliationAttestation('interview-reconciliation-verified', () => interviewReconciliationAvailable,
+      ['confirm-calendar-completed', 'confirm-calendar-not-completed'],
+      button => button !== 'confirm-calendar-not-completed' || interviewReconciliationAllowedOutcomes.includes('not_completed'));
     function invalidateReconciliationForVersion(version) {
       if (reconciliationAvailable && reconciliationVersion !== version) {
         invalidateApplicationReconciliation(
@@ -1069,7 +1080,45 @@ _HTML = r"""<!doctype html>
           invalidateMessageReconciliation();
         }
         if (snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human) {
-          enableInterviewReconciliation(snapshot.state_version);
+          const intent = await call(runPath('/interview-reconciliation'), {},
+            'Interview reconciliation intent could not be recovered.', true);
+          if (statusContextGeneration !== inputContextGeneration ||
+              runId !== byId('run-id').value || selectedRunVersion !== snapshot.state_version) return;
+          const event = intent && intent.event;
+          const eventFields = ['event_id', 'employer_name', 'event_type', 'location', 'status',
+            'event_version', 'local_date', 'local_start_time', 'local_end_date', 'local_end_time',
+            'timezone_name', 'utc_offset', 'end_utc_offset'];
+          const validOutcomes = intent && Array.isArray(intent.allowed_outcomes) &&
+            (intent.allowed_outcomes.length === 1 || intent.allowed_outcomes.length === 2) &&
+            intent.allowed_outcomes.includes('completed') &&
+            intent.allowed_outcomes.every((value, index, values) =>
+              ['completed', 'not_completed'].includes(value) && values.indexOf(value) === index);
+          if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
+              Object.keys(intent).length !== 5 ||
+              !['schema_version', 'run_id', 'state_version', 'allowed_outcomes', 'event'].every(key => Object.hasOwn(intent, key)) ||
+              intent.schema_version !== 1 || intent.run_id !== runId ||
+              intent.state_version !== snapshot.state_version || !validOutcomes ||
+              !event || typeof event !== 'object' || Array.isArray(event) ||
+              Object.keys(event).length !== eventFields.length ||
+              !eventFields.every(key => Object.hasOwn(event, key)) ||
+              typeof event.event_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(event.event_id) ||
+              !validApprovalText(event.employer_name, 500) || !validApprovalText(event.location, 2000) ||
+              !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(event.event_type) ||
+              !['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(event.status) ||
+              !Number.isSafeInteger(event.event_version) || event.event_version < 1 ||
+              typeof event.local_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(event.local_date) ||
+              typeof event.local_start_time !== 'string' || !/^\d{2}:\d{2}:\d{2}(\.\d{6})?$/.test(event.local_start_time) ||
+              !(event.local_end_date === null || (typeof event.local_end_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(event.local_end_date))) ||
+              !(event.local_end_time === null || (typeof event.local_end_time === 'string' && /^\d{2}:\d{2}:\d{2}(\.\d{6})?$/.test(event.local_end_time))) ||
+              !validApprovalText(event.timezone_name, 100) ||
+              typeof event.utc_offset !== 'string' || !/^[+-]\d{2}:\d{2}(:\d{2})?$/.test(event.utc_offset) ||
+              !(event.end_utc_offset === null || (typeof event.end_utc_offset === 'string' && /^[+-]\d{2}:\d{2}(:\d{2})?$/.test(event.end_utc_offset)))) {
+            throw new Error('Invalid interview reconciliation intent.');
+          }
+          if (event.status === 'accepted' && intent.allowed_outcomes.includes('not_completed')) {
+            throw new Error('Accepted interview intent cannot be marked as not completed.');
+          }
+          enableInterviewReconciliation(snapshot.state_version, intent);
         } else {
           invalidateInterviewReconciliation();
         }
@@ -1377,6 +1426,9 @@ _HTML = r"""<!doctype html>
       if (reconciliationInFlight) throw new Error('Reconciliation is already being submitted.');
       const runId = byId('run-id').value;
       const observedVersion = interviewReconciliationVersion;
+      if (!interviewReconciliationAllowedOutcomes.includes(completed ? 'completed' : 'not_completed')) {
+        throw new Error('This verified calendar outcome is not allowed by the durable intent.');
+      }
       const providerEventId = byId('provider-event-id').value;
       if (completed && !validProviderSubmissionId(providerEventId)) {
         throw new Error('A valid provider event ID is required.');
