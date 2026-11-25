@@ -36,3 +36,16 @@ requires every attempt to be an explicit no-effect or interrupted-before-effect
 outcome; confirmed presence requires a terminal success or timeout-after-effect and
 an exact effect match. Legacy intent rows without the canonical payload remain
 inconclusive and are never automatically backfilled or retried.
+
+
+## Replay accounting integrity
+
+Returning a previously recorded calendar effect is permitted only when the canonical
+intent, terminal effect-producing attempt history, and exact effect snapshot still
+match. Replay accounting is a separate integrity boundary: its persisted value must be
+a non-negative SQLite signed 64-bit integer below the maximum before increment. The
+increment uses a compare-and-swap predicate over the observed value; a zero-row update
+is treated as a conflict, the transaction is rolled back, and the effect is not returned.
+Malformed, negative, or exhausted counters never trigger a provider attempt or mutate
+the attempt ledger. Reconciliation continues to derive PRESENT/ABSENT_CONFIRMED from
+canonical intent, attempt history, and effect evidence rather than the replay counter.
