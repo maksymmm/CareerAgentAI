@@ -219,7 +219,7 @@ def test_communication_draft_rejects_ambient_transaction_without_committing_it(t
     )
 
     with pytest.raises(
-        PreDeliveryCommunicationError, match="draft cannot run inside an existing SQLite transaction"
+        PreDeliveryCommunicationError, match="cannot run inside an existing SQLite transaction"
     ):
         provider.draft(_message())
 
