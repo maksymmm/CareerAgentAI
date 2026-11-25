@@ -132,7 +132,7 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
             ).fetchall()
             attempts = self._parse_attempts(attempt_rows)
             effect = connection.execute(
-                "SELECT fingerprint, action, event_json FROM sandbox_calendar_effects "
+                "SELECT fingerprint, action, event_json, replays FROM sandbox_calendar_effects "
                 "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
@@ -173,6 +173,7 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                     )
 
             if effect is not None:
+                replay_count = effect[3]
                 if (
                     not self._attempts_allow_effect(attempts)
                     or effect[0] != fingerprint
@@ -182,11 +183,23 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                     raise PreCalendarActionError(
                         "Sandbox calendar effect conflicts with its canonical intent evidence."
                     )
-                connection.execute(
+                if (
+                    type(replay_count) is not int
+                    or replay_count < 0
+                    or replay_count >= (1 << 63) - 1
+                ):
+                    raise PreCalendarActionError(
+                        "Sandbox calendar replay counter is malformed or exhausted."
+                    )
+                cursor = connection.execute(
                     "UPDATE sandbox_calendar_effects SET replays = replays + 1 "
-                    "WHERE operation_id = ?",
-                    (operation_id,),
+                    "WHERE operation_id = ? AND replays = ?",
+                    (operation_id, replay_count),
                 )
+                if cursor.rowcount != 1:
+                    raise PreCalendarActionError(
+                        "Sandbox calendar replay evidence changed before replay accounting."
+                    )
                 connection.commit()
                 return self._decode_event(effect[2])
 

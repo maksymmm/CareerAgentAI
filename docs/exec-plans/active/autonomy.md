@@ -1590,3 +1590,13 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Calendar sandbox replay accounting: replay now validates the persisted counter as a
+non-negative SQLite signed 64-bit integer before changing it, rejects malformed or
+exhausted counters, and increments through a compare-and-swap predicate. A failed
+compare-and-swap returns an inconclusive provider error and rolls back without
+returning the prior effect or invoking a new provider attempt. Restart regressions cover
+REAL/negative/exhausted counters, the maximum-value boundary, and a forced CAS miss.
+Next: exact-head CI and independent review, then align calendar replay invariants with
+the application and communication providers.
