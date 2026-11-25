@@ -1041,3 +1041,16 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+
+## Candidate interview reconciliation recovery
+
+Pending calendar-response reconciliation can be restored after a browser reload through
+an authenticated owner-scoped read-only projection. The projection verifies the durable
+run snapshot, the calendar.accept operation in reconciliation_required, and the
+schedule row's still-active operation claim in one SQLite read transaction. It returns
+only the event reference, employer, local date/time, timezone and run state version.
+The operation ID and provider payload remain private. The browser restores the intent
+only for the exact current run/version and still requires explicit independent provider
+attestation before the existing version-bound POST.
