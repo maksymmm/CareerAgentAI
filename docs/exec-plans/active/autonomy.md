@@ -1603,3 +1603,22 @@ POST. Regression coverage includes owner-before-parse, immutable read-only stora
 message-row tampering, HTTP/OpenAPI, runtime composition and Chromium version races.
 Next: exact-head full CI and independent code/security review, then audit remaining
 candidate workflow restart paths.
+
+
+Candidate communication reconciliation HTTP/restart acceptance:
+
+The candidate sandbox runtime now accepts an optional deterministic communication
+outcome plan and passes it to every request-local SQLite communication provider.
+This keeps the application submission and communication outcome plans separate while
+allowing the real sandbox composition to simulate an ambiguous delivery without
+monkeypatching provider constructors.
+
+The new authenticated HTTP regression drives application approval, message approval,
+a `TIMEOUT_AFTER_EFFECT` delivery, runtime restart, owner-scoped intent restoration,
+stale-version rejection, and evidence-backed completion. It verifies one durable
+provider attempt, one outbound delivery, zero replay increments, and no second
+provider effect after restart. The public intent omits the private operation ID,
+message ID, and body. All data remains synthetic and local to SQLite.
+
+Next: extend the same restart/concurrency acceptance to calendar reschedule and
+application retry, then run the cross-provider acceptance matrix.
