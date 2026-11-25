@@ -306,13 +306,15 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_external_actions_operation_ref
                ON external_action_operations(operation_ref)"""
         )
+        connection.execute("DROP INDEX IF EXISTS idx_external_actions_correlation_operation_ref")
+        connection.execute("DROP INDEX IF EXISTS idx_external_actions_correlation_ref_operation_ref")
         connection.execute(
-            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_operation_ref
-               ON external_action_operations(correlation_id, operation_ref)"""
+            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_operation_id
+               ON external_action_operations(correlation_id, operation_id)"""
         )
         connection.execute(
-            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_ref_operation_ref
-               ON external_action_operations(correlation_ref, operation_ref)"""
+            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_ref_operation_id
+               ON external_action_operations(correlation_ref, operation_id)"""
         )
         connection.commit()
 
