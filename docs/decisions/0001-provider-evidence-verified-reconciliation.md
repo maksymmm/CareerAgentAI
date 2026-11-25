@@ -61,6 +61,24 @@ reusing its potentially stale read snapshot would not acquire the promised write
 objects accept only the closed `EvidenceState` enum, and a negative claim requires the explicit
 `ABSENT_CONFIRMED` member rather than merely any state other than `PRESENT`.
 
+### Idempotent replay
+
+A prior effect is replayable only when the original durable intent still exists and
+matches the request, the complete ledger row recomputes to that intent, and the
+attempt history is non-empty, contiguous, recognized, and ends in exactly one
+effect-producing outcome. Earlier attempts may only be explicit no-effect or
+interrupted-before-effect outcomes. Missing intent is never recreated from an effect
+row during replay. Invalid effect metadata, malformed replay counters, exhausted
+SQLite integer counters, missing/gapped/unknown attempts, and attempts recorded after
+an effect fail closed before replay accounting changes. The replay counter is updated
+with a compare-and-swap predicate inside the provider-owned writer transaction.
+
+A new provider attempt is also blocked when an existing intent has missing, malformed,
+gapped, unknown, or effect-producing attempt history but no corresponding effect row.
+Only a contiguous history of explicit no-effect/interrupted outcomes permits another
+attempt. This prevents deletion of a successful effect row from turning a duplicate
+submission into a second provider effect.
+
 ### Future real-provider adapters
 
 A real adapter MUST return `UNKNOWN` unless its lookup is authoritative for the idempotency

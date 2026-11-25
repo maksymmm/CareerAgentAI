@@ -1601,3 +1601,28 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Application sandbox replay integrity: idempotent replay now revalidates the original
+durable intent, the complete recomputed effect row, and a non-empty contiguous attempt
+history before returning a prior submission. Missing intent is not recreated from a
+remaining effect row. Only explicit no-effect/interrupted attempts may precede one
+terminal effect outcome; missing, gapped, unknown, or post-effect attempts fail closed.
+Corrupt effect metadata, invalid or exhausted replay counters, and compare-and-swap
+misses do not increment replay accounting or consume another provider attempt.
+Restart regressions cover every persisted effect binding, deleted intent, malformed
+attempt histories, counter corruption/overflow, and a valid no-effect-then-success
+history. Synthetic local SQLite only; no real application submission.
+Next: exact-head full CI with both >=90% coverage gates and independent code/security
+review, then continue cross-provider replay-integrity parity.
+
+
+Application sandbox retry integrity: the no-effect retry path now validates any
+pre-existing intent and complete attempt history before invoking the sandbox outcome
+plan. A missing effect row after SUCCESS, TIMEOUT_AFTER_EFFECT, or EVIDENCE_MISMATCH
+cannot be interpreted as permission for a fresh submission. Only contiguous,
+recognized, explicit no-effect/interrupted attempts permit a subsequent attempt.
+Missing intent with residual attempts, missing attempts for an existing intent, and
+gapped or unknown attempt history fail closed without another provider call.
+Restart regressions delete a previously committed effect and corrupt a retryable
+attempt ledger to prove that neither path creates a new effect or attempt.

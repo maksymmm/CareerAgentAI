@@ -165,12 +165,22 @@ class SQLiteSandboxSubmissionProvider:
         connection = self._database.connection
         self._begin(connection)
         try:
-            self._bind_intent(operation_id, fingerprint)
             existing = self._load(operation_id)
             if existing is not None:
+                intent = connection.execute(
+                    "SELECT fingerprint FROM sandbox_submission_intents "
+                    "WHERE idempotency_key = ?",
+                    (operation_id,),
+                ).fetchone()
+                if intent is None or intent[0] != fingerprint:
+                    raise PreSubmissionError(
+                        "Sandbox provider replay has a missing durable intent or a different submission intent."
+                    )
                 result = self._replay(existing, fingerprint)
                 connection.commit()
                 return result
+            self._validate_retry_history_before_new_attempt(operation_id, fingerprint)
+            self._bind_intent(operation_id, fingerprint)
             outcome = self._next_outcome(operation_id)
             if outcome in _NO_EFFECT_OUTCOMES or (
                 outcome == SandboxOutcome.INTERRUPTED_BEFORE_EFFECT
@@ -384,15 +394,32 @@ class SQLiteSandboxSubmissionProvider:
     def _replay(
         self, row: tuple[Any, ...], fingerprint: str
     ) -> Mapping[str, Any]:
-        if row[1] != fingerprint:
+        operation_id = row[0] if row else None
+        if (
+            not isinstance(operation_id, str)
+            or not self._valid_effect_row(row, operation_id, fingerprint)
+        ):
             raise PreSubmissionError(
-                "Sandbox idempotency key was reused with a different submission intent."
+                "Sandbox provider replay evidence is malformed or conflicts with the request."
             )
-        self._database.connection.execute(
+        if not self._valid_replay_attempt_history(operation_id):
+            raise PreSubmissionError(
+                "Sandbox provider replay evidence has an incomplete or contradictory attempt history."
+            )
+        replay_count = row[7]
+        if replay_count >= (1 << 63) - 1:
+            raise PreSubmissionError(
+                "Sandbox provider replay counter is exhausted."
+            )
+        cursor = self._database.connection.execute(
             "UPDATE sandbox_submission_ledger SET replays = replays + 1 "
-            "WHERE idempotency_key = ?",
-            (row[0],),
+            "WHERE idempotency_key = ? AND replays = ?",
+            (operation_id, replay_count),
         )
+        if cursor.rowcount != 1:
+            raise PreSubmissionError(
+                "Sandbox provider replay evidence changed before replay accounting."
+            )
         return {
             "job_id": row[2],
             "application_id": row[3],
@@ -400,6 +427,74 @@ class SQLiteSandboxSubmissionProvider:
             "artifact_sha256": row[4],
             "candidate_snapshot_sha256": row[5],
         }
+
+    def _validate_retry_history_before_new_attempt(
+        self, operation_id: str, fingerprint: str
+    ) -> None:
+        connection = self._database.connection
+        try:
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_submission_intents "
+                "WHERE idempotency_key = ?",
+                (operation_id,),
+            ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise PreSubmissionError(
+                "Sandbox provider retry evidence is unavailable."
+            ) from exc
+        history = self._read_attempt_history(operation_id)
+        if history is None:
+            raise PreSubmissionError(
+                "Sandbox provider retry evidence has an invalid attempt history."
+            )
+        if intent is None:
+            if history:
+                raise PreSubmissionError(
+                    "Sandbox provider retry evidence is missing its durable intent."
+                )
+            return
+        if intent[0] != fingerprint:
+            raise PreSubmissionError(
+                "Sandbox idempotency key was reused with a different submission intent."
+            )
+        if not history:
+            raise PreSubmissionError(
+                "Sandbox provider retry evidence is missing its attempt history."
+            )
+        if any(outcome not in _ABSENCE_OUTCOMES for outcome in history):
+            raise PreSubmissionError(
+                "A prior sandbox submission may have produced an effect; reconciliation is required."
+            )
+
+    def _read_attempt_history(
+        self, operation_id: str
+    ) -> tuple[SandboxOutcome, ...] | None:
+        try:
+            rows = self._database.connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
+                "WHERE idempotency_key = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
+        except sqlite3.DatabaseError:
+            return None
+        parsed: list[SandboxOutcome] = []
+        for expected_no, (attempt_no, raw_outcome) in enumerate(rows, start=1):
+            if type(attempt_no) is not int or attempt_no != expected_no:
+                return None
+            try:
+                parsed.append(SandboxOutcome(raw_outcome))
+            except (TypeError, ValueError):
+                return None
+        return tuple(parsed)
+
+    def _valid_replay_attempt_history(self, operation_id: str) -> bool:
+        history = self._read_attempt_history(operation_id)
+        return (
+            history is not None
+            and bool(history)
+            and history[-1] in _EFFECT_OUTCOMES
+            and all(outcome in _ABSENCE_OUTCOMES for outcome in history[:-1])
+        )
 
     def _next_outcome(self, operation_id: str) -> SandboxOutcome:
         connection = self._database.connection
