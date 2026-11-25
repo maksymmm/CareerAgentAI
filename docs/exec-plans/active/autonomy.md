@@ -1594,3 +1594,14 @@ not-completed reconciliation when the local interview event is already accepted,
 direct API caller cannot convert a durable accepted event into a no-effect retry.
 Next: exact-head CI and independent review, then cross-provider restart/concurrency
 acceptance for application, communication and calendar.
+
+
+Candidate interview reconciliation HTTP restart acceptance: an authenticated WSGI
+regression now reopens the durable SQLite run after an ambiguous calendar attempt,
+simulates a local accepted-event commit, and posts a stale no-effect observation. The
+route must return the sanitized 409 conflict, preserve the pending reconciliation and
+provider ledger, avoid another provider attempt, and release its execution lease for a
+later evidence-backed resolution. The scenario uses only the fake calendar adapter and
+synthetic SQLite state.
+Next: exact-head CI/review, then cross-provider restart/concurrency acceptance for
+application, communication and calendar.

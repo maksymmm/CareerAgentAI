@@ -4207,3 +4207,108 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+
+
+def test_interview_no_effect_conflict_is_http_409_after_restart_and_releases_lease(
+    tmp_path, monkeypatch
+):
+    """A durable accepted event cannot be downgraded through the candidate HTTP API."""
+    import json
+    from io import BytesIO
+
+    from career_agent_ai.application.api import CandidateApprovalWSGIApp
+
+    path = str(tmp_path / "interview-http-no-effect-conflict.sqlite")
+    run_id = "interview-http-no-effect-conflict"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    loop.start(request(), run_id=run_id)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == (
+        CareerLoopPhase.MESSAGE_APPROVAL
+    )
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == (
+        CareerLoopPhase.INTERVIEW_APPROVAL
+    )
+
+    attempts = {"count": 0}
+
+    def ambiguous_accept(*args, **kwargs):
+        attempts["count"] += 1
+        raise RuntimeError("calendar outcome unknown")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    operation_id = ambiguous.human_action.details["operation_id"]
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    database.close()
+
+    # Reopen the same durable run before simulating the local accepted-event commit.
+    restarted_database, restarted_loop, _, _, restarted_scheduling, _, _, restarted_calendar = (
+        build_stack(path)
+    )
+    proposed = restarted_scheduling.get_event("interview-1")
+    accepted = proposed.transition(
+        ScheduleStatus.ACCEPTED,
+        provider_event_id="provider-event-confirmed",
+    )
+    restarted_scheduling._repository.complete_action(
+        accepted, operation_id, expected_version=proposed.version
+    )
+    operation_before = restarted_scheduling.get_operation(operation_id)
+    assert operation_before.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+    candidate_app = CandidateApprovalWSGIApp(
+        restarted_loop,
+        resolve_bearer=lambda token: "user-1" if token == "valid" else None,
+    )
+    payload = json.dumps(
+        {
+            "schema_version": 1,
+            "state_version": observed_version,
+            "completed": False,
+        }
+    ).encode("utf-8")
+    statuses = []
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": f"/v1/candidate/runs/{run_id}/interview-reconciliation",
+        "QUERY_STRING": "",
+        "HTTP_AUTHORIZATION": "Bearer valid",
+        "CONTENT_LENGTH": str(len(payload)),
+        "CONTENT_TYPE": "application/json",
+        "wsgi.input": BytesIO(payload),
+    }
+    response = b"".join(
+        candidate_app(
+            environ,
+            lambda status, headers: statuses.append((status, headers)),
+        )
+    )
+
+    assert statuses[0][0] == "409 Conflict"
+    assert json.loads(response) == {"error": "approval_conflict"}
+    assert attempts["count"] == 1
+    assert restarted_calendar.calls == []
+    assert restarted_scheduling.get_operation(operation_id) == operation_before
+    after = restarted_loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )
+    assert after["phase"] == CareerLoopPhase.INTERVIEW_RECONCILIATION.value
+    assert after["waiting_for_human"] is True
+    assert after["state_version"] == observed_version
+    assert restarted_scheduling.get_event("interview-1").status == ScheduleStatus.ACCEPTED
+
+    # The conflict path must release its short execution lease for a later valid
+    # provider-evidence reconciliation.
+    lease_probe = "post-conflict-lease-probe"
+    restarted_loop._states.claim_execution(
+        run_id,
+        lease_probe,
+        expected_version=observed_version,
+        lease_seconds=10,
+    )
+    restarted_loop._states.release_execution(run_id, lease_probe)
+    restarted_database.close()
