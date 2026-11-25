@@ -1537,12 +1537,9 @@ def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     start_entered = Event()
     release_start = Event()
+    list_requests = []
 
     class DelayedStartLoop(Loop):
-        def __init__(self):
-            super().__init__()
-            self.list_calls = 0
-
         def start(self, request, *, run_id=None):
             self.started = (request, run_id)
             start_entered.set()
@@ -1552,7 +1549,6 @@ def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads
             )
 
         def list_run_statuses(self, **kwargs):
-            self.list_calls += 1
             assert kwargs == {
                 "user_id": "candidate-1", "limit": 25, "after": None, "phase": None,
             }
@@ -1561,6 +1557,12 @@ def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads
     class QuietHandler(WSGIRequestHandler):
         def log_message(self, format, *args):
             pass
+
+    def fulfill_list(route):
+        list_requests.append(route.request.url)
+        return route.fulfill(status=200, json={
+            "schema_version": 1, "items": [], "next_after": None,
+        })
 
     loop = DelayedStartLoop()
     server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
@@ -1571,10 +1573,7 @@ def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
-            page.route("**/v1/candidate/run-statuses?*", lambda route: route.fulfill(
-                status=200, json={
-                    "schema_version": 1, "items": [], "next_after": None,
-                }))
+            page.route("**/v1/candidate/run-statuses?*", fulfill_list)
             page.locator("#token").fill("valid")
             page.locator("#start-run-id").fill("concurrent-start")
             page.locator("#keyword").fill("platform engineer")
@@ -1584,7 +1583,7 @@ def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads
 
             assert page.locator("#list-runs").is_disabled()
             page.locator("#list-runs").dispatch_event("click")
-            assert loop.list_calls == 0
+            assert list_requests == []
 
             release_start.set()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
@@ -1594,7 +1593,7 @@ def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads
 
             with page.expect_request("**/v1/candidate/run-statuses?*"):
                 page.locator("#list-runs").click()
-            assert loop.list_calls == 1
+            assert len(list_requests) == 1
             browser.close()
     finally:
         release_start.set()
