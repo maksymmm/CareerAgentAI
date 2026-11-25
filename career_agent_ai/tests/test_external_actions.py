@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import pytest
@@ -223,6 +224,14 @@ def test_restart_marks_in_progress_operation_for_reconciliation(tmp_path):
         ExternalActionStatus.PREPARED,
         ExternalActionStatus.IN_PROGRESS,
     )
+    first_database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        (
+            (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(),
+            "operation-1",
+        ),
+    )
+    first_database.connection.commit()
     first_database.close()
 
     adapter = RecordingAdapter()
@@ -449,3 +458,176 @@ def test_failed_terminal_commit_rolls_back_before_reconciliation(tmp_path):
     assert durable is not None
     assert durable.status == ExternalActionStatus.RECONCILIATION_REQUIRED
     restarted.close()
+
+def test_live_duplicate_observes_in_progress_without_reclassifying_active_provider_call(tmp_path):
+    path = str(tmp_path / "live-duplicate.sqlite")
+
+    class ReentrantDuplicateAdapter:
+        def __init__(self):
+            self.calls = 0
+            self.duplicate_status = None
+
+        def execute(self, operation_id, action_type, payload):
+            self.calls += 1
+            duplicate_database = SQLiteDatabase(path)
+            try:
+                duplicate_repository = SQLiteExternalActionOperationRepository(
+                    duplicate_database
+                )
+                duplicate_service = ExternalActionService(duplicate_repository, self)
+                duplicate = duplicate_service.execute(
+                    operation_id, human_approved=True
+                )
+                self.duplicate_status = duplicate.status
+            finally:
+                duplicate_database.close()
+            return {"provider_reference": "ref-123"}
+
+    database = SQLiteDatabase(path)
+    repository = SQLiteExternalActionOperationRepository(database)
+    adapter = ReentrantDuplicateAdapter()
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-live-duplicate", "application", {"job": "1"})
+
+    result = service.execute("operation-live-duplicate", human_approved=True)
+
+    assert adapter.calls == 1
+    assert adapter.duplicate_status == ExternalActionStatus.IN_PROGRESS
+    assert result.status == ExternalActionStatus.SUCCEEDED
+    assert repository.get("operation-live-duplicate") == result
+    database.close()
+
+
+def test_expired_in_progress_operation_moves_to_reconciliation_without_provider_call():
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-stale", "application", {})
+    in_progress = repository.transition(
+        "operation-stale",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+
+    recovered = service.execute(
+        "operation-stale",
+        human_approved=True,
+        stale_after_seconds=300,
+        now=in_progress.updated_at + timedelta(seconds=300),
+    )
+
+    assert recovered.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert "ambiguous outcome" in recovered.error
+    assert adapter.calls == []
+
+
+def test_future_in_progress_timestamp_is_conservatively_treated_as_live():
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-future", "application", {})
+    in_progress = repository.transition(
+        "operation-future",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+
+    observed = service.execute(
+        "operation-future",
+        human_approved=True,
+        now=in_progress.updated_at - timedelta(seconds=30),
+    )
+
+    assert observed.status == ExternalActionStatus.IN_PROGRESS
+    assert repository.get("operation-future").status == ExternalActionStatus.IN_PROGRESS
+    assert adapter.calls == []
+
+
+class LostStaleRecoveryRaceRepository(SQLiteExternalActionOperationRepository):
+    """Simulate another worker completing the action after a stale read."""
+
+    def transition(
+        self,
+        operation_id,
+        expected_status,
+        status,
+        *,
+        result=None,
+        error=None,
+    ):
+        if (
+            expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.RECONCILIATION_REQUIRED
+        ):
+            super().transition(
+                operation_id,
+                ExternalActionStatus.IN_PROGRESS,
+                ExternalActionStatus.SUCCEEDED,
+                result={"provider_reference": "completed-by-original-worker"},
+            )
+            raise OperationConflictError("another worker completed the operation")
+        return super().transition(
+            operation_id,
+            expected_status,
+            status,
+            result=result,
+            error=error,
+        )
+
+
+def test_stale_recovery_returns_concurrent_terminal_winner_instead_of_false_conflict():
+    database = SQLiteDatabase()
+    repository = LostStaleRecoveryRaceRepository(database)
+    adapter = RecordingAdapter()
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-stale-race", "application", {})
+    in_progress = repository.transition(
+        "operation-stale-race",
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+
+    observed = service.execute(
+        "operation-stale-race",
+        human_approved=True,
+        now=in_progress.updated_at + timedelta(minutes=10),
+    )
+
+    assert observed.status == ExternalActionStatus.SUCCEEDED
+    assert observed.result == {
+        "provider_reference": "completed-by-original-worker"
+    }
+    assert repository.get("operation-stale-race") == observed
+    assert adapter.calls == []
+    database.close()
+
+
+@pytest.mark.parametrize("seconds", [True, 0, -1, 3601, 1.5])
+def test_execution_rejects_invalid_stale_grace_without_mutating_operation(seconds):
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-invalid-grace", "application", {})
+
+    with pytest.raises(ValueError, match="stale_after_seconds"):
+        service.execute(
+            "operation-invalid-grace",
+            human_approved=True,
+            stale_after_seconds=seconds,
+        )
+
+    assert repository.get("operation-invalid-grace").status == ExternalActionStatus.PREPARED
+    assert adapter.calls == []
+
+
+def test_execution_rejects_naive_recovery_clock_without_mutating_operation():
+    adapter = RecordingAdapter()
+    service, repository = make_service(SQLiteDatabase(), adapter)
+    service.prepare("operation-naive-clock", "application", {})
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        service.execute(
+            "operation-naive-clock",
+            human_approved=True,
+            now=datetime.now(),
+        )
+
+    assert repository.get("operation-naive-clock").status == ExternalActionStatus.PREPARED
+    assert adapter.calls == []
