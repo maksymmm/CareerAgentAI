@@ -30,7 +30,10 @@ candidate workflow transition is single-winner.
 - Race two authenticated interview-reconciliation POST requests with the same
   state_version and verified provider event ID through independent request-local
   SQLite connections.
-- Require exactly one 200 OK terminal transition and one sanitized 409 Conflict.
+- Require exactly one 200 OK reconciliation winner and one sanitized 409 Conflict.
+- If the winning request returns the recoverable INTERVIEW_ACCEPT phase because
+  post-effect application tracking could not finish in the concurrent segment, use
+  the authenticated continue route after the race and require terminal COMPLETE.
 - Verify the accepted event, succeeded external action, single provider effect,
   single attempt, and unchanged replay count.
 
