@@ -855,6 +855,28 @@ class SQLiteCandidateRunStatusProjection:
                 details.get("operation_id"), "operation_id"
             )
             message_id = validated_identifier(details.get("message_id"), "message_id")
+            operation_row = connection.execute(
+                """
+                SELECT action_type, payload_json, status
+                FROM external_action_operations
+                WHERE operation_id = ?
+                """,
+                (operation_id,),
+            ).fetchone()
+            if operation_row is None:
+                raise ValueError("Persisted message operation is missing.")
+            operation_payload = json.loads(
+                operation_row[1],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
+            if (
+                operation_row[0] != "communication.send"
+                or operation_row[2] != "reconciliation_required"
+                or operation_payload != {"message_id": message_id}
+            ):
+                raise ValueError("Persisted message operation does not match the pending intent.")
             if state.message_id is None or message_id != state.message_id:
                 raise ValueError("Pending message identity does not match the run.")
 
