@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
 from career_agent_ai.application.observability.structured_logging import redact_text
 
 from .external_action_operation import ExternalActionOperation, ExternalActionStatus
-from .external_action_repository import ExternalActionOperationRepository
+from .external_action_repository import (
+    ExternalActionOperationRepository,
+    OperationConflictError,
+)
 
 
 class AmbiguousExternalActionError(RuntimeError):
@@ -66,12 +70,29 @@ class ExternalActionService:
         operation_id: str,
         *,
         human_approved: bool,
+        stale_after_seconds: int = 300,
+        now: datetime | None = None,
     ) -> ExternalActionOperation:
-        """Execute a prepared action once after explicit human approval.
+        """Execute once, while protecting a live provider call from duplicate recovery.
 
-        An operation already left in ``in_progress`` is ambiguous: it is moved to
-        ``reconciliation_required`` and the adapter is deliberately not called.
+        A duplicate observes an in-progress operation unchanged during the bounded
+        grace period. Only older operations are promoted to reconciliation, and
+        this recovery transition never invokes the adapter. Future timestamps are
+        treated conservatively as live to avoid clock-skew-induced early recovery.
         """
+        if (
+            type(stale_after_seconds) is not int
+            or not 1 <= stale_after_seconds <= 3600
+        ):
+            raise ValueError("stale_after_seconds must be an integer from 1 to 3600.")
+        current_time = now if now is not None else datetime.now(timezone.utc)
+        if (
+            not isinstance(current_time, datetime)
+            or current_time.tzinfo is None
+            or current_time.utcoffset() is None
+        ):
+            raise ValueError("now must be a timezone-aware datetime.")
+
         operation = self._require_operation(operation_id)
         if operation.status in {
             ExternalActionStatus.SUCCEEDED,
@@ -80,12 +101,29 @@ class ExternalActionService:
         }:
             return operation
         if operation.status == ExternalActionStatus.IN_PROGRESS:
-            return self._repository.transition(
-                operation.operation_id,
-                ExternalActionStatus.IN_PROGRESS,
-                ExternalActionStatus.RECONCILIATION_REQUIRED,
-                error="Previous execution has an ambiguous outcome; reconcile with the provider.",
-            )
+            age = (
+                current_time.astimezone(timezone.utc)
+                - operation.updated_at.astimezone(timezone.utc)
+            ).total_seconds()
+            if age < stale_after_seconds:
+                return operation
+            try:
+                return self._repository.transition(
+                    operation.operation_id,
+                    ExternalActionStatus.IN_PROGRESS,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED,
+                    error="Previous execution has an ambiguous outcome; reconcile with the provider.",
+                )
+            except OperationConflictError:
+                # Another worker may have completed or classified the operation
+                # after our read. Return that winner instead of reporting a false
+                # recovery failure; preserve a conflict if it is still in progress.
+                current = self._repository.get(operation.operation_id)
+                if current is None:
+                    raise
+                if current.status != ExternalActionStatus.IN_PROGRESS:
+                    return current
+                raise
         if not isinstance(human_approved, bool):
             raise TypeError("human_approved must be a boolean.")
         if human_approved is not True:
