@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
+from threading import Event, Lock
 
 import pytest
 
@@ -80,3 +82,85 @@ def test_replay_fails_closed_on_corrupted_delivery_evidence(tmp_path, corruption
     assert attempts == 1
     assert restarted_provider.delivery_count("send:replay-integrity") == 1
     restarted_database.close()
+
+
+
+def test_concurrent_duplicate_delivery_replays_one_verified_effect(tmp_path):
+    path = str(tmp_path / "communication-concurrent-replay.sqlite")
+    setup_database = SQLiteDatabase(path)
+    setup_provider = SQLiteSandboxCommunicationProvider(setup_database)
+    message = _message()
+    setup_provider.draft(message)
+    setup_database.close()
+
+    start = Event()
+    ready = (Event(), Event())
+    calling = (Event(), Event())
+    plan_entered = Event()
+    release_plan = Event()
+    plan_lock = Lock()
+    plan_calls: list[tuple[str, int]] = []
+
+    def plan(operation_id: str, attempt_no: int) -> SandboxCommunicationOutcome:
+        with plan_lock:
+            plan_calls.append((operation_id, attempt_no))
+        plan_entered.set()
+        if not release_plan.wait(timeout=5):
+            raise TimeoutError("Test did not release the sandbox provider plan.")
+        return SandboxCommunicationOutcome.SUCCESS
+
+    def deliver(index: int):
+        database = SQLiteDatabase(path)
+        provider = SQLiteSandboxCommunicationProvider(database, plan)
+        ready[index].set()
+        if not start.wait(timeout=5):
+            database.close()
+            raise TimeoutError("Concurrent delivery start was not released.")
+        calling[index].set()
+        try:
+            return provider.send("send:concurrent-replay", message)
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(deliver, 0)
+        second = executor.submit(deliver, 1)
+        assert ready[0].wait(timeout=5)
+        assert ready[1].wait(timeout=5)
+        start.set()
+        assert calling[0].wait(timeout=5)
+        assert calling[1].wait(timeout=5)
+        assert plan_entered.wait(timeout=5)
+
+        # One provider owns the SQLite writer transaction while the duplicate
+        # waits. Neither request may finish before the first durable commit.
+        with pytest.raises(FutureTimeoutError):
+            first.result(timeout=0.05)
+        with pytest.raises(FutureTimeoutError):
+            second.result(timeout=0.05)
+        release_plan.set()
+
+        first_result = first.result(timeout=5)
+        second_result = second.result(timeout=5)
+
+    assert first_result == second_result
+    assert first_result.direction == MessageDirection.OUTBOUND
+    assert plan_calls == [("send:concurrent-replay", 1)]
+
+    verification_database = SQLiteDatabase(path)
+    assert verification_database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_communication_attempts "
+        "WHERE operation_id = ?",
+        ("send:concurrent-replay",),
+    ).fetchone() == (1,)
+    assert verification_database.connection.execute(
+        "SELECT replays FROM sandbox_communication_deliveries "
+        "WHERE operation_id = ?",
+        ("send:concurrent-replay",),
+    ).fetchone() == (1,)
+    assert verification_database.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_communication_deliveries "
+        "WHERE operation_id = ?",
+        ("send:concurrent-replay",),
+    ).fetchone() == (1,)
+    verification_database.close()
