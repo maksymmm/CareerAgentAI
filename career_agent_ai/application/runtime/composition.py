@@ -65,6 +65,7 @@ from career_agent_ai.application.storage.sqlite_sandbox_submission_provider impo
     SQLiteSandboxSubmissionProvider,
 )
 from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
+    SandboxCommunicationOutcomePlan,
     SQLiteSandboxCommunicationProvider,
 )
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
@@ -131,11 +132,13 @@ class RuntimeCandidateApp:
         jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
         sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+        communication_outcome_plan: SandboxCommunicationOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._resolve_bearer = resolve_bearer
         self._sandbox_outcome_plan = sandbox_outcome_plan
+        self._communication_outcome_plan = communication_outcome_plan
         self._closed = False
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
@@ -144,7 +147,10 @@ class RuntimeCandidateApp:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         app = CandidateApprovalWSGIApp(
             _RequestCandidateLoop(
-                self._database_path, self._jobs, self._sandbox_outcome_plan
+                self._database_path,
+                self._jobs,
+                self._sandbox_outcome_plan,
+                self._communication_outcome_plan,
             ),
             resolve_bearer=self._resolve_bearer,
         )
@@ -165,7 +171,10 @@ class RuntimeCandidateApp:
         database = SQLiteDatabase(self._database_path)
         try:
             loop = _build_candidate_loop(
-                database, self._jobs, self._sandbox_outcome_plan
+                database,
+                self._jobs,
+                self._sandbox_outcome_plan,
+                self._communication_outcome_plan,
             )
             if run_id is None:
                 return loop.start(request)
@@ -260,10 +269,12 @@ class _RequestCandidateLoop:
         database_path: str,
         jobs: tuple[Job, ...],
         outcome_plan: SandboxOutcomePlan | None = None,
+        communication_outcome_plan: SandboxCommunicationOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._outcome_plan = outcome_plan
+        self._communication_outcome_plan = communication_outcome_plan
 
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's event without writable storage or calendar I/O."""
@@ -308,7 +319,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).start(
                 request, run_id=run_id
             )
@@ -322,7 +333,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).replay_existing_start(
                 request, run_id=run_id, user_id=user_id
             )
@@ -354,7 +365,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).get_candidate_approval_prompt(run_id, user_id=user_id)
         finally:
             database.close()
@@ -364,7 +375,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resume_candidate_submission(user_id=user_id, submission=submission)
         finally:
             database.close()
@@ -374,7 +385,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).continue_run(
                 run_id, user_id=user_id
             )
@@ -394,7 +405,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_application_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -417,7 +428,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_message_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -436,7 +447,7 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan, self._communication_outcome_plan
             ).resolve_interview_reconciliation(
                 run_id, user_id=user_id, completed=completed,
                 provider_event_id=provider_event_id,
@@ -452,6 +463,7 @@ def build_candidate_sandbox_app_from_env(
     jobs: Iterable[Job] = (),
     environ: Mapping[str, str] | None = None,
     sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+    communication_outcome_plan: SandboxCommunicationOutcomePlan | None = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
     config = validate_candidate_sandbox_environment(environ)
@@ -466,7 +478,12 @@ def build_candidate_sandbox_app_from_env(
     try:
         if database.is_memory:
             raise ValueError("Candidate sandbox requires durable SQLite storage.")
-        _build_candidate_loop(database, configured_jobs, sandbox_outcome_plan)
+        _build_candidate_loop(
+            database,
+            configured_jobs,
+            sandbox_outcome_plan,
+            communication_outcome_plan,
+        )
     finally:
         database.close()
     return RuntimeCandidateApp(
@@ -474,6 +491,7 @@ def build_candidate_sandbox_app_from_env(
         jobs=configured_jobs,
         resolve_bearer=resolve_bearer,
         sandbox_outcome_plan=sandbox_outcome_plan,
+        communication_outcome_plan=communication_outcome_plan,
     )
 
 
@@ -503,6 +521,7 @@ def _build_candidate_loop(
     database: SQLiteDatabase,
     jobs: tuple[Job, ...],
     outcome_plan: SandboxOutcomePlan | None = None,
+    communication_outcome_plan: SandboxCommunicationOutcomePlan | None = None,
 ) -> AutonomousCareerLoop:
     """Build one loop whose repositories share a request-owned connection."""
     job_repository = InMemoryJobRepository()
@@ -525,7 +544,9 @@ def _build_candidate_loop(
         require_provider_evidence=True,
     )
     communication_repository = SQLiteCommunicationRepository(database)
-    communication_adapter = SQLiteSandboxCommunicationProvider(database)
+    communication_adapter = SQLiteSandboxCommunicationProvider(
+        database, communication_outcome_plan
+    )
     communication = CommunicationService(
         communication_repository,
         communication_adapter,
