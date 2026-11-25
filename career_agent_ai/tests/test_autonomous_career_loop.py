@@ -4264,3 +4264,87 @@ def test_candidate_interview_intent_projection_rejects_lost_calendar_action_clai
     with pytest.raises(ValueError, match="Persisted candidate interview reconciliation is malformed"):
         runtime.get_candidate_interview_reconciliation(run_id, user_id="user-1")
     runtime.close()
+
+
+
+def test_candidate_interview_intent_http_restores_owner_scoped_projection_after_restart(
+    tmp_path, monkeypatch
+):
+    from io import BytesIO
+    from wsgiref.util import setup_testing_defaults
+
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+
+    path = tmp_path / "interview-intent-http-restart.sqlite"
+    run_id, operation_id, version = _create_ambiguous_interview_intent_database(
+        str(path), monkeypatch
+    )
+    baseline = path.read_bytes()
+    runtime = RuntimeCandidateApp(
+        database_path=str(path),
+        jobs=(),
+        resolve_bearer=lambda token: "user-1" if token == "valid" else "user-2",
+    )
+
+    def get_intent(*, token="valid", requested_run_id=run_id, query=""):
+        environ = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": (
+                    f"/v1/candidate/runs/{requested_run_id}/interview-reconciliation"
+                ),
+                "QUERY_STRING": query,
+                "CONTENT_LENGTH": "0",
+                "HTTP_AUTHORIZATION": "" if token is None else f"Bearer {token}",
+            }
+        )
+        environ["wsgi.input"] = BytesIO()
+        captured = {}
+
+        def start_response(status, headers, exc_info=None):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        response = b"".join(runtime(environ, start_response))
+        return (
+            captured["status"],
+            captured["headers"],
+            json.loads(response.decode("utf-8")),
+        )
+
+    try:
+        status, headers, intent = get_intent()
+        assert status == "200 OK"
+        assert headers["Cache-Control"] == "no-store"
+        assert intent == {
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": version,
+            "event_id": "interview-1",
+            "employer": "Acme Logistics",
+            "local_date": "2026-11-12",
+            "local_start_time": "10:00:00",
+            "timezone": "Europe/Berlin",
+        }
+        assert operation_id not in json.dumps(intent)
+        assert "provider_event_id" not in intent
+        assert path.read_bytes() == baseline
+
+        foreign_status, _, foreign_body = get_intent(token="foreign")
+        missing_status, _, missing_body = get_intent(requested_run_id="missing-run")
+        assert foreign_status == missing_status == "404 Not Found"
+        assert foreign_body == missing_body
+        assert path.read_bytes() == baseline
+
+        unauthorized_status, _, unauthorized_body = get_intent(token=None)
+        assert unauthorized_status == "401 Unauthorized"
+        assert unauthorized_body == {"error": "unauthorized"}
+
+        query_status, _, query_body = get_intent(query="operation_id=private")
+        assert query_status == "400 Bad Request"
+        assert query_body == {"error": "invalid_request"}
+        assert path.read_bytes() == baseline
+    finally:
+        runtime.close()
