@@ -99,24 +99,66 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
         connection = self._database.connection
         self._begin()
         try:
-            row = connection.execute(
+            intent_row = connection.execute(
                 "SELECT fingerprint FROM sandbox_communication_intents WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
-            if row is None:
-                connection.execute(
-                    "INSERT INTO sandbox_communication_intents VALUES (?, ?)",
-                    (operation_id, fingerprint),
-                )
-            elif row[0] != fingerprint:
-                raise PreDeliveryCommunicationError(
-                    "Sandbox idempotency key was reused with a different message intent."
-                )
+            attempt_rows = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+                "WHERE operation_id = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
             delivered_row = connection.execute(
                 "SELECT fingerprint, message_id FROM sandbox_communication_deliveries "
                 "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
+            attempts = self._validated_attempt_history(attempt_rows)
+
+            # An intent may be created only for a genuinely new operation. Existing
+            # attempts or a delivery without their original intent are corruption,
+            # not permission to reconstruct the binding from the caller's request.
+            if intent_row is None:
+                if attempts or delivered_row is not None:
+                    raise PreDeliveryCommunicationError(
+                        "Sandbox communication ledger is incomplete; refusing to recreate its intent."
+                    )
+                connection.execute(
+                    "INSERT INTO sandbox_communication_intents VALUES (?, ?)",
+                    (operation_id, fingerprint),
+                )
+            else:
+                if intent_row[0] != fingerprint:
+                    raise PreDeliveryCommunicationError(
+                        "Sandbox idempotency key was reused with a different message intent."
+                    )
+                if not attempts:
+                    raise PreDeliveryCommunicationError(
+                        "Sandbox communication intent has no attempt history; refusing delivery."
+                    )
+
+            no_effect_outcomes = {
+                SandboxCommunicationOutcome.NO_EFFECT,
+                SandboxCommunicationOutcome.INTERRUPTED_BEFORE_EFFECT,
+            }
+            effect_outcomes = {
+                SandboxCommunicationOutcome.SUCCESS,
+                SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT,
+            }
+            if delivered_row is None:
+                if any(outcome not in no_effect_outcomes for outcome in attempts):
+                    raise PreDeliveryCommunicationError(
+                        "Sandbox attempt history does not prove that retry is safe."
+                    )
+            elif (
+                not attempts
+                or attempts[-1] not in effect_outcomes
+                or any(outcome not in no_effect_outcomes for outcome in attempts[:-1])
+            ):
+                raise PreDeliveryCommunicationError(
+                    "Sandbox delivery evidence conflicts with its attempt history."
+                )
+
             if delivered_row is not None:
                 if delivered_row[0] != fingerprint:
                     raise PreDeliveryCommunicationError(
@@ -132,10 +174,7 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
                     raise ValueError("Sandbox delivery ledger references a missing message.")
                 connection.commit()
                 return delivered
-            attempt = connection.execute(
-                "SELECT COUNT(*) FROM sandbox_communication_attempts WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()[0] + 1
+            attempt = len(attempts) + 1
             outcome = self._plan(operation_id, attempt)
             if not isinstance(outcome, SandboxCommunicationOutcome):
                 raise PreDeliveryCommunicationError(
@@ -199,6 +238,29 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
                 (operation_id,),
             ).fetchone()[0]
         )
+
+    @staticmethod
+    def _validated_attempt_history(rows) -> tuple[SandboxCommunicationOutcome, ...]:
+        """Require a contiguous, recognized attempt ledger before retry or replay."""
+        parsed: list[SandboxCommunicationOutcome] = []
+        for expected_no, row in enumerate(rows, start=1):
+            try:
+                attempt_no, raw_outcome = row
+            except (TypeError, ValueError) as exc:
+                raise PreDeliveryCommunicationError(
+                    "Sandbox communication attempt history is malformed."
+                ) from exc
+            if type(attempt_no) is not int or attempt_no != expected_no:
+                raise PreDeliveryCommunicationError(
+                    "Sandbox communication attempt history is incomplete."
+                )
+            try:
+                parsed.append(SandboxCommunicationOutcome(raw_outcome))
+            except (TypeError, ValueError) as exc:
+                raise PreDeliveryCommunicationError(
+                    "Sandbox communication attempt history has an unknown outcome."
+                ) from exc
+        return tuple(parsed)
 
     def _begin(self) -> None:
         try:
