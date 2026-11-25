@@ -237,3 +237,64 @@ def test_replay_does_not_accept_a_rewritten_durable_intent(tmp_path):
     ).fetchone() == (0,)
     assert provider.attempts(OPERATION_ID) == (SandboxOutcome.SUCCESS,)
     restarted.close()
+
+
+def test_missing_effect_after_success_cannot_be_retried_as_a_new_submission(tmp_path):
+    path = tmp_path / "application-missing-effect.sqlite"
+    database, provider = _stack(path)
+    _submit(provider)
+    database.connection.execute(
+        "DELETE FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+        (OPERATION_ID,),
+    )
+    database.connection.commit()
+    database.close()
+
+    restarted, provider = _stack(path)
+    with pytest.raises(PreSubmissionError, match="may have produced an effect"):
+        _submit(provider)
+    assert provider.ledger_entries() == ()
+    assert provider.attempts(OPERATION_ID) == (SandboxOutcome.SUCCESS,)
+    assert restarted.connection.execute(
+        "SELECT COUNT(*) FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+        (OPERATION_ID,),
+    ).fetchone()[0] == 0
+    restarted.close()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE sandbox_submission_attempts SET attempt_no = 2 WHERE idempotency_key = ?",
+        "UPDATE sandbox_submission_attempts SET outcome = 'unknown' WHERE idempotency_key = ?",
+    ],
+)
+def test_retry_fails_closed_on_corrupted_no_effect_attempt_history(tmp_path, mutation):
+    path = tmp_path / "application-corrupt-retry-history.sqlite"
+
+    def no_effect(_operation_id, _attempt_no):
+        return SandboxOutcome.NO_EFFECT
+
+    database, provider = _stack(path, no_effect)
+    with pytest.raises(PreSubmissionError):
+        _submit(provider)
+    database.connection.execute(mutation, (OPERATION_ID,))
+    database.connection.commit()
+    before = database.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
+        "WHERE idempotency_key = ? ORDER BY attempt_no",
+        (OPERATION_ID,),
+    ).fetchall()
+    database.close()
+
+    restarted, provider = _stack(path)
+    with pytest.raises(PreSubmissionError, match="attempt history"):
+        _submit(provider)
+    after = restarted.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
+        "WHERE idempotency_key = ? ORDER BY attempt_no",
+        (OPERATION_ID,),
+    ).fetchall()
+    assert after == before
+    assert provider.ledger_entries() == ()
+    restarted.close()

@@ -73,6 +73,12 @@ SQLite integer counters, missing/gapped/unknown attempts, and attempts recorded 
 an effect fail closed before replay accounting changes. The replay counter is updated
 with a compare-and-swap predicate inside the provider-owned writer transaction.
 
+A new provider attempt is also blocked when an existing intent has missing, malformed,
+gapped, unknown, or effect-producing attempt history but no corresponding effect row.
+Only a contiguous history of explicit no-effect/interrupted outcomes permits another
+attempt. This prevents deletion of a successful effect row from turning a duplicate
+submission into a second provider effect.
+
 ### Future real-provider adapters
 
 A real adapter MUST return `UNKNOWN` unless its lookup is authoritative for the idempotency

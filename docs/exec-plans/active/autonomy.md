@@ -1615,3 +1615,14 @@ attempt histories, counter corruption/overflow, and a valid no-effect-then-succe
 history. Synthetic local SQLite only; no real application submission.
 Next: exact-head full CI with both >=90% coverage gates and independent code/security
 review, then continue cross-provider replay-integrity parity.
+
+
+Application sandbox retry integrity: the no-effect retry path now validates any
+pre-existing intent and complete attempt history before invoking the sandbox outcome
+plan. A missing effect row after SUCCESS, TIMEOUT_AFTER_EFFECT, or EVIDENCE_MISMATCH
+cannot be interpreted as permission for a fresh submission. Only contiguous,
+recognized, explicit no-effect/interrupted attempts permit a subsequent attempt.
+Missing intent with residual attempts, missing attempts for an existing intent, and
+gapped or unknown attempt history fail closed without another provider call.
+Restart regressions delete a previously committed effect and corrupt a retryable
+attempt ledger to prove that neither path creates a new effect or attempt.
