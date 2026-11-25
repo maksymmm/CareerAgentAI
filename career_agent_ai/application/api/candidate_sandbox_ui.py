@@ -193,6 +193,7 @@ _HTML = r"""<!doctype html>
     let startInFlight = false;
     let statusInFlight = false;
     let reconciliationInFlight = false;
+    let candidateMutationInFlight = false;
     let reconciliationAvailable = false;
     let reconciliationVersion = null;
     let messageReconciliationAvailable = false;
@@ -309,7 +310,7 @@ _HTML = r"""<!doctype html>
       clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
       selectedEventId = null; selectedEventVersion = null;
       eventVersionFloorId = null; eventVersionFloor = null;
-      byId('list-events').disabled = false;
+      byId('list-events').disabled = candidateMutationInFlight;
       byId('owned-events').setAttribute('aria-busy', 'false');
       byId('owned-events').replaceChildren(); byId('events-state').textContent = '';
       byId('next-events').disabled = true;
@@ -350,6 +351,9 @@ _HTML = r"""<!doctype html>
       }
     }
     async function loadEvents(after = null) {
+      if (candidateMutationInFlight) {
+        throw new Error('Wait for the workflow action to finish before loading candidate collections.');
+      }
       clearEvents();
       const generation = eventsGeneration;
       const selectedStatus = byId('event-status').value;
@@ -542,13 +546,16 @@ _HTML = r"""<!doctype html>
       applicationVersionFloor = null;
       applicationsGeneration += 1;
       nextApplicationCursor = null;
-      byId('list-applications').disabled = false;
+      byId('list-applications').disabled = candidateMutationInFlight;
       byId('owned-applications').setAttribute('aria-busy', 'false');
       byId('owned-applications').replaceChildren();
       byId('applications-state').textContent = '';
       byId('next-applications').disabled = true;
     }
     async function loadApplications(after = null) {
+      if (candidateMutationInFlight) {
+        throw new Error('Wait for the workflow action to finish before loading candidate collections.');
+      }
       clearApplications();
       const generation = applicationsGeneration;
       const selectedStatus = byId('application-status').value;
@@ -646,7 +653,7 @@ _HTML = r"""<!doctype html>
     function clearRunList() {
       listGeneration += 1;
       nextRunCursor = null;
-      byId('list-runs').disabled = false;
+      byId('list-runs').disabled = candidateMutationInFlight;
       byId('owned-runs').setAttribute('aria-busy', 'false');
       byId('owned-runs').replaceChildren();
       byId('list-state').textContent = '';
@@ -654,10 +661,19 @@ _HTML = r"""<!doctype html>
     }
     function invalidateCandidateCollections() {
       // Any workflow write may change run, application, or schedule projections.
-      // Advance their generations before the request so late reads cannot repaint stale data.
+      // Advance their generations so late reads cannot repaint stale data.
       clearApplications();
       clearEvents();
       clearRunList();
+    }
+    function beginCandidateMutation() {
+      candidateMutationInFlight = true;
+      invalidateCandidateCollections();
+    }
+    function finishCandidateMutation() {
+      // Clear again: a read attempted while the mutation was pending must not survive it.
+      candidateMutationInFlight = false;
+      invalidateCandidateCollections();
     }
     const runPhases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
       'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
@@ -764,6 +780,9 @@ _HTML = r"""<!doctype html>
       return fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]));
     };
     async function loadRunList(after = null) {
+      if (candidateMutationInFlight) {
+        throw new Error('Wait for the workflow action to finish before loading candidate collections.');
+      }
       clearRunList();
       const generation = listGeneration;
       const selectedPhase = byId('run-phase').value;
@@ -990,7 +1009,7 @@ _HTML = r"""<!doctype html>
       const requestNumber = ++latestStartRequest;
       const startContextGeneration = inputContextGeneration;
       const requestedRunId = byId('start-run-id').value;
-      invalidateCandidateCollections();
+      beginCandidateMutation();
       try {
         const payload = await call('/v1/candidate/runs', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1011,6 +1030,7 @@ _HTML = r"""<!doctype html>
           selectRun(payload.run_id);
         }
       } finally {
+        finishCandidateMutation();
         startInFlight = false;
         byId('start').disabled = false;
         byId('start-panel').setAttribute('aria-busy', 'false');
@@ -1126,7 +1146,7 @@ _HTML = r"""<!doctype html>
       byId('decline').disabled = true;
       invalidateAllReconciliation(
         'Recovery may change workflow state. Refresh run status before reconciliation.');
-      invalidateCandidateCollections();
+      beginCandidateMutation();
       try {
         const runId = byId('run-id').value;
         const requestNumber = latestResultRequest + 1;
@@ -1153,6 +1173,7 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
+        finishCandidateMutation();
         recoveryInFlight = false;
         byId('continue').disabled = false;
         byId('prompt').disabled = false;
@@ -1250,7 +1271,7 @@ _HTML = r"""<!doctype html>
       let completionMessage = 'Decision result is uncertain. Load the current approval prompt.';
       invalidateAllReconciliation(
         'Decision may change workflow state. Refresh run status before reconciliation.');
-      invalidateCandidateCollections();
+      beginCandidateMutation();
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(payload.run_id) + '/approval', {method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)}, 'Decision request failed.');
@@ -1272,6 +1293,7 @@ _HTML = r"""<!doctype html>
         }
         throw error;
       } finally {
+        finishCandidateMutation();
         decisionInFlight = false;
         invalidateApprovalPrompt(completionMessage);
         byId('continue').disabled = false;
@@ -1316,7 +1338,7 @@ _HTML = r"""<!doctype html>
       reconciliationInFlight = true;
       byId('reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateApplicationReconciliation('Recording verified provider evidence…');
-      invalidateCandidateCollections();
+      beginCandidateMutation();
       try {
         const request = {schema_version: 1, state_version: observedVersion, submitted};
         if (submitted) request.provider_submission_id = providerSubmissionId;
@@ -1337,6 +1359,7 @@ _HTML = r"""<!doctype html>
           : 'Reconciliation result is uncertain. Refresh run status before retrying.');
         throw error;
       } finally {
+        finishCandidateMutation();
         reconciliationInFlight = false;
         byId('reconciliation-panel').setAttribute('aria-busy', 'false');
       }
@@ -1359,7 +1382,7 @@ _HTML = r"""<!doctype html>
       reconciliationInFlight = true;
       byId('message-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateMessageReconciliation('Recording verified provider outcome…');
-      invalidateCandidateCollections();
+      beginCandidateMutation();
       try {
         const result = await call('/v1/candidate/runs/' + encodeURIComponent(runId) +
           '/message-reconciliation', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1378,6 +1401,7 @@ _HTML = r"""<!doctype html>
           : 'Reconciliation result is uncertain. Refresh run status before retrying.');
         throw error;
       } finally {
+        finishCandidateMutation();
         reconciliationInFlight = false;
         byId('message-reconciliation-panel').setAttribute('aria-busy', 'false');
       }
@@ -1404,7 +1428,7 @@ _HTML = r"""<!doctype html>
       reconciliationInFlight = true;
       byId('interview-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateInterviewReconciliation('Recording verified calendar-provider evidence…');
-      invalidateCandidateCollections();
+      beginCandidateMutation();
       try {
         const request = {schema_version: 1, state_version: observedVersion, completed};
         if (completed) request.provider_event_id = providerEventId;
@@ -1424,6 +1448,7 @@ _HTML = r"""<!doctype html>
           : 'Reconciliation result is uncertain. Refresh run status before retrying.');
         throw error;
       } finally {
+        finishCandidateMutation();
         reconciliationInFlight = false;
         byId('interview-reconciliation-panel').setAttribute('aria-busy', 'false');
       }
