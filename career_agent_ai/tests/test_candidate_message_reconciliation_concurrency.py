@@ -167,7 +167,7 @@ def test_concurrent_candidate_message_reconciliation_is_single_winner_after_rest
         restarted_runtime, method="GET", path=reconciliation_path
     )
     assert status == "200 OK"
-    assert ("Cache-Control", "no-store") in headers
+    assert headers.get("Cache-Control") == "no-store"
     assert intent["schema_version"] == 1
     assert intent["run_id"] == durable_run_id
     assert intent["sender"] == "candidate@example.test"
