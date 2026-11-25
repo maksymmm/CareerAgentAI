@@ -113,23 +113,38 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
                     "Sandbox idempotency key was reused with a different message intent."
                 )
             delivered_row = connection.execute(
-                "SELECT fingerprint, message_id FROM sandbox_communication_deliveries "
+                "SELECT fingerprint, message_id, action FROM sandbox_communication_deliveries "
                 "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
             if delivered_row is not None:
-                if delivered_row[0] != fingerprint:
+                persisted_fingerprint, persisted_message_id, persisted_action = delivered_row
+                if persisted_fingerprint != fingerprint or persisted_action != action:
                     raise PreDeliveryCommunicationError(
                         "Sandbox delivery evidence conflicts with the message intent."
                     )
+                try:
+                    normalized_message_id = validate_identifier(
+                        persisted_message_id, "message_id"
+                    )
+                    delivered = self._load_message(normalized_message_id)
+                    if (
+                        delivered is None
+                        or delivered.direction != MessageDirection.OUTBOUND
+                        or self._fingerprint(action, delivered) != fingerprint
+                    ):
+                        raise ValueError("Persisted delivery does not match its intent.")
+                except (TypeError, UnicodeError, ValueError) as exc:
+                    raise PreDeliveryCommunicationError(
+                        "Sandbox delivery evidence is malformed or conflicts with the requested message."
+                    ) from exc
+                # Do not mutate replay accounting until every persisted field has
+                # been checked against the original immutable delivery intent.
                 connection.execute(
                     "UPDATE sandbox_communication_deliveries SET replays = replays + 1 "
                     "WHERE operation_id = ?",
                     (operation_id,),
                 )
-                delivered = self._load_message(delivered_row[1])
-                if delivered is None:
-                    raise ValueError("Sandbox delivery ledger references a missing message.")
                 connection.commit()
                 return delivered
             attempt = connection.execute(
