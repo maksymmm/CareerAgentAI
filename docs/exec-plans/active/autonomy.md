@@ -1622,3 +1622,20 @@ message ID, and body. All data remains synthetic and local to SQLite.
 
 Next: extend the same restart/concurrency acceptance to calendar reschedule and
 application retry, then run the cross-provider acceptance matrix.
+
+
+Candidate communication single-winner reconciliation after restart:
+
+The authenticated candidate workflow now has a concurrent restart acceptance for
+ambiguous communication delivery. The test drives application and message approval,
+records one synthetic TIMEOUT_AFTER_EFFECT delivery, closes the runtime, and restores
+the owner-scoped public intent from the same SQLite database. A stale state version
+is rejected before two same-version reconciliation POSTs race through independent
+request-local SQLite connections. Exactly one request completes the candidate run
+and the other receives a sanitized conflict. The test verifies one outbound delivery,
+one provider attempt, zero replay increments, a succeeded external action, and no
+provider retry after restart. The public intent continues to omit private operation
+and message identifiers and the message body.
+
+Next: run exact-head full CI and both coverage gates, request independent code/security
+review, then complete the cross-provider acceptance matrix.
