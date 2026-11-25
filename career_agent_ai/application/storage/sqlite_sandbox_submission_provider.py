@@ -238,7 +238,9 @@ class SQLiteSandboxSubmissionProvider:
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
         if connection.in_transaction:
-            return
+            raise PreSubmissionError(
+                "Sandbox provider cannot run inside an existing SQLite transaction."
+            )
         try:
             connection.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as exc:

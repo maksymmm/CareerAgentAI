@@ -580,3 +580,44 @@ def test_openapi_contract_exposes_no_new_sandbox_provider_surface():
     assert methods == {"post"}
     assert "409" in paths[route]["post"]["responses"]
     assert not [p for p in paths if "ledger" in p or "provider" in p or "sandbox-" in p]
+
+
+def test_submit_rejects_existing_caller_transaction_without_committing_it(path):
+    stack = Stack(path)
+    connection = stack.database.connection
+    connection.execute(
+        "CREATE TABLE caller_transaction_probe (value TEXT NOT NULL)"
+    )
+    connection.commit()
+    connection.execute(
+        "INSERT INTO caller_transaction_probe(value) VALUES ('pending')"
+    )
+    assert connection.in_transaction
+
+    with pytest.raises(PreSubmissionError, match="existing SQLite transaction"):
+        stack.provider.submit(
+            OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT
+        )
+
+    # The provider must neither join nor commit the caller-owned transaction.
+    assert connection.in_transaction
+    assert connection.execute(
+        "SELECT value FROM caller_transaction_probe"
+    ).fetchone() == ("pending",)
+    assert connection.execute(
+        "SELECT COUNT(*) FROM sandbox_submission_intents"
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM sandbox_submission_attempts"
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM sandbox_submission_ledger"
+    ).fetchone()[0] == 0
+
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM caller_transaction_probe"
+    ).fetchone()[0] == 0
+    assert stack.provider.observe(OP) is None
+    assert stack.provider.attempts(OP) == ()
+    stack.close()
