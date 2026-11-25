@@ -305,7 +305,7 @@ def test_candidate_action_projection_uses_composite_keyset_index(tmp_path):
             SELECT operation_id, operation_ref
             FROM external_action_operations
             WHERE correlation_ref = ?
-            ORDER BY operation_ref ASC
+            ORDER BY operation_id ASC
             LIMIT ?
             """,
             (stable_reference("candidate-run-a"), 26),
