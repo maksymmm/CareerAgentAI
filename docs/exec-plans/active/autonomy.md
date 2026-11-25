@@ -1590,3 +1590,9 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Application sandbox provider initialization now rejects an ambient SQLite
+transaction before schema DDL or commit. A regression proves that caller-owned
+pending writes remain active, no provider tables are created, and caller rollback
+still removes the pending write.
