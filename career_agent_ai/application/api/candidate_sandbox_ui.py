@@ -906,9 +906,9 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid message reconciliation intent.');
         }
         byId('message-reconciliation-intent').textContent =
-          'From: ' + intent.sender + '\\nTo: ' + intent.recipient +
-          '\\nSubject: ' + intent.subject +
-          '\\nContent SHA-256: ' + intent.content_sha256;
+          'From: ' + intent.sender + '\nTo: ' + intent.recipient +
+          '\nSubject: ' + intent.subject +
+          '\nContent SHA-256: ' + intent.content_sha256;
         enableMessageReconciliation(version);
       } catch (error) {
         if (contextGeneration === inputContextGeneration &&
