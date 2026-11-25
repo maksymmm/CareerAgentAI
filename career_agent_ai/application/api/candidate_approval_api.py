@@ -383,7 +383,7 @@ class CandidateApprovalWSGIApp:
                 if method != "POST":
                     return self._respond(
                         start_response, "405 Method Not Allowed",
-                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                        {"error": "method_not_allowed"}, [("Allow", "GET, POST")],
                     )
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
                 if media_type.strip().casefold() != "application/json":
