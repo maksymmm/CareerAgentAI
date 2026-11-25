@@ -1600,6 +1600,9 @@ recomputed message fingerprint against the original request. Missing or corrupte
 delivery evidence fails closed without consuming another attempt or changing the
 replay count. Regression coverage corrupts each persisted binding independently and
 restarts the provider before replay.
+A two-connection regression also holds the first provider inside its writer transaction
+while a duplicate request starts, then proves the durable ledger contains one provider
+attempt, one delivery, and exactly one replay after the first commit.
 
 Next: exact-head full CI with both >=90% coverage gates and independent code/security
 review; then continue bounded communication-provider contention and evidence-ledger
