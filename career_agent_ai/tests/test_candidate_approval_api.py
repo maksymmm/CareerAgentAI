@@ -1533,10 +1533,11 @@ def test_candidate_sandbox_browser_keeps_status_when_owned_list_loads_concurrent
         server.server_close()
 
 
-def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrently():
+def test_candidate_sandbox_browser_keeps_started_run_and_blocks_collection_reads_during_mutation():
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     start_entered = Event()
     release_start = Event()
+    list_requests = []
 
     class DelayedStartLoop(Loop):
         def start(self, request, *, run_id=None):
@@ -1557,6 +1558,12 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
         def log_message(self, format, *args):
             pass
 
+    def fulfill_list(route):
+        list_requests.append(route.request.url)
+        return route.fulfill(status=200, json={
+            "schema_version": 1, "items": [], "next_after": None,
+        })
+
     loop = DelayedStartLoop()
     server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -1566,24 +1573,30 @@ def test_candidate_sandbox_browser_keeps_started_run_when_list_loads_concurrentl
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
-            page.route("**/v1/candidate/run-statuses?*", lambda route: route.fulfill(
-                status=200, json={
-                    "schema_version": 1, "items": [], "next_after": None,
-                }))
+            page.route("**/v1/candidate/run-statuses?*", fulfill_list)
             page.locator("#token").fill("valid")
             page.locator("#start-run-id").fill("concurrent-start")
             page.locator("#keyword").fill("platform engineer")
             page.locator("#profile").fill("Senior Python engineer")
             page.locator("#start").click()
             assert start_entered.wait(timeout=5)
-            with page.expect_request("**/v1/candidate/run-statuses?*"):
-                page.locator("#list-runs").dispatch_event("click")
+
+            assert page.locator("#list-runs").is_disabled()
+            page.locator("#list-runs").dispatch_event("click")
+            assert list_requests == []
+
             release_start.set()
             page.locator("#result").get_by_text('"phase": "application_approval"').wait_for()
             assert loop.started is not None
             assert page.locator("#run-id").input_value() == loop.started[1]
+            assert not page.locator("#list-runs").is_disabled()
+
+            with page.expect_request("**/v1/candidate/run-statuses?*"):
+                page.locator("#list-runs").click()
+            assert len(list_requests) == 1
             browser.close()
     finally:
+        release_start.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
@@ -1848,6 +1861,134 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
         "expected_state_version": 29,
     })]
 
+
+
+def test_candidate_sandbox_invalidates_all_owner_collections_before_state_changes():
+    html = raw_request(app(Loop()))[1].decode("utf-8")
+    helper_start = html.index("function invalidateCandidateCollections")
+    helper_end = html.index("const runPhases", helper_start)
+    helper = html[helper_start:helper_end]
+    for clear in ("clearApplications();", "clearEvents();", "clearRunList();"):
+        assert clear in helper
+
+    for handler, request in (
+        ("byId('start').addEventListener", "await call('/v1/candidate/runs'"),
+        ("byId('continue').addEventListener", "await call(runPath('/continue')"),
+        ("async function decide", "await call('/v1/candidate/runs/'"),
+        ("async function reconcileApplication", "await call('/v1/candidate/runs/'"),
+        ("async function reconcileMessage", "await call('/v1/candidate/runs/'"),
+        ("async function reconcileInterview", "await call('/v1/candidate/runs/'"),
+    ):
+        start = html.index(handler)
+        post = html.index(request, start)
+        assert html.index("beginCandidateMutation();", start, post) < post
+    assert html.count("beginCandidateMutation();") == 6
+    assert html.count("finishCandidateMutation();") == 6
+
+    begin_helper = html[html.index("function beginCandidateMutation"):html.index("function selectRun")]
+    assert "candidateMutationInFlight = true" in begin_helper
+    assert "candidateMutationInFlight = false" in begin_helper
+    for loader in ("async function loadApplications", "async function loadEvents", "async function loadRunList"):
+        section_start = html.index(loader)
+        assert "if (candidateMutationInFlight)" in html[section_start:section_start + 250]
+
+    status_start = html.index("byId('status').addEventListener")
+    status_end = html.index("byId('continue').addEventListener", status_start)
+    status_handler = html[status_start:status_end]
+    assert "const previousRunVersion = selectedRunVersion" in status_handler
+    assert "snapshot.state_version > previousRunVersion" in status_handler
+    assert "invalidateCandidateCollections();" in status_handler
+
+    prompt_start = html.index("byId('prompt').addEventListener")
+    prompt_get = html.index("const loadedPrompt = await call", prompt_start)
+    assert "invalidateCandidateCollections();" in html[prompt_get:html.index("promptInFlight = false", prompt_get)]
+
+
+def test_candidate_sandbox_invalidates_owner_collections_after_workflow_advance():
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+
+    class VersionedLoop(Loop):
+        def __init__(self):
+            super().__init__()
+            self.version = 1
+            self.continue_entered = Event()
+            self.continue_release = Event()
+
+        def continue_run(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            self.continue_entered.set()
+            assert self.continue_release.wait(timeout=5)
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
+
+        def get_candidate_run_status(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1,
+                "run_id": run_id,
+                "state_version": self.version,
+                "phase": "application_approval",
+                "waiting_for_human": True,
+                "terminal": False,
+            }
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    loop = VersionedLoop()
+    server = make_server("127.0.0.1", 0, app(loop), handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("version 1").wait_for()
+
+            def seed_stale_collections():
+                page.evaluate("""() => {
+                  for (const id of ['owned-applications', 'owned-events', 'owned-runs']) {
+                    const row = document.createElement('li');
+                    row.textContent = 'stale projection';
+                    document.getElementById(id).append(row);
+                  }
+                  for (const id of ['application-detail', 'application-history', 'event-detail']) {
+                    document.getElementById(id).textContent = 'stale detail';
+                  }
+                }""")
+
+            def assert_collections_cleared():
+                for identifier in ("owned-applications", "owned-events", "owned-runs"):
+                    assert page.locator(f"#{identifier} li").count() == 0
+                for identifier in ("application-detail", "application-history", "event-detail"):
+                    assert page.locator(f"#{identifier}").text_content() == ""
+
+            seed_stale_collections()
+            loop.version = 2
+            page.locator("#status").click()
+            page.locator("#run-overview").get_by_text("version 2").wait_for()
+            assert_collections_cleared()
+
+            seed_stale_collections()
+            page.evaluate("document.querySelector('#continue').click()")
+            assert loop.continue_entered.wait(timeout=5)
+            for identifier in ("list-applications", "list-events", "list-runs"):
+                assert page.locator(f"#{identifier}").is_disabled()
+            loop.continue_release.set()
+            page.locator("#result").get_by_text('"phase": "complete"').wait_for()
+            assert_collections_cleared()
+            for identifier in ("list-applications", "list-events", "list-runs"):
+                assert not page.locator(f"#{identifier}").is_disabled()
+            browser.close()
+    finally:
+        loop.continue_release.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 def test_candidate_sandbox_ui_is_public_static_and_hardened():
     (status, headers), body = raw_request(app(Loop()))

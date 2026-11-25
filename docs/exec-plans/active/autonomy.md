@@ -1590,3 +1590,18 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate owner-collection invalidation: candidate run, application, and schedule-event
+projections are cleared before every workflow-changing request, including start, decision,
+recovery, and all three provider-reconciliation submissions. Collection controls are
+disabled while the mutation is in flight, and the loaders reject programmatic attempts;
+the collections are cleared again after settlement so reads cannot race the commit and
+repaint stale rows. Collection generations discard reads that were already in flight.
+A status or approval snapshot that advances beyond the previously selected run version
+invalidates the same collections because another actor may have changed related
+application or calendar state. Chromium and static regressions cover version advancement,
+pre/post mutation invalidation, and the disabled-read boundary.
+Next: extend the same stale-projection audit to the candidate external-action status panel
+when its integration lands, and verify message/application/interview cross-collection
+refresh behavior against the durable runtime.
