@@ -1590,3 +1590,24 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Candidate collection invalidation across workflow mutations:
+
+The candidate browser now invalidates the run-status, application, and schedule
+collections before starting any state-changing workflow request (run start,
+continue, approval decision, or application/message/interview reconciliation).
+Each collection's generation is advanced and its rows, cursors, selected details,
+and application history are cleared. This prevents an older in-flight GET from
+repopulating a dashboard projection after a mutation may have changed durable
+workflow state. Read-only status and approval-prompt reads do not invalidate the
+collections.
+
+A Chromium regression holds all three owner-scoped collection reads open, completes
+a candidate continuation, then releases the old run/application/event responses.
+The assertions require the rows, cursors, detail and history projections to remain
+empty after those stale responses settle.
+
+Next: extend the same stale-response proof to concurrent detail/history requests
+and verify projection refresh after the next durable workflow snapshot.
