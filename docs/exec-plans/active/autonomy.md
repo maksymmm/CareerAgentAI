@@ -1605,3 +1605,19 @@ sandbox calendar flow, owner isolation, immutable SQLite bytes, operation-payloa
 event-claim tampering, strict OpenAPI/HTTP behavior and Chromium stale-version rejection.
 Next: audit cross-collection invalidation across application, message, interview and
 external-action status projections.
+
+
+Candidate interview intent-to-evidence recovery round trip:
+
+The authenticated owner-scoped interview intent restored after a runtime restart
+is now exercised through the actual SQLite sandbox calendar provider. The provider
+commits one synthetic TIMEOUT_AFTER_EFFECT attempt and event before simulating a
+lost response. After restart, the candidate reads only the allowlisted intent,
+rejects mismatched provider-event evidence without changing durable workflow or
+provider state, then submits the matching event evidence with the restored state
+version. The run reaches COMPLETE, the schedule event becomes ACCEPTED, the
+external action becomes succeeded, and the original single effect remains at zero
+replays. No network calendar or real-world action is used.
+
+Next: complete browser-level acceptance for the restored intent and its explicit
+provider-attestation gate, then reconcile the stacked interview recovery PRs.
