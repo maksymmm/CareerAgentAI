@@ -1619,7 +1619,8 @@ concurrent submission regression observed on the integration base.
 Candidate action cursor confidentiality: candidate pagination no longer Base64-encodes
 the private provider operation ID. A persisted stable operation reference is backfilled
 through an additive migration, protected by a unique index and verified on reads.
-Run-bound cursors carry only the public operation reference; keyset pagination orders
-by that indexed reference and resolves cursors only inside the authenticated run scope.
+Run-bound cursors carry only the public operation reference; the read-only projection
+resolves that reference to an internal operation key inside the authenticated run and
+preserves the established operation-ID ordering through a composite run/operation index.
 Regressions decode the cursor payload to prove the source operation ID is absent, verify
 legacy migration and corruption rejection, and assert the composite SQLite query plan.
