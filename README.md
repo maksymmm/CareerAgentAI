@@ -1041,3 +1041,15 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+## Candidate-owned external-action status
+
+The authenticated candidate sandbox exposes
+`GET /v1/candidate/runs/{run_id}/actions` as a bounded, read-only view of
+application submission, communication, and calendar lifecycle metadata. It verifies
+run ownership before reading the indexed correlation reference, binds keyset cursors
+to the selected run, and returns only a stable action reference, allowlisted action
+family/status, UTC timestamps, and an `error_present` boolean. Provider payloads,
+results, error text, raw operation IDs, and correlation IDs are never returned.
+The dashboard panel is read-only and cannot retry, reconcile, or execute provider work.
