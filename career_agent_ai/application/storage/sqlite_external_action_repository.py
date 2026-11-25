@@ -34,8 +34,9 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 """
                 INSERT INTO external_action_operations (
                     operation_id, action_type, payload_json, status, result_json,
-                    error, created_at, updated_at, correlation_id, correlation_ref
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+                    error, created_at, updated_at, correlation_id, correlation_ref,
+                    operation_ref
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
                 """,
                 (
                     operation.operation_id,
@@ -46,6 +47,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                     operation.updated_at.isoformat(),
                     operation.correlation_id,
                     None if operation.correlation_id is None else stable_reference(operation.correlation_id),
+                    stable_reference(operation.operation_id),
                 ),
             )
             self._database.connection.commit()
@@ -74,7 +76,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         row = self._database.connection.execute(
             """
             SELECT operation_id, action_type, payload_json, status, result_json,
-                   error, created_at, updated_at, correlation_id, correlation_ref
+                   error, created_at, updated_at, correlation_id, correlation_ref,
+                   operation_ref
             FROM external_action_operations WHERE operation_id = ?
             """,
             (normalized,),
@@ -89,6 +92,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                     raise ValueError("correlation reference has no source identifier")
             elif row[9] != stable_reference(row[8]):
                 raise ValueError("correlation reference does not match its source identifier")
+            if row[10] != stable_reference(row[0]):
+                raise ValueError("operation reference does not match its source identifier")
             return ExternalActionOperation(
                 operation_id=row[0],
                 action_type=row[1],
@@ -234,7 +239,8 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 correlation_id TEXT,
-                correlation_ref TEXT
+                correlation_ref TEXT,
+                operation_ref TEXT NOT NULL
             )
             """
         )
@@ -251,6 +257,22 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         if "correlation_ref" not in columns:
             connection.execute(
                 "ALTER TABLE external_action_operations ADD COLUMN correlation_ref TEXT"
+            )
+        if "operation_ref" not in columns:
+            connection.execute(
+                "ALTER TABLE external_action_operations ADD COLUMN operation_ref TEXT"
+            )
+        for operation_id, operation_ref in connection.execute(
+            "SELECT operation_id, operation_ref FROM external_action_operations "
+            "WHERE operation_ref IS NULL"
+        ).fetchall():
+            try:
+                reference = stable_reference(operation_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Persisted external-action identifier is malformed.") from exc
+            connection.execute(
+                "UPDATE external_action_operations SET operation_ref = ? WHERE operation_id = ?",
+                (reference, operation_id),
             )
         for operation_id, correlation_id in connection.execute(
             "SELECT operation_id, correlation_id FROM external_action_operations "
@@ -279,6 +301,20 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         connection.execute(
             """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_ref
                ON external_action_operations(correlation_ref)"""
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_external_actions_operation_ref
+               ON external_action_operations(operation_ref)"""
+        )
+        connection.execute("DROP INDEX IF EXISTS idx_external_actions_correlation_operation_ref")
+        connection.execute("DROP INDEX IF EXISTS idx_external_actions_correlation_ref_operation_ref")
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_operation_id
+               ON external_action_operations(correlation_id, operation_id)"""
+        )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_external_actions_correlation_ref_operation_id
+               ON external_action_operations(correlation_ref, operation_id)"""
         )
         connection.commit()
 

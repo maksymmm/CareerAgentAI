@@ -80,3 +80,8 @@ External-action duplicate/restart policy: a recent `in_progress` operation remai
 in progress during the default five-minute grace period. Only an older operation may
 move to `reconciliation_required` through compare-and-swap, and recovery never invokes
 the provider. Future timestamps are treated conservatively as live.
+
+
+Candidate action cursors are run-bound and contain only the non-reversible action
+reference exposed by the row projection. They must never encode the private provider
+operation identifier, including through reversible Base64 encoding.

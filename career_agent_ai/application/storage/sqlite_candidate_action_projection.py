@@ -54,7 +54,7 @@ class SQLiteCandidateActionProjection:
             identifier, user_id=owner
         )
         run_ref = stable_reference(identifier)
-        cursor = (
+        cursor_ref = (
             None
             if after is None
             else decode_action_cursor(after, candidate_run_ref=run_ref)
@@ -70,6 +70,7 @@ class SQLiteCandidateActionProjection:
         }
         required = {
             "operation_id",
+            "operation_ref",
             "action_type",
             "status",
             "created_at",
@@ -86,13 +87,14 @@ class SQLiteCandidateActionProjection:
                 "PRAGMA index_list(external_action_operations)"
             )
         }
-        if "idx_external_actions_correlation" not in indexes:
-            raise RuntimeError("Candidate external-action lookup index is unavailable.")
+        if "idx_external_actions_operation_ref" not in indexes:
+            raise RuntimeError("Candidate external-action operation-reference index is unavailable.")
 
         has_reference = "correlation_ref" in columns
         if has_reference:
             if "idx_external_actions_correlation_ref" not in indexes:
                 raise RuntimeError("Candidate external-action reference index is unavailable.")
+            cursor_index = "idx_external_actions_correlation_ref_operation_id"
             inconsistent = self._database.connection.execute(
                 """
                 SELECT operation_id
@@ -110,22 +112,41 @@ class SQLiteCandidateActionProjection:
         else:
             # Read-only compatibility for pre-reference schemas. The raw correlation
             # column is already indexed and is never included in the response.
+            cursor_index = "idx_external_actions_correlation_operation_id"
             where = "correlation_id = ?"
             filter_value = identifier
+        if cursor_index not in indexes:
+            raise RuntimeError("Candidate external-action cursor index is unavailable.")
 
-        if cursor is not None:
-            where += " AND operation_id > ?"
-            parameters: tuple[object, ...] = (filter_value, cursor, limit + 1)
-        else:
-            parameters = (filter_value, limit + 1)
+        cursor_operation_id = None
+        if cursor_ref is not None:
+            cursor_row = self._database.connection.execute(
+                f"""
+                SELECT operation_id
+                FROM external_action_operations
+                WHERE {where} AND operation_ref = ?
+                """,
+                (filter_value, cursor_ref),
+            ).fetchone()
+            if cursor_row is None:
+                raise ValueError("after cursor does not belong to the selected candidate run.")
+            cursor_operation_id = cursor_row[0]
+            if stable_reference(cursor_operation_id) != cursor_ref:
+                raise RuntimeError("Persisted candidate action operation reference is inconsistent.")
 
+        cursor_clause = "" if cursor_operation_id is None else " AND operation_id > ?"
+        parameters: tuple[object, ...] = (
+            (filter_value, limit + 1)
+            if cursor_operation_id is None
+            else (filter_value, cursor_operation_id, limit + 1)
+        )
         rows = self._database.connection.execute(
             f"""
-            SELECT operation_id, action_type, status, created_at, updated_at,
+            SELECT operation_id, operation_ref, action_type, status, created_at, updated_at,
                    CASE WHEN error IS NULL THEN 0 ELSE 1 END,
                    correlation_id
             FROM external_action_operations
-            WHERE {where}
+            WHERE {where}{cursor_clause}
             ORDER BY operation_id ASC
             LIMIT ?
             """,
@@ -136,6 +157,7 @@ class SQLiteCandidateActionProjection:
         items: list[dict[str, object]] = []
         for (
             operation_id,
+            operation_ref,
             action_type,
             status,
             created_at,
@@ -144,12 +166,13 @@ class SQLiteCandidateActionProjection:
             correlation_id,
         ) in visible:
             try:
-                # The cursor encoder applies the same strict operation-key bounds
-                # used by the operator projection without exposing that key.
+                # The cursor carries this reference, never the private operation key.
                 encode_action_cursor(operation_id, candidate_run_ref=run_ref)
-                operation_ref = stable_reference(operation_id)
+                expected_reference = stable_reference(operation_id)
             except (TypeError, ValueError) as exc:
                 raise RuntimeError("Persisted candidate action identifier is malformed.") from exc
+            if operation_ref != expected_reference:
+                raise RuntimeError("Persisted candidate action operation reference is inconsistent.")
             if correlation_id != identifier:
                 raise RuntimeError("Persisted candidate action correlation is inconsistent.")
             if (

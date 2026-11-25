@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import BytesIO
+import base64
 import json
 import sqlite3
 
@@ -164,20 +165,31 @@ def test_candidate_action_projection_is_owner_scoped_bounded_and_restart_safe(tm
 
     assert first["schema_version"] == 1
     assert first["run_ref"] == run_ref
-    assert [item["operation_ref"] for item in first["items"]] == [
-        stable_reference("action-01"), stable_reference("action-02")
+    expected = {
+        "action-01": ("application_submission", "prepared", False),
+        "action-02": ("communication", "in_progress", False),
+        "action-03": ("calendar", "failed", True),
+        "action-04": ("calendar", "reconciliation_required", True),
+        "action-05": ("application_submission", "succeeded", False),
+        "action-06": ("other", "prepared", False),
+    }
+    expected_ids = sorted(expected)
+    all_items = [item for page in (first, second, third) for item in page["items"]]
+    assert [item["operation_ref"] for item in all_items] == [
+        stable_reference(operation_id) for operation_id in expected_ids
     ]
-    assert [item["action_family"] for item in first["items"]] == [
-        "application_submission", "communication"
-    ]
-    assert [item["status"] for item in first["items"]] == ["prepared", "in_progress"]
-    assert decode_action_cursor(first["next_after"], candidate_run_ref=run_ref) == "action-02"
-    assert [item["status"] for item in second["items"]] == [
-        "failed", "reconciliation_required"
-    ]
-    assert [item["error_present"] for item in second["items"]] == [True, True]
-    assert [item["status"] for item in third["items"]] == ["succeeded", "prepared"]
-    assert third["items"][1]["action_family"] == "other"
+    assert [
+        (item["action_family"], item["status"], item["error_present"])
+        for item in all_items
+    ] == [expected[operation_id] for operation_id in expected_ids]
+    assert decode_action_cursor(
+        first["next_after"], candidate_run_ref=run_ref
+    ) == stable_reference(expected_ids[1])
+    decoded_cursor = base64.urlsafe_b64decode(
+        first["next_after"] + "=" * (-len(first["next_after"]) % 4)
+    ).decode("ascii")
+    assert all(operation_id not in decoded_cursor for operation_id in expected_ids)
+    assert stable_reference(expected_ids[1]) in decoded_cursor
     assert third["next_after"] is None
     assert all(
         set(item) == {
@@ -259,6 +271,49 @@ def test_candidate_action_projection_fails_closed_on_corrupt_correlation(tmp_pat
     finally:
         database.close()
 
+
+
+def test_candidate_action_projection_fails_closed_on_corrupt_operation_reference(tmp_path):
+    path = tmp_path / "candidate-action-corrupt-operation-reference.sqlite"
+    _seed(path)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE external_action_operations SET operation_ref = ? WHERE operation_id = ?",
+        ("f" * 24, "action-03"),
+    )
+    database.connection.commit()
+    database.close()
+
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        with pytest.raises(RuntimeError, match="operation reference is inconsistent"):
+            SQLiteCandidateActionProjection(database).list_page(
+                "candidate-run-a", user_id="candidate-1", limit=25
+            )
+    finally:
+        database.close()
+
+
+def test_candidate_action_projection_uses_composite_keyset_index(tmp_path):
+    path = tmp_path / "candidate-action-query-plan.sqlite"
+    _seed(path)
+    database = SQLiteDatabase.open_read_only(str(path))
+    try:
+        plan = database.connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT operation_id, operation_ref
+            FROM external_action_operations
+            WHERE correlation_ref = ?
+            ORDER BY operation_id ASC
+            LIMIT ?
+            """,
+            (stable_reference("candidate-run-a"), 26),
+        ).fetchall()
+        details = " ".join(str(row[3]) for row in plan)
+        assert "idx_external_actions_correlation_ref_operation_id" in details
+    finally:
+        database.close()
 
 def test_candidate_action_projection_fails_closed_on_missing_lookup_index(tmp_path):
     path = tmp_path / "candidate-action-index.sqlite"
@@ -349,6 +404,12 @@ def test_candidate_action_projection_reads_legacy_correlation_schema(tmp_path):
     connection.commit()
     connection.close()
 
+    # The writable runtime performs the additive migration before read-only
+    # candidate projections are opened. The projection itself never migrates.
+    migration = SQLiteDatabase(str(path))
+    SQLiteExternalActionOperationRepository(migration)
+    migration.close()
+
     database = SQLiteDatabase.open_read_only(str(path))
     try:
         page = SQLiteCandidateActionProjection(database).list_page(
@@ -427,10 +488,18 @@ def test_candidate_action_http_runtime_enforces_owner_and_survives_restart(tmp_p
         status, headers, page = _request(runtime, path=route, token="owner")
         assert status == "200 OK"
         assert headers["Cache-Control"] == "no-store"
-        assert [item["status"] for item in page["items"]] == [
-            "prepared", "in_progress", "failed", "reconciliation_required", "succeeded", "prepared"
-        ]
-        assert page["items"][-1]["action_family"] == "other"
+        expected = {
+            "action-01": ("prepared", "application_submission"),
+            "action-02": ("in_progress", "communication"),
+            "action-03": ("failed", "calendar"),
+            "action-04": ("reconciliation_required", "calendar"),
+            "action-05": ("succeeded", "application_submission"),
+            "action-06": ("prepared", "other"),
+        }
+        expected_ids = sorted(expected)
+        assert [
+            (item["status"], item["action_family"]) for item in page["items"]
+        ] == [expected[operation_id] for operation_id in expected_ids]
         assert _request(
             runtime,
             path="/v1/candidate/runs/foreign-run/actions",
@@ -495,6 +564,7 @@ def test_candidate_action_projection_fails_closed_when_required_schema_is_missin
     _seed(path)
     database = SQLiteDatabase(str(path))
     database.connection.execute("DROP INDEX idx_external_actions_correlation")
+    database.connection.execute("DROP INDEX idx_external_actions_correlation_operation_id")
     database.connection.execute(
         "ALTER TABLE external_action_operations DROP COLUMN correlation_id"
     )

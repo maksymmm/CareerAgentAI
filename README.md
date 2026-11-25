@@ -1060,3 +1060,8 @@ External-action recovery uses a bounded five-minute grace period for live
 reclassifying it; only stale operations move to `reconciliation_required` via
 compare-and-swap, without another provider call. Future timestamps are treated as live
 to avoid clock-skew-induced premature recovery.
+
+
+Candidate action pagination cursors contain only the run reference and the same
+non-reversible operation reference shown in the status row. They never encode the
+source provider operation identifier, even in reversible Base64 form.
