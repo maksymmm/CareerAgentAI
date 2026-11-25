@@ -4156,3 +4156,129 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+
+
+
+def _prepare_ambiguous_message_reconciliation_projection(tmp_path, monkeypatch, run_id):
+    path = str(tmp_path / f"{run_id}.sqlite")
+    database, loop, _, _, _, _, communication_provider, _ = build_stack(
+        path, with_schedule=False
+    )
+    loop.start(
+        CareerLoopRequest(
+            user_id="user-1", keyword="Logistics", candidate_profile=PROFILE,
+            sender="candidate@example.test", recipient="recruiter@example.test",
+        ),
+        run_id=run_id,
+    )
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+
+    def ambiguous_send(*args, **kwargs):
+        raise RuntimeError("synthetic ambiguous message delivery")
+
+    monkeypatch.setattr(communication_provider, "send", ambiguous_send)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase == CareerLoopPhase.MESSAGE_RECONCILIATION
+    state = loop._states.get(run_id)
+    assert state is not None and state.pending_human_action is not None
+    return path, database, state
+
+
+def test_candidate_message_reconciliation_projection_is_owned_read_only_and_minimal(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    run_id = "message-reconciliation-projection"
+    path, database, state = _prepare_ambiguous_message_reconciliation_projection(
+        tmp_path, monkeypatch, run_id
+    )
+    baseline = Path(path).read_bytes()
+    readonly = SQLiteDatabase.open_read_only(path)
+    try:
+        projection = SQLiteCandidateRunStatusProjection(readonly)
+        result = projection.get_message_reconciliation(run_id, user_id="user-1")
+        with pytest.raises(KeyError):
+            projection.get_message_reconciliation(run_id, user_id="foreign-user")
+    finally:
+        readonly.close()
+
+    expected_digest = state.pending_human_action.details["content_sha256"]
+    assert result == {
+        "schema_version": 1,
+        "run_id": run_id,
+        "state_version": state.version,
+        "sender": "candidate@example.test",
+        "recipient": "recruiter@example.test",
+        "subject": state.request.message_subject,
+        "content_sha256": expected_digest,
+    }
+    assert "operation_id" not in result
+    assert "message_id" not in result
+    assert "body" not in result
+    assert Path(path).read_bytes() == baseline
+    database.close()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("body", "tampered message body"),
+        ("subject", "tampered subject"),
+        ("direction", "inbound"),
+        ("delivery_operation_id", "foreign-operation"),
+    ],
+)
+def test_candidate_message_reconciliation_projection_rejects_tampered_message(
+    tmp_path, monkeypatch, column, value
+):
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    run_id = "message-reconciliation-tampered"
+    path, database, state = _prepare_ambiguous_message_reconciliation_projection(
+        tmp_path, monkeypatch, run_id
+    )
+    database.connection.execute(
+        f"UPDATE communication_messages SET {column} = ? WHERE message_id = ?",
+        (value, state.message_id),
+    )
+    database.connection.commit()
+    readonly = SQLiteDatabase.open_read_only(path)
+    try:
+        projection = SQLiteCandidateRunStatusProjection(readonly)
+        with pytest.raises(ValueError, match="Persisted candidate message reconciliation is malformed"):
+            projection.get_message_reconciliation(run_id, user_id="user-1")
+    finally:
+        readonly.close()
+        database.close()
+
+
+def test_candidate_message_reconciliation_checks_owner_before_parsing_corrupt_snapshot(
+    tmp_path, monkeypatch
+):
+    from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+        SQLiteCandidateRunStatusProjection,
+    )
+
+    run_id = "message-reconciliation-foreign-corrupt"
+    path, database, _ = _prepare_ambiguous_message_reconciliation_projection(
+        tmp_path, monkeypatch, run_id
+    )
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET owner_user_id = ?, payload_json = ? WHERE run_id = ?",
+        ("foreign-owner", "{malformed", run_id),
+    )
+    database.connection.commit()
+    readonly = SQLiteDatabase.open_read_only(path)
+    try:
+        projection = SQLiteCandidateRunStatusProjection(readonly)
+        with pytest.raises(KeyError):
+            projection.get_message_reconciliation(run_id, user_id="user-1")
+    finally:
+        readonly.close()
+        database.close()
