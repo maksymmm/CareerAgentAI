@@ -4348,3 +4348,200 @@ def test_candidate_interview_intent_http_restores_owner_scoped_projection_after_
         assert path.read_bytes() == baseline
     finally:
         runtime.close()
+
+
+def test_candidate_interview_intent_round_trip_reconciles_timeout_after_effect_from_sandbox_ledger(
+    tmp_path, monkeypatch
+):
+    from io import BytesIO
+    from wsgiref.util import setup_testing_defaults
+
+    from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
+    from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+        SandboxCalendarOutcome,
+        SQLiteSandboxCalendarProvider,
+    )
+
+    path = tmp_path / "interview-intent-provider-round-trip.sqlite"
+    run_id, operation_id, original_version = _create_ambiguous_interview_intent_database(
+        str(path), monkeypatch
+    )
+
+    # Model the provider committing the calendar effect immediately before its
+    # response is lost. The candidate run and local schedule remain pending.
+    database = SQLiteDatabase(str(path))
+    try:
+        event = SQLiteSchedulingRepository(database).get("interview-1")
+        assert event is not None
+        provider = SQLiteSandboxCalendarProvider(
+            database,
+            lambda _operation_id, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+        )
+        with pytest.raises(TimeoutError, match="timed out after recording the effect"):
+            provider.accept(operation_id, event)
+        effect = database.connection.execute(
+            "SELECT event_json, replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        assert effect is not None
+        provider_event_id = json.loads(effect[0])["provider_event_id"]
+        assert provider_event_id == "fake-interview-1"
+        assert effect[1] == 0
+        assert database.connection.execute(
+            "SELECT operation_id, attempt_no, outcome FROM sandbox_calendar_attempts "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall() == [(operation_id, 1, "timeout_after_effect")]
+    finally:
+        database.close()
+
+    baseline = path.read_bytes()
+    runtime = RuntimeCandidateApp(
+        database_path=str(path),
+        jobs=(),
+        resolve_bearer=lambda token: "user-1" if token == "valid" else "user-2",
+    )
+
+    def call(method, route, payload=None):
+        body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+        environ = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            {
+                "REQUEST_METHOD": method,
+                "PATH_INFO": route,
+                "QUERY_STRING": "",
+                "CONTENT_TYPE": "application/json" if payload is not None else "",
+                "CONTENT_LENGTH": str(len(body)),
+                "HTTP_AUTHORIZATION": "Bearer valid",
+            }
+        )
+        environ["wsgi.input"] = BytesIO(body)
+        captured = {}
+
+        def start_response(status, headers, exc_info=None):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        response = b"".join(runtime(environ, start_response))
+        return (
+            captured["status"],
+            captured["headers"],
+            json.loads(response.decode("utf-8")),
+        )
+
+    def durable_snapshot():
+        database = SQLiteDatabase(str(path))
+        try:
+            state = SQLiteCareerLoopRepository(database).get(run_id)
+            assert state is not None
+            event_row = database.connection.execute(
+                "SELECT status, provider_event_id, version, active_action_operation_id "
+                "FROM scheduling_events WHERE event_id = ?",
+                ("interview-1",),
+            ).fetchone()
+            action_row = database.connection.execute(
+                "SELECT status, payload_json FROM external_action_operations "
+                "WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            effects = database.connection.execute(
+                "SELECT operation_id, fingerprint, action, event_json, replays "
+                "FROM sandbox_calendar_effects WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchall()
+            attempts = database.connection.execute(
+                "SELECT operation_id, attempt_no, outcome FROM sandbox_calendar_attempts "
+                "WHERE operation_id = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
+            return (
+                (state.phase.value, state.version, state.pending_human_action),
+                event_row,
+                action_row,
+                effects,
+                attempts,
+            )
+        finally:
+            database.close()
+
+    reconciliation_path = (
+        f"/v1/candidate/runs/{run_id}/interview-reconciliation"
+    )
+    status_path = f"/v1/candidate/runs/{run_id}/status"
+    try:
+        status, headers, intent = call("GET", reconciliation_path)
+        assert status == "200 OK"
+        assert headers["Cache-Control"] == "no-store"
+        assert intent == {
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": original_version,
+            "event_id": "interview-1",
+            "employer": "Acme Logistics",
+            "local_date": "2026-11-12",
+            "local_start_time": "10:00:00",
+            "timezone": "Europe/Berlin",
+        }
+        assert operation_id not in json.dumps(intent)
+        assert provider_event_id not in json.dumps(intent)
+        assert path.read_bytes() == baseline
+
+        before_reconciliation = durable_snapshot()
+        stale_evidence = {
+            "schema_version": 1,
+            "state_version": intent["state_version"],
+            "completed": True,
+            "provider_event_id": "wrong-provider-event",
+        }
+        status, _, rejected = call("POST", reconciliation_path, stale_evidence)
+        assert status == "409 Conflict"
+        assert rejected == {"error": "approval_conflict"}
+        assert durable_snapshot() == before_reconciliation
+
+        verified_evidence = {
+            "schema_version": 1,
+            "state_version": intent["state_version"],
+            "completed": True,
+            "provider_event_id": provider_event_id,
+        }
+        status, _, reconciled = call("POST", reconciliation_path, verified_evidence)
+        assert status == "200 OK"
+        assert reconciled["run_id"] == run_id
+        assert reconciled["phase"] in {
+            CareerLoopPhase.INTERVIEW_ACCEPT.value,
+            CareerLoopPhase.COMPLETE.value,
+        }
+
+        if reconciled["phase"] != CareerLoopPhase.COMPLETE.value:
+            status, _, continued = call(
+                "POST", f"/v1/candidate/runs/{run_id}/continue"
+            )
+            assert status == "200 OK"
+            assert continued == {
+                "run_id": run_id,
+                "phase": CareerLoopPhase.COMPLETE.value,
+            }
+
+        status, _, final_status = call("GET", status_path)
+        assert status == "200 OK"
+        assert final_status["phase"] == CareerLoopPhase.COMPLETE.value
+        assert final_status["terminal"] is True
+
+        final = durable_snapshot()
+        assert final[0][0] == CareerLoopPhase.COMPLETE.value
+        assert final[0][2] is None
+        assert final[1] == (
+            ScheduleStatus.ACCEPTED.value,
+            provider_event_id,
+            2,
+            None,
+        )
+        assert final[2] is not None and final[2][0] == "succeeded"
+        assert len(final[3]) == 1
+        assert final[3][0][0] == operation_id
+        assert final[3][0][2] == "accept"
+        assert final[3][0][4] == 0
+        assert final[4] == [(operation_id, 1, "timeout_after_effect")]
+    finally:
+        runtime.close()
