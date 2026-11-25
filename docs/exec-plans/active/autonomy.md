@@ -1590,3 +1590,11 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Read-only candidate status connections now enable SQLite query-only mode in
+addition to opening the primary database with `mode=ro`. This prevents accidental
+writes to temporary or attached databases through the same connection. Regression
+tests cover primary, temporary and attached-database writes while preserving reads.
+This is a connection guardrail, not an isolation boundary against code that can
+deliberately reconfigure the raw SQLite connection.

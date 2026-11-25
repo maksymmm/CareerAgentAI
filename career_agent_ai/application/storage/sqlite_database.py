@@ -15,7 +15,7 @@ class SQLiteDatabase(Database):
 
     @classmethod
     def open_read_only(cls, path: str) -> "SQLiteDatabase":
-        """Open an existing SQLite database without permitting writes or creation."""
+        """Open an existing database read-only, including attached/temp databases."""
         if path == ":memory:":
             raise ValueError("Read-only SQLite requires a durable database path.")
         if path.startswith("file:"):
@@ -30,7 +30,15 @@ class SQLiteDatabase(Database):
 
         database = cls.__new__(cls)
         database._path = path
-        database._connection = sqlite3.connect(uri, uri=True)
+        connection = sqlite3.connect(uri, uri=True)
+        try:
+            # mode=ro protects the primary file; query_only also prevents writes
+            # to temporary or attached databases through this connection.
+            connection.execute("PRAGMA query_only = ON")
+        except Exception:
+            connection.close()
+            raise
+        database._connection = connection
         database._is_memory = False
         return database
 
