@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import pytest
@@ -199,6 +200,14 @@ def test_restart_converts_in_progress_transition_to_reconciliation(tmp_path):
         ExternalActionStatus.PREPARED,
         ExternalActionStatus.IN_PROGRESS,
     )
+    first_database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        (
+            (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(),
+            "promote:restart",
+        ),
+    )
+    first_database.connection.commit()
     first_database.close()
 
     second_database = SQLiteDatabase(path)

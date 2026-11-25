@@ -74,6 +74,10 @@ from career_agent_ai.application.storage.sqlite_job_application_repository impor
 from career_agent_ai.application.storage.sqlite_scheduling_repository import (
     SQLiteSchedulingRepository,
 )
+from career_agent_ai.application.storage.sqlite_sandbox_submission_provider import (
+    SandboxOutcome,
+    SQLiteSandboxSubmissionProvider,
+)
 
 
 CREATED = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
@@ -92,6 +96,7 @@ def build_stack(
     job_title: str = "Logistics Coordinator",
     company_id: str = "company-1",
     max_iterations: int = AutonomousCareerLoop.DEFAULT_MAX_ITERATIONS,
+    submission_outcome_plan=None,
 ):
     database = SQLiteDatabase(path)
 
@@ -120,13 +125,18 @@ def build_stack(
     applications = SQLiteJobApplicationRepository(database)
     operations = SQLiteExternalActionOperationRepository(database)
 
-    submission_provider = FakeApplicationSubmissionAdapter()
+    submission_provider = (
+        FakeApplicationSubmissionAdapter()
+        if submission_outcome_plan is None
+        else SQLiteSandboxSubmissionProvider(database, submission_outcome_plan)
+    )
     submission = ApplicationSubmissionService(
         submission_provider,
         ExternalActionService(
             operations,
             ApplicationSubmissionService.action_adapter(submission_provider),
         ),
+        require_provider_evidence=submission_outcome_plan is not None,
     )
 
     messages = SQLiteCommunicationRepository(database)
@@ -4156,3 +4166,148 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+
+
+def test_candidate_http_reconciles_sqlite_application_timeout_after_restart(tmp_path):
+    import json
+    from io import BytesIO
+
+    from career_agent_ai.application.api.candidate_approval_api import (
+        CandidateApprovalWSGIApp,
+    )
+
+    path = str(tmp_path / "candidate-application-evidence-http-restart.sqlite")
+    run_id = "candidate-application-evidence-http-restart"
+    planned_attempts = []
+
+    def timeout_after_effect(operation_id, attempt):
+        planned_attempts.append((operation_id, attempt))
+        return SandboxOutcome.TIMEOUT_AFTER_EFFECT
+
+    database, loop, applications, _, _, provider, _, _ = build_stack(
+        path,
+        with_schedule=False,
+        submission_outcome_plan=timeout_after_effect,
+    )
+    started = loop.start(
+        CareerLoopRequest(
+            user_id="user-1",
+            keyword="Logistics",
+            candidate_profile=PROFILE,
+        ),
+        run_id=run_id,
+    )
+    assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase == CareerLoopPhase.APPLICATION_RECONCILIATION
+    operation_id = ambiguous.human_action.details["operation_id"]
+    application_id = f"{run_id}:application"
+    observed_version = loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    evidence = provider.observe(operation_id)
+    assert evidence is not None
+    assert evidence.application_id == application_id
+    assert evidence.provider_submission_id == f"fake:{application_id}"
+    assert evidence.replays == 0
+    assert planned_attempts == [(operation_id, 1)]
+    assert provider.attempts(operation_id) == (SandboxOutcome.TIMEOUT_AFTER_EFFECT,)
+    assert len(provider.ledger_entries()) == 1
+    assert applications.get(application_id).status == JobApplicationStatus.SAVED
+    database.close()
+
+    restarted_database, restarted_loop, restarted_applications, _, _, restarted_provider, _, _ = (
+        build_stack(
+            path,
+            with_schedule=False,
+            submission_outcome_plan=lambda _operation_id, _attempt: SandboxOutcome.SUCCESS,
+        )
+    )
+    operation_before = restarted_database.connection.execute(
+        "SELECT * FROM external_action_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    application_before = restarted_applications.get(application_id)
+    status_before = restarted_loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )
+    evidence_before = restarted_provider.observe(operation_id)
+    attempts_before = restarted_provider.attempts(operation_id)
+    assert status_before["phase"] == CareerLoopPhase.APPLICATION_RECONCILIATION.value
+    assert evidence_before == evidence
+    assert attempts_before == (SandboxOutcome.TIMEOUT_AFTER_EFFECT,)
+
+    candidate_app = CandidateApprovalWSGIApp(
+        restarted_loop,
+        resolve_bearer=lambda token: "user-1" if token == "valid" else None,
+    )
+
+    def post_reconciliation(provider_submission_id):
+        payload = {
+            "schema_version": 1,
+            "state_version": observed_version,
+            "submitted": True,
+            "provider_submission_id": provider_submission_id,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        responses = []
+        environ = {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": (
+                f"/v1/candidate/runs/{run_id}/application-reconciliation"
+            ),
+            "QUERY_STRING": "",
+            "HTTP_AUTHORIZATION": "Bearer valid",
+            "CONTENT_LENGTH": str(len(body)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": BytesIO(body),
+        }
+        response = b"".join(
+            candidate_app(
+                environ,
+                lambda status, headers: responses.append((status, dict(headers))),
+            )
+        )
+        assert len(responses) == 1
+        return responses[0], json.loads(response)
+
+    rejected, rejection_body = post_reconciliation("fake:wrong-application")
+    assert rejected[0] == "409 Conflict"
+    assert rejection_body == {"error": "approval_conflict"}
+    assert rejected[1]["Cache-Control"] == "no-store"
+    assert restarted_database.connection.execute(
+        "SELECT * FROM external_action_operations WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone() == operation_before
+    assert restarted_applications.get(application_id) == application_before
+    assert restarted_loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    ) == status_before
+    assert restarted_provider.observe(operation_id) == evidence_before
+    assert restarted_provider.attempts(operation_id) == attempts_before
+    assert restarted_provider.ledger_entries() == (evidence_before,)
+
+    accepted, accepted_body = post_reconciliation(evidence.provider_submission_id)
+    assert accepted[0] == "200 OK"
+    assert accepted[1]["Cache-Control"] == "no-store"
+    assert accepted_body == {
+        "run_id": run_id,
+        "phase": CareerLoopPhase.COMPLETE.value,
+    }
+
+    final_application = restarted_applications.get(application_id)
+    assert final_application.status == JobApplicationStatus.APPLIED
+    assert operation_id in final_application.external_action_operation_ids
+    assert dict(final_application.timeline[-1].metadata) == {
+        "provider_submission_id": evidence.provider_submission_id
+    }
+    final_status = restarted_loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )
+    assert final_status["phase"] == CareerLoopPhase.COMPLETE.value
+    assert final_status["waiting_for_human"] is False
+    assert restarted_provider.observe(operation_id).replays == 0
+    assert restarted_provider.attempts(operation_id) == attempts_before
+    assert len(restarted_provider.ledger_entries()) == 1
+    restarted_database.close()
