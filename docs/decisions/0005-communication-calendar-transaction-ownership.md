@@ -12,7 +12,7 @@ The SQLite sandbox communication and calendar providers share a database connect
 
 Communication and calendar provider constructors reject initialization when the shared connection already has an active transaction, before issuing schema DDL. Communication draft/delivery and calendar action methods likewise reject an ambient transaction before provider reads, writes, or outcome-plan execution.
 
-Each provider action starts its own `BEGIN IMMEDIATE` transaction and owns its commit/rollback boundary. Evidence verification remains read-only and rejects an ambient transaction. A caller that needs a larger atomic unit must coordinate it outside these provider boundaries; the providers never commit or roll back caller-owned work.
+Each mutating provider method starts its own `BEGIN IMMEDIATE` transaction and owns its commit/rollback boundary. Evidence verification remains read-only and rejects an ambient transaction. A caller that needs a larger atomic unit must coordinate it outside these provider boundaries; the providers never commit or roll back caller-owned work.
 
 ## Consequences
 

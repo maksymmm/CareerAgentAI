@@ -83,7 +83,15 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
     def draft(self, message: CommunicationMessage) -> CommunicationMessage:
         if message.direction != MessageDirection.DRAFT:
             raise ValueError("Sandbox communication drafts must have draft direction.")
-        self._save_message(message)
+        connection = self._database.connection
+        self._begin()
+        try:
+            self._save_message(message, commit=False)
+            connection.commit()
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
         self.calls.append(("draft", message.message_id))
         return message
 
