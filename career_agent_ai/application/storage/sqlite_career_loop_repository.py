@@ -6,6 +6,7 @@ import json
 import sqlite3
 from math import isfinite
 from datetime import date, datetime, time, timedelta, timezone
+from collections.abc import Mapping
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -845,7 +846,7 @@ class SQLiteCandidateRunStatusProjection:
                 if (
                     action is None
                     or action.kind is not HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
-                    or not isinstance(action.details, dict)
+                    or not isinstance(action.details, Mapping)
                 ):
                     raise ValueError("Pending interview reconciliation action is malformed.")
                 details = action.details
