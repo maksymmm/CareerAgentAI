@@ -4617,7 +4617,13 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
                 )
                 page.locator("#token").fill("valid")
                 page.locator("#run-id").fill(run_id)
-                page.locator("#status").click()
+                def refresh_status():
+                    refresh_status()
+                    page.wait_for_function(
+                        "() => !document.querySelector('#status').disabled"
+                    )
+
+                refresh_status()
                 page.wait_for_function(
                     "() => document.querySelector('#interview-reconciliation-intent')"
                     ".textContent.includes('Acme Logistics')"
@@ -4641,13 +4647,21 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
                     response = route.fetch()
                     payload = response.json()
                     payload["state_version"] -= 1
-                    route.fulfill(response=response, json=payload)
+                    route.fulfill(
+                        status=response.status,
+                        headers={"Cache-Control": response.headers.get("cache-control", "no-store")},
+                        content_type="application/json",
+                        body=json.dumps(payload),
+                    )
 
                 page.route("**/interview-reconciliation", stale_intent_response)
-                page.locator("#status").click()
+                refresh_status()
                 page.wait_for_function(
                     "() => document.querySelector('#interview-reconciliation-state')"
                     ".textContent.includes('could not be restored')"
+                )
+                page.wait_for_function(
+                    "() => !document.querySelector('#status').disabled"
                 )
                 assert page.locator("#provider-event-id").input_value() == ""
                 assert page.locator("#provider-event-id").is_disabled()
@@ -4659,7 +4673,7 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
                 page.unroute("**/interview-reconciliation", stale_intent_response)
 
                 # A fresh exact-version read restores the public intent, not provider evidence.
-                page.locator("#status").click()
+                refresh_status()
                 page.wait_for_function(
                     "() => document.querySelector('#interview-reconciliation-intent')"
                     ".textContent.includes('Acme Logistics')"
@@ -4684,13 +4698,17 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
                     "() => document.querySelector('#interview-reconciliation-state')"
                     ".textContent.includes('Reconciliation finished')"
                 )
+                page.wait_for_function(
+                    "() => document.querySelector('#interview-reconciliation-panel')"
+                    ".getAttribute('aria-busy') === 'false'"
+                )
                 assert page.locator("#provider-event-id").is_disabled()
                 assert page.locator("#confirm-calendar-completed").is_disabled()
                 assert not page.locator(
                     "#interview-reconciliation-verified"
                 ).is_checked()
 
-                page.locator("#status").click()
+                refresh_status()
                 page.wait_for_function(
                     "() => document.querySelector('#run-overview')"
                     ".textContent.includes('version')"
@@ -4699,7 +4717,10 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
                 if "complete" not in overview.lower():
                     assert "interview accept" in overview.lower()
                     page.locator("#continue").click()
-                    page.locator("#status").click()
+                    page.wait_for_function(
+                        "() => !document.querySelector('#continue').disabled"
+                    )
+                    refresh_status()
                     page.wait_for_function(
                         "() => document.querySelector('#run-overview')"
                         ".textContent.includes('Finished') && "
