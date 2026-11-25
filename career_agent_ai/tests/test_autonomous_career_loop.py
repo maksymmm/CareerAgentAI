@@ -4618,7 +4618,7 @@ def test_candidate_browser_reloads_and_completes_interview_from_sandbox_provider
                 page.locator("#token").fill("valid")
                 page.locator("#run-id").fill(run_id)
                 def refresh_status():
-                    refresh_status()
+                    page.locator("#status").click()
                     page.wait_for_function(
                         "() => !document.querySelector('#status').disabled"
                     )
