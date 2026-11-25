@@ -227,6 +227,20 @@ class RuntimeCandidateApp:
         return SQLiteCandidateSchedule(self._database_path).list_page(
             user_id=user_id, limit=limit, after=after, status=status)
 
+    def get_candidate_message_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
+        """Read pending message intent without permitting storage writes."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(database).get_message_reconciliation(
+                run_id, user_id=user_id
+            )
+        finally:
+            database.close()
+
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
         if self._closed:
@@ -320,6 +334,18 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteCandidateRunStatusProjection(database).get(run_id, user_id=user_id)
+        finally:
+            database.close()
+
+    def get_candidate_message_reconciliation(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any] | None:
+        """Read authenticated message intent through request-local read-only storage."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateRunStatusProjection(database).get_message_reconciliation(
+                run_id, user_id=user_id
+            )
         finally:
             database.close()
 
