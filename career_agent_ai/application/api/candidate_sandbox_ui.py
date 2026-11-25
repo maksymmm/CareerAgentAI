@@ -111,6 +111,7 @@ _HTML = r"""<!doctype html>
   <fieldset id="message-reconciliation-panel" tabindex="-1" aria-busy="false">
     <legend>Message delivery reconciliation</legend>
     <p id="message-reconciliation-state" role="status">Refresh a run in message reconciliation before recording the independently verified delivery outcome.</p>
+    <p id="message-reconciliation-intent" class="muted" role="status">No pending message intent loaded.</p>
     <label class="attestation"><input id="message-reconciliation-verified" type="checkbox" disabled> I independently verified this delivery outcome for the displayed run version.</label>
     <div class="actions">
       <button id="confirm-delivered" type="button" disabled>Confirm message delivered</button>
@@ -860,6 +861,7 @@ _HTML = r"""<!doctype html>
       messageReconciliationAvailable = false;
       messageReconciliationVersion = null;
       byId('message-reconciliation-state').textContent = message;
+      byId('message-reconciliation-intent').textContent = 'No pending message intent loaded.';
       setReconciliationAttestation('message-reconciliation-verified', false);
       byId('confirm-delivered').disabled = true; byId('confirm-not-delivered').disabled = true;
     }
@@ -871,6 +873,51 @@ _HTML = r"""<!doctype html>
       setReconciliationAttestation('message-reconciliation-verified', true);
       byId('confirm-delivered').disabled = true;
       byId('confirm-not-delivered').disabled = true;
+    }
+    async function restoreMessageReconciliationIntent(runId, version, contextGeneration) {
+      invalidateMessageReconciliation('Restoring the approved message details…');
+      try {
+        const intent = await call(runPath('/message-reconciliation'), {},
+          'Message reconciliation details request failed.', true);
+        if (contextGeneration !== inputContextGeneration || runId !== byId('run-id').value ||
+            selectedRunVersion !== version) return;
+        const fields = [
+          'schema_version', 'run_id', 'state_version', 'sender', 'recipient',
+          'subject', 'content_sha256',
+        ];
+        const validIdentifier = value => typeof value === 'string' &&
+          /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
+        const validSubject = value => typeof value === 'string' && value.length > 0 &&
+          Array.from(value).length <= 500 && value === value.trim() &&
+          !Array.from(value).some(character => {
+            const codePoint = character.codePointAt(0);
+            return codePoint < 32 || codePoint === 127 ||
+              (codePoint >= 0xD800 && codePoint <= 0xDFFF);
+          });
+        if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
+            Object.keys(intent).length !== fields.length ||
+            !fields.every(field => Object.hasOwn(intent, field)) ||
+            intent.schema_version !== 1 || intent.run_id !== runId ||
+            intent.state_version !== version || !Number.isSafeInteger(intent.state_version) ||
+            intent.state_version < 0 || !validIdentifier(intent.sender) ||
+            !validIdentifier(intent.recipient) || !validSubject(intent.subject) ||
+            typeof intent.content_sha256 !== 'string' ||
+            !/^[a-f0-9]{64}$/.test(intent.content_sha256)) {
+          throw new Error('Invalid message reconciliation intent.');
+        }
+        byId('message-reconciliation-intent').textContent =
+          'From: ' + intent.sender + '\\nTo: ' + intent.recipient +
+          '\\nSubject: ' + intent.subject +
+          '\\nContent SHA-256: ' + intent.content_sha256;
+        enableMessageReconciliation(version);
+      } catch (error) {
+        if (contextGeneration === inputContextGeneration &&
+            runId === byId('run-id').value && selectedRunVersion === version) {
+          invalidateMessageReconciliation(
+            'Pending message details could not be restored. Refresh run status.');
+        }
+        throw error;
+      }
     }
     function invalidateInterviewReconciliation(message =
       'Refresh a run in interview reconciliation before recording independently verified calendar evidence.') {
@@ -1064,7 +1111,8 @@ _HTML = r"""<!doctype html>
           invalidateApplicationReconciliation();
         }
         if (snapshot.phase === 'message_reconciliation' && snapshot.waiting_for_human) {
-          enableMessageReconciliation(snapshot.state_version);
+          await restoreMessageReconciliationIntent(
+            runId, snapshot.state_version, statusContextGeneration);
         } else {
           invalidateMessageReconciliation();
         }
