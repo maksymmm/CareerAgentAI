@@ -1590,3 +1590,28 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate calendar reconciliation runtime/concurrency acceptance:
+
+The candidate sandbox runtime now accepts an optional deterministic
+calendar_outcome_plan and passes it to every request-local
+SQLiteSandboxCalendarProvider. Existing callers retain the default successful
+sandbox behavior; the application submission outcome plan remains independent.
+
+The authenticated HTTP regression seeds one candidate-owned interview event,
+starts the full application/message/interview approval workflow, and records a
+synthetic TIMEOUT_AFTER_EFFECT calendar result. It closes and reopens the runtime,
+rejects mismatched provider-event evidence without changing the run, event,
+external-action operation, attempts, effect, or replay count, then races two
+same-version evidence-backed reconciliation requests through independent request
+connections. Exactly one request wins reconciliation and the other receives a
+sanitized conflict. If the winning response remains at the recoverable interview_accept
+phase while post-effect application tracking is pending, an authenticated continue
+request after the race completes the candidate run. The accepted event and succeeded
+external action remain bound to the single durable provider effect. No network
+calendar, production credential,
+real invitation, application submission, or outbound message is used.
+
+Next: extend the single-winner matrix to communication reconciliation and reconcile
+the stacked candidate HTTP PRs before integration.
