@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
+from career_agent_ai.application.storage.sqlite_candidate_action_projection import SQLiteCandidateActionProjection
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 
@@ -189,6 +190,20 @@ class RuntimeCandidateApp:
         finally:
             database.close()
 
+    def list_candidate_action_statuses(
+        self, run_id: str, *, user_id: str, limit: int = 25, after: str | None = None
+    ) -> dict[str, Any]:
+        """Read one candidate's external-action lifecycle through read-only storage."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateActionProjection(database).list_page(
+                run_id, user_id=user_id, limit=limit, after=after
+            )
+        finally:
+            database.close()
+
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
                           status: JobApplicationStatus | None = None) -> dict[str, Any]:
@@ -320,6 +335,18 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase.open_read_only(self._database_path)
         try:
             return SQLiteCandidateRunStatusProjection(database).get(run_id, user_id=user_id)
+        finally:
+            database.close()
+
+    def list_candidate_action_statuses(
+        self, run_id: str, *, user_id: str, limit: int = 25, after: str | None = None
+    ) -> dict[str, Any]:
+        """Read candidate action lifecycle with a request-local read-only connection."""
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            return SQLiteCandidateActionProjection(database).list_page(
+                run_id, user_id=user_id, limit=limit, after=after
+            )
         finally:
             database.close()
 
