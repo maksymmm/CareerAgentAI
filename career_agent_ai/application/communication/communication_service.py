@@ -262,7 +262,8 @@ class CommunicationService:
             )
 
     def send(
-        self, operation_id: str, message_id: str, *, human_approved: bool
+        self, operation_id: str, message_id: str, *, human_approved: bool,
+        correlation_id: str | None = None,
     ) -> CommunicationMessage | None:
         """Send a persisted draft once through the crash-safe action service."""
         self._validate_human_approval(human_approved)
@@ -271,7 +272,8 @@ class CommunicationService:
         if message.direction != MessageDirection.DRAFT and existing_operation is None:
             raise ValueError("Only a draft message can be sent.")
         self._external_actions.prepare(
-            operation_id, "communication.send", {"message_id": message.message_id}
+            operation_id, "communication.send", {"message_id": message.message_id},
+            correlation_id=correlation_id,
         )
         return self._execute(operation_id, human_approved)
 

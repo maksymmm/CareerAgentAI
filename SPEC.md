@@ -64,3 +64,19 @@ commit and CI run; a review of an older commit is not final review of the curren
 
 These remain product work. Core coverage or eight completed execution-plan items
 must not be reported as a measured completion percentage for the entire product.
+
+
+## Candidate sandbox external-action status
+
+The candidate sandbox provides a read-only `My external actions` panel for the
+selected owner-scoped run. It validates the exact response shape, stable run reference,
+allowlisted action family/status, UTC timestamps, and bounded opaque cursor before
+rendering text-only rows. Run/token changes and workflow mutations invalidate in-flight
+pages and clear prior action data. The panel cannot retry, reconcile, or execute provider
+actions. The raw correlation identifier remains outside provider payload/result JSON.
+
+
+External-action duplicate/restart policy: a recent `in_progress` operation remains
+in progress during the default five-minute grace period. Only an older operation may
+move to `reconciliation_required` through compare-and-swap, and recovery never invokes
+the provider. Future timestamps are treated conservatively as live.

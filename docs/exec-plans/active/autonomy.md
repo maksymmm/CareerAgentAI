@@ -1590,3 +1590,27 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate-owned external-action status: durable action rows now carry optional
+non-payload candidate-run correlation metadata through application submission,
+communication delivery, and calendar acceptance. A read-only owner-scoped API and
+candidate dashboard panel expose bounded lifecycle pages with stable references,
+allowlisted action families/statuses, UTC timestamps, and an error-present flag only.
+Legacy action schemas migrate additively; correlation reference/index mismatches fail
+closed; cursors are bound to the selected run. The panel clears on run/token changes,
+workflow mutations, and observed state-version advancement, and discards stale in-flight
+responses. Chromium, API, storage, owner-isolation, redaction, pagination, and legacy
+schema regressions cover the workflow. Next: exact-head full CI, independent review,
+then audit cross-collection freshness for the candidate external-action panel and
+application/message/interview reconciliation projections.
+
+
+Live external-action duplicate recovery: repeated execution now observes a recent
+`in_progress` operation unchanged for a bounded five-minute grace period. Only stale
+operations are promoted to `reconciliation_required` through compare-and-swap; the
+recovery path never invokes the provider. Future timestamps are conservatively treated
+as live, and a concurrent terminal winner is returned rather than misreported as a
+recovery conflict. Regression coverage includes reentrant duplicate execution, stale
+restart recovery, future clock skew, and a lost stale-recovery race. This closes the
+concurrent submission regression observed on the integration base.

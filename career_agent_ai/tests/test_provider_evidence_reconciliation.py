@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from threading import Barrier, Thread
 
 import pytest
@@ -215,6 +216,14 @@ def test_crash_after_committed_effect_recovers_without_second_effect(path):
     with pytest.raises(Crash):
         crashing.service.submit(OP, **_submit_kwargs())
     assert crashing.status() == ExternalActionStatus.IN_PROGRESS
+    crashing.database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        (
+            (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(),
+            OP,
+        ),
+    )
+    crashing.database.connection.commit()
     crashing.close()
 
     recovered = Stack(path, always(OUTCOME.NO_EFFECT), evidence=True)
