@@ -906,8 +906,8 @@ class SQLiteCandidateRunStatusProjection:
 
             content_digest = sha256(
                 (
-                    message.sender + "\\n" + message.recipient + "\\n"
-                    + message.subject + "\\n" + message.body
+                    message.sender + "\n" + message.recipient + "\n"
+                    + message.subject + "\n" + message.body
                 ).encode("utf-8")
             ).hexdigest()
             if details.get("content_sha256") != content_digest:
