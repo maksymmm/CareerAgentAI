@@ -173,7 +173,7 @@ def test_candidate_action_projection_is_owner_scoped_bounded_and_restart_safe(tm
         "action-05": ("application_submission", "succeeded", False),
         "action-06": ("other", "prepared", False),
     }
-    expected_ids = sorted(expected, key=stable_reference)
+    expected_ids = sorted(expected)
     all_items = [item for page in (first, second, third) for item in page["items"]]
     assert [item["operation_ref"] for item in all_items] == [
         stable_reference(operation_id) for operation_id in expected_ids
@@ -311,7 +311,7 @@ def test_candidate_action_projection_uses_composite_keyset_index(tmp_path):
             (stable_reference("candidate-run-a"), 26),
         ).fetchall()
         details = " ".join(str(row[3]) for row in plan)
-        assert "idx_external_actions_correlation_ref_operation_ref" in details
+        assert "idx_external_actions_correlation_ref_operation_id" in details
     finally:
         database.close()
 
@@ -496,7 +496,7 @@ def test_candidate_action_http_runtime_enforces_owner_and_survives_restart(tmp_p
             "action-05": ("succeeded", "application_submission"),
             "action-06": ("prepared", "other"),
         }
-        expected_ids = sorted(expected, key=stable_reference)
+        expected_ids = sorted(expected)
         assert [
             (item["status"], item["action_family"]) for item in page["items"]
         ] == [expected[operation_id] for operation_id in expected_ids]
@@ -564,7 +564,7 @@ def test_candidate_action_projection_fails_closed_when_required_schema_is_missin
     _seed(path)
     database = SQLiteDatabase(str(path))
     database.connection.execute("DROP INDEX idx_external_actions_correlation")
-    database.connection.execute("DROP INDEX idx_external_actions_correlation_operation_ref")
+    database.connection.execute("DROP INDEX idx_external_actions_correlation_operation_id")
     database.connection.execute(
         "ALTER TABLE external_action_operations DROP COLUMN correlation_id"
     )
