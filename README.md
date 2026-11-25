@@ -1053,3 +1053,10 @@ to the selected run, and returns only a stable action reference, allowlisted act
 family/status, UTC timestamps, and an `error_present` boolean. Provider payloads,
 results, error text, raw operation IDs, and correlation IDs are never returned.
 The dashboard panel is read-only and cannot retry, reconcile, or execute provider work.
+
+
+External-action recovery uses a bounded five-minute grace period for live
+`in_progress` operations. Duplicate requests observe the active operation without
+reclassifying it; only stale operations move to `reconciliation_required` via
+compare-and-swap, without another provider call. Future timestamps are treated as live
+to avoid clock-skew-induced premature recovery.
