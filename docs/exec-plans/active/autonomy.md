@@ -1614,3 +1614,12 @@ as live, and a concurrent terminal winner is returned rather than misreported as
 recovery conflict. Regression coverage includes reentrant duplicate execution, stale
 restart recovery, future clock skew, and a lost stale-recovery race. This closes the
 concurrent submission regression observed on the integration base.
+
+
+Candidate action cursor confidentiality: candidate pagination no longer Base64-encodes
+the private provider operation ID. A persisted stable operation reference is backfilled
+through an additive migration, protected by a unique index and verified on reads.
+Run-bound cursors carry only the public operation reference; keyset pagination orders
+by that indexed reference and resolves cursors only inside the authenticated run scope.
+Regressions decode the cursor payload to prove the source operation ID is absent, verify
+legacy migration and corruption rejection, and assert the composite SQLite query plan.
