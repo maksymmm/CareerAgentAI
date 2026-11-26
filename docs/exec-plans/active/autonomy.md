@@ -1590,3 +1590,7 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate browser interview-decline restart acceptance: a Chromium journey now approves the application and message, then declines the exact version-bound interview event. The SQLite calendar intent, attempt and effect ledgers remain empty; the event stays proposed at version one; and earlier approved application/message effects remain durable. A fresh RuntimeCandidateApp and browser session over the same database restore terminal FAILED. Status, Continue and read-only event browsing create no calendar effect, and a foreign owner cannot read the run. ADR 0032 records the contract.
+Next: extend browser restart acceptance to an interview NO_EFFECT reconciliation, proving that only fresh candidate attestation can resolve the ambiguous calendar outcome.
