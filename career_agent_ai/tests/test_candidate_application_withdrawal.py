@@ -169,7 +169,10 @@ def test_withdrawal_rejects_stale_version_and_terminal_status_without_mutation(t
         occurred_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
     )
     repository.add(applied)
-    repository.add(_application("rejected", status=JobApplicationStatus.REJECTED))
+    repository.add(JobApplication(
+        application_id="rejected", user_id="candidate-1", job_id="job-2",
+        status=JobApplicationStatus.REJECTED,
+    ))
     service = CandidateApplicationWithdrawalService(repository)
 
     with pytest.raises(ApplicationConflictError):
