@@ -511,7 +511,7 @@ def _open_candidate_browser(playwright, server):
     page.locator("#owned-applications button").first.wait_for()
     page.locator("#owned-applications button").first.click()
     page.wait_for_function(
-        "document.querySelector('#application-detail').textContent.includes('\\\"status\\\": \\\"applied\\\"')"
+        "JSON.parse(document.querySelector('#application-detail').textContent).status === 'applied'"
     )
     return browser, page
 
@@ -546,7 +546,7 @@ def test_candidate_browser_explicitly_approves_sandbox_employer_withdrawal_and_r
 
             page.locator("#load-application-history").click()
             page.wait_for_function(
-                "document.querySelector('#application-history').textContent.includes('\\\"to_status\\\": \\\"withdrawn\\\"')"
+                "JSON.parse(document.querySelector('#application-history').textContent).items.some(item => item.to_status === 'withdrawn')"
             )
             assert "No real employer was contacted" in page.locator(
                 "#employer-withdrawal-state"
@@ -602,7 +602,7 @@ def test_candidate_browser_requires_fresh_explicit_confirmation_after_no_effect(
             # A new detail read and a second explicit checkbox decision are required.
             page.locator("#owned-applications button").first.click()
             page.wait_for_function(
-                "document.querySelector('#application-detail').textContent.includes('\\\"status\\\": \\\"applied\\\"')"
+                "JSON.parse(document.querySelector('#application-detail').textContent).status === 'applied'"
             )
             page.locator("#confirm-employer-withdrawal").check()
             page.locator("#withdraw-employer-application").click()
