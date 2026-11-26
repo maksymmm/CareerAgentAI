@@ -1465,6 +1465,8 @@ def test_candidate_sandbox_discovers_pending_reschedules_after_runtime_restart(t
             ).text_content()
 
             review.click()
+            assert pending_list.get_by_role("button").count() == 0
+            assert page.locator("#next-pending-reschedules").is_disabled()
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "An ambiguous reschedule was restored from durable storage"
             ).wait_for()
@@ -1486,6 +1488,8 @@ def test_candidate_sandbox_discovers_pending_reschedules_after_runtime_restart(t
             )
             review.wait_for()
             review.click()
+            assert pending_list.get_by_role("button").count() == 0
+            assert page.locator("#next-pending-reschedules").is_disabled()
             page.locator("#reschedule-reconciliation-state").get_by_text(
                 "An ambiguous reschedule was restored from durable storage"
             ).wait_for()
@@ -1506,3 +1510,144 @@ def test_candidate_sandbox_discovers_pending_reschedules_after_runtime_restart(t
         )
     assert final_counts == baseline_counts
 
+
+def test_candidate_dashboard_paginates_pending_reschedules_and_revalidates_stale_selection(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-pending-reschedule-pages.sqlite"
+    events = tuple(
+        _event(
+            f"pending-reschedule-page-{index:03d}",
+            start_at=datetime(2026, 12, 1, 9, 0, tzinfo=timezone.utc)
+            + timedelta(days=index),
+        )
+        for index in range(26)
+    )
+    _seed(path, *events)
+    first = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    try:
+        for index, event in enumerate(events):
+            target_start = datetime(
+                2026, 12, 1, 12, 0, tzinfo=timezone(timedelta(hours=1))
+            ) + timedelta(days=index)
+            target_end = target_start + timedelta(hours=1)
+            status, result = first.call(
+                CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+                body=_body(
+                    event_id=event.event_id,
+                    start_at=target_start.isoformat(),
+                    end_at=target_end.isoformat(),
+                ),
+            )
+            assert status == "202 Accepted"
+            assert result["outcome"] == "reconciliation_required"
+    finally:
+        first.close()
+
+    with sqlite3.connect(path) as connection:
+        baseline_counts = (
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_attempts").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
+        )
+    assert baseline_counts == (len(events), len(events))
+
+    restarted = Candidate(path)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, restarted.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+                page.locator("#token").fill("owner-token")
+                page.locator("#list-pending-reschedules").click()
+
+                expected_labels = [
+                    f"Review pending reschedule for event {event.event_id}"
+                    for event in events
+                ]
+                first_page_last = page.get_by_role("button", name=expected_labels[24])
+                first_page_last.wait_for()
+                buttons = page.locator("#pending-reschedule-items button")
+                assert buttons.count() == 25
+                labels = buttons.evaluate_all(
+                    "(buttons) => buttons.map(button => button.getAttribute('aria-label'))"
+                )
+                assert labels == expected_labels[:25]
+                next_page = page.locator("#next-pending-reschedules")
+                assert not next_page.is_disabled()
+
+                next_page.click()
+                page.get_by_role("button", name=expected_labels[25]).wait_for()
+                assert buttons.count() == 26
+                labels = buttons.evaluate_all(
+                    "(buttons) => buttons.map(button => button.getAttribute('aria-label'))"
+                )
+                assert labels == expected_labels
+                assert next_page.is_disabled()
+                assert "1 pending reschedule on this page." in page.locator(
+                    "#pending-reschedules-state"
+                ).text_content()
+
+                # Simulate another durable decision winning after discovery but before
+                # selection. The old reschedule operation remains ambiguous, so the
+                # per-event recovery endpoint must reject the stale source snapshot.
+                with sqlite3.connect(path) as connection:
+                    connection.execute("PRAGMA busy_timeout=5000")
+                    cursor = connection.execute(
+                        """
+                        UPDATE scheduling_events
+                        SET status = ?, version = version + 1,
+                            active_action_operation_id = NULL,
+                            reservation_start_epoch_us = NULL,
+                            reservation_end_epoch_us = NULL,
+                            updated_at = ?
+                        WHERE event_id = ? AND candidate_id = ? AND version = 1
+                        """,
+                        (
+                            ScheduleStatus.DECLINED.value,
+                            datetime.now(timezone.utc).isoformat(),
+                            events[0].event_id,
+                            OWNER,
+                        ),
+                    )
+                    assert cursor.rowcount == 1
+
+                stale_review = page.get_by_role("button", name=expected_labels[0])
+                stale_review.click()
+                assert buttons.count() == 0
+                assert next_page.is_disabled()
+                page.wait_for_function(
+                    "() => document.querySelector('#event-detail-state')?.textContent === "
+                    "'Select the event again to retry.'"
+                )
+                assert page.locator("#reschedule-panel").is_disabled()
+                assert page.locator("#reschedule-reconciliation-panel").is_disabled()
+                assert page.locator("#reschedule-reconciliation-verified").is_disabled()
+                assert page.locator("#confirm-reschedule-completed").is_disabled()
+                assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
+        restarted.close()
+
+    with sqlite3.connect(path) as connection:
+        final_counts = (
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_attempts").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
+        )
+    assert final_counts == baseline_counts
