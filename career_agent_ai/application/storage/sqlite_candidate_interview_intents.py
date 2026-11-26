@@ -104,7 +104,8 @@ class SQLiteCandidateInterviewIntents:
             request = state["request"]
             action = state["pending_human_action"]
             if (
-                state.get("serialization_version") not in {1, 2, 3}
+                type(state.get("serialization_version")) is not int
+                or state.get("serialization_version") not in {1, 2, 3}
                 or state.get("run_id") != run_id
                 or state.get("phase") != CareerLoopPhase.INTERVIEW_RECONCILIATION.value
                 or type(storage_version) is not int
@@ -131,8 +132,7 @@ class SQLiteCandidateInterviewIntents:
                 raise ValueError("event claim mismatch")
             event = SQLiteCandidateSchedule._snapshot(event_row[:16])
             if (
-                event["event_type"] != "interview"
-                or event["status"] not in {"proposed", "reschedule_requested"}
+                event["status"] not in {"proposed", "reschedule_requested"}
                 or details.get("employer") != event["employer_name"]
                 or details.get("local_date") != event["local_date"]
                 or details.get("local_start_time") != event["local_start_time"]
@@ -158,6 +158,7 @@ class SQLiteCandidateInterviewIntents:
             if (
                 set(operation_payload) != _REQUIRED_OPERATION_FIELDS
                 or operation_payload.get("event_id") != event_id
+                or type(operation_payload.get("event_version")) is not int
                 or operation_payload.get("event_version") != event["state_version"]
                 or operation_payload.get("event_start_at") != event["start_at"]
                 or operation_payload.get("event_end_at") != event["end_at"]

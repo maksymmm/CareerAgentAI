@@ -1005,8 +1005,7 @@ _HTML = r"""<!doctype html>
         throw new Error('Invalid pending interview intent.');
       }
       const event = eventSnapshot(item.event);
-      if (event.event_type !== 'interview' ||
-          !['proposed', 'reschedule_requested'].includes(event.status)) {
+      if (!['proposed', 'reschedule_requested'].includes(event.status)) {
         throw new Error('Invalid pending interview event.');
       }
       return {run_id: item.run_id, state_version: item.state_version,

@@ -1592,8 +1592,8 @@ Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
 
 Candidate interview intent discovery delivered: a bounded authenticated
-\`GET /v1/candidate/interview-intents\` lists only the caller's pending
-\`calendar.accept\` reconciliation actions. The read-only projection filters loop
+`GET /v1/candidate/interview-intents` lists only the caller's pending
+`calendar.accept` reconciliation actions. The read-only projection filters loop
 ownership and phase in SQL before parsing, then cross-checks the pending action,
 owner-scoped schedule row, active action claim, exact prepared event version/slot and
 durable external-action status in one SQLite read snapshot. Its response excludes

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from threading import Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
@@ -61,7 +62,7 @@ def _seed_interview_intent(
         event_id=event_id,
         candidate_id=owner,
         employer_name="Sandbox Logistics",
-        event_type=ScheduleEventType.INTERVIEW,
+        event_type=ScheduleEventType.TRIAL_DAY,
         location="Karlsruhe",
         start_at=NOW + timedelta(days=2),
         end_at=NOW + timedelta(days=2, hours=1),
@@ -189,6 +190,7 @@ def test_projection_discovers_only_owned_pending_interview_intents_and_redacts_i
     assert item["operation_status"] == "reconciliation_required"
     assert item["event"]["event_id"] == event_id
     assert item["event"]["employer_name"] == "Sandbox Logistics"
+    assert item["event"]["event_type"] == "trial_day"
     assert item["event"]["state_version"] == 1
     assert "operation_id" not in str(page)
     assert operation_id not in str(page)
@@ -261,7 +263,7 @@ def test_projection_validates_arguments_before_opening_storage(tmp_path):
 
 def test_projection_does_not_create_missing_storage(tmp_path):
     path = tmp_path / "missing.sqlite"
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.OperationalError):
         SQLiteCandidateInterviewIntents(str(path)).list_page(user_id="candidate-1")
     assert not path.exists()
 
