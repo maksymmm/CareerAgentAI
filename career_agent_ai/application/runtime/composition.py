@@ -317,10 +317,19 @@ class _RequestCandidateLoop:
                 raise CandidateApprovalConflictError("Schedule event changed; reload it.") from exc
             operation = scheduling.get_operation(operation_id)
             if declined is None:
-                if (
-                    operation is None
-                    or operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED
-                ):
+                if operation is None:
+                    raise CandidateApprovalConflictError(
+                        "Calendar decline outcome is unavailable."
+                    )
+                if operation.status == ExternalActionStatus.FAILED:
+                    return {
+                        "schema_version": 1,
+                        "event_id": identifier,
+                        "status": event.status.value,
+                        "state_version": expected_state_version,
+                        "provider_status": "no_effect_confirmed",
+                    }
+                if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
                     raise CandidateApprovalConflictError(
                         "Calendar decline did not reach a confirmed or reconcilable outcome."
                     )
