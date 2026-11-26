@@ -274,13 +274,12 @@ def test_constructor_rejects_ambient_transaction_without_committing_caller_work(
 def test_busy_writer_rejects_before_intent_attempt_or_outcome_plan(tmp_path):
     path = tmp_path / "busy.sqlite"
     calls = []
-    database, provider, submission_id = _provider(path, "application-busy")
 
     def plan(operation_id, attempt):
         calls.append((operation_id, attempt))
         return SandboxApplicationWithdrawalOutcome.SUCCESS
 
-    provider._plan = plan
+    database, provider, submission_id = _provider(path, "application-busy", plan)
     blocker = SQLiteDatabase(str(path))
     database.connection.execute("PRAGMA busy_timeout = 0")
     blocker.connection.execute("PRAGMA busy_timeout = 0")
