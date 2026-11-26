@@ -126,7 +126,7 @@ class CandidateEmployerApplicationWithdrawalService:
         if application.version != expected_state_version:
             raise ApplicationConflictError("Application state has changed.")
 
-        submission_id, provider_submission_id = self._confirmed_submission(application)
+        _submission_operation_id, provider_submission_id = self._confirmed_submission(application)
         operation_id = self.operation_id_for(user_id, application_id)
         payload = {
             "application_id": application_id,
@@ -208,8 +208,18 @@ class CandidateEmployerApplicationWithdrawalService:
             ):
                 continue
             provider_id = operation.result.get("provider_submission_id")
-            if isinstance(provider_id, str) and provider_id and provider_id == provider_id.strip():
-                matches.append((operation_id, provider_id))
+            if (
+                not isinstance(provider_id, str)
+                or not provider_id
+                or provider_id != provider_id.strip()
+                or len(provider_id) > 1_000
+                or any(ord(ch) < 32 or ord(ch) == 127 for ch in provider_id)
+                or any(0xD800 <= ord(ch) <= 0xDFFF for ch in provider_id)
+            ):
+                raise ApplicationConflictError(
+                    "The prior application submission has malformed provider evidence."
+                )
+            matches.append((operation_id, provider_id))
         if len(matches) != 1:
             raise ApplicationConflictError(
                 "A unique, confirmed prior application submission is required."
