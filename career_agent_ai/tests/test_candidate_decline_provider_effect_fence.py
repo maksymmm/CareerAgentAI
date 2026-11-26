@@ -169,14 +169,17 @@ def test_candidate_decline_stops_downstream_sandbox_provider_effects(
 
         status, snapshot = call(f"/v1/candidate/runs/{run_id}/status")
         assert status == "200 OK"
-        assert snapshot == {
-            "schema_version": 1,
-            "run_id": run_id,
-            "state_version": snapshot["state_version"],
-            "phase": CareerLoopPhase.FAILED.value,
-            "waiting_for_human": False,
-            "terminal": True,
+        assert set(snapshot) == {
+            "schema_version", "run_id", "state_version", "phase",
+            "waiting_for_human", "terminal",
         }
+        assert snapshot["schema_version"] == 1
+        assert snapshot["run_id"] == run_id
+        assert isinstance(snapshot["state_version"], int)
+        assert snapshot["state_version"] > 0
+        assert snapshot["phase"] == CareerLoopPhase.FAILED.value
+        assert snapshot["waiting_for_human"] is False
+        assert snapshot["terminal"] is True
     finally:
         runtime.close()
 
