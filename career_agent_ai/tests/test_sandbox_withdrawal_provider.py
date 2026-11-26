@@ -202,10 +202,16 @@ def test_operation_and_application_intents_cannot_be_rebound(tmp_path):
     database, provider, submission_id = _provider(
         tmp_path / "conflict.sqlite", "application-4"
     )
+    other_submission_id = _seed_submission(database, "application-4-other")
     provider.withdraw("withdraw:op-4", "application-4", submission_id)
 
-    with pytest.raises(PreApplicationWithdrawalError, match="different withdrawal intent"):
+    with pytest.raises(
+        PreApplicationWithdrawalError,
+        match="verified sandbox application submission is required",
+    ):
         provider.withdraw("withdraw:op-4", "application-4", "different-submission-id")
+    with pytest.raises(PreApplicationWithdrawalError, match="different withdrawal intent"):
+        provider.withdraw("withdraw:op-4", "application-4-other", other_submission_id)
     with pytest.raises(PreApplicationWithdrawalError, match="different withdrawal intent"):
         provider.withdraw("withdraw:op-other", "application-4", submission_id)
 
