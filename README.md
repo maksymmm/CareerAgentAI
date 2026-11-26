@@ -618,8 +618,11 @@ a pre-scope build is forbidden; candidate starts stay disabled until a safe roll
 The same WSGI service exposes a dependency-free candidate sandbox at
 `GET /sandbox/candidate`. It can start a sandbox run, inspect its status, load the
 current candidate-visible approval prompt, continue recovery, and submit approve or
-decline decisions. The static page contains no credentials or durable state: the
-candidate enters a bearer token that stays only in the tab's memory.
+decline decisions. The application tracker also exposes owner-scoped detail and
+history plus a separate, version-bound employer-withdrawal confirmation for the
+SQLite sandbox provider. That action is not the tracker-only withdrawal and never
+contacts a real employer. The static page contains no credentials or durable state:
+the candidate enters a bearer token that stays only in the tab's memory.
 An accessible dashboard navigation landmark links to start, inspection, pending
 decision, overview, applications and interviews. Native fragment links move keyboard
 focus without API requests or credential/state changes; a return link reaches the top.

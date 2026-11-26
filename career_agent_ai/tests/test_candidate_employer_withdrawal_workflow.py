@@ -486,3 +486,178 @@ def test_concurrent_duplicate_candidate_approvals_create_one_provider_effect(tmp
     assert operation.status is ExternalActionStatus.SUCCEEDED
     assert application.status is JobApplicationStatus.WITHDRAWN
     app.close()
+
+
+def _start_candidate_browser_server(app):
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _open_candidate_browser(playwright, server):
+    browser = playwright.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+    page.locator("#token").fill("valid")
+    page.locator("#list-applications").click()
+    page.locator("#owned-applications button").first.wait_for()
+    page.locator("#owned-applications button").first.click()
+    page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
+    return browser, page
+
+
+def test_candidate_browser_explicitly_approves_sandbox_employer_withdrawal_and_refreshes_history(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "candidate-employer-withdrawal-browser.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    app = _app(path)
+    server, thread = _start_candidate_browser_server(app)
+    try:
+        with sync_playwright() as playwright:
+            browser, page = _open_candidate_browser(playwright, server)
+            confirmation = page.locator("#confirm-employer-withdrawal")
+            submit = page.locator("#withdraw-employer-application")
+            assert confirmation.is_enabled()
+            assert submit.is_disabled()
+            confirmation.check()
+            assert submit.is_enabled()
+            submit.click()
+            page.locator("#employer-withdrawal-state").get_by_text("Sandbox provider confirmed").wait_for()
+            detail = page.locator("#application-detail").text_content()
+            assert '"status": "withdrawn"' in detail
+            assert '"state_version": 3' in detail
+            assert confirmation.is_disabled()
+            assert submit.is_disabled()
+
+            page.locator("#load-application-history").click()
+            page.locator("#application-history").get_by_text('"to_status": "withdrawn"').wait_for()
+            assert "No real employer was contacted" in page.locator(
+                "#employer-withdrawal-state"
+            ).text_content()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        app.close()
+
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == (SandboxApplicationWithdrawalOutcome.SUCCESS,)
+    assert len(effects) == 1 and effects[0].replays == 0
+    assert operation.status is ExternalActionStatus.SUCCEEDED
+    assert application.status is JobApplicationStatus.WITHDRAWN
+    assert application.version == 3
+
+
+def test_candidate_browser_requires_fresh_explicit_confirmation_after_no_effect(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "candidate-employer-withdrawal-retry-browser.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    plan = scripted_withdrawal_outcomes({
+        operation_id: [
+            SandboxApplicationWithdrawalOutcome.NO_EFFECT,
+            SandboxApplicationWithdrawalOutcome.SUCCESS,
+        ]
+    })
+    app = _app(path, plan)
+    server, thread = _start_candidate_browser_server(app)
+    try:
+        with sync_playwright() as playwright:
+            browser, page = _open_candidate_browser(playwright, server)
+            page.locator("#confirm-employer-withdrawal").check()
+            page.locator("#withdraw-employer-application").click()
+            page.locator("#employer-withdrawal-state").get_by_text("No automatic retry occurred").wait_for()
+            assert page.locator("#application-detail").text_content() == ""
+            assert page.locator("#confirm-employer-withdrawal").is_disabled()
+            assert page.locator("#withdraw-employer-application").is_disabled()
+
+            attempts, effects, operation, application = _inspect(path, operation_id)
+            assert attempts == (SandboxApplicationWithdrawalOutcome.NO_EFFECT,)
+            assert effects == ()
+            assert operation.status is ExternalActionStatus.FAILED
+            assert application.status is JobApplicationStatus.APPLIED
+
+            # A new detail read and a second explicit checkbox decision are required.
+            page.locator("#owned-applications button").first.click()
+            page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
+            page.locator("#confirm-employer-withdrawal").check()
+            page.locator("#withdraw-employer-application").click()
+            page.locator("#employer-withdrawal-state").get_by_text("Sandbox provider confirmed").wait_for()
+            assert '"status": "withdrawn"' in page.locator(
+                "#application-detail"
+            ).text_content()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        app.close()
+
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == (
+        SandboxApplicationWithdrawalOutcome.NO_EFFECT,
+        SandboxApplicationWithdrawalOutcome.SUCCESS,
+    )
+    assert len(effects) == 1 and effects[0].replays == 0
+    assert operation.status is ExternalActionStatus.SUCCEEDED
+    assert application.status is JobApplicationStatus.WITHDRAWN
+    assert application.version == 3
+
+
+def test_candidate_browser_history_advance_invalidates_old_withdrawal_confirmation(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "candidate-employer-withdrawal-stale-confirmation.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    app = _app(path)
+    server, thread = _start_candidate_browser_server(app)
+    try:
+        with sync_playwright() as playwright:
+            browser, page = _open_candidate_browser(playwright, server)
+            confirmation = page.locator("#confirm-employer-withdrawal")
+            submit = page.locator("#withdraw-employer-application")
+            confirmation.check()
+            assert submit.is_enabled()
+
+            # Simulate a second candidate tab completing the same approved action.
+            status, _, body = _request(app, _body())
+            assert status == "200 OK"
+            assert body["provider_status"] == "confirmed"
+
+            page.locator("#load-application-history").click()
+            page.locator("#application-history").get_by_text('"state_version": 3').wait_for()
+            assert not confirmation.is_checked()
+            assert confirmation.is_disabled()
+            assert submit.is_disabled()
+            assert '"status": "withdrawn"' in page.locator(
+                "#application-detail"
+            ).text_content()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        app.close()
+
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == (SandboxApplicationWithdrawalOutcome.SUCCESS,)
+    assert len(effects) == 1 and effects[0].replays == 0
+    assert operation.status is ExternalActionStatus.SUCCEEDED
+    assert application.status is JobApplicationStatus.WITHDRAWN
+    assert application.version == 3
