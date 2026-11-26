@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Full candidate browser recovery across all sandbox providers: a single Chromium journey
+now exercises application submission, communication delivery, and calendar acceptance
+with one committed TIMEOUT_AFTER_EFFECT per provider. The candidate reconciles each
+effect through the dashboard after a fresh runtime/browser restart over the same SQLite
+database. Final assertions require one attempt and one durable effect per provider,
+zero replays, three SUCCEEDED external actions, an accepted calendar event, and a
+terminal COMPLETE run. CI also requires an independent coverage CLI gate after full
+pytest coverage. Synthetic data, loopback HTTP, Chromium, and no-network SQLite
+providers only. Next: exact-head full CI and independent code/security review; then
+extend browser recovery to candidate-approved reschedule/decline actions without
+weakening owner, version, or provider-effect fencing.
