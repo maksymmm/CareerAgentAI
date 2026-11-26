@@ -1386,7 +1386,7 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                 "200": {
                     "description": (
                         "Candidate-declared withdrawal recorded in the local tracker; "
-                        "no employer notification or provider action is performed"
+                        "no withdrawal notice or provider action is performed"
                     ),
                     "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
                     "content": content({
