@@ -134,6 +134,17 @@ class Candidate:
             token=token, method="GET", body={}, query=encoded_query,
         )
 
+    def pending_page(self, *, limit=25, after=None, token="owner-token", query=None):
+        encoded_query = query
+        if encoded_query is None:
+            encoded_query = "limit=" + str(limit)
+            if after is not None:
+                encoded_query += "&after=" + after
+        return self.call(
+            CandidateScheduleActionWSGIApp.PENDING_COLLECTION_PATH,
+            token=token, method="GET", body={}, query=encoded_query,
+        )
+
     def reconcile(self, completed, body=None, *, verified=True):
         source = _body() if body is None else body
         request = {
@@ -1067,3 +1078,319 @@ def test_pending_reschedule_scan_uses_composite_index_without_temporary_sort(tmp
     details = tuple(str(row[3]) for row in plan)
     assert any("idx_external_actions_type_status" in detail for detail in details)
     assert not any("TEMP B-TREE" in detail.upper() for detail in details)
+
+
+def test_pending_reschedule_collection_is_owner_scoped_read_only_and_hides_private_ids(tmp_path):
+    path = tmp_path / "pending-reschedule-owner-page.sqlite"
+    first = _event("reschedule-page-a")
+    second = _event(
+        "reschedule-page-b",
+        start_at=datetime(2026, 12, 3, 9, 0, tzinfo=timezone.utc),
+    )
+    foreign = _event("reschedule-page-foreign", candidate_id="candidate-2")
+    _seed(path, first, second, foreign)
+    candidate = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    requests = (
+        (first.event_id, "2026-12-02T10:00:00+01:00", "2026-12-02T11:00:00+01:00", "owner-token"),
+        (second.event_id, "2026-12-04T10:00:00+01:00", "2026-12-04T11:00:00+01:00", "owner-token"),
+        (foreign.event_id, "2026-12-05T10:00:00+01:00", "2026-12-05T11:00:00+01:00", "foreign-token"),
+    )
+    try:
+        for event_id, start_at, end_at, token in requests:
+            status, result = candidate.call(
+                CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+                token=token,
+                method="POST",
+                body=_body(
+                    event_id=event_id,
+                    start_at=start_at,
+                    end_at=end_at,
+                ),
+            )
+            assert status == "202 Accepted"
+            assert result["outcome"] == "reconciliation_required"
+
+        baseline = path.read_bytes()
+        lease_path = Path(candidate_schedule_execution_lease_database_path(str(path)))
+        lease_baseline = lease_path.read_bytes()
+
+        owner_status, owner_page = candidate.pending_page()
+        assert owner_status == "200 OK"
+        assert owner_page["schema_version"] == 1
+        assert owner_page["next_after"] is None
+        assert [item["event"]["event_id"] for item in owner_page["items"]] == [
+            first.event_id,
+            second.event_id,
+        ]
+        for item in owner_page["items"]:
+            assert item["state_version"] == 1
+            assert item["operation_status"] == "reconciliation_required"
+            serialized = json.dumps(item)
+            for private_field in (
+                "candidate_id",
+                "application_id",
+                "provider_event_id",
+                "operation_id",
+                "active_action_operation_id",
+                "lease_token",
+            ):
+                assert private_field not in serialized
+
+        foreign_status, foreign_page = candidate.pending_page(token="foreign-token")
+        assert foreign_status == "200 OK"
+        assert [item["event"]["event_id"] for item in foreign_page["items"]] == [
+            foreign.event_id
+        ]
+        assert path.read_bytes() == baseline
+        assert lease_path.read_bytes() == lease_baseline
+    finally:
+        candidate.close()
+
+
+def test_pending_reschedule_collection_uses_stable_keyset_pagination(tmp_path):
+    path = tmp_path / "pending-reschedule-pagination.sqlite"
+    first = _event("reschedule-cursor-a")
+    second = _event(
+        "reschedule-cursor-b",
+        start_at=datetime(2026, 12, 3, 9, 0, tzinfo=timezone.utc),
+    )
+    _seed(path, first, second)
+    candidate = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    try:
+        assert candidate.call(
+            CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+            body=_body(event_id=first.event_id),
+        )[0] == "202 Accepted"
+        assert candidate.call(
+            CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+            body=_body(
+                event_id=second.event_id,
+                start_at="2026-12-04T10:00:00+01:00",
+                end_at="2026-12-04T11:00:00+01:00",
+            ),
+        )[0] == "202 Accepted"
+
+        first_status, first_page = candidate.pending_page(limit=1)
+        assert first_status == "200 OK"
+        assert [item["event"]["event_id"] for item in first_page["items"]] == [
+            first.event_id
+        ]
+        assert first_page["next_after"] == first.event_id
+
+        second_status, second_page = candidate.pending_page(
+            limit=1, after=first_page["next_after"]
+        )
+        assert second_status == "200 OK"
+        assert [item["event"]["event_id"] for item in second_page["items"]] == [
+            second.event_id
+        ]
+        assert second_page["next_after"] is None
+    finally:
+        candidate.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "limit=1&limit=2",
+        "limit=101",
+        "after=%ZZ",
+        "unknown=1",
+        "limit=1&after=reschedule-a&extra=1",
+    ],
+)
+def test_pending_reschedule_collection_rejects_duplicate_and_unbounded_queries(tmp_path, query):
+    path = tmp_path / "pending-reschedule-query.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+    try:
+        assert candidate.pending_page(query=query) == (
+            "400 Bad Request",
+            {"error": "invalid_request"},
+        )
+    finally:
+        candidate.close()
+
+
+def test_pending_reschedule_collection_authenticates_before_opening_missing_storage(tmp_path):
+    path = tmp_path / "missing-reschedule-intents.sqlite"
+    app = CandidateScheduleActionWSGIApp(
+        database_path=str(path),
+        resolve_bearer=lambda _token: None,
+    )
+    statuses = []
+    response = app(
+        {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": CandidateScheduleActionWSGIApp.PENDING_COLLECTION_PATH,
+            "QUERY_STRING": "",
+            "HTTP_AUTHORIZATION": "Bearer invalid",
+        },
+        lambda status, headers: statuses.append(status),
+    )
+    assert statuses == ["401 Unauthorized"]
+    assert json.loads(b"".join(response)) == {"error": "unauthorized"}
+    assert not path.exists()
+
+
+def test_empty_pending_reschedule_collection_does_not_initialize_operation_storage(tmp_path):
+    path = tmp_path / "empty-reschedule-intents.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+    baseline = path.read_bytes()
+    try:
+        assert candidate.pending_page() == (
+            "200 OK",
+            {"schema_version": 1, "items": [], "next_after": None},
+        )
+    finally:
+        candidate.close()
+    assert path.read_bytes() == baseline
+    assert not Path(candidate_schedule_execution_lease_database_path(str(path))).exists()
+
+
+def test_pending_reschedule_collection_fails_closed_on_duplicate_payload_members(tmp_path):
+    path = tmp_path / "duplicate-reschedule-intent-payload.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    try:
+        assert candidate.reschedule()[0] == "202 Accepted"
+        database = SQLiteDatabase(str(path))
+        try:
+            operation_id = database.connection.execute(
+                "SELECT operation_id FROM external_action_operations "
+                "WHERE action_type = 'calendar.reschedule'"
+            ).fetchone()[0]
+            database.connection.execute(
+                "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+                (
+                    '{"event_id":"interview-reschedule-1","event_id":"interview-reschedule-1"}',
+                    operation_id,
+                ),
+            )
+            database.connection.commit()
+        finally:
+            database.close()
+
+        assert candidate.pending_page() == (
+            "409 Conflict",
+            {"error": "approval_conflict"},
+        )
+    finally:
+        candidate.close()
+
+
+def test_pending_reschedule_collection_reports_live_lease_without_promoting_operation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(SQLiteCandidateScheduleExecutionLease, "DEFAULT_LEASE_TTL_MS", 100)
+    monkeypatch.setattr(SQLiteCandidateScheduleExecutionLease, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    path = tmp_path / "pending-reschedule-live-lease.sqlite"
+    _seed(path, _event())
+    provider_entered = Event()
+    release_provider = Event()
+    responses = []
+
+    def blocking_plan(_key, _attempt):
+        provider_entered.set()
+        if not release_provider.wait(timeout=10):
+            raise TimeoutError("Test did not release the sandbox provider.")
+        return SandboxCalendarOutcome.SUCCESS
+
+    candidate = Candidate(path, blocking_plan)
+    request_thread = Thread(target=lambda: responses.append(candidate.reschedule()))
+    request_thread.start()
+    try:
+        assert provider_entered.wait(timeout=5)
+        time.sleep(0.25)
+        status, page = candidate.pending_page()
+        assert status == "200 OK"
+        assert len(page["items"]) == 1
+        assert page["items"][0]["operation_status"] == "running"
+
+        database = SQLiteDatabase(str(path))
+        try:
+            operation = database.connection.execute(
+                "SELECT status FROM external_action_operations "
+                "WHERE action_type = 'calendar.reschedule'"
+            ).fetchone()
+            assert operation == (ExternalActionStatus.IN_PROGRESS.value,)
+        finally:
+            database.close()
+        assert _effect_count(path) == 0
+    finally:
+        release_provider.set()
+        request_thread.join(timeout=10)
+        candidate.close()
+
+    assert not request_thread.is_alive()
+    assert len(responses) == 1
+    assert responses[0][0] == "200 OK"
+    assert responses[0][1]["outcome"] == "completed"
+    assert _effect_count(path) == 1
+
+
+def test_pending_reschedule_collection_query_uses_composite_index_without_temporary_sort(
+    tmp_path,
+):
+    path = tmp_path / "pending-reschedule-collection-plan.sqlite"
+    _seed(path, _event())
+    _seed_pending_operation(path)
+    connection = sqlite3.connect(path)
+    try:
+        plan = connection.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT
+                o.operation_id, o.payload_json, o.status,
+                e.event_id, e.candidate_id, e.employer_name, e.event_type, e.location,
+                e.start_at, e.start_epoch_us, e.end_at, e.end_epoch_us,
+                e.timezone_name, e.status, e.version, e.created_at, e.updated_at,
+                e.active_action_operation_id
+            FROM external_action_operations AS o INDEXED BY idx_external_actions_type_status
+            JOIN scheduling_events AS e
+              ON e.active_action_operation_id = o.operation_id
+              OR e.event_id = CASE
+                   WHEN json_valid(o.payload_json)
+                   THEN json_extract(o.payload_json, '$.event_id')
+                   ELSE NULL
+                 END
+            WHERE o.action_type = ?
+              AND o.status IN (?, ?)
+              AND e.candidate_id = ?
+            LIMIT 1001
+            """,
+            (
+                "calendar.reschedule",
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                OWNER,
+            ),
+        ).fetchall()
+    finally:
+        connection.close()
+    details = tuple(str(row[3]) for row in plan)
+    assert any("idx_external_actions_type_status" in detail for detail in details)
+    assert not any("TEMP B-TREE" in detail.upper() for detail in details)
+
+
+def test_pending_reschedule_collection_is_published_in_openapi():
+    document = candidate_approval_openapi_document()
+    route = document["paths"][CandidateScheduleActionWSGIApp.PENDING_COLLECTION_PATH]["get"]
+    assert route["security"] == [{"bearerAuth": []}]
+    assert [parameter["name"] for parameter in route["parameters"]] == ["limit", "after"]
+    response = route["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response["properties"]["items"]["maxItems"] == 100
+    item = response["properties"]["items"]["items"]
+    assert item["additionalProperties"] is False
+    assert item["properties"]["operation_status"]["enum"] == [
+        "running", "in_progress", "reconciliation_required"
+    ]
+    assert "operation_id" not in item["properties"]
+    assert "candidate_id" not in item["properties"]
