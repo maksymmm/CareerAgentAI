@@ -66,3 +66,11 @@ and independent review.
 - SQLite writer contention fails closed before plan consumption or durable mutation.
 - The sandbox provider is a test/integration seam, not evidence that a real employer
   withdrawal has occurred.
+## Evidence identity binding
+
+Reconciliation callers may supply the expected application ID and provider submission
+ID together. The provider checks both against the immutable intent and any effect while
+holding the writer lock. A missing/mismatched intent or an effect that diverges from
+its intent fails closed; it cannot be interpreted as absence or success for another
+candidate/application. The unscoped lookup remains available for diagnostics, but
+candidate workflow reconciliation must use the identity-bound form.
