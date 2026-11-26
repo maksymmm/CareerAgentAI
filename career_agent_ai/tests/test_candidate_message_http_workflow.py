@@ -250,7 +250,7 @@ def test_candidate_start_openapi_and_browser_ui_publish_optional_message_workflo
         schema["properties"]["message_subject"]["pattern"], "Application follow-up"
     )
     assert re.fullmatch(
-        schema["properties"]["message_subject"]["pattern"], "Application\\nBcc: x"
+        schema["properties"]["message_subject"]["pattern"], "Application\nBcc: x"
     ) is None
     assert len(schema["allOf"]) == 3
     assert schema["additionalProperties"] is False
@@ -292,7 +292,7 @@ def test_candidate_start_rejects_invalid_message_identifiers_and_header_injectio
         {
             "sender": "candidate@example.test",
             "recipient": "recruiter@example.test",
-            "message_subject": "Application\\nBcc: attacker@example.test",
+            "message_subject": "Application\nBcc: attacker@example.test",
         },
     )
     for index, message_fields in enumerate(cases):
