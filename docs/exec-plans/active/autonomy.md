@@ -1655,7 +1655,16 @@ stale versions, strict body validation, and a rebound-intent retry. This is a
 SQLite sandbox simulation only; it does not contact an employer or claim a
 real-world withdrawal.
 
-Next: add the candidate dashboard's separate employer-withdrawal confirmation and
-status presentation, preserving the existing tracker-only withdrawal as a distinct
-action. Then verify browser restart/reload behavior against the same durable
-operation and provider evidence.
+Delivered the candidate dashboard's separate employer-withdrawal confirmation
+and status presentation. The panel is available only from a freshly loaded,
+owner-scoped application detail in an eligible applied/interview/offer state. Every
+attempt requires a new checkbox decision and sends the exact displayed state version;
+provider submission and operation IDs remain server-owned. The browser accepts only
+the exact confirmed response contract, updates the detail snapshot, invalidates old
+history, and never retries automatically. A conflict or uncertain result clears the
+selection so the candidate must reload detail and explicitly confirm again. Chromium
+acceptance covers successful provider-backed withdrawal and a NO_EFFECT followed by
+a fresh detail read and a second explicit decision. The UI clearly identifies the
+SQLite sandbox boundary and states that no real employer was contacted. See ADR 0016.
+Next: add browser reload/restart coverage for the same durable employer-withdrawal
+operation and verify status through a read-only candidate-owned projection.
