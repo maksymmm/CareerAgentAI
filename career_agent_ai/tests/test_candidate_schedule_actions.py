@@ -5,7 +5,11 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+import stat
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
@@ -21,6 +25,11 @@ from career_agent_ai.application.api.candidate_sandbox_ui import candidate_sandb
 from career_agent_ai.application.runtime.composition import build_candidate_sandbox_app_from_env
 from career_agent_ai.application.scheduling import ScheduleEvent, ScheduleEventType, ScheduleStatus
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_candidate_schedule_execution_lease import (
+    SQLiteCandidateScheduleExecutionLease,
+    SQLiteCandidateScheduleExecutionLeaseRepository,
+    candidate_schedule_execution_lease_database_path,
+)
 from career_agent_ai.application.storage.sqlite_external_action_repository import (
     SQLiteExternalActionOperationRepository,
 )
@@ -485,6 +494,134 @@ def test_pending_lookup_recovers_stranded_in_progress_operation_without_provider
     candidate.close()
 
 
+def test_pending_lookup_does_not_promote_a_live_reschedule_request(tmp_path, monkeypatch):
+    monkeypatch.setattr(SQLiteCandidateScheduleExecutionLease, "DEFAULT_LEASE_TTL_MS", 100)
+    monkeypatch.setattr(SQLiteCandidateScheduleExecutionLease, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    path = tmp_path / "pending-live-in-progress.sqlite"
+    _seed(path, _event())
+    provider_entered = Event()
+    release_provider = Event()
+    responses = []
+
+    def blocking_plan(_key, _attempt):
+        provider_entered.set()
+        if not release_provider.wait(timeout=10):
+            raise TimeoutError("Test did not release the sandbox provider.")
+        return SandboxCalendarOutcome.SUCCESS
+
+    candidate = Candidate(path, blocking_plan)
+    request_thread = Thread(target=lambda: responses.append(candidate.reschedule()))
+    request_thread.start()
+    try:
+        assert provider_entered.wait(timeout=5)
+        lease_path = candidate_schedule_execution_lease_database_path(str(path))
+        assert stat.S_IMODE(Path(lease_path).stat().st_mode) == 0o600
+        time.sleep(0.25)
+        status, pending = candidate.pending()
+        assert status == "202 Accepted"
+        assert pending == {
+            "schema_version": 1,
+            "outcome": "running",
+            "event_id": EVENT_ID,
+        }
+
+        target_start = datetime.fromisoformat(START).astimezone(timezone.utc)
+        target_end = datetime.fromisoformat(END).astimezone(timezone.utc)
+        operation_id = CandidateScheduleActionWSGIApp._operation_id(
+            OWNER, EVENT_ID, 1, target_start, target_end, ZONE
+        )
+        database = SQLiteDatabase(str(path))
+        try:
+            operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+            assert operation.status == ExternalActionStatus.IN_PROGRESS
+        finally:
+            database.close()
+        assert _effect_count(path) == 0
+    finally:
+        release_provider.set()
+        request_thread.join(timeout=10)
+        candidate.close()
+
+    assert not request_thread.is_alive()
+    assert len(responses) == 1
+    assert responses[0][0] == "200 OK"
+    assert responses[0][1]["outcome"] == "completed"
+    assert _effect_count(path) == 1
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "200 OK",
+        {"schema_version": 1, "outcome": "none", "event_id": EVENT_ID},
+    )
+    restarted.close()
+
+
+def test_candidate_schedule_execution_lease_is_event_scoped_and_expires(tmp_path):
+    path = tmp_path / "schedule-execution-lease.sqlite"
+    database = SQLiteDatabase(str(path))
+    leases = SQLiteCandidateScheduleExecutionLeaseRepository(database)
+    try:
+        assert leases.acquire(
+            "operation-1", EVENT_ID, "lease-token-1", now_epoch_ms=1_000, lease_ttl_ms=100
+        )
+        assert SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event(
+            database.connection, EVENT_ID, now_epoch_ms=1_099
+        )
+        assert not leases.acquire(
+            "operation-2", EVENT_ID, "lease-token-2", now_epoch_ms=1_050, lease_ttl_ms=100
+        )
+        assert SQLiteCandidateScheduleExecutionLeaseRepository.renew(
+            database, "operation-1", "lease-token-1", now_epoch_ms=1_050, lease_ttl_ms=100
+        )
+        assert SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event(
+            database.connection, EVENT_ID, now_epoch_ms=1_149
+        )
+        assert not SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event(
+            database.connection, EVENT_ID, now_epoch_ms=1_150
+        )
+        assert not SQLiteCandidateScheduleExecutionLeaseRepository.renew(
+            database, "operation-1", "lease-token-1", now_epoch_ms=1_150, lease_ttl_ms=100
+        )
+        assert leases.acquire(
+            "operation-2", EVENT_ID, "lease-token-2", now_epoch_ms=1_150, lease_ttl_ms=100
+        )
+        assert not leases.release("operation-1", "lease-token-1")
+        assert leases.release("operation-2", "lease-token-2")
+    finally:
+        database.close()
+
+
+def test_pending_lookup_recovers_after_the_sidecar_lease_expires(tmp_path):
+    path = tmp_path / "pending-expired-lease.sqlite"
+    _seed(path, _event())
+    operation_id = _seed_pending_operation(path)
+    lease_path = candidate_schedule_execution_lease_database_path(str(path))
+    lease_database = SQLiteDatabase(lease_path)
+    try:
+        leases = SQLiteCandidateScheduleExecutionLeaseRepository(lease_database)
+        assert leases.acquire(
+            operation_id,
+            EVENT_ID,
+            "expired-process-token",
+            now_epoch_ms=1_000,
+            lease_ttl_ms=100,
+        )
+    finally:
+        lease_database.close()
+
+    candidate = Candidate(path)
+    status, pending = candidate.pending()
+    assert status == "200 OK"
+    assert pending["outcome"] == "pending"
+    database = SQLiteDatabase(str(path))
+    try:
+        operation = SQLiteExternalActionOperationRepository(database).get(operation_id)
+        assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    finally:
+        database.close()
+    assert _effect_count(path) == 0
+    candidate.close()
+
+
 def test_pending_lookup_recovers_operation_after_event_commit_before_operation_commit(tmp_path):
     path = tmp_path / "pending-event-committed.sqlite"
     target_event = _event().transition(
@@ -650,6 +787,16 @@ def test_openapi_and_dashboard_publish_the_approved_sandbox_flow():
     ):
         assert identifier in html
     assert "No real calendar is contacted" in html
+    assert "A reschedule request is still running" in html
+    assert "outcome === 'running'" in html
+
+
+def test_ci_enforces_independent_coverage_gate_after_full_pytest():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    pytest_step = workflow.index("name: Run test suite")
+    coverage_step = workflow.index("name: Enforce independent coverage threshold")
+    assert coverage_step > pytest_step
+    assert "python -m coverage report --fail-under=90" in workflow
 
 
 def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_reschedule(tmp_path):
@@ -857,6 +1004,7 @@ def test_empty_pending_lookup_does_not_mutate_candidate_database(
     finally:
         candidate.close()
     assert path.read_bytes() == baseline
+    assert not Path(candidate_schedule_execution_lease_database_path(str(path))).exists()
 
 
 @pytest.mark.parametrize(
