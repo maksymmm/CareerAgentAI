@@ -1590,3 +1590,19 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate decline provider-effect fence:
+
+A production-composition regression drives the authenticated candidate approval workflow
+through application, message, and interview gates, then declines each gate in turn.
+The SQLite sandbox ledgers prove that the declined action and all later provider actions
+produce no attempt or effect. Earlier explicitly approved actions remain exactly once:
+application decline creates no submission; message decline preserves only the prior
+application; interview decline preserves the prior application and one sandbox message
+but creates no calendar attempt or effect. Every decline leaves the durable run terminal
+and not waiting for human input.
+
+Next: exact-head full CI and independent code/security review, then extend the same
+effect-boundary audit to cancellation and withdrawal after a provider action has already
+been accepted.
