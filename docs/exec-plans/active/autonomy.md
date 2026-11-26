@@ -1590,3 +1590,25 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Sandbox employer-withdrawal provider primitive (no network): a new SQLite-backed
+adapter first verifies the exact application/provider-submission pair in the durable
+sandbox submission ledger, then binds one immutable withdrawal operation to it. It
+persists attempt/effect ledgers, permits same-intent retry
+only after a confirmed no-effect outcome, and reconciles timeout-after-effect from
+durable evidence without creating a second effect. Constructor and evidence paths
+reject ambient transactions; writer contention fails closed before outcome-plan
+consumption. This is deliberately provider-only: the candidate withdrawal action
+remains tracker-only until a separately reviewed, explicitly approved runtime
+workflow is implemented. Regression coverage includes restart, idempotent replay,
+no-effect retry, timeout recovery, intent rebinding, ambient transaction ownership,
+busy-writer behavior, missing-submission rejection, and concurrent same-intent calls.
+Next: wire this adapter only through a distinct candidate-approved employer
+withdrawal operation with owner/version fencing and durable external-action status;
+never reinterpret local tracker withdrawal as employer-side completion.
+Same-process external-action execution is now serialized by operation ID across
+service instances, so a live worker is not mistaken for a crashed `IN_PROGRESS`
+action. The lock is intentionally process-local; after restart an `IN_PROGRESS`
+operation remains ambiguous and is resolved only from the provider's durable evidence.
+The concurrent application-submission regression verifies both callers observe one
+terminal success with one provider attempt/effect.
