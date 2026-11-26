@@ -811,5 +811,5 @@ class SQLiteCandidateRunStatusProjection:
             "state_version": payload_version,
             "phase": phase.value,
             "waiting_for_human": payload.get("pending_human_action") is not None,
-            "terminal": phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
+            "terminal": phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED, CareerLoopPhase.CANCELLED},
         }

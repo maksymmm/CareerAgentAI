@@ -64,6 +64,7 @@ class CareerLoopPhase(str, Enum):
     INTERVIEW_RECONCILIATION = "interview_reconciliation"
     COMPLETE = "complete"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class HumanActionKind(str, Enum):

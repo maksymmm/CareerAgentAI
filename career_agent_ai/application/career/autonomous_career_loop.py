@@ -293,7 +293,7 @@ class AutonomousCareerLoop:
             "state_version": state.version,
             "phase": state.phase.value,
             "waiting_for_human": state.pending_human_action is not None,
-            "terminal": state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED},
+            "terminal": state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED, CareerLoopPhase.CANCELLED},
         }
 
     def get_candidate_approval_prompt(
@@ -303,6 +303,65 @@ class AutonomousCareerLoop:
         return build_candidate_approval_prompt(
             self._owned_state(run_id, user_id), user_id=user_id
         )
+
+    def cancel_run(
+        self,
+        run_id: str,
+        *,
+        user_id: str,
+        expected_state_version: int,
+    ) -> CareerLoopResult:
+        """Cancel a version-matched ordinary approval gate without compensating effects.
+
+        Ambiguous provider outcomes must be reconciled before cancellation. Earlier
+        successful application and message effects remain durable and unchanged.
+        """
+        if type(expected_state_version) is not int or expected_state_version < 0:
+            raise ValueError("expected_state_version must be a non-negative integer.")
+        state = self._owned_state(run_id, user_id)
+        self._validate_reconciliation_version(state, expected_state_version)
+        cancellable_actions = {
+            CareerLoopPhase.APPLICATION_APPROVAL: HumanActionKind.APPROVE_APPLICATION,
+            CareerLoopPhase.MESSAGE_APPROVAL: HumanActionKind.APPROVE_MESSAGE,
+            CareerLoopPhase.INTERVIEW_APPROVAL: HumanActionKind.APPROVE_INTERVIEW,
+        }
+        expected_action = cancellable_actions.get(state.phase)
+        if (
+            expected_action is None
+            or state.pending_human_action is None
+            or state.pending_human_action.kind is not expected_action
+        ):
+            raise CareerLoopConflictError(
+                "Only an ordinary pending approval gate can be cancelled."
+            )
+
+        cancellation_owner = f"cancellation:{uuid4().hex}"
+        self._states.claim_execution(
+            state.run_id,
+            cancellation_owner,
+            expected_version=state.version,
+            lease_seconds=self.EXECUTION_LEASE_SECONDS,
+        )
+        try:
+            if (
+                state.phase not in cancellable_actions
+                or state.pending_human_action is None
+                or state.pending_human_action.kind is not cancellable_actions[state.phase]
+            ):
+                raise CareerLoopConflictError(
+                    "Candidate run is no longer at a cancellable approval gate."
+                )
+            state.pending_human_action = None
+            state.phase = CareerLoopPhase.CANCELLED
+            state.last_error = "candidate_cancelled"
+            state.touch()
+            self._persist(state, expected_owner_id=cancellation_owner)
+            return self._result(state)
+        finally:
+            try:
+                self._states.release_execution(state.run_id, cancellation_owner)
+            except CareerLoopConflictError:
+                pass
 
     def resume_candidate_submission(
         self,
@@ -336,7 +395,7 @@ class AutonomousCareerLoop:
                 self._states.release_execution(state.run_id, approval_owner)
             except CareerLoopConflictError:
                 pass
-        if result.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
+        if result.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED, CareerLoopPhase.CANCELLED}:
             return result
         return self._continue(state)
 
@@ -582,7 +641,7 @@ class AutonomousCareerLoop:
             raise HumanActionRequiredError(
                 "Career loop is waiting for explicit human action."
             )
-        if state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED}:
+        if state.phase in {CareerLoopPhase.COMPLETE, CareerLoopPhase.FAILED, CareerLoopPhase.CANCELLED}:
             return self._result(state)
         return self._continue(state)
 
@@ -618,6 +677,7 @@ class AutonomousCareerLoop:
                 while state.phase not in {
                     CareerLoopPhase.COMPLETE,
                     CareerLoopPhase.FAILED,
+                    CareerLoopPhase.CANCELLED,
                 }:
                     if state.pending_human_action is not None:
                         break
@@ -651,6 +711,7 @@ class AutonomousCareerLoop:
                         state.phase not in {
                             CareerLoopPhase.COMPLETE,
                             CareerLoopPhase.FAILED,
+                            CareerLoopPhase.CANCELLED,
                         }
                         and state.pending_human_action is None
                     ):

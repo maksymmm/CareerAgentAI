@@ -73,7 +73,7 @@ _HTML = r"""<!doctype html>
       <option value="message_reconciliation">Message reconciliation</option><option value="track">Track</option>
       <option value="interview_coordination">Interview coordination</option><option value="interview_approval">Interview approval</option>
       <option value="interview_accept">Interview accept</option><option value="interview_reconciliation">Interview reconciliation</option>
-      <option value="complete">Complete</option><option value="failed">Failed</option>
+      <option value="complete">Complete</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option>
     </select>
     <button id="list-runs" type="button">Load my runs</button>
     <ul id="owned-runs" aria-label="My runs" aria-busy="false"></ul>
@@ -84,7 +84,9 @@ _HTML = r"""<!doctype html>
       <button id="status" type="button">Refresh status</button>
       <button id="prompt" type="button">Load approval prompt</button>
       <button id="continue" type="button">Continue recovery</button>
+      <button id="cancel-run" type="button" disabled>Cancel pending run</button>
     </div>
+    <p class="muted">Cancellation is available only at application, message, or interview approval gates. It stops future workflow steps; it does not undo earlier submissions or deliveries.</p>
   </fieldset>
   <fieldset id="decision-panel" tabindex="-1">
     <legend>Pending candidate decision</legend>
@@ -206,7 +208,25 @@ _HTML = r"""<!doctype html>
     let listGeneration = 0;
     let nextRunCursor = null;
     let selectedRunVersion = null;
+    let selectedRunPhase = null;
+    let selectedRunWaitingForHuman = false;
+    let cancellationInFlight = false;
     const byId = (id) => document.getElementById(id);
+    const cancellableApprovalPhases = new Set([
+      'application_approval', 'message_approval', 'interview_approval',
+    ]);
+    function updateCancellationControl() {
+      const busy = startInFlight || statusInFlight || promptInFlight ||
+        recoveryInFlight || decisionInFlight || reconciliationInFlight ||
+        cancellationInFlight;
+      byId('cancel-run').disabled = busy || selectedRunVersion === null ||
+        !selectedRunWaitingForHuman || !cancellableApprovalPhases.has(selectedRunPhase);
+    }
+    function invalidateCancellationEligibility() {
+      selectedRunPhase = null;
+      selectedRunWaitingForHuman = false;
+      updateCancellationControl();
+    }
     const pageSummary = (count, singular, plural, hasMore, instruction = '') =>
       count + ' ' + (count === 1 ? singular : plural) + ' on this page. ' +
       (hasMore ? 'More available.' : 'End of list.') + (instruction ? ' ' + instruction : '');
@@ -655,9 +675,10 @@ _HTML = r"""<!doctype html>
     const runPhases = ['search', 'decision', 'resume', 'application_prepare', 'application_approval',
       'application_submit', 'application_reconciliation', 'message_prepare', 'message_approval',
       'message_send', 'message_reconciliation', 'track', 'interview_coordination',
-      'interview_approval', 'interview_accept', 'interview_reconciliation', 'complete', 'failed'];
+      'interview_approval', 'interview_accept', 'interview_reconciliation',
+      'complete', 'failed', 'cancelled'];
     const validRunFlags = item =>
-      item.terminal === ['complete', 'failed'].includes(item.phase) &&
+      item.terminal === ['complete', 'failed', 'cancelled'].includes(item.phase) &&
       (!item.terminal || !item.waiting_for_human);
     const approvalDetailFields = {
       approve_application: ['job_id', 'job_title', 'company', 'company_id',
@@ -922,6 +943,7 @@ _HTML = r"""<!doctype html>
     function selectRun(runId, minimumVersion = null) {
       clearOverview();
       selectedRunVersion = minimumVersion;
+      invalidateCancellationEligibility();
       inputContextGeneration += 1;
       latestResultRequest += 1;
       byId('run-id').value = runId;
@@ -966,6 +988,10 @@ _HTML = r"""<!doctype html>
       }
     }
     async function guarded(operation, preserveOverview = false) {
+      if (cancellationInFlight) {
+        show({error: 'A candidate cancellation is in progress.'}, preserveOverview);
+        return;
+      }
       try { await operation(); } catch (error) {
         if (error.resultRequest === undefined || error.resultRequest === latestResultRequest) {
           show({error: String(error.message || error)}, preserveOverview);
@@ -978,6 +1004,7 @@ _HTML = r"""<!doctype html>
         throw new Error('Wait for the current workflow request to finish.');
       }
       startInFlight = true;
+      updateCancellationControl();
       byId('start').disabled = true;
       byId('start-panel').setAttribute('aria-busy', 'true');
       const requestNumber = ++latestStartRequest;
@@ -1004,6 +1031,7 @@ _HTML = r"""<!doctype html>
         }
       } finally {
         startInFlight = false;
+        updateCancellationControl();
         byId('start').disabled = false;
         byId('start-panel').setAttribute('aria-busy', 'false');
         byId('prompt').disabled = statusInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
@@ -1012,6 +1040,7 @@ _HTML = r"""<!doctype html>
     function invalidateInputContext() {
       clearOverview();
       selectedRunVersion = null;
+      invalidateCancellationEligibility();
       inputContextGeneration += 1;
       latestResultRequest += 1;
       latestStartRequest += 1;
@@ -1036,6 +1065,7 @@ _HTML = r"""<!doctype html>
       if (startInFlight) throw new Error('Wait for the run start to finish.');
       if (promptInFlight || recoveryInFlight || decisionInFlight || reconciliationInFlight) throw new Error('Wait for the workflow action to finish.');
       statusInFlight = true;
+      updateCancellationControl();
       byId('status').disabled = true;
       byId('inspect-panel').setAttribute('aria-busy', 'true');
       clearOverview();
@@ -1058,6 +1088,9 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid status snapshot.');
         }
         selectedRunVersion = snapshot.state_version;
+        selectedRunPhase = snapshot.phase;
+        selectedRunWaitingForHuman = snapshot.waiting_for_human;
+        updateCancellationControl();
         if (snapshot.phase === 'application_reconciliation' && snapshot.waiting_for_human) {
           enableApplicationReconciliation(snapshot.state_version);
         } else {
@@ -1081,7 +1114,9 @@ _HTML = r"""<!doctype html>
         show({status: 200, payload: Object.fromEntries(
           statusFields.map(field => [field, snapshot[field]])
         )});
-        const state = snapshot.terminal ? 'Finished' : snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
+        const state = snapshot.phase === 'cancelled' ? 'Cancelled' :
+          snapshot.terminal ? 'Finished' :
+          snapshot.waiting_for_human ? 'Your decision is needed' : 'In progress';
         byId('run-overview').textContent = state + ' — ' + snapshot.phase.replaceAll('_', ' ') +
           ' (version ' + snapshot.state_version + '). Run: ' + snapshot.run_id;
       } catch (error) {
@@ -1091,13 +1126,60 @@ _HTML = r"""<!doctype html>
           invalidateApplicationReconciliation('Status could not be verified. Refresh run status.');
           invalidateMessageReconciliation('Status could not be verified. Refresh run status.');
           invalidateInterviewReconciliation('Status could not be verified. Refresh run status.');
+          invalidateCancellationEligibility();
         }
         throw error;
       } finally {
         statusInFlight = false;
+        updateCancellationControl();
         byId('status').disabled = false;
         byId('inspect-panel').setAttribute('aria-busy', 'false');
         byId('prompt').disabled = startInFlight || decisionInFlight || recoveryInFlight || promptInFlight;
+      }
+    }));
+    byId('cancel-run').addEventListener('click', () => guarded(async () => {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight ||
+          decisionInFlight || reconciliationInFlight || cancellationInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      const runId = byId('run-id').value;
+      const observedVersion = selectedRunVersion;
+      if (observedVersion === null || !selectedRunWaitingForHuman ||
+          !cancellableApprovalPhases.has(selectedRunPhase)) {
+        throw new Error('Refresh status or load the current ordinary approval prompt first.');
+      }
+      cancellationInFlight = true;
+      updateCancellationControl();
+      invalidateApprovalPrompt('Cancellation submitted. Refresh status before continuing.');
+      invalidateAllReconciliation(
+        'Cancellation changes workflow state. Refresh run status before further actions.');
+      try {
+        const result = await call(runPath('/cancel'), {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({schema_version: 1, state_version: observedVersion}),
+        }, 'Cancellation request failed.');
+        if (!result || typeof result !== 'object' || Array.isArray(result) ||
+            Object.keys(result).length !== 2 || result.run_id !== runId ||
+            result.phase !== 'cancelled') {
+          throw new Error('Invalid cancellation response.');
+        }
+        selectedRunPhase = 'cancelled';
+        selectedRunWaitingForHuman = false;
+        show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
+        byId('run-overview').textContent =
+          'Cancelled — refresh status to confirm the terminal snapshot. Run: ' + runId;
+      } catch (error) {
+        invalidateCancellationEligibility();
+        if (error.code === 'approval_conflict') {
+          error.message = 'Run state changed or is no longer at a cancellable approval gate. Refresh status.';
+        } else {
+          error.message = 'Cancellation result is uncertain. Refresh status before continuing.';
+        }
+        throw error;
+      } finally {
+        cancellationInFlight = false;
+        updateCancellationControl();
       }
     }));
     byId('continue').addEventListener('click', () => guarded(async () => {
@@ -1108,6 +1190,8 @@ _HTML = r"""<!doctype html>
       if (recoveryInFlight) throw new Error('Recovery is already running.');
       if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       recoveryInFlight = true;
+      invalidateCancellationEligibility();
+      updateCancellationControl();
       byId('continue').disabled = true;
       byId('prompt').disabled = true;
       byId('approve').disabled = true;
@@ -1141,6 +1225,7 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         recoveryInFlight = false;
+        updateCancellationControl();
         byId('continue').disabled = false;
         byId('prompt').disabled = false;
       }
@@ -1153,6 +1238,7 @@ _HTML = r"""<!doctype html>
       if (promptInFlight) throw new Error('An approval prompt is already loading.');
       if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       promptInFlight = true;
+      updateCancellationControl();
       invalidateApprovalPrompt('Loading approval prompt…');
       const promptGeneration = approvalPromptGeneration;
       const promptRunId = byId('run-id').value;
@@ -1190,6 +1276,9 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid approval prompt. Load it again.');
         }
         selectedRunVersion = loadedPrompt.state_version;
+        selectedRunPhase = approvalPhases[loadedPrompt.action_kind];
+        selectedRunWaitingForHuman = true;
+        updateCancellationControl();
         invalidateReconciliationForVersion(selectedRunVersion);
         approvalPrompt = loadedPrompt;
         byId('action-title').textContent = loadedPrompt.title;
@@ -1198,6 +1287,7 @@ _HTML = r"""<!doctype html>
         byId('decline').disabled = false;
       } catch (error) {
         if (promptGeneration === approvalPromptGeneration) {
+          invalidateCancellationEligibility();
           byId('action-title').textContent = error.code === 'approval_unavailable'
             ? 'Approval is no longer available. Refresh run status.'
             : error.code === 'approval_conflict'
@@ -1207,6 +1297,7 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         promptInFlight = false;
+        updateCancellationControl();
         if (activePromptLoadGeneration === promptGeneration) {
           activePromptLoadGeneration = null;
         }
@@ -1222,6 +1313,8 @@ _HTML = r"""<!doctype html>
       if (decisionInFlight) throw new Error('A decision is already being submitted.');
       if (reconciliationInFlight) throw new Error('Wait for reconciliation to finish.');
       decisionInFlight = true;
+      invalidateCancellationEligibility();
+      updateCancellationControl();
       byId('approve').disabled = true;
       byId('decline').disabled = true;
       byId('prompt').disabled = true;
@@ -1255,6 +1348,7 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         decisionInFlight = false;
+        updateCancellationControl();
         invalidateApprovalPrompt(completionMessage);
         byId('continue').disabled = false;
       }
@@ -1296,6 +1390,8 @@ _HTML = r"""<!doctype html>
         throw new Error('A valid provider submission ID is required.');
       }
       reconciliationInFlight = true;
+      invalidateCancellationEligibility();
+      updateCancellationControl();
       byId('reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateApplicationReconciliation('Recording verified provider evidence…');
       try {
@@ -1319,6 +1415,7 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         reconciliationInFlight = false;
+        updateCancellationControl();
         byId('reconciliation-panel').setAttribute('aria-busy', 'false');
       }
     }
@@ -1338,6 +1435,8 @@ _HTML = r"""<!doctype html>
       const runId = byId('run-id').value;
       const observedVersion = messageReconciliationVersion;
       reconciliationInFlight = true;
+      invalidateCancellationEligibility();
+      updateCancellationControl();
       byId('message-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateMessageReconciliation('Recording verified provider outcome…');
       try {
@@ -1359,6 +1458,7 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         reconciliationInFlight = false;
+        updateCancellationControl();
         byId('message-reconciliation-panel').setAttribute('aria-busy', 'false');
       }
     }
@@ -1382,6 +1482,8 @@ _HTML = r"""<!doctype html>
         throw new Error('A valid provider event ID is required.');
       }
       reconciliationInFlight = true;
+      invalidateCancellationEligibility();
+      updateCancellationControl();
       byId('interview-reconciliation-panel').setAttribute('aria-busy', 'true');
       invalidateInterviewReconciliation('Recording verified calendar-provider evidence…');
       try {
@@ -1404,6 +1506,7 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         reconciliationInFlight = false;
+        updateCancellationControl();
         byId('interview-reconciliation-panel').setAttribute('aria-busy', 'false');
       }
     }
