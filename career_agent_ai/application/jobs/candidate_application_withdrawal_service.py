@@ -74,7 +74,7 @@ class CandidateApplicationWithdrawalService:
             occurred_at=occurred_at,
             note=(
                 "Candidate marked this application as withdrawn in the tracker; "
-                "no employer notification was sent."
+                "no withdrawal notice was sent."
             ),
         )
         # The repository's version CAS and submission-claim check serialize this
