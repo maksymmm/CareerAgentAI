@@ -187,6 +187,7 @@ class SQLiteSandboxApplicationWithdrawalProvider:
         connection = self._database.connection
         self._begin(connection)
         try:
+            self._require_submission(application_id, provider_submission_id)
             self._bind_intent(
                 operation_id, fingerprint, application_id, provider_submission_id
             )
@@ -351,6 +352,25 @@ class SQLiteSandboxApplicationWithdrawalProvider:
             raise PreApplicationWithdrawalError(
                 "Sandbox withdrawal provider is busy; nothing was attempted."
             ) from exc
+
+    def _require_submission(
+        self, application_id: str, provider_submission_id: str
+    ) -> None:
+        """Require an exact prior sandbox submission before withdrawal is attempted."""
+        try:
+            row = self._database.connection.execute(
+                "SELECT 1 FROM sandbox_submission_ledger "
+                "WHERE application_id = ? AND provider_submission_id = ?",
+                (application_id, provider_submission_id),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            raise PreApplicationWithdrawalError(
+                "A verified sandbox application submission is required before withdrawal."
+            ) from exc
+        if row is None:
+            raise PreApplicationWithdrawalError(
+                "A verified sandbox application submission is required before withdrawal."
+            )
 
     def _bind_intent(
         self,
