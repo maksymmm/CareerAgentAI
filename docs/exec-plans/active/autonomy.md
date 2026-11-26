@@ -1,3 +1,13 @@
+Calendar provider concurrent timeout-after-effect recovery: a two-connection
+SQLite regression holds one `calendar.accept` request inside the provider transaction
+while a duplicate starts, commits one `TIMEOUT_AFTER_EFFECT` attempt/effect, and proves
+the duplicate observes the exact durable event without a second plan call. A new
+provider instance replays the same event after restart without changing attempt history
+or creating another effect. ADR 0025 records the provider-boundary contract. The CI
+workflow also enforces an independent `python -m coverage report --fail-under=90`
+gate after full pytest. Next: exact-head full CI and independent code/security review,
+then continue cross-provider concurrent writer/evidence verification.
+
 Relevance boundary follow-up: hyphens are separators between complete technology
 identifiers and location tokens, while letters, digits, underscore, plus, hash and
 period remain part of identifier boundaries. Java matches Java-based and New matches
