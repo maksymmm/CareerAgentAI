@@ -1231,14 +1231,35 @@ def test_ci_enforces_independent_coverage_gate_after_pytest():
     assert coverage_gate > pytest_step
 
 
-def test_pending_decline_collection_rejects_detached_operation_rewritten_for_foreign_owner(tmp_path):
+def test_pending_decline_collection_rejects_detached_operation_rewritten_for_foreign_owner(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "decline-intent-detached-owner-tamper.sqlite"
     _seed(path, _event())
-    candidate = Candidate(
-        path,
-        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
-    )
-    assert candidate.decline()[0] == "202 Accepted"
+    original_transition = SQLiteExternalActionOperationRepository.transition
+
+    def interrupt_operation_completion(
+        repository, operation_id, expected_status, status, **kwargs
+    ):
+        if (
+            expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.SUCCEEDED
+        ):
+            raise sqlite3.OperationalError("simulated terminal status write failure")
+        return original_transition(repository, operation_id, expected_status, status, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            SQLiteExternalActionOperationRepository,
+            "transition",
+            interrupt_operation_completion,
+        )
+        first_status, first_result = Candidate(path).decline()
+
+    assert first_status == "202 Accepted"
+    assert first_result["outcome"] == "reconciliation_required"
+    assert _stored_event(path).status == ScheduleStatus.DECLINED
+    assert _stored_event(path).version == 2
 
     connection = sqlite3.connect(path)
     try:
@@ -1275,6 +1296,13 @@ def test_pending_decline_collection_rejects_detached_operation_rewritten_for_for
         connection.commit()
     finally:
         connection.close()
+
+    assert Candidate(path).pending_page() == (
+        "409 Conflict", {"error": "approval_conflict"}
+    )
+    assert _stored_event(path).status == ScheduleStatus.DECLINED
+    assert _effect_count(path) == 1
+
 
     assert Candidate(path).pending_page() == (
         "409 Conflict", {"error": "approval_conflict"}
