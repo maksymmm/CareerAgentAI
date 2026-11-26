@@ -163,6 +163,16 @@ _HTML = r"""<!doctype html>
   </section>
   <section aria-labelledby="schedule-title">
     <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
+    <fieldset id="pending-reschedules-panel" tabindex="-1" aria-busy="false">
+      <legend>Pending reschedule recovery</legend>
+      <p class="muted">Find uncertain sandbox reschedules saved before a browser or runtime restart. Selecting an item reloads the owned event and its authoritative per-event recovery state; discovery alone never authorizes reconciliation.</p>
+      <div class="actions">
+        <button id="list-pending-reschedules" type="button">Find pending reschedules</button>
+        <button id="next-pending-reschedules" type="button" disabled>Next pending reschedules</button>
+      </div>
+      <ul id="pending-reschedule-items" aria-label="Pending reschedules" aria-busy="false"></ul>
+      <p id="pending-reschedules-state" role="status">Load pending reschedules to discover recoverable interview changes.</p>
+    </fieldset>
     <label for="event-status">Status</label>
     <select id="event-status">
       <option value="">All statuses</option>
@@ -241,6 +251,9 @@ _HTML = r"""<!doctype html>
     let eventDetailGeneration = 0;
     let eventDetailTrigger = null;
     let nextEventCursor = null;
+    let pendingRescheduleCollectionGeneration = 0;
+    let pendingRescheduleCollectionInFlight = false;
+    let nextPendingRescheduleCursor = null;
     let selectedEventId = null;
     let selectedEventVersion = null;
     const eventId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(value);
@@ -321,6 +334,17 @@ _HTML = r"""<!doctype html>
         throw new Error('Event timezone data does not match this browser.');
       }
       return Object.fromEntries(eventFields.map(key => [key, item[key]]));
+    }
+    function clearPendingRescheduleCollection() {
+      pendingRescheduleCollectionGeneration += 1;
+      pendingRescheduleCollectionInFlight = false;
+      nextPendingRescheduleCursor = null;
+      byId('list-pending-reschedules').disabled = false;
+      byId('next-pending-reschedules').disabled = true;
+      byId('pending-reschedule-items').setAttribute('aria-busy', 'false');
+      byId('pending-reschedule-items').replaceChildren();
+      byId('pending-reschedules-state').textContent = '';
+      byId('pending-reschedules-panel').setAttribute('aria-busy', 'false');
     }
     let eventVersionFloorId = null;
     let eventVersionFloor = null;
@@ -528,12 +552,106 @@ _HTML = r"""<!doctype html>
         }
       }
     }
+    async function loadPendingReschedules(after = null) {
+      if (rescheduleInFlight) throw new Error('Wait for the current reschedule request to finish.');
+      if (pendingRescheduleCollectionInFlight) return;
+      if (after === null) clearPendingRescheduleCollection();
+      const generation = pendingRescheduleCollectionGeneration;
+      pendingRescheduleCollectionInFlight = true;
+      byId('list-pending-reschedules').disabled = true;
+      byId('pending-reschedule-items').setAttribute('aria-busy', 'true');
+      byId('pending-reschedules-panel').setAttribute('aria-busy', 'true');
+      byId('pending-reschedules-state').textContent = 'Discovering pending reschedules…';
+      try {
+        const page = await call('/v1/candidate/schedule-event/reschedule-intents?limit=25' +
+          (after === null ? '' : '&after=' + encodeURIComponent(after)), {},
+          'Pending reschedule discovery failed.', true);
+        if (generation !== pendingRescheduleCollectionGeneration) return;
+        if (!page || page.schema_version !== 1 || !Array.isArray(page.items) ||
+            page.items.length > 25 ||
+            !(page.next_after === null || eventId(page.next_after))) {
+          throw new Error('Invalid pending reschedule page.');
+        }
+        const items = page.items.map(raw => {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            throw new Error('Invalid pending reschedule item.');
+          }
+          const snapshot = eventSnapshot(raw.event);
+          if (!Number.isSafeInteger(raw.state_version) || raw.state_version < 1 ||
+              raw.state_version > snapshot.state_version ||
+              snapshot.state_version - raw.state_version > 1 ||
+              (snapshot.state_version === raw.state_version + 1 &&
+                snapshot.status !== 'reschedule_requested') ||
+              !['running', 'in_progress', 'reconciliation_required'].includes(raw.operation_status)) {
+            throw new Error('Pending reschedule does not match its event version.');
+          }
+          return {event: snapshot, state_version: raw.state_version,
+            operation_status: raw.operation_status};
+        });
+        if (!items.every((item, index) =>
+          item.event.event_id > (index ? items[index - 1].event.event_id : (after || '')))) {
+          throw new Error('Invalid pending reschedule cursor order.');
+        }
+        if (page.next_after !== null &&
+            (items.length === 0 || page.next_after !== items.at(-1).event.event_id)) {
+          throw new Error('Invalid pending reschedule next cursor.');
+        }
+        for (const item of items) {
+          const event = item.event;
+          const row = document.createElement('li');
+          row.textContent = event.employer_name + ' — ' + event.event_type + ' — ' +
+            item.operation_status + ' — ' + event.local_date + ' ' +
+            event.local_start_time + ' ' + event.utc_offset + ' (' + event.timezone_name + ') ';
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Review reschedule';
+          button.setAttribute('aria-label',
+            'Review pending reschedule for event ' + event.event_id);
+          button.addEventListener('click', () => {
+            if (generation === pendingRescheduleCollectionGeneration) {
+              guarded(() => loadEventDetail(event.event_id, event.state_version, button), true);
+            }
+          });
+          row.append(button);
+          byId('pending-reschedule-items').append(row);
+        }
+        nextPendingRescheduleCursor = page.next_after;
+        byId('next-pending-reschedules').disabled = nextPendingRescheduleCursor === null;
+        byId('pending-reschedules-state').textContent = pageSummary(
+          items.length, 'pending reschedule', 'pending reschedules',
+          nextPendingRescheduleCursor !== null,
+          'Selecting an item reloads the owned event and per-event recovery state.');
+      } catch (error) {
+        if (generation === pendingRescheduleCollectionGeneration) {
+          if (after === null) byId('pending-reschedule-items').replaceChildren();
+          byId('next-pending-reschedules').disabled = nextPendingRescheduleCursor === null;
+          byId('pending-reschedules-state').textContent =
+            'Load or retry the pending reschedule page.';
+        }
+        throw error;
+      } finally {
+        if (generation === pendingRescheduleCollectionGeneration) {
+          pendingRescheduleCollectionInFlight = false;
+          byId('list-pending-reschedules').disabled = false;
+          byId('pending-reschedule-items').setAttribute('aria-busy', 'false');
+          byId('pending-reschedules-panel').setAttribute('aria-busy', 'false');
+        }
+      }
+    }
+    byId('list-pending-reschedules').addEventListener('click', () =>
+      guarded(() => loadPendingReschedules(), true));
+    byId('next-pending-reschedules').addEventListener('click', () => guarded(() => {
+      if (nextPendingRescheduleCursor !== null) return loadPendingReschedules(nextPendingRescheduleCursor);
+    }, true));
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents(), true));
     byId('event-status').addEventListener('change', clearEvents);
     byId('next-events').addEventListener('click', () => guarded(() => {
       if (nextEventCursor !== null) return loadEvents(nextEventCursor);
     }, true));
-    byId('token').addEventListener('input', clearEvents);
+    byId('token').addEventListener('input', () => {
+      clearEvents();
+      clearPendingRescheduleCollection();
+    });
     const clearOverview = () => { byId('run-overview').textContent = 'Refresh status to load a snapshot.'; };
     const show = (value, preserveOverview = false) => {
       if (!preserveOverview) clearOverview();
@@ -1577,6 +1695,7 @@ _HTML = r"""<!doctype html>
         timezone_name: zone, decision: 'approve'
       };
       rescheduleInFlight = true;
+      clearPendingRescheduleCollection();
       const generation = ++rescheduleGeneration;
       byId('reschedule-panel').setAttribute('aria-busy', 'true');
       byId('request-reschedule').disabled = true;
@@ -1678,6 +1797,7 @@ _HTML = r"""<!doctype html>
       }
       const request = pendingReschedule;
       rescheduleInFlight = true;
+      clearPendingRescheduleCollection();
       byId('reschedule-reconciliation-verified').checked = false;
       byId('reschedule-reconciliation-verified').disabled = true;
       const generation = ++rescheduleGeneration;

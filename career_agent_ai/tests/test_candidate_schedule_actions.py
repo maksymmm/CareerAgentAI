@@ -1394,3 +1394,115 @@ def test_pending_reschedule_collection_is_published_in_openapi():
     ]
     assert "operation_id" not in item["properties"]
     assert "candidate_id" not in item["properties"]
+
+def test_candidate_sandbox_discovers_pending_reschedules_after_runtime_restart(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from threading import Thread
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-pending-reschedule-discovery.sqlite"
+    owner_event = _event()
+    foreign_event = _event(
+        "interview-reschedule-foreign",
+        candidate_id="candidate-2",
+        start_at=datetime(2026, 12, 4, 9, 0, tzinfo=timezone.utc),
+    )
+    _seed(path, owner_event, foreign_event)
+    first = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    owner_status, owner_result = first.reschedule()
+    assert owner_status == "202 Accepted"
+    assert owner_result["outcome"] == "reconciliation_required"
+    foreign_status, foreign_result = first.call(
+        CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+        token="foreign-token",
+        method="POST",
+        body=_body(
+            event_id=foreign_event.event_id,
+            start_at="2026-12-05T10:00:00+01:00",
+            end_at="2026-12-05T11:00:00+01:00",
+        ),
+    )
+    assert foreign_status == "202 Accepted"
+    assert foreign_result["outcome"] == "reconciliation_required"
+    first.close()
+
+    with sqlite3.connect(path) as connection:
+        baseline_counts = (
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_attempts").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
+        )
+    assert baseline_counts == (2, 2)
+
+    restarted = Candidate(path)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, restarted.app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-pending-reschedules").click()
+            review = page.get_by_role(
+                "button",
+                name=f"Review pending reschedule for event {owner_event.event_id}",
+            )
+            review.wait_for()
+            pending_list = page.locator("#pending-reschedule-items")
+            assert pending_list.get_by_role("button").count() == 1
+            assert foreign_event.event_id not in pending_list.text_content()
+            assert page.locator("#next-pending-reschedules").is_disabled()
+            assert "1 pending reschedule" in page.locator(
+                "#pending-reschedules-state"
+            ).text_content()
+
+            review.click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage"
+            ).wait_for()
+            assert page.locator("#reschedule-start").input_value() == PENDING_START
+            assert page.locator("#reschedule-end").input_value() == PENDING_END
+            assert not page.locator("#reschedule-reconciliation-verified").is_checked()
+            assert not page.locator("#reschedule-reconciliation-verified").is_disabled()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+
+            # A fresh browser session must rediscover the same owned intent without
+            # restoring the previous page's candidate attestation.
+            page.reload()
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-pending-reschedules").click()
+            review = page.get_by_role(
+                "button",
+                name=f"Review pending reschedule for event {owner_event.event_id}",
+            )
+            review.wait_for()
+            review.click()
+            page.locator("#reschedule-reconciliation-state").get_by_text(
+                "An ambiguous reschedule was restored from durable storage"
+            ).wait_for()
+            assert not page.locator("#reschedule-reconciliation-verified").is_checked()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
+        restarted.close()
+
+    with sqlite3.connect(path) as connection:
+        final_counts = (
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_attempts").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
+        )
+    assert final_counts == baseline_counts
+
