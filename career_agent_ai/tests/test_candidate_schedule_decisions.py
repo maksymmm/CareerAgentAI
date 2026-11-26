@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from threading import Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
@@ -139,6 +140,20 @@ class Candidate:
             method="GET",
             body={},
             query=query if query is not None else "event_id=" + event_id,
+        )
+
+    def pending_page(self, *, limit=25, after=None, token="owner-token", query=None):
+        encoded_query = query
+        if encoded_query is None:
+            encoded_query = "limit=" + str(limit)
+            if after is not None:
+                encoded_query += "&after=" + after
+        return self.call(
+            CandidateScheduleDeclineWSGIApp.PENDING_COLLECTION_PATH,
+            token=token,
+            method="GET",
+            body={},
+            query=encoded_query,
         )
 
     def reconcile(self, completed, *, state_version=1, token="owner-token", verified=True):
@@ -391,8 +406,13 @@ def test_openapi_and_dashboard_publish_candidate_decline_workflow():
     assert CandidateScheduleDeclineWSGIApp.DECLINE_PATH in document["paths"]
     assert CandidateScheduleDeclineWSGIApp.RECONCILIATION_PATH in document["paths"]
     assert CandidateScheduleDeclineWSGIApp.PENDING_PATH in document["paths"]
+    assert CandidateScheduleDeclineWSGIApp.PENDING_COLLECTION_PATH in document["paths"]
     html = candidate_sandbox_html().decode("utf-8")
     for identifier in (
+        "load-decline-intents",
+        "pending-decline-intents",
+        "decline-intents-state",
+        "next-decline-intents",
         "decline-confirmed",
         "decline-event",
         "decline-reconciliation-verified",
@@ -735,7 +755,7 @@ def test_pending_decline_scan_uses_composite_index_without_temporary_sort(tmp_pa
         plan = connection.execute(
             """
             EXPLAIN QUERY PLAN
-            SELECT operation_id, payload_json
+            SELECT operation_id, payload_json, status
             FROM external_action_operations
             WHERE action_type = ?
               AND status IN (?, ?)
@@ -956,6 +976,14 @@ def test_pending_recovers_decline_after_event_commit_before_operation_completion
     assert _effect_count(path) == 1
 
     restarted = Candidate(path)
+    page_status, page = restarted.pending_page()
+    assert page_status == "200 OK"
+    assert page["schema_version"] == 1
+    assert page["next_after"] is None
+    assert len(page["items"]) == 1
+    assert page["items"][0]["event"]["event_id"] == EVENT_ID
+    assert page["items"][0]["state_version"] == 1
+    assert page["items"][0]["operation_status"] == operation_status
     pending_status, pending = restarted.pending()
     assert pending_status == "200 OK"
     assert pending == {
@@ -1009,3 +1037,268 @@ def test_pending_rejects_detached_ambiguous_decline_before_event_transition(tmp_
     )
     assert _stored_event(path).status == ScheduleStatus.PROPOSED
     assert _effect_count(path) == 0
+
+
+def test_pending_decline_collection_is_owner_scoped_read_only_and_hides_private_ids(tmp_path):
+    path = tmp_path / "decline-intent-owner-scope.sqlite"
+    owner_event = _event(event_id="decline-owner-event")
+    foreign_event = _event(event_id="decline-foreign-event", candidate_id="candidate-2")
+    _seed(path, owner_event, foreign_event)
+
+    def timeout_after_effect(_key, _attempt):
+        return SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+
+    candidate = Candidate(path, timeout_after_effect)
+    assert candidate.decline(_body(event_id=owner_event.event_id))[0] == "202 Accepted"
+    assert candidate.decline(
+        _body(event_id=foreign_event.event_id), token="foreign-token"
+    )[0] == "202 Accepted"
+
+    baseline = path.read_bytes()
+    owner_status, owner_page = candidate.pending_page()
+    assert owner_status == "200 OK"
+    assert owner_page["schema_version"] == 1
+    assert owner_page["next_after"] is None
+    assert len(owner_page["items"]) == 1
+    owner_item = owner_page["items"][0]
+    assert owner_item["event"]["event_id"] == owner_event.event_id
+    assert owner_item["state_version"] == 1
+    assert owner_item["operation_status"] == "reconciliation_required"
+    serialized = json.dumps(owner_item)
+    for private_field in (
+        "candidate_id", "application_id", "provider_event_id", "operation_id",
+        "active_action_operation_id",
+    ):
+        assert private_field not in serialized
+    assert path.read_bytes() == baseline
+
+    foreign_status, foreign_page = candidate.pending_page(token="foreign-token")
+    assert foreign_status == "200 OK"
+    assert [item["event"]["event_id"] for item in foreign_page["items"]] == [
+        foreign_event.event_id
+    ]
+    assert path.read_bytes() == baseline
+    assert _effect_count(path) == 2
+
+
+def test_pending_decline_collection_uses_stable_keyset_pagination(tmp_path):
+    path = tmp_path / "decline-intent-pagination.sqlite"
+    first_event = _event(event_id="decline-page-a")
+    second_event = _event(event_id="decline-page-b")
+    _seed(path, first_event, second_event)
+    candidate = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    assert candidate.decline(_body(event_id=first_event.event_id))[0] == "202 Accepted"
+    assert candidate.decline(_body(event_id=second_event.event_id))[0] == "202 Accepted"
+
+    first_status, first_page = candidate.pending_page(limit=1)
+    assert first_status == "200 OK"
+    assert [item["event"]["event_id"] for item in first_page["items"]] == [
+        first_event.event_id
+    ]
+    assert first_page["next_after"] == first_event.event_id
+
+    second_status, second_page = candidate.pending_page(
+        limit=1, after=first_page["next_after"]
+    )
+    assert second_status == "200 OK"
+    assert [item["event"]["event_id"] for item in second_page["items"]] == [
+        second_event.event_id
+    ]
+    assert second_page["next_after"] is None
+    assert _effect_count(path) == 2
+
+
+def test_pending_decline_collection_rejects_duplicate_and_unbounded_queries(tmp_path):
+    path = tmp_path / "decline-intent-query.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+    assert candidate.pending_page(query="limit=1&limit=2")[0] == "400 Bad Request"
+    assert candidate.pending_page(query="limit=101")[0] == "400 Bad Request"
+    assert candidate.pending_page(query="after=%ZZ")[0] == "400 Bad Request"
+
+
+def test_pending_decline_collection_authenticates_before_opening_missing_storage(tmp_path):
+    path = tmp_path / "missing-decline-intents.sqlite"
+    candidate = Candidate(path)
+    assert candidate.pending_page(token=None) == (
+        "401 Unauthorized", {"error": "unauthorized"}
+    )
+    assert not path.exists()
+
+
+def test_candidate_browser_discovers_and_reconciles_pending_decline_after_restart(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "decline-intent-browser-restart.sqlite"
+    _seed(path, _event())
+    provider_calls = []
+
+    def first_plan(key, attempt):
+        provider_calls.append((key, attempt))
+        return SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+
+    def unexpected_retry(*_args):
+        raise AssertionError("provider execution must not replay during recovery")
+
+    def runtime_dispatch(plan):
+        runtime = build_candidate_sandbox_app_from_env(
+            resolve_bearer=TOKENS.get,
+            environ={"CAREER_AGENT_DB_PATH": str(path), **ENV},
+        )
+        decline = CandidateScheduleDeclineWSGIApp(
+            database_path=str(path), resolve_bearer=TOKENS.get, outcome_plan=plan
+        )
+
+        def dispatch(environ, start_response):
+            if environ.get("PATH_INFO") in CandidateScheduleDeclineWSGIApp.ROUTES:
+                return decline(environ, start_response)
+            return runtime(environ, start_response)
+
+        return runtime, dispatch
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    runtime1, app1 = runtime_dispatch(first_plan)
+    server1 = make_server("127.0.0.1", 0, app1, handler_class=QuietHandler)
+    thread1 = Thread(target=server1.serve_forever, daemon=True)
+    thread1.start()
+    first_url = f"http://127.0.0.1:{server1.server_port}/sandbox/candidate"
+
+    with sync_playwright() as playwright:
+        browser1 = playwright.chromium.launch(headless=True)
+        try:
+            page1 = browser1.new_page()
+            page1.goto(first_url)
+            page1.locator("#token").fill("owner-token")
+            page1.locator("#list-events").click()
+            view_button = page1.get_by_role("button", name="View event 1: " + EVENT_ID)
+            view_button.wait_for()
+            view_button.click()
+            page1.locator("#decline-confirmed").check()
+            page1.locator("#decline-event").click()
+            page1.get_by_text("Decline is awaiting provider reconciliation.").wait_for()
+        finally:
+            browser1.close()
+            server1.shutdown()
+            thread1.join(timeout=10)
+            server1.server_close()
+            runtime1.close()
+
+        runtime2, app2 = runtime_dispatch(unexpected_retry)
+        server2 = make_server("127.0.0.1", 0, app2, handler_class=QuietHandler)
+        thread2 = Thread(target=server2.serve_forever, daemon=True)
+        thread2.start()
+        browser2 = playwright.chromium.launch(headless=True)
+        try:
+            page2 = browser2.new_page()
+            page2.goto(f"http://127.0.0.1:{server2.server_port}/sandbox/candidate")
+            page2.locator("#token").fill("owner-token")
+            page2.locator("#load-decline-intents").click()
+            recover_button = page2.get_by_role(
+                "button", name="Recover pending decline 1: " + EVENT_ID
+            )
+            recover_button.wait_for()
+            recover_button.click()
+            page2.get_by_text(
+                "An ambiguous interview decline was restored from durable storage."
+            ).wait_for()
+            assert page2.locator("#decline-reconciliation-panel").is_enabled()
+            page2.locator("#decline-reconciliation-verified").check()
+            page2.locator("#confirm-decline-completed").click()
+            page2.get_by_text(
+                "Provider evidence confirmed the interview decline."
+            ).wait_for()
+            assert len(provider_calls) == 1
+            assert _effect_count(path) == 1
+            assert _stored_event(path).status == ScheduleStatus.DECLINED
+            assert _stored_event(path).version == 2
+        finally:
+            browser2.close()
+            server2.shutdown()
+            thread2.join(timeout=10)
+            server2.server_close()
+            runtime2.close()
+
+
+def test_ci_enforces_independent_coverage_gate_after_pytest():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    pytest_step = workflow.index("python -m pytest")
+    coverage_gate = workflow.index("python -m coverage report --fail-under=90")
+    assert coverage_gate > pytest_step
+
+
+def test_pending_decline_collection_rejects_detached_operation_rewritten_for_foreign_owner(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "decline-intent-detached-owner-tamper.sqlite"
+    _seed(path, _event())
+    original_transition = SQLiteExternalActionOperationRepository.transition
+
+    def interrupt_operation_completion(
+        repository, operation_id, expected_status, status, **kwargs
+    ):
+        if (
+            expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.SUCCEEDED
+        ):
+            raise sqlite3.OperationalError("simulated terminal status write failure")
+        return original_transition(repository, operation_id, expected_status, status, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            SQLiteExternalActionOperationRepository,
+            "transition",
+            interrupt_operation_completion,
+        )
+        first_status, first_result = Candidate(path).decline()
+
+    assert first_status == "202 Accepted"
+    assert first_result["outcome"] == "reconciliation_required"
+    assert _stored_event(path).status == ScheduleStatus.DECLINED
+    assert _stored_event(path).version == 2
+
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            """
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = 'calendar.decline'
+            """
+        ).fetchone()
+        assert row is not None
+        old_operation_id, payload_json = row
+        payload = json.loads(payload_json)
+        payload["candidate_id"] = "candidate-2"
+        new_operation_id = CandidateScheduleDeclineWSGIApp._operation_id(
+            "candidate-2", EVENT_ID, 1
+        )
+        connection.execute(
+            """
+            UPDATE external_action_operations
+            SET operation_id = ?, payload_json = ?
+            WHERE operation_id = ?
+            """,
+            (
+                new_operation_id,
+                json.dumps(payload, separators=(",", ":")),
+                old_operation_id,
+            ),
+        )
+        assert connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0] is None
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert Candidate(path).pending_page() == (
+        "409 Conflict", {"error": "approval_conflict"}
+    )
+    assert _stored_event(path).status == ScheduleStatus.DECLINED
+    assert _effect_count(path) == 1

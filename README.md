@@ -1038,3 +1038,15 @@ retain their legacy child and operation IDs, including replay after restart.
 Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
 The ownership check includes retained applications, messages and external-action
 records, so deleting a terminal loop snapshot cannot release its child namespace.
+
+
+Candidate interview-decline recovery discovery is available through the authenticated,
+read-only GET /v1/candidate/schedule-event/decline-intents endpoint. It returns a
+bounded, owner-scoped keyset page of ambiguous decline intents with candidate-safe
+event snapshots and the source state version; provider event IDs, application IDs,
+candidate IDs, and internal operation IDs are never returned. The endpoint validates
+the durable operation identity and the event's active-action pointer, including the
+provider-effect/event-commit partial-failure state where the pointer has already been
+cleared. Discovery performs no provider I/O and writes no state. Selecting an item in
+the candidate dashboard still reloads the owned event and the per-event pending
+snapshot before enabling explicit provider-evidence attestation.

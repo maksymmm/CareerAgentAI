@@ -1625,3 +1625,21 @@ and reject a detached operation whose event transition did not commit.
 Next: exact-head full CI/coverage and Codex code/security review; then integrate the
 decline workflow only after all findings are resolved, while continuing candidate
 acceptance and reschedule recovery hardening.
+
+
+Candidate decline intent discovery: the candidate dashboard now exposes a bounded,
+owner-scoped GET /v1/candidate/schedule-event/decline-intents page after browser
+reload. The SQLite read-only projection validates deterministic operation identity,
+the owned event's active-action pointer, complete source snapshot, and the exact
+declined target for pointer-free provider-success/local-commit partial failures. It
+uses a bounded indexed ambiguous-operation scan, strict duplicate-key/non-finite JSON
+rejection, and stable event-ID keyset pagination. The response omits provider,
+application, candidate, and internal operation identifiers. Selecting an item always
+re-reads the current event and per-event pending state before reconciliation controls
+are enabled; discovery itself performs no provider action and no writes. HTTP/SQLite
+regressions cover owner isolation, hidden identifiers, read-only behavior, pagination,
+malformed queries, detached recovery, and a Chromium runtime/browser restart followed
+by evidence-based reconciliation with exactly one provider effect.
+Next: implement the same candidate-safe discovery contract for reschedule intents on
+an isolated branch, reusing the reschedule workflow's durable target snapshot and
+version-bound reconciliation only after its existing review findings are resolved.

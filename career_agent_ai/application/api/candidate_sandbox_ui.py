@@ -174,6 +174,10 @@ _HTML = r"""<!doctype html>
     <ul id="owned-events" aria-label="My events" aria-busy="false"></ul>
     <p id="events-state" role="status"></p>
     <button id="next-events" type="button" disabled>Next event page</button>
+    <button id="load-decline-intents" type="button">Find pending interview declines</button>
+    <ul id="pending-decline-intents" aria-label="Pending interview declines" aria-busy="false"></ul>
+    <p id="decline-intents-state" role="status">Load pending declines after signing in.</p>
+    <button id="next-decline-intents" type="button" disabled>Next pending decline page</button>
     <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
     <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
@@ -227,6 +231,9 @@ _HTML = r"""<!doctype html>
       count + ' ' + (count === 1 ? singular : plural) + ' on this page. ' +
       (hasMore ? 'More available.' : 'End of list.') + (instruction ? ' ' + instruction : '');
     let eventsGeneration = 0;
+    let declineIntentsGeneration = 0;
+    let nextDeclineIntentCursor = null;
+    let declineIntentsInFlight = false;
     let eventDetailGeneration = 0;
     let eventDetailTrigger = null;
     let nextEventCursor = null;
@@ -340,7 +347,18 @@ _HTML = r"""<!doctype html>
       byId('event-detail').textContent = '';
       byId('event-detail-state').textContent = '';
     }
+    function clearDeclineIntents() {
+      declineIntentsGeneration += 1;
+      declineIntentsInFlight = false;
+      nextDeclineIntentCursor = null;
+      byId('pending-decline-intents').replaceChildren();
+      byId('pending-decline-intents').setAttribute('aria-busy', 'false');
+      byId('decline-intents-state').textContent = 'Load pending declines after signing in.';
+      byId('load-decline-intents').disabled = false;
+      byId('next-decline-intents').disabled = true;
+    }
     function clearEvents() {
+      clearDeclineIntents();
       clearEventDetail(); eventsGeneration += 1; nextEventCursor = null;
       selectedEventId = null; selectedEventVersion = null;
       eventVersionFloorId = null; eventVersionFloor = null;
@@ -425,6 +443,93 @@ _HTML = r"""<!doctype html>
       byId('decline-reconciliation-verified').disabled = true;
       byId('confirm-decline-completed').disabled = true;
       byId('confirm-decline-no-effect').disabled = true;
+    }
+    async function loadDeclineIntents(after = null) {
+      if (declineIntentsInFlight) throw new Error('Pending declines are already loading.');
+      const generation = ++declineIntentsGeneration;
+      const cursor = after;
+      if (cursor === null) {
+        nextDeclineIntentCursor = null;
+        byId('pending-decline-intents').replaceChildren();
+      }
+      declineIntentsInFlight = true;
+      byId('load-decline-intents').disabled = true;
+      byId('next-decline-intents').disabled = true;
+      byId('pending-decline-intents').setAttribute('aria-busy', 'true');
+      byId('decline-intents-state').textContent = 'Loading pending interview declines…';
+      try {
+        const page = await call('/v1/candidate/schedule-event/decline-intents?limit=25' +
+          (cursor === null ? '' : '&after=' + encodeURIComponent(cursor)), {},
+          'Pending interview-decline discovery failed.', true);
+        if (generation !== declineIntentsGeneration) return;
+        if (!page || typeof page !== 'object' || Array.isArray(page) ||
+            Object.keys(page).length !== 3 ||
+            !['schema_version', 'items', 'next_after'].every(key => Object.hasOwn(page, key)) ||
+            page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || eventId(page.next_after))) {
+          throw new Error('Invalid pending interview-decline page.');
+        }
+        const items = page.items.map(item => {
+          const fields = ['event', 'state_version', 'operation_status'];
+          if (!item || typeof item !== 'object' || Array.isArray(item) ||
+              Object.keys(item).length !== fields.length ||
+              !fields.every(key => Object.hasOwn(item, key)) ||
+              !Number.isSafeInteger(item.state_version) || item.state_version < 1 ||
+              !['in_progress', 'reconciliation_required'].includes(item.operation_status)) {
+            throw new Error('Invalid pending interview-decline item.');
+          }
+          const event = eventSnapshot(item.event);
+          const versionMatches = item.state_version === event.state_version ||
+            (item.state_version < Number.MAX_SAFE_INTEGER &&
+              item.state_version + 1 === event.state_version && event.status === 'declined');
+          if (!versionMatches) throw new Error('Pending decline does not match the event version.');
+          return {event, state_version: item.state_version,
+            operation_status: item.operation_status};
+        });
+        if (!items.every((item, index) =>
+            item.event.event_id > (index ? items[index - 1].event.event_id : (cursor || ''))) ||
+            (page.next_after !== null &&
+              (page.next_after !== items.at(-1)?.event.event_id || items.length !== 25))) {
+          throw new Error('Invalid pending interview-decline cursor.');
+        }
+        for (const [index, item] of items.entries()) {
+          const row = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = item.event.employer_name + ' — ' + item.event.local_date +
+            ' ' + item.event.local_start_time + ' ' + item.event.timezone_name +
+            ' — pending decline';
+          button.setAttribute('aria-label', 'Recover pending decline ' + (index + 1) +
+            ': ' + item.event.event_id);
+          button.addEventListener('click', () => {
+            if (generation === declineIntentsGeneration) guarded(
+              () => loadEventDetail(item.event.event_id, item.event.state_version, button), true);
+          });
+          row.appendChild(button);
+          byId('pending-decline-intents').appendChild(row);
+        }
+        nextDeclineIntentCursor = page.next_after;
+        byId('next-decline-intents').disabled = page.next_after === null;
+        byId('decline-intents-state').textContent = pageSummary(
+          items.length, 'pending decline', 'pending declines', page.next_after !== null,
+          items.length ? 'Select one to reload its event and provider evidence.' :
+            'No pending interview declines were found.');
+      } catch (error) {
+        if (generation === declineIntentsGeneration) {
+          byId('pending-decline-intents').replaceChildren();
+          nextDeclineIntentCursor = null;
+          byId('next-decline-intents').disabled = true;
+          byId('decline-intents-state').textContent =
+            'Pending interview declines could not be verified. Load them again.';
+        }
+        throw error;
+      } finally {
+        if (generation === declineIntentsGeneration) {
+          declineIntentsInFlight = false;
+          byId('load-decline-intents').disabled = false;
+          byId('pending-decline-intents').setAttribute('aria-busy', 'false');
+        }
+      }
     }
     async function requestDecline() {
       if (declineInFlight) throw new Error('An interview decline is already being submitted.');
@@ -625,6 +730,11 @@ _HTML = r"""<!doctype html>
       }
     }
     byId('list-events').addEventListener('click', () => guarded(() => loadEvents(), true));
+    byId('load-decline-intents').addEventListener('click', () =>
+      guarded(() => loadDeclineIntents(), true));
+    byId('next-decline-intents').addEventListener('click', () => guarded(() => {
+      if (nextDeclineIntentCursor !== null) return loadDeclineIntents(nextDeclineIntentCursor);
+    }, true));
     byId('event-status').addEventListener('change', clearEvents);
     byId('next-events').addEventListener('click', () => guarded(() => {
       if (nextEventCursor !== null) return loadEvents(nextEventCursor);

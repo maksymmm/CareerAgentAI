@@ -51,9 +51,12 @@ class CandidateScheduleDeclineWSGIApp:
     """Expose a candidate-approved decline with durable idempotency and evidence."""
 
     PENDING_PATH = "/v1/candidate/schedule-event/decline-pending"
+    PENDING_COLLECTION_PATH = "/v1/candidate/schedule-event/decline-intents"
     DECLINE_PATH = "/v1/candidate/schedule-event/decline"
     RECONCILIATION_PATH = "/v1/candidate/schedule-event/decline-reconciliation"
-    ROUTES = frozenset({PENDING_PATH, DECLINE_PATH, RECONCILIATION_PATH})
+    ROUTES = frozenset({
+        PENDING_PATH, PENDING_COLLECTION_PATH, DECLINE_PATH, RECONCILIATION_PATH
+    })
     MAX_BODY_BYTES = 16_384
 
     def __init__(
@@ -79,7 +82,9 @@ class CandidateScheduleDeclineWSGIApp:
         path = environ.get("PATH_INFO")
         if path not in self.ROUTES:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-        required_method = "GET" if path == self.PENDING_PATH else "POST"
+        required_method = (
+            "GET" if path in {self.PENDING_PATH, self.PENDING_COLLECTION_PATH} else "POST"
+        )
         raw_method = environ.get("REQUEST_METHOD")
         if (
             not isinstance(raw_method, str)
@@ -129,6 +134,8 @@ class CandidateScheduleDeclineWSGIApp:
         try:
             if path == self.PENDING_PATH:
                 request = self._pending_request(environ)
+            elif path == self.PENDING_COLLECTION_PATH:
+                request = self._pending_collection_request(environ)
             else:
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
                 if media_type.strip().casefold() != "application/json":
@@ -150,6 +157,8 @@ class CandidateScheduleDeclineWSGIApp:
         try:
             if path == self.PENDING_PATH:
                 return self._pending(start_response, user_id, request)
+            if path == self.PENDING_COLLECTION_PATH:
+                return self._pending_page(start_response, user_id, request)
             if path == self.DECLINE_PATH:
                 return self._decline(start_response, user_id, request)
             return self._reconcile(start_response, user_id, request)
@@ -636,11 +645,11 @@ class CandidateScheduleDeclineWSGIApp:
             database.close()
 
     @classmethod
-    def _pending_operation_ids(cls, connection, user_id: str, event_id: str) -> tuple[str, ...]:
-        """Verify every ambiguous row's identity before filtering, with bounded indexed work."""
+    def _pending_operation_records(cls, connection) -> tuple[dict[str, Any], ...]:
+        """Validate the bounded ambiguous ledger before filtering by candidate or event."""
         rows = connection.execute(
             """
-            SELECT operation_id, payload_json
+            SELECT operation_id, payload_json, status
             FROM external_action_operations
             WHERE action_type = ?
               AND status IN (?, ?)
@@ -668,8 +677,8 @@ class CandidateScheduleDeclineWSGIApp:
         def reject_constant(_value):
             raise ValueError("Persisted operation payload contains a non-finite number.")
 
-        matches = []
-        for operation_id, payload_json in rows:
+        records = []
+        for operation_id, payload_json, status in rows:
             try:
                 payload = json.loads(
                     payload_json,
@@ -679,22 +688,18 @@ class CandidateScheduleDeclineWSGIApp:
                 if not isinstance(payload, dict):
                     raise ValueError("Persisted operation payload must be an object.")
                 raw_event_id = payload.get("event_id")
-                normalized_event_id = validate_schedule_identifier(
-                    raw_event_id, "event_id"
-                )
-                if normalized_event_id != raw_event_id:
+                event_id = validate_schedule_identifier(raw_event_id, "event_id")
+                if event_id != raw_event_id:
                     raise ValueError("Persisted operation event identity is not canonical.")
                 raw_candidate_id = payload.get("candidate_id")
-                candidate_id = validate_schedule_identifier(
-                    raw_candidate_id, "candidate_id"
-                )
+                candidate_id = validate_schedule_identifier(raw_candidate_id, "candidate_id")
                 if candidate_id != raw_candidate_id:
                     raise ValueError("Persisted operation candidate identity is not canonical.")
                 state_version = payload.get("event_version")
                 if type(state_version) is not int or not 1 <= state_version <= _MAX_STATE_VERSION:
                     raise ValueError("Persisted operation source version is invalid.")
                 expected_operation_id = cls._operation_id(
-                    candidate_id, normalized_event_id, state_version
+                    candidate_id, event_id, state_version
                 )
                 if operation_id != expected_operation_id:
                     raise ValueError("Persisted operation identity does not match its payload.")
@@ -702,17 +707,192 @@ class CandidateScheduleDeclineWSGIApp:
                 raise SchedulingOperationConflict(
                     "An ambiguous calendar operation has an unmatchable payload."
                 ) from exc
-            if normalized_event_id == event_id:
-                if candidate_id != user_id:
+            records.append({
+                "operation_id": operation_id,
+                "candidate_id": candidate_id,
+                "event_id": event_id,
+                "state_version": state_version,
+                "payload": payload,
+                "status": status,
+            })
+        return tuple(records)
+
+    @classmethod
+    def _pending_operation_ids(
+        cls, connection, user_id: str, event_id: str
+    ) -> tuple[str, ...]:
+        """Return the unique owner-bound ambiguous operation for one event."""
+        matches = tuple(
+            record for record in cls._pending_operation_records(connection)
+            if record["event_id"] == event_id
+        )
+        if any(record["candidate_id"] != user_id for record in matches):
+            raise SchedulingOperationConflict(
+                "An ambiguous decline has a conflicting candidate owner."
+            )
+        if len(matches) > 1:
+            raise SchedulingOperationConflict(
+                "More than one ambiguous decline is bound to this event."
+            )
+        return tuple(record["operation_id"] for record in matches)
+
+    def _pending_page(
+        self, start_response, user_id: str, request: Mapping[str, Any]
+    ) -> Iterable[bytes]:
+        """List bounded owner-scoped pending declines without provider I/O or writes."""
+        limit = request["limit"]
+        after = request["after"]
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            connection = database.connection
+            connection.execute("BEGIN")
+            operation_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'external_action_operations'"
+            ).fetchone()
+            if operation_table is None:
+                active = connection.execute(
+                    """
+                    SELECT 1 FROM scheduling_events
+                    WHERE candidate_id = ? AND active_action_operation_id IS NOT NULL
+                    LIMIT 1
+                    """,
+                    (user_id,),
+                ).fetchone()
+                if active is not None:
                     raise SchedulingOperationConflict(
-                        "An ambiguous decline has a conflicting candidate owner."
+                        "An owned scheduling event has an active action but its ledger is missing."
                     )
-                matches.append(operation_id)
-                if len(matches) > 1:
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"schema_version": 1, "items": [], "next_after": None},
+                )
+
+            records = self._pending_operation_records(connection)
+            owner_records: dict[str, dict[str, Any]] = {}
+            seen_event_ids: set[str] = set()
+            for record in records:
+                event_id = record["event_id"]
+                if event_id in seen_event_ids:
                     raise SchedulingOperationConflict(
-                        "More than one ambiguous decline is bound to this event."
+                        "More than one ambiguous decline is bound to an event."
                     )
-        return tuple(matches)
+                seen_event_ids.add(event_id)
+                event_owner = connection.execute(
+                    "SELECT candidate_id FROM scheduling_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if record["candidate_id"] == user_id:
+                    if event_owner is None or event_owner[0] != user_id:
+                        raise SchedulingOperationConflict(
+                            "An ambiguous decline does not reference an owned event."
+                        )
+                    owner_records[event_id] = record
+                elif event_owner is not None and event_owner[0] == user_id:
+                    raise SchedulingOperationConflict(
+                        "An owned event has an ambiguous decline with a conflicting owner."
+                    )
+
+            # Catch active pointers to missing or mismatched ambiguous decline rows.
+            active_rows = connection.execute(
+                """
+                SELECT e.event_id, e.active_action_operation_id
+                FROM scheduling_events AS e
+                LEFT JOIN external_action_operations AS o
+                  ON o.operation_id = e.active_action_operation_id
+                WHERE e.candidate_id = ?
+                  AND e.active_action_operation_id IS NOT NULL
+                  AND (
+                    o.operation_id IS NULL
+                    OR (
+                      o.action_type = ?
+                      AND o.status IN (?, ?)
+                    )
+                  )
+                LIMIT 1001
+                """,
+                (
+                    user_id,
+                    "calendar.decline",
+                    ExternalActionStatus.IN_PROGRESS.value,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                ),
+            ).fetchall()
+            if len(active_rows) > 1000:
+                raise SchedulingOperationConflict(
+                    "Too many active calendar actions to discover safely."
+                )
+            for event_id, active_operation_id in active_rows:
+                record = owner_records.get(event_id)
+                if record is None or record["operation_id"] != active_operation_id:
+                    raise SchedulingOperationConflict(
+                        "An owned event's active decline pointer does not match its durable intent."
+                    )
+
+            items = []
+            for event_id, record in sorted(owner_records.items()):
+                event_row = connection.execute(
+                    """
+                    SELECT event_id, candidate_id, employer_name, event_type, location,
+                           start_at, start_epoch_us, end_at, end_epoch_us, timezone_name,
+                           status, provider_event_id, application_id, version,
+                           created_at, updated_at, active_action_operation_id
+                    FROM scheduling_events
+                    WHERE event_id = ? AND candidate_id = ?
+                    """,
+                    (event_id, user_id),
+                ).fetchone()
+                if event_row is None:
+                    raise SchedulingOperationConflict(
+                        "An ambiguous decline references a missing owned event."
+                    )
+                has_pending = self._require_active_action_binding(
+                    connection,
+                    event_row[16],
+                    (record["operation_id"],),
+                    user_id,
+                    event_id,
+                    event_version=event_row[13],
+                    event_start_at=event_row[5],
+                    event_end_at=event_row[7],
+                    event_timezone_name=event_row[9],
+                    event_status=event_row[10],
+                )
+                if not has_pending:
+                    raise SchedulingOperationConflict(
+                        "An ambiguous decline was not bound to a recoverable event."
+                    )
+                event = SQLiteSchedulingRepository._event_from_row(event_row[:16])
+                self._require_event_matches_intent(
+                    event, record["payload"], record["state_version"]
+                )
+                items.append({
+                    "event": self._event_snapshot(event),
+                    "state_version": record["state_version"],
+                    "operation_status": record["status"],
+                })
+
+            remaining = [
+                item for item in items
+                if after is None or item["event"]["event_id"] > after
+            ]
+            page = remaining[:limit]
+            next_after = (
+                page[-1]["event"]["event_id"]
+                if len(remaining) > limit and page
+                else None
+            )
+            return self._respond(
+                start_response,
+                "200 OK",
+                {"schema_version": 1, "items": page, "next_after": next_after},
+            )
+        finally:
+            if database.connection.in_transaction:
+                database.connection.rollback()
+            database.close()
+
 
     def _pending(
         self, start_response, user_id: str, request: Mapping[str, str]
@@ -1005,6 +1185,43 @@ class CandidateScheduleDeclineWSGIApp:
         return value
 
     @classmethod
+    def _pending_collection_request(cls, environ: Mapping[str, Any]) -> dict[str, Any]:
+        query = environ.get("QUERY_STRING", "")
+        if (
+            not isinstance(query, str)
+            or len(query) > 1000
+            or re.search(r"%(?![0-9A-Fa-f]{2})", query)
+        ):
+            raise ValueError("Pending collection query is invalid.")
+        pairs = parse_qsl(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=2,
+            errors="strict",
+        )
+        values = dict(pairs)
+        if len(values) != len(pairs) or set(values) - {"limit", "after"}:
+            raise ValueError("Unknown or duplicate pending collection query parameter.")
+        raw_limit = values.get("limit", "25")
+        if (
+            not isinstance(raw_limit, str)
+            or not raw_limit.isascii()
+            or not raw_limit.isdecimal()
+            or len(raw_limit) > 3
+        ):
+            raise ValueError("limit must be a bounded decimal.")
+        limit = int(raw_limit)
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100.")
+        after = values.get("after")
+        if after is not None:
+            normalized = validate_schedule_identifier(after, "after")
+            if normalized != after:
+                raise ValueError("after must be canonical.")
+        return {"limit": limit, "after": after}
+
+    @classmethod
     def _pending_request(cls, environ: Mapping[str, Any]) -> dict[str, str]:
         query = environ.get("QUERY_STRING", "")
         if (
@@ -1200,6 +1417,58 @@ def candidate_schedule_decision_openapi_paths() -> dict[str, Any]:
                     **common,
                     "405": {"description": "Only POST is allowed"},
                     "415": {"description": "JSON is required"},
+                },
+            },
+        },
+        CandidateScheduleDeclineWSGIApp.PENDING_COLLECTION_PATH: {
+            "get": {
+                "operationId": "listPendingCandidateInterviewDeclines",
+                "security": security,
+                "parameters": [
+                    {"name": "limit", "in": "query", "schema": {
+                        "type": "integer", "minimum": 1, "maximum": 100, "default": 25
+                    }},
+                    {"name": "after", "in": "query", "description": "Exclusive event-ID cursor",
+                     "schema": {"type": "string", "minLength": 1, "maxLength": 200}},
+                ],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "Bounded owner-scoped ambiguous decline intents. Provider and "
+                            "operation identifiers are never returned."
+                        ),
+                        "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                        "content": content({
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["schema_version", "items", "next_after"],
+                            "properties": {
+                                "schema_version": {"const": 1},
+                                "items": {
+                                    "type": "array", "maxItems": 100,
+                                    "items": {
+                                        "type": "object", "additionalProperties": False,
+                                        "required": ["event", "state_version", "operation_status"],
+                                        "properties": {
+                                            "event": event_schema,
+                                            "state_version": {
+                                                "type": "integer", "minimum": 1,
+                                                "maximum": _MAX_STATE_VERSION
+                                            },
+                                            "operation_status": {
+                                                "enum": ["in_progress", "reconciliation_required"]
+                                            },
+                                        },
+                                    },
+                                },
+                                "next_after": {
+                                    "type": ["string", "null"], "minLength": 1, "maxLength": 200
+                                },
+                            },
+                        }),
+                    },
+                    **common,
+                    "405": {"description": "Only GET is allowed"},
                 },
             },
         },
