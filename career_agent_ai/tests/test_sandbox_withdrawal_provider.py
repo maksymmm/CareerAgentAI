@@ -371,3 +371,111 @@ def test_concurrent_same_intent_produces_one_effect_and_one_attempt(tmp_path):
     )
     assert verifier.ledger_entries()[0].replays == 1
     database.close()
+
+
+def test_withdrawal_evidence_requires_exact_application_and_submission_binding(tmp_path):
+    database, provider, submission_id = _provider(
+        tmp_path / "evidence-binding.sqlite", "application-bound"
+    )
+    provider.withdraw("withdraw:bound", "application-bound", submission_id)
+
+    evidence = provider.verify_withdrawal(
+        "withdraw:bound",
+        application_id="application-bound",
+        provider_submission_id=submission_id,
+    )
+    assert evidence.state is WithdrawalEvidenceState.PRESENT
+    assert evidence.application_id == "application-bound"
+    assert evidence.provider_submission_id == submission_id
+
+    with pytest.raises(
+        PreApplicationWithdrawalError,
+        match="not bound to the expected application submission",
+    ):
+        provider.verify_withdrawal(
+            "withdraw:bound",
+            application_id="different-application",
+            provider_submission_id=submission_id,
+        )
+    with pytest.raises(
+        PreApplicationWithdrawalError,
+        match="not bound to the expected application submission",
+    ):
+        provider.verify_withdrawal(
+            "withdraw:bound",
+            application_id="application-bound",
+            provider_submission_id="different-submission",
+        )
+    database.close()
+
+
+def test_confirmed_absence_is_scoped_to_the_persisted_withdrawal_intent(tmp_path):
+    plan = scripted_withdrawal_outcomes(
+        {"withdraw:absent-bound": (SandboxApplicationWithdrawalOutcome.NO_EFFECT,)}
+    )
+    database, provider, submission_id = _provider(
+        tmp_path / "absence-binding.sqlite", "application-absent-bound", plan
+    )
+    with pytest.raises(PreApplicationWithdrawalError, match="recorded no withdrawal effect"):
+        provider.withdraw(
+            "withdraw:absent-bound", "application-absent-bound", submission_id
+        )
+
+    evidence = provider.verify_withdrawal(
+        "withdraw:absent-bound",
+        application_id="application-absent-bound",
+        provider_submission_id=submission_id,
+    )
+    assert evidence.state is WithdrawalEvidenceState.ABSENT_CONFIRMED
+    with pytest.raises(
+        PreApplicationWithdrawalError,
+        match="not bound to the expected application submission",
+    ):
+        provider.verify_withdrawal(
+            "withdraw:absent-bound",
+            application_id="other-application",
+            provider_submission_id=submission_id,
+        )
+    database.close()
+
+
+@pytest.mark.parametrize(
+    ("application_id", "provider_submission_id"),
+    [
+        ("application-only", None),
+        (None, "submission-only"),
+    ],
+)
+def test_withdrawal_evidence_rejects_partial_expected_identity(
+    tmp_path, application_id, provider_submission_id
+):
+    database, provider, _ = _provider(tmp_path / "partial-identity.sqlite")
+    with pytest.raises(ValueError, match="must be supplied together"):
+        provider.verify_withdrawal(
+            "withdraw:partial",
+            application_id=application_id,
+            provider_submission_id=provider_submission_id,
+        )
+    assert not database.connection.in_transaction
+    database.close()
+
+
+def test_withdrawal_evidence_rejects_corrupt_effect_intent_binding(tmp_path):
+    database, provider, submission_id = _provider(
+        tmp_path / "corrupt-binding.sqlite", "application-corrupt"
+    )
+    provider.withdraw("withdraw:corrupt", "application-corrupt", submission_id)
+    database.connection.execute(
+        "UPDATE sandbox_application_withdrawal_intents "
+        "SET provider_submission_id = ? WHERE operation_id = ?",
+        ("tampered-submission", "withdraw:corrupt"),
+    )
+    database.connection.commit()
+
+    with pytest.raises(
+        PreApplicationWithdrawalError,
+        match="effect does not match its durable intent",
+    ):
+        provider.verify_withdrawal("withdraw:corrupt")
+    assert not database.connection.in_transaction
+    database.close()
