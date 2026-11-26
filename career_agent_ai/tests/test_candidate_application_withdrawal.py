@@ -131,7 +131,7 @@ def test_withdrawal_service_persists_candidate_decision_and_preserves_submission
         JobApplicationStatus.APPLIED,
         JobApplicationStatus.WITHDRAWN,
     ]
-    assert "no employer notification was sent" in restored.timeline[-1].note
+    assert "no withdrawal notice was sent" in restored.timeline[-1].note
     assert restored_repository.find(ApplicationQuery(
         user_id="candidate-1",
         external_action_operation_id="submission-operation-1",
@@ -414,7 +414,7 @@ def test_candidate_browser_records_tracker_withdrawal_without_employer_action():
             page.locator("#withdraw-application").click()
             page.wait_for_function(
                 "document.querySelector('#application-detail-state').textContent.includes("
-                "'No employer notification was sent.')"
+                "'No withdrawal notice was sent.')"
             )
             assert '"status": "withdrawn"' in page.locator("#application-detail").inner_text()
             assert '"state_version": 3' in page.locator("#application-detail").inner_text()
