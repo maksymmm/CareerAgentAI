@@ -450,6 +450,8 @@ _HTML = r"""<!doctype html>
       confirmation.disabled = !eligible || employerWithdrawalInFlight;
       byId('withdraw-employer-application').disabled =
         !eligible || !confirmation.checked || employerWithdrawalInFlight;
+      byId('load-application-history').disabled =
+        selectedApplicationId === null || employerWithdrawalInFlight;
       if (selectedApplicationId === null) {
         byId('employer-withdrawal-state').textContent = '';
       } else if (employerWithdrawalConfirmed && selectedApplicationStatus === 'withdrawn') {
@@ -563,6 +565,13 @@ _HTML = r"""<!doctype html>
                 Date.parse(item.occurred_at) >= Date.parse(history.items[index - 1].occurred_at))))) {
           throw new Error('Invalid application history.');
         }
+        if (history.state_version > selectedApplicationVersion) {
+          // A candidate confirmation is bound to the exact version they saw.
+          // A newer history snapshot must not reuse a checkbox decision from the
+          // older version, even when the resulting status is still withdrawable.
+          byId('confirm-employer-withdrawal').checked = false;
+          employerWithdrawalConfirmed = false;
+        }
         selectedApplicationVersion = history.state_version;
         applicationVersionFloorId = applicationId;
         applicationVersionFloor = history.state_version;
@@ -631,6 +640,7 @@ _HTML = r"""<!doctype html>
       employerWithdrawalInFlight = true;
       confirmation.disabled = true;
       byId('withdraw-employer-application').disabled = true;
+      byId('load-application-history').disabled = true;
       byId('employer-withdrawal-state').textContent =
         'Waiting for the explicitly approved sandbox provider result…';
       try {
