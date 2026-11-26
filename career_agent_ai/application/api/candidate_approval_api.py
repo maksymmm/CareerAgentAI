@@ -55,6 +55,8 @@ class CandidateApprovalLoop(Protocol):
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def decline_schedule_event(self, event_id: str, *, user_id: str, expected_state_version: int) -> dict[str, Any]: ...
+    def resolve_schedule_event_decline(self, event_id: str, *, user_id: str, expected_state_version: int, completed: bool) -> dict[str, Any]: ...
     def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None,
                              status: ScheduleStatus | None = None) -> dict[str, Any]: ...
     def list_interview_intents(self, *, user_id: str, limit: int = 25,
@@ -147,6 +149,8 @@ class CandidateApprovalWSGIApp:
         is_history = parts == ["v1", "candidate", "application", "history"]
         is_application = parts == ["v1", "candidate", "application"] or is_history
         is_schedule = parts == ["v1", "candidate", "schedule-event"]
+        is_schedule_decline = parts == ["v1", "candidate", "schedule-event", "decline"]
+        is_schedule_decline_reconciliation = parts == ["v1", "candidate", "schedule-event", "decline-reconciliation"]
         is_schedule_list = parts == ["v1", "candidate", "schedule-events"]
         is_interview_intents = parts == ["v1", "candidate", "interview-intents"]
         is_list = (parts == ["v1", "candidate", "run-statuses"] or is_applications
@@ -157,7 +161,7 @@ class CandidateApprovalWSGIApp:
             and parts[4] in {"approval", "continue", "status", "application-reconciliation",
                              "message-reconciliation", "interview-reconciliation"}
         )
-        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
+        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule and not is_schedule_decline and not is_schedule_decline_reconciliation:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -187,6 +191,47 @@ class CandidateApprovalWSGIApp:
                     {"error": "invalid_request", "message": str(exc)[:500]},
                 )
         try:
+            if is_schedule_decline or is_schedule_decline_reconciliation:
+                if method != "POST":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    if is_schedule_decline:
+                        event_id, state_version = self._schedule_decline_request(payload)
+                        result = self._loop.decline_schedule_event(
+                            event_id, user_id=user_id,
+                            expected_state_version=state_version,
+                        )
+                        status = (
+                            "202 Accepted"
+                            if result["provider_status"] == "reconciliation_required"
+                            else "200 OK"
+                        )
+                    else:
+                        event_id, state_version, completed = (
+                            self._schedule_decline_reconciliation_request(payload)
+                        )
+                        result = self._loop.resolve_schedule_event_decline(
+                            event_id, user_id=user_id,
+                            expected_state_version=state_version,
+                            completed=completed,
+                        )
+                        status = "200 OK"
+                except (TypeError, ValueError, InvalidOperation) as exc:
+                    return self._respond(
+                        start_response, "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                return self._respond(start_response, status, result)
             if is_application or is_schedule:
                 if method != "GET":
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
@@ -615,6 +660,65 @@ class CandidateApprovalWSGIApp:
         if type(delivered) is not bool:
             raise ValueError("delivered must be a boolean.")
         return delivered, normalized_state_version
+
+    @staticmethod
+    def _schedule_decline_request(payload: Mapping[str, Any]) -> tuple[str, int]:
+        """Validate one explicit candidate-approved schedule decline."""
+        if set(payload) != {
+            "schema_version", "event_id", "state_version", "confirm_decline"
+        }:
+            raise ValueError("schedule decline body has unknown or missing fields.")
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
+            raise ValueError("schema_version must equal 1.")
+        if payload["confirm_decline"] is not True:
+            raise ValueError("confirm_decline must be true.")
+        event_id = payload["event_id"]
+        if not isinstance(event_id, str):
+            raise ValueError("event_id must be text.")
+        normalized_event_id = validate_schedule_identifier(event_id, "event_id")
+        if normalized_event_id != event_id:
+            raise ValueError("event_id must be canonical.")
+        state_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["state_version"]
+        )
+        if state_version < 1:
+            raise ValueError("state_version must be positive.")
+        return event_id, state_version
+
+    @staticmethod
+    def _schedule_decline_reconciliation_request(
+        payload: Mapping[str, Any],
+    ) -> tuple[str, int, bool]:
+        """Validate explicit evidence attestation for an ambiguous sandbox decline."""
+        if set(payload) != {
+            "schema_version", "event_id", "state_version",
+            "completed", "confirm_reconciliation",
+        }:
+            raise ValueError("schedule reconciliation body has unknown or missing fields.")
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
+            raise ValueError("schema_version must equal 1.")
+        if payload["confirm_reconciliation"] is not True:
+            raise ValueError("confirm_reconciliation must be true.")
+        if type(payload["completed"]) is not bool:
+            raise ValueError("completed must be a boolean.")
+        event_id = payload["event_id"]
+        if not isinstance(event_id, str):
+            raise ValueError("event_id must be text.")
+        normalized_event_id = validate_schedule_identifier(event_id, "event_id")
+        if normalized_event_id != event_id:
+            raise ValueError("event_id must be canonical.")
+        state_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["state_version"]
+        )
+        if state_version < 1:
+            raise ValueError("state_version must be positive.")
+        return event_id, state_version, payload["completed"]
 
     @staticmethod
     def _interview_reconciliation(
@@ -1465,4 +1569,64 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             }
         }
     }}
+    decline_result_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["schema_version", "event_id", "status", "state_version", "provider_status"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "event_id": event_properties["event_id"],
+            "status": {"enum": ["proposed", "reschedule_requested", "declined"]},
+            "state_version": {"type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION},
+            "provider_status": {"enum": ["confirmed", "reconciliation_required", "no_effect_confirmed"]},
+        },
+    }
+    document["paths"]["/v1/candidate/schedule-event/decline"] = {
+        "post": {
+            "operationId": "declineCandidateScheduleEvent",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {"required": True, "content": content({
+                "type": "object", "additionalProperties": False,
+                "required": ["schema_version", "event_id", "state_version", "confirm_decline"],
+                "properties": {
+                    "schema_version": {"const": 1},
+                    "event_id": event_properties["event_id"],
+                    "state_version": {"type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION},
+                    "confirm_decline": {"const": True},
+                },
+            })},
+            "responses": {
+                "200": {"description": "Sandbox provider confirmed the decline", "content": content(decline_result_schema)},
+                "202": {"description": "Provider effect is ambiguous; explicit evidence reconciliation is required", "content": content(decline_result_schema)},
+                **common_responses,
+                "409": {"description": "The displayed event version is stale or evidence conflicts", "content": content(error_schema)},
+                "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                "415": {"description": "Request body is not application/json", "content": content(error_schema)},
+            },
+        },
+    }
+    document["paths"]["/v1/candidate/schedule-event/decline-reconciliation"] = {
+        "post": {
+            "operationId": "reconcileCandidateScheduleEventDecline",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {"required": True, "content": content({
+                "type": "object", "additionalProperties": False,
+                "required": ["schema_version", "event_id", "state_version", "completed", "confirm_reconciliation"],
+                "properties": {
+                    "schema_version": {"const": 1},
+                    "event_id": event_properties["event_id"],
+                    "state_version": {"type": "integer", "minimum": 1, "maximum": MAX_SQLITE_STATE_VERSION},
+                    "completed": {"type": "boolean"},
+                    "confirm_reconciliation": {"const": True},
+                },
+            })},
+            "responses": {
+                "200": {"description": "Sandbox provider evidence reconciled without a blind retry", "content": content(decline_result_schema)},
+                **common_responses,
+                "409": {"description": "Provider evidence is inconclusive, mismatched, or stale", "content": content(error_schema)},
+                "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                "415": {"description": "Request body is not application/json", "content": content(error_schema)},
+            },
+        },
+    }
     return document
