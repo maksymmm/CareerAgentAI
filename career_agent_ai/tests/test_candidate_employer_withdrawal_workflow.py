@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO
+from threading import Barrier
 import sqlite3
 import json
 
@@ -421,4 +423,66 @@ def test_retry_fails_closed_when_durable_withdrawal_intent_is_rebound(tmp_path):
     assert effects == ()
     assert operation.status is ExternalActionStatus.FAILED
     assert application.status is JobApplicationStatus.APPLIED
+    app.close()
+
+
+def test_recent_in_progress_withdrawal_is_not_reclassified_or_retried(tmp_path):
+    path = tmp_path / "candidate-withdrawal-live-operation.sqlite"
+    provider_submission_id = _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    database = SQLiteDatabase(str(path))
+    operations = SQLiteExternalActionOperationRepository(database)
+    operations.create(
+        ExternalActionOperation(
+            operation_id=operation_id,
+            action_type="application.withdraw",
+            payload={
+                "application_id": APPLICATION_ID,
+                "provider_submission_id": provider_submission_id,
+            },
+        )
+    )
+    operations.transition(
+        operation_id,
+        ExternalActionStatus.PREPARED,
+        ExternalActionStatus.IN_PROGRESS,
+    )
+    database.close()
+
+    app = _app(path)
+    status, _, body = _request(app, _body())
+    assert status == "409 Conflict"
+    assert body == {"error": "approval_conflict"}
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == () and effects == ()
+    assert operation.status is ExternalActionStatus.IN_PROGRESS
+    assert application.status is JobApplicationStatus.APPLIED
+    app.close()
+
+
+def test_concurrent_duplicate_candidate_approvals_create_one_provider_effect(tmp_path):
+    path = tmp_path / "candidate-withdrawal-concurrent.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    app = _app(path)
+    barrier = Barrier(2)
+
+    def invoke():
+        barrier.wait()
+        return _request(app, _body())
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: invoke(), range(2)))
+
+    statuses = sorted(result[0] for result in results)
+    assert statuses == ["200 OK", "409 Conflict"]
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == (SandboxApplicationWithdrawalOutcome.SUCCESS,)
+    assert len(effects) == 1 and effects[0].replays == 0
+    assert operation.status is ExternalActionStatus.SUCCEEDED
+    assert application.status is JobApplicationStatus.WITHDRAWN
     app.close()
