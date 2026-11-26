@@ -1623,3 +1623,39 @@ present evidence binding, no-effect absence binding, partial-identity rejection,
 corrupt-ledger rejection. Next: wire the adapter through a separately approved,
 owner/version-fenced candidate workflow with durable external-action status; retain the
 tracker-only withdrawal semantics until that workflow is independently reviewed.
+
+## Candidate-approved sandbox application withdrawal
+
+Delivered a separate authenticated `POST /v1/candidate/application/withdraw-employer`
+workflow. It requires an exact schema-versioned body, explicit
+`confirm_employer_withdrawal: true`, and the current application state version.
+The provider submission ID is never accepted from the client: the runtime resolves
+it from the candidate-owned application's linked, successful
+`application.submit` external-action record.
+
+The service derives one stable owner/application withdrawal operation ID, persists
+an `application.withdraw` external-action intent, and invokes only
+`SQLiteSandboxApplicationWithdrawalProvider`. Reconciliation supplies both expected
+application and provider-submission identities; the provider verifies them against
+the immutable intent and effect under its SQLite writer lock. The application
+transitions to `WITHDRAWN` only after matching provider evidence is confirmed and
+the repository state-version update succeeds.
+
+A definite `NO_EFFECT` remains failed until a second explicit candidate request;
+that request verifies the exact intent identity before reopening the same operation.
+Interrupted and timeout outcomes are reconciled from the durable provider ledger.
+Recent `IN_PROGRESS` operations are protected by a five-minute grace period, and
+provider evidence contention, rebinding, or mismatch fails closed. Owner filtering
+happens before private application children are decoded.
+
+Regression coverage exercises the authenticated runtime route, one-effect success,
+explicit no-effect retry, timeout-after-effect reconciliation, idempotent replay,
+foreign-owner isolation with corrupted private child data, missing prior submission,
+stale versions, strict body validation, and a rebound-intent retry. This is a
+SQLite sandbox simulation only; it does not contact an employer or claim a
+real-world withdrawal.
+
+Next: add the candidate dashboard's separate employer-withdrawal confirmation and
+status presentation, preserving the existing tracker-only withdrawal as a distinct
+action. Then verify browser restart/reload behavior against the same durable
+operation and provider evidence.
