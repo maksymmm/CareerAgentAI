@@ -1590,3 +1590,20 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate message no-effect retry across runtime restart:
+
+The candidate runtime now has an end-to-end regression for a communication provider
+that explicitly confirms no delivery on its first attempt. The approved message remains
+in the same durable `MESSAGE_SEND` phase with a failed external-action operation and
+no delivery row. After closing and reopening the runtime over the same SQLite file,
+authenticated `/continue` reopens that failed operation only after the provider's
+absence evidence, then succeeds on attempt two. The run reaches the next
+`INTERVIEW_APPROVAL` gate. Assertions prove the already-successful application
+submission is not replayed, the same message operation is retried, exactly one
+outbound delivery is recorded, and both provider replay counters remain zero.
+
+All outcomes are deterministic SQLite sandbox results; no real message is sent.
+
+Next: add equivalent candidate-runtime coverage for a confirmed no-effect calendar
+response, then reconcile the full-provider recovery PR with this independent retry path.
