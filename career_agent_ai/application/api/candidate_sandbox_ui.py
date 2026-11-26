@@ -381,7 +381,7 @@ _HTML = r"""<!doctype html>
           encodeURIComponent(identifier), {}, 'Pending reschedule recovery failed.', true);
         if (generation !== eventDetailGeneration) return;
         if (!pending || pending.schema_version !== 1 || pending.event_id !== identifier ||
-            !['none', 'pending'].includes(pending.outcome)) {
+            !['none', 'pending', 'running'].includes(pending.outcome)) {
           throw new Error('Invalid pending reschedule snapshot.');
         }
         selectedEventId = identifier;
@@ -398,6 +398,24 @@ _HTML = r"""<!doctype html>
         byId('reschedule-end').disabled = false;
         byId('reschedule-timezone').disabled = false;
         byId('request-reschedule').textContent = 'Confirm sandbox reschedule';
+        if (pending.outcome === 'running') {
+          pendingReschedule = null;
+          byId('reschedule-panel').disabled = true;
+          byId('reschedule-start').disabled = true;
+          byId('reschedule-end').disabled = true;
+          byId('reschedule-timezone').disabled = true;
+          byId('request-reschedule').disabled = true;
+          byId('reschedule-reconciliation-panel').disabled = true;
+          byId('reschedule-reconciliation-verified').checked = false;
+          byId('reschedule-reconciliation-verified').disabled = true;
+          byId('confirm-reschedule-completed').disabled = true;
+          byId('confirm-reschedule-no-effect').disabled = true;
+          byId('reschedule-state').textContent =
+            'A reschedule request is still running. Reload event detail after it finishes.';
+          byId('reschedule-reconciliation-state').textContent =
+            'The provider action is active; reconciliation is not available yet.';
+          return;
+        }
         if (pending.outcome === 'pending') {
           const validInstant = value => typeof value === 'string' &&
             /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
@@ -1581,6 +1599,23 @@ _HTML = r"""<!doctype html>
           byId('reschedule-reconciliation-state').textContent =
             'Provider outcome is uncertain. Independently inspect the sandbox evidence before confirming either outcome.';
           byId('reschedule-state').textContent = 'No retry is permitted until reconciliation finishes.';
+          return;
+        }
+        if (result.outcome === 'running') {
+          if (result.event_id !== request.event_id) {
+            throw new Error('Running reschedule response is not bound to the selected event.');
+          }
+          pendingReschedule = null;
+          byId('reschedule-panel').disabled = true;
+          byId('reschedule-reconciliation-panel').disabled = true;
+          byId('reschedule-reconciliation-verified').checked = false;
+          byId('reschedule-reconciliation-verified').disabled = true;
+          byId('confirm-reschedule-completed').disabled = true;
+          byId('confirm-reschedule-no-effect').disabled = true;
+          byId('reschedule-state').textContent =
+            'Another request is still processing this event. Reload event detail after it finishes.';
+          byId('reschedule-reconciliation-state').textContent =
+            'The provider action is active; do not attest or retry while it is running.';
           return;
         }
         if (!['completed', 'no_effect'].includes(result.outcome) || !result.event) {

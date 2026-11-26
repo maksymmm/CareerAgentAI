@@ -37,6 +37,12 @@ from career_agent_ai.application.scheduling.scheduling_repository import (
     SchedulingOperationConflict,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.storage.sqlite_candidate_schedule_execution_lease import (
+    SQLiteCandidateScheduleExecutionLease,
+    SQLiteCandidateScheduleExecutionLeaseRepository,
+    candidate_schedule_execution_lease_database_path,
+    ensure_private_candidate_schedule_lease_database,
+)
 from career_agent_ai.application.storage.sqlite_external_action_repository import (
     SQLiteExternalActionOperationRepository,
 )
@@ -301,6 +307,14 @@ class CandidateScheduleActionWSGIApp:
             ).fetchone()
             if event_row is None:
                 raise KeyError("not_found")
+            if SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event_path(
+                candidate_schedule_execution_lease_database_path(self._database_path), event_id
+            ):
+                return self._respond(
+                    start_response,
+                    "202 Accepted",
+                    {"schema_version": 1, "outcome": "running", "event_id": event_id},
+                )
             operation_table = read_database.connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' "
                 "AND name = 'external_action_operations'"
@@ -315,6 +329,14 @@ class CandidateScheduleActionWSGIApp:
                 read_database.connection, event_id
             )
             if not pending_ids:
+                if SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event_path(
+                    candidate_schedule_execution_lease_database_path(self._database_path), event_id
+                ):
+                    return self._respond(
+                        start_response,
+                        "202 Accepted",
+                        {"schema_version": 1, "outcome": "running", "event_id": event_id},
+                    )
                 return self._respond(
                     start_response,
                     "200 OK",
@@ -328,6 +350,14 @@ class CandidateScheduleActionWSGIApp:
             event = repository.get(event_id)
             if event is None or event.candidate_id != user_id:
                 raise KeyError("not_found")
+            if SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event_path(
+                candidate_schedule_execution_lease_database_path(self._database_path), event_id
+            ):
+                return self._respond(
+                    start_response,
+                    "202 Accepted",
+                    {"schema_version": 1, "outcome": "running", "event_id": event_id},
+                )
             pending_ids = self._pending_operation_ids(database.connection, event_id)
             pending = tuple(operations.get(operation_id) for operation_id in pending_ids)
             if any(operation is None for operation in pending):
@@ -440,58 +470,78 @@ class CandidateScheduleActionWSGIApp:
                     start_response, "409 Conflict", {"error": "approval_conflict"}
                 )
 
-            service.reschedule(
-                operation_id,
-                event_id,
-                start_at=start_at,
-                end_at=end_at,
-                timezone_name=timezone_name,
-                human_approved=True,
+            lease_database_path = candidate_schedule_execution_lease_database_path(
+                self._database_path
             )
-            operation = service.get_operation(operation_id)
-            if operation is None:
-                raise RuntimeError("Reschedule intent was not persisted.")
-            if operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED:
-                return self._respond(
-                    start_response,
-                    "202 Accepted",
-                    {
-                        "schema_version": 1,
-                        "outcome": "reconciliation_required",
-                        "event_id": event_id,
-                        "state_version": state_version,
-                    },
+            ensure_private_candidate_schedule_lease_database(lease_database_path)
+            lease_database = SQLiteDatabase(lease_database_path)
+            try:
+                lease = SQLiteCandidateScheduleExecutionLease(
+                    lease_database, lease_database_path, operation_id, event_id
                 )
-            if operation.status == ExternalActionStatus.FAILED:
-                return self._respond(
-                    start_response,
-                    "200 OK",
-                    {
-                        "schema_version": 1,
-                        "outcome": "no_effect",
-                        "event": self._event_snapshot(repository.get(event_id)),
-                    },
-                )
-            if operation.status != ExternalActionStatus.SUCCEEDED:
-                return self._respond(
-                    start_response,
-                    "202 Accepted",
-                    {
-                        "schema_version": 1,
-                        "outcome": "reconciliation_required",
-                        "event_id": event_id,
-                        "state_version": state_version,
-                    },
-                )
-            return self._respond(
-                start_response,
-                "200 OK",
-                {
-                    "schema_version": 1,
-                    "outcome": "completed",
-                    "event": self._event_snapshot(repository.get(event_id)),
-                },
-            )
+                if not lease.acquire():
+                    return self._respond(
+                        start_response,
+                        "202 Accepted",
+                        {"schema_version": 1, "outcome": "running", "event_id": event_id},
+                    )
+                try:
+                    service.reschedule(
+                        operation_id,
+                        event_id,
+                        start_at=start_at,
+                        end_at=end_at,
+                        timezone_name=timezone_name,
+                        human_approved=True,
+                    )
+                    operation = service.get_operation(operation_id)
+                    if operation is None:
+                        raise RuntimeError("Reschedule intent was not persisted.")
+                    if operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED:
+                        return self._respond(
+                            start_response,
+                            "202 Accepted",
+                            {
+                                "schema_version": 1,
+                                "outcome": "reconciliation_required",
+                                "event_id": event_id,
+                                "state_version": state_version,
+                            },
+                        )
+                    if operation.status == ExternalActionStatus.FAILED:
+                        return self._respond(
+                            start_response,
+                            "200 OK",
+                            {
+                                "schema_version": 1,
+                                "outcome": "no_effect",
+                                "event": self._event_snapshot(repository.get(event_id)),
+                            },
+                        )
+                    if operation.status != ExternalActionStatus.SUCCEEDED:
+                        return self._respond(
+                            start_response,
+                            "202 Accepted",
+                            {
+                                "schema_version": 1,
+                                "outcome": "reconciliation_required",
+                                "event_id": event_id,
+                                "state_version": state_version,
+                            },
+                        )
+                    return self._respond(
+                        start_response,
+                        "200 OK",
+                        {
+                            "schema_version": 1,
+                            "outcome": "completed",
+                            "event": self._event_snapshot(repository.get(event_id)),
+                        },
+                    )
+                finally:
+                    lease.release()
+            finally:
+                lease_database.close()
         finally:
             database.close()
 
