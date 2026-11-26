@@ -57,6 +57,8 @@ class CandidateApprovalLoop(Protocol):
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None,
                              status: ScheduleStatus | None = None) -> dict[str, Any]: ...
+    def list_interview_intents(self, *, user_id: str, limit: int = 25,
+                               after: str | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
     def resolve_application_reconciliation(
@@ -146,7 +148,9 @@ class CandidateApprovalWSGIApp:
         is_application = parts == ["v1", "candidate", "application"] or is_history
         is_schedule = parts == ["v1", "candidate", "schedule-event"]
         is_schedule_list = parts == ["v1", "candidate", "schedule-events"]
-        is_list = parts == ["v1", "candidate", "run-statuses"] or is_applications or is_schedule_list
+        is_interview_intents = parts == ["v1", "candidate", "interview-intents"]
+        is_list = (parts == ["v1", "candidate", "run-statuses"] or is_applications
+                   or is_schedule_list or is_interview_intents)
         is_existing_run = (
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
@@ -215,14 +219,17 @@ class CandidateApprovalWSGIApp:
                     # 200 scalars * 4 UTF-8 bytes * 3 escape characters + overhead.
                     if len(query) > (2500 if is_applications else 1000):
                         raise ValueError("query too long")
-                    if is_schedule_list and re.search(r"%(?![0-9A-Fa-f]{2})", query):
+                    if (is_schedule_list or is_interview_intents) and re.search(r"%(?![0-9A-Fa-f]{2})", query):
                         raise ValueError("invalid escape")
                     pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True,
                                       max_num_fields=3,
                                       errors="strict")
                     values = dict(pairs)
-                    allowed = ({"limit", "after", "status"} if (is_applications or is_schedule_list)
-                               else {"limit", "after", "phase"})
+                    allowed = (
+                        {"limit", "after", "status"} if (is_applications or is_schedule_list)
+                        else {"limit", "after"} if is_interview_intents
+                        else {"limit", "after", "phase"}
+                    )
                     if len(values) != len(pairs) or set(values) - allowed:
                         raise ValueError("unknown or duplicate query parameter")
                     raw_limit = values.get("limit", "25")
@@ -254,6 +261,8 @@ class CandidateApprovalWSGIApp:
                     return self._respond(start_response, "400 Bad Request", {"error": "invalid_request"})
                 if is_schedule_list:
                     collection = self._loop.list_schedule_events
+                elif is_interview_intents:
+                    collection = self._loop.list_interview_intents
                 else:
                     collection = self._loop.list_applications if is_applications else self._loop.list_run_statuses
                 arguments = {"user_id": user_id, "limit": limit, "after": after}
@@ -1389,4 +1398,71 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             "type": "object", "additionalProperties": False,
                             "required": list(event_properties), "properties": event_properties}},
                         "next_after": {**event_properties["event_id"], "type": ["string", "null"]}}})}}}}
+    document["paths"]["/v1/candidate/interview-intents"] = {"get": {
+        "operationId": "listCandidateInterviewIntents",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+            {"name": "limit", "in": "query",
+             "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+            {"name": "after", "in": "query",
+             "description": "Exclusive owner-scoped run-ID cursor; not an ownership credential",
+             "schema": {"type": "string", "minLength": 1, "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"}},
+        ],
+        "responses": {
+            **common_responses,
+            "405": {"description": "Only GET is allowed", "content": content(error_schema)},
+            "200": {
+                "description": (
+                    "Bounded owner-scoped pending interview actions. Internal operation IDs "
+                    "and provider event IDs are never returned."
+                ),
+                "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                "content": content({
+                    "type": "object",
+                    "required": ["schema_version", "items", "next_after"],
+                    "properties": {
+                        "schema_version": {"const": 1},
+                        "items": {
+                            "type": "array",
+                            "maxItems": 100,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": [
+                                    "run_id", "state_version", "action_type",
+                                    "operation_status", "event"
+                                ],
+                                "properties": {
+                                    "run_id": {
+                                        "type": "string", "minLength": 1, "maxLength": 200,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"
+                                    },
+                                    "state_version": {
+                                        "type": "integer", "minimum": 1,
+                                        "maximum": MAX_SQLITE_STATE_VERSION
+                                    },
+                                    "action_type": {"const": "calendar.accept"},
+                                    "operation_status": {"const": "reconciliation_required"},
+                                    "event": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": list(event_properties),
+                                        "properties": event_properties
+                                    }
+                                }
+                            }
+                        },
+                        "next_after": {
+                            "type": ["string", "null"],
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"
+                        }
+                    },
+                    "additionalProperties": False
+                })
+            }
+        }
+    }}
     return document

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
+from career_agent_ai.application.storage.sqlite_candidate_interview_intents import SQLiteCandidateInterviewIntents
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 
@@ -227,6 +228,14 @@ class RuntimeCandidateApp:
         return SQLiteCandidateSchedule(self._database_path).list_page(
             user_id=user_id, limit=limit, after=after, status=status)
 
+    def list_interview_intents(self, *, user_id: str, limit: int = 25,
+                               after: str | None = None) -> dict[str, Any]:
+        """Discover owned pending interview actions through read-only storage."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return SQLiteCandidateInterviewIntents(self._database_path).list_page(
+            user_id=user_id, limit=limit, after=after)
+
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""
         if self._closed:
@@ -250,6 +259,12 @@ class _RequestCandidateLoop:
         self._database_path = database_path
         self._jobs = jobs
         self._outcome_plan = outcome_plan
+
+    def list_interview_intents(self, *, user_id: str, limit: int = 25,
+                               after: str | None = None) -> dict[str, Any]:
+        """Discover owned pending interview actions through request-local read-only storage."""
+        return SQLiteCandidateInterviewIntents(self._database_path).list_page(
+            user_id=user_id, limit=limit, after=after)
 
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's event without writable storage or calendar I/O."""
