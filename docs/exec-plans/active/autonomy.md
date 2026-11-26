@@ -1603,3 +1603,7 @@ used.
 Next: verify exact-head CI coverage and Codex review; then extend the same candidate
 action contract to explicit interview decline without weakening the provider evidence
 and human-approval boundaries.
+
+
+Candidate reschedule intent discovery API: authenticated GET /v1/candidate/schedule-event/reschedule-intents now provides bounded owner-scoped keyset discovery for ambiguous calendar.reschedule operations. The SQLite read-only query joins through the authenticated event owner before full payload validation, caps the ambiguous scan at 1,000 rows, validates deterministic operation identity and either the exact source snapshot or the exact locally applied target at source version + 1, and rejects duplicate payload members, non-finite values, stale snapshots, inconsistent event pointers, and duplicate intents. Active sidecar leases are surfaced as running without promotion; stranded IN_PROGRESS rows remain discoverable for the existing per-event recovery route. The response omits candidate, application, provider, operation, and lease identifiers. Regressions cover owner isolation, hidden fields, read-only behavior, keyset pagination, strict query parsing, malformed payloads, live leases, the composite-index query plan, and OpenAPI. ADR 0033 records the contract.
+Next: integrate the collection into the candidate browser dashboard, then reload the selected event and existing per-event pending endpoint before enabling fresh independent provider attestation.
