@@ -462,9 +462,13 @@ def test_withdrawal_uses_monotonic_timestamp_and_rejects_naive_clock(tmp_path):
     assert result["updated_at"] == latest.isoformat()
     assert repository.get("application-1").timeline[-1].occurred_at == latest
 
-    second = _application("application-2").transition(
-        JobApplicationStatus.APPLIED, occurred_at=latest
-    )
+    second = JobApplication(
+        application_id="application-2", user_id="candidate-1", job_id="job-2",
+        company_id="Sandbox GmbH", job_title="Platform Engineer",
+        status=JobApplicationStatus.SAVED,
+        created_at=latest - timedelta(seconds=1),
+        updated_at=latest - timedelta(seconds=1),
+    ).transition(JobApplicationStatus.APPLIED, occurred_at=latest)
     repository.add(second)
     invalid_clock = CandidateApplicationWithdrawalService(
         repository, clock=lambda: datetime(2026, 1, 1)
