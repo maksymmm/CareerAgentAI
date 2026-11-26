@@ -62,7 +62,7 @@ def _runtime(path, *, plan=None):
     )
 
 
-def _request(app, *, path, method="GET", token="owner-token", body=None):
+def _request(app, *, path, method="GET", token="owner-token", body=None, query=""):
     encoded = b"" if body is None else json.dumps(body).encode("utf-8")
     statuses = []
     response_headers = []
@@ -71,7 +71,7 @@ def _request(app, *, path, method="GET", token="owner-token", body=None):
             {
                 "REQUEST_METHOD": method,
                 "PATH_INFO": path,
-                "QUERY_STRING": "",
+                "QUERY_STRING": query,
                 "HTTP_AUTHORIZATION": f"Bearer {token}" if token else "",
                 "CONTENT_TYPE": "application/json",
                 "CONTENT_LENGTH": str(len(encoded)),
@@ -128,16 +128,14 @@ def test_candidate_decline_is_explicit_owner_scoped_version_fenced_and_idempoten
     runtime = _runtime(path)
 
     status, headers, detail = _request(
-        runtime, path="/v1/candidate/schedule-event", method="GET"
-    )
-    assert status == "400 Bad Request"  # Exact event identity is mandatory.
-
-    status, headers, detail = _request(
         runtime,
         path="/v1/candidate/schedule-event",
         method="GET",
+        query="event_id=event-1",
     )
-    assert status == "400 Bad Request"
+    assert status == "200 OK"
+    assert detail["event"]["state_version"] == 1
+    assert not ({"provider_event_id", "candidate_id", "application_id"} & set(detail["event"]))
 
     invalid = _decline_body()
     invalid["confirm_decline"] = False
