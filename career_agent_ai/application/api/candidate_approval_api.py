@@ -317,10 +317,10 @@ class CandidateApprovalWSGIApp:
                 try:
                     payload = self._read_json(environ)
                     expected_state_version = self._cancellation(payload)
-                except (TypeError, ValueError, InvalidOperation) as exc:
+                except (TypeError, ValueError, InvalidOperation):
                     return self._respond(
                         start_response, "400 Bad Request",
-                        {"error": "invalid_request", "message": str(exc)[:500]},
+                        {"error": "invalid_request"},
                     )
                 result = self._loop.cancel_run(
                     run_id, user_id=user_id,
