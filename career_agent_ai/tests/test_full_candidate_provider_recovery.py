@@ -162,6 +162,11 @@ def test_complete_candidate_workflow_reconciles_all_sandbox_effects_across_resta
             run_id=run_id,
         )
         assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+        # The runtime may replace the caller's requested ID with its durable,
+        # owner-scoped ID. Every subsequent authenticated route and persisted
+        # application reference must use the identity returned by start().
+        assert isinstance(started.run_id, str) and started.run_id
+        run_id = started.run_id
 
         database = SQLiteDatabase(database_path)
         try:
