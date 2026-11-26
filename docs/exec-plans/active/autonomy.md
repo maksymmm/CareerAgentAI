@@ -1590,3 +1590,17 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Candidate message start API and browser workflow: the strict authenticated start
+contract and sandbox UI now accept optional paired sender/recipient identifiers with
+bounded subject/body fields. OpenAPI publishes the same pair/content dependencies.
+An end-to-end RuntimeCandidateApp/HTTP regression advances through application
+approval, confirms the message remains a draft with no provider attempt before its
+separate version-bound approval, then verifies exactly one durable SQLite sandbox
+delivery and terminal status replay after runtime restart. No real outbound message
+or network provider is used. See ADR 0029. The separate communication outcome-plan
+and definite no-effect restart contracts remain in the independent provider-hardening
+work. Next: expose the candidate-approved interview/calendar path through the same
+strict HTTP/UI contract and reconcile the existing calendar recovery PRs.
