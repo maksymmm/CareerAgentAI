@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from threading import Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
