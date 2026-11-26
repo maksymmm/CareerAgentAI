@@ -1590,3 +1590,6 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate browser message-decline restart acceptance: the real Chromium dashboard now exercises the separate message approval gate after application approval, declines the exact displayed message, and proves that the communication intent, attempt and delivery ledgers remain empty while the immutable message stays a draft. The runtime and browser session are closed and recreated over the same SQLite database; status and explicit continue remain terminal FAILED without provider I/O or durable mutation. The acceptance uses synthetic .example.test identities, loopback WSGI, Chromium and the no-network sandbox provider.
+Next: extend the same browser-level terminal-decision contract to candidate interview decline while preserving the existing event-version and provider-effect fences.
