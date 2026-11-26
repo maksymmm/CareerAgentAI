@@ -23,6 +23,7 @@ from career_agent_ai.application.scheduling.models import (
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
     SandboxCalendarOutcome,
+    SQLiteSandboxCalendarProvider,
 )
 from career_agent_ai.application.storage.sqlite_scheduling_repository import (
     SQLiteSchedulingRepository,
@@ -49,6 +50,7 @@ def _seed_event(path, *, owner="candidate-1", event_id="event-1", version=1):
         updated_at=NOW,
     )
     SQLiteSchedulingRepository(database).create(event)
+    SQLiteSandboxCalendarProvider(database)
     database.close()
     return event
 
