@@ -882,7 +882,7 @@ _HTML = r"""<!doctype html>
         typeof item === 'string' && item.length <= maximum && item === item.trim() &&
         !/[\u0000-\u001f\u007f]/.test(item) &&
         !/[\uD800-\uDFFF]/.test(item) && (optional || item.length > 0);
-      const optionalText = item => item === null || text(item, 32);
+      const optionalText = (item, maximum = 32) => item === null || text(item, maximum);
       if (!value || typeof value !== 'object' || Array.isArray(value) ||
           Object.keys(value).length !== rootFields.length ||
           !rootFields.every(field => Object.hasOwn(value, field)) ||
@@ -901,10 +901,10 @@ _HTML = r"""<!doctype html>
         /^\d{4}-\d{2}-\d{2}$/.test(action.local_date) &&
         text(action.local_start_time, 32) &&
         (action.local_end_date === null || /^\d{4}-\d{2}-\d{2}$/.test(action.local_end_date)) &&
-        optionalText(action.local_end_time) &&
+        optionalText(action.local_end_time, 32) &&
         text(action.timezone, 100) &&
         text(action.utc_offset, 16) &&
-        optionalText(action.end_utc_offset) &&
+        optionalText(action.end_utc_offset, 16) &&
         ['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(action.status) &&
         text(action.instruction, 500);
     }
