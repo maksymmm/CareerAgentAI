@@ -37,6 +37,17 @@ _STRICT_START_TEXT_PATTERN = (
     r"(?![\s\S]*[\u0000-\u0008\u000B-\u001F\uD800-\uDFFF])"
     r"[\s\S]+$"
 )
+_STRICT_HEADER_TEXT_PATTERN = (
+    r"^(?![\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680"
+    r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF])"
+    r"(?![\s\S]*[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680"
+    r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]$)"
+    r"(?![\s\S]*[\u0000-\u001F\u007F\uD800-\uDFFF])"
+    r"[\s\S]+$"
+)
+_COMMUNICATION_IDENTIFIER_PATTERN = (
+    r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$"
+)
 
 
 class CandidateApprovalLoop(Protocol):
@@ -897,15 +908,15 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             },
             "sender": {
                 "type": "string", "minLength": 1, "maxLength": 200,
-                "pattern": _STRICT_START_TEXT_PATTERN,
+                "pattern": _COMMUNICATION_IDENTIFIER_PATTERN,
             },
             "recipient": {
                 "type": "string", "minLength": 1, "maxLength": 200,
-                "pattern": _STRICT_START_TEXT_PATTERN,
+                "pattern": _COMMUNICATION_IDENTIFIER_PATTERN,
             },
             "message_subject": {
                 "type": "string", "minLength": 1, "maxLength": 500,
-                "pattern": _STRICT_START_TEXT_PATTERN,
+                "pattern": _STRICT_HEADER_TEXT_PATTERN,
             },
             "message_body": {
                 "type": "string", "minLength": 1, "maxLength": 100_000,

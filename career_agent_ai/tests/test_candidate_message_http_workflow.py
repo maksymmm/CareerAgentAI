@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import re
 
 from career_agent_ai.application.api.candidate_approval_api import (
     candidate_approval_openapi_document,
@@ -239,6 +240,18 @@ def test_candidate_start_openapi_and_browser_ui_publish_optional_message_workflo
     assert schema["properties"]["recipient"]["maxLength"] == 200
     assert schema["properties"]["message_subject"]["maxLength"] == 500
     assert schema["properties"]["message_body"]["maxLength"] == 100_000
+    assert re.fullmatch(
+        schema["properties"]["sender"]["pattern"], "candidate@example.test"
+    )
+    assert re.fullmatch(
+        schema["properties"]["sender"]["pattern"], "candidate name"
+    ) is None
+    assert re.fullmatch(
+        schema["properties"]["message_subject"]["pattern"], "Application follow-up"
+    )
+    assert re.fullmatch(
+        schema["properties"]["message_subject"]["pattern"], "Application\\nBcc: x"
+    ) is None
     assert len(schema["allOf"]) == 3
     assert schema["additionalProperties"] is False
 
@@ -266,3 +279,38 @@ def test_candidate_ci_enforces_independent_coverage_gate_after_pytest():
     assert pytest_command in test_job
     assert coverage_command in test_job
     assert test_job.index(pytest_command) < test_job.index(coverage_command)
+
+
+def test_candidate_start_rejects_invalid_message_identifiers_and_header_injection(
+    tmp_path,
+):
+    cases = (
+        {
+            "sender": "candidate name",
+            "recipient": "recruiter@example.test",
+        },
+        {
+            "sender": "candidate@example.test",
+            "recipient": "recruiter@example.test",
+            "message_subject": "Application\\nBcc: attacker@example.test",
+        },
+    )
+    for index, message_fields in enumerate(cases):
+        path = tmp_path / f"invalid-message-{index}.sqlite"
+        runtime = _runtime(path)
+        body = {
+            "schema_version": 1,
+            "run_id": f"invalid-message-{index}",
+            "keyword": "Logistics",
+            "candidate_profile": "Experienced logistics coordinator.",
+            **message_fields,
+        }
+        try:
+            status, _, response = _request(
+                runtime, "POST", "/v1/candidate/runs", body
+            )
+            assert status == "400 Bad Request"
+            assert response["error"] == "invalid_request"
+            assert not path.exists()
+        finally:
+            runtime.close()
