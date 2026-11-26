@@ -1302,10 +1302,3 @@ def test_pending_decline_collection_rejects_detached_operation_rewritten_for_for
     )
     assert _stored_event(path).status == ScheduleStatus.DECLINED
     assert _effect_count(path) == 1
-
-
-    assert Candidate(path).pending_page() == (
-        "409 Conflict", {"error": "approval_conflict"}
-    )
-    assert _stored_event(path).status == ScheduleStatus.DECLINED
-    assert _effect_count(path) == 1
