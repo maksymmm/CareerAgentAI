@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
+from pathlib import Path
 
 import pytest
 
@@ -204,3 +205,17 @@ def test_candidate_decline_stops_downstream_sandbox_provider_effects(
         assert len(submission_attempts) == expected_submission_effects
     finally:
         database.close()
+
+
+
+def test_candidate_ci_enforces_both_coverage_thresholds_in_order():
+    workflow = (Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "python -m pytest" in workflow
+    assert "--cov-fail-under=90" in workflow
+    assert "Enforce independent coverage threshold" in workflow
+    assert "python -m coverage report --fail-under=90" in workflow
+    assert workflow.index("Run test suite") < workflow.index(
+        "Enforce independent coverage threshold"
+    )
