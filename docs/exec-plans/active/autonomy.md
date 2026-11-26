@@ -1590,3 +1590,17 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate browser/runtime restart recovery: a Chromium acceptance now drives the real
+RuntimeCandidateApp through application approval, message approval, and an
+interview calendar TIMEOUT_AFTER_EFFECT. It closes the first runtime, clears the
+tab-local credential and run selection, recreates the runtime over the same SQLite
+database and reloads the dashboard on the same local origin. A fresh owner-scoped
+status read enables only the current version-bound interview reconciliation; explicit
+provider-event evidence and attestation complete the run without another calendar
+attempt or replay of the earlier application/message effects. The test inspects all
+three durable provider ledgers and the terminal COMPLETE state. CI also enforces an
+independent coverage CLI threshold after the full pytest coverage run. No real
+employer, message, or calendar is contacted.
+Next: exact-head CI and independent code/security review, then extend browser restart
+acceptance to the candidate's application and message reconciliation gates.
