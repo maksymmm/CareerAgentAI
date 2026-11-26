@@ -1590,3 +1590,7 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate browser message approval acceptance: a Chromium regression now drives the real RuntimeCandidateApp and authenticated sandbox UI through application approval and the separate immutable recruiter-message approval. It proves that application approval creates only a draft, with no communication intent, attempt, delivery, or outbound message; the browser must display the exact sender, recipient, subject, and body before the second approval enables the SQLite sandbox provider. Durable attempt, intent fingerprint, delivery, and outbound message rows are checked after completion. The test uses synthetic identities and a no-network local provider.
+Next: exact-head full CI/coverage and independent code/security review; then extend browser acceptance to candidate cancellation and no-effect retry without conflating orchestration cancellation with provider compensation.
