@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from hashlib import sha256
 from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
 from career_agent_ai.application.storage.sqlite_candidate_interview_intents import SQLiteCandidateInterviewIntents
 from datetime import datetime
@@ -22,6 +23,7 @@ from career_agent_ai.application.agents.resume.resume_agent import ResumeAgent
 from career_agent_ai.application.career import (
     ApplicationSubmissionService,
     AutonomousCareerLoop,
+    CandidateApprovalConflictError,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
@@ -52,7 +54,10 @@ from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
 from career_agent_ai.application.search.search_service import SearchService
 from career_agent_ai.application.scheduling import FakeCalendarAdapter, SchedulingService
-from career_agent_ai.application.scheduling.models import ScheduleStatus
+from career_agent_ai.application.scheduling.calendar_adapter import CalendarReconciliationEvidenceError
+from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
+from career_agent_ai.application.scheduling.scheduling_repository import SchedulingConflictError
+from career_agent_ai.application.external_actions.external_action_operation import ExternalActionStatus
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
     SQLiteCandidateRunStatusProjection,
     SQLiteCareerLoopRepository,
@@ -69,6 +74,7 @@ from career_agent_ai.application.storage.sqlite_sandbox_communication_provider i
     SQLiteSandboxCommunicationProvider,
 )
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SandboxCalendarOutcomePlan,
     SQLiteSandboxCalendarProvider,
 )
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
@@ -132,11 +138,13 @@ class RuntimeCandidateApp:
         jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
         sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+        sandbox_calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._resolve_bearer = resolve_bearer
         self._sandbox_outcome_plan = sandbox_outcome_plan
+        self._sandbox_calendar_outcome_plan = sandbox_calendar_outcome_plan
         self._closed = False
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
@@ -145,7 +153,8 @@ class RuntimeCandidateApp:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         app = CandidateApprovalWSGIApp(
             _RequestCandidateLoop(
-                self._database_path, self._jobs, self._sandbox_outcome_plan
+                self._database_path, self._jobs, self._sandbox_outcome_plan,
+                self._sandbox_calendar_outcome_plan
             ),
             resolve_bearer=self._resolve_bearer,
         )
@@ -166,7 +175,8 @@ class RuntimeCandidateApp:
         database = SQLiteDatabase(self._database_path)
         try:
             loop = _build_candidate_loop(
-                database, self._jobs, self._sandbox_outcome_plan
+                database, self._jobs, self._sandbox_outcome_plan,
+                self._sandbox_calendar_outcome_plan
             )
             if run_id is None:
                 return loop.start(request)
@@ -255,16 +265,156 @@ class _RequestCandidateLoop:
         database_path: str,
         jobs: tuple[Job, ...],
         outcome_plan: SandboxOutcomePlan | None = None,
+        calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._outcome_plan = outcome_plan
+        self._calendar_outcome_plan = calendar_outcome_plan
 
     def list_interview_intents(self, *, user_id: str, limit: int = 25,
                                after: str | None = None) -> dict[str, Any]:
         """Discover owned pending interview actions through request-local read-only storage."""
         return SQLiteCandidateInterviewIntents(self._database_path).list_page(
             user_id=user_id, limit=limit, after=after)
+
+    def decline_schedule_event(
+        self, event_id: str, *, user_id: str, expected_state_version: int
+    ) -> dict[str, Any]:
+        """Execute one explicitly confirmed, owner/version-fenced sandbox decline."""
+        owner = validate_schedule_identifier(user_id, "user_id")
+        identifier = validate_schedule_identifier(event_id, "event_id")
+        if type(expected_state_version) is not int or expected_state_version < 1:
+            raise ValueError("expected_state_version must be a positive integer.")
+        visible = SQLiteCandidateSchedule(self._database_path).get_snapshot(
+            identifier, user_id=owner
+        )["event"]
+        if visible["state_version"] != expected_state_version:
+            raise CandidateApprovalConflictError("Schedule event changed; reload it.")
+        database = SQLiteDatabase(self._database_path)
+        try:
+            scheduling = _build_scheduling_service(
+                database,
+                self._calendar_outcome_plan,
+                SQLiteExternalActionOperationRepository(database),
+            )
+            event = scheduling.get_event(identifier)
+            if event.candidate_id != owner:
+                raise KeyError("Schedule event not found.")
+            if event.version != expected_state_version:
+                raise CandidateApprovalConflictError("Schedule event changed; reload it.")
+            operation_id = _candidate_calendar_decline_operation_id(
+                owner, identifier, expected_state_version
+            )
+            try:
+                declined = scheduling.decline(
+                    operation_id,
+                    identifier,
+                    human_approved=True,
+                    expected_version=expected_state_version,
+                )
+            except SchedulingConflictError as exc:
+                raise CandidateApprovalConflictError("Schedule event changed; reload it.") from exc
+            operation = scheduling.get_operation(operation_id)
+            if declined is None:
+                if (
+                    operation is None
+                    or operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED
+                ):
+                    raise CandidateApprovalConflictError(
+                        "Calendar decline did not reach a confirmed or reconcilable outcome."
+                    )
+                return {
+                    "schema_version": 1,
+                    "event_id": identifier,
+                    "status": event.status.value,
+                    "state_version": expected_state_version,
+                    "provider_status": "reconciliation_required",
+                }
+            return {
+                "schema_version": 1,
+                "event_id": identifier,
+                "status": declined.status.value,
+                "state_version": declined.version,
+                "provider_status": "confirmed",
+            }
+        finally:
+            database.close()
+
+    def resolve_schedule_event_decline(
+        self,
+        event_id: str,
+        *,
+        user_id: str,
+        expected_state_version: int,
+        completed: bool,
+    ) -> dict[str, Any]:
+        """Reconcile one ambiguous decline using only the sandbox provider's evidence."""
+        owner = validate_schedule_identifier(user_id, "user_id")
+        identifier = validate_schedule_identifier(event_id, "event_id")
+        if type(expected_state_version) is not int or expected_state_version < 1:
+            raise ValueError("expected_state_version must be a positive integer.")
+        if type(completed) is not bool:
+            raise ValueError("completed must be a boolean.")
+        visible = SQLiteCandidateSchedule(self._database_path).get_snapshot(
+            identifier, user_id=owner
+        )["event"]
+        database = SQLiteDatabase(self._database_path)
+        try:
+            scheduling = _build_scheduling_service(
+                database,
+                self._calendar_outcome_plan,
+                SQLiteExternalActionOperationRepository(database),
+            )
+            operation_id = _candidate_calendar_decline_operation_id(
+                owner, identifier, expected_state_version
+            )
+            operation = scheduling.get_operation(operation_id)
+            if (
+                operation is None
+                or operation.action_type != "calendar.decline"
+                or operation.payload.get("event_id") != identifier
+                or operation.payload.get("event_version") != expected_state_version
+            ):
+                raise KeyError("Pending decline not found.")
+            if operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED:
+                if visible["state_version"] != expected_state_version:
+                    raise CandidateApprovalConflictError("Schedule event changed; reload it.")
+            elif operation.status == ExternalActionStatus.SUCCEEDED and completed:
+                pass
+            else:
+                raise CandidateApprovalConflictError(
+                    "Decline is no longer awaiting reconciliation."
+                )
+            try:
+                resolved = scheduling.resolve_reconciliation(
+                    operation_id, completed=completed
+                )
+            except CalendarReconciliationEvidenceError as exc:
+                raise CandidateApprovalConflictError(
+                    "Sandbox provider evidence does not support this outcome."
+                ) from exc
+            if completed:
+                snapshot = resolved.result.get("event_snapshot") if resolved.result else None
+                if not isinstance(snapshot, dict):
+                    raise CandidateApprovalConflictError("Decline result is unavailable.")
+                return {
+                    "schema_version": 1,
+                    "event_id": identifier,
+                    "status": snapshot["status"],
+                    "state_version": snapshot["version"],
+                    "provider_status": "confirmed",
+                }
+            current = scheduling.get_event(identifier)
+            return {
+                "schema_version": 1,
+                "event_id": identifier,
+                "status": current.status.value,
+                "state_version": current.version,
+                "provider_status": "no_effect_confirmed",
+            }
+        finally:
+            database.close()
 
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's event without writable storage or calendar I/O."""
@@ -309,7 +459,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).start(
                 request, run_id=run_id
             )
@@ -323,7 +474,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).replay_existing_start(
                 request, run_id=run_id, user_id=user_id
             )
@@ -343,7 +495,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).get_candidate_approval_prompt(run_id, user_id=user_id)
         finally:
             database.close()
@@ -353,7 +506,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).resume_candidate_submission(user_id=user_id, submission=submission)
         finally:
             database.close()
@@ -363,7 +517,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).continue_run(
                 run_id, user_id=user_id
             )
@@ -383,7 +538,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).resolve_application_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -406,7 +562,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).resolve_message_reconciliation(
                 run_id,
                 user_id=user_id,
@@ -425,7 +582,8 @@ class _RequestCandidateLoop:
         database = SQLiteDatabase(self._database_path)
         try:
             return _build_candidate_loop(
-                database, self._jobs, self._outcome_plan
+                database, self._jobs, self._outcome_plan,
+                self._calendar_outcome_plan
             ).resolve_interview_reconciliation(
                 run_id, user_id=user_id, completed=completed,
                 provider_event_id=provider_event_id,
@@ -441,6 +599,7 @@ def build_candidate_sandbox_app_from_env(
     jobs: Iterable[Job] = (),
     environ: Mapping[str, str] | None = None,
     sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+    sandbox_calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
     config = validate_candidate_sandbox_environment(environ)
@@ -455,7 +614,9 @@ def build_candidate_sandbox_app_from_env(
     try:
         if database.is_memory:
             raise ValueError("Candidate sandbox requires durable SQLite storage.")
-        _build_candidate_loop(database, configured_jobs, sandbox_outcome_plan)
+        _build_candidate_loop(
+            database, configured_jobs, sandbox_outcome_plan, sandbox_calendar_outcome_plan
+        )
     finally:
         database.close()
     return RuntimeCandidateApp(
@@ -463,6 +624,7 @@ def build_candidate_sandbox_app_from_env(
         jobs=configured_jobs,
         resolve_bearer=resolve_bearer,
         sandbox_outcome_plan=sandbox_outcome_plan,
+        sandbox_calendar_outcome_plan=sandbox_calendar_outcome_plan,
     )
 
 
@@ -488,10 +650,39 @@ def validate_candidate_sandbox_environment(
     return config
 
 
+def _candidate_calendar_decline_operation_id(
+    user_id: str, event_id: str, event_version: int
+) -> str:
+    digest = sha256(
+        f"{user_id}\n{event_id}\n{event_version}".encode("utf-8")
+    ).hexdigest()
+    return f"candidate-calendar-decline:{digest}"
+
+
+def _build_scheduling_service(
+    database: SQLiteDatabase,
+    calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
+    operations: SQLiteExternalActionOperationRepository | None = None,
+) -> SchedulingService:
+    repository = SQLiteSchedulingRepository(database)
+    provider = SQLiteSandboxCalendarProvider(database, calendar_outcome_plan)
+    operation_repository = operations or SQLiteExternalActionOperationRepository(database)
+    return SchedulingService(
+        repository,
+        provider,
+        ExternalActionService(
+            operation_repository,
+            SchedulingService.action_adapter(provider, repository),
+        ),
+        require_provider_evidence=True,
+    )
+
+
 def _build_candidate_loop(
     database: SQLiteDatabase,
     jobs: tuple[Job, ...],
     outcome_plan: SandboxOutcomePlan | None = None,
+    calendar_outcome_plan: SandboxCalendarOutcomePlan | None = None,
 ) -> AutonomousCareerLoop:
     """Build one loop whose repositories share a request-owned connection."""
     job_repository = InMemoryJobRepository()
@@ -526,16 +717,8 @@ def _build_candidate_loop(
         ),
         require_provider_evidence=True,
     )
-    scheduling_repository = SQLiteSchedulingRepository(database)
-    calendar_adapter = SQLiteSandboxCalendarProvider(database)
-    scheduling = SchedulingService(
-        scheduling_repository,
-        calendar_adapter,
-        ExternalActionService(
-            operations,
-            SchedulingService.action_adapter(calendar_adapter, scheduling_repository),
-        ),
-        require_provider_evidence=True,
+    scheduling = _build_scheduling_service(
+        database, calendar_outcome_plan, operations
     )
     return AutonomousCareerLoop(
         agent_factory=factory,
