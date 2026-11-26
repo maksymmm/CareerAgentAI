@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from threading import Thread
@@ -430,3 +431,11 @@ def test_candidate_can_discover_interview_intent_after_runtime_and_browser_resta
         first.close()
         if second is not None:
             second.close()
+
+
+def test_ci_enforces_independent_coverage_gate_after_full_pytest():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    pytest_gate = workflow.index("python -m pytest")
+    independent_gate = workflow.index("python -m coverage report --fail-under=90")
+    assert independent_gate > pytest_gate
+    assert "- name: Enforce independent coverage threshold" in workflow
