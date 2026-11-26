@@ -1,12 +1,56 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
+from functools import wraps
+from threading import Lock
 from typing import Any, Mapping, Protocol
 
 from career_agent_ai.application.observability.structured_logging import redact_text
 
 from .external_action_operation import ExternalActionOperation, ExternalActionStatus
 from .external_action_repository import ExternalActionOperationRepository
+
+
+_OPERATION_LOCKS_GUARD = Lock()
+_OPERATION_LOCKS: dict[str, tuple[object, int]] = {}
+
+
+@contextmanager
+def _operation_execution_lock(operation_id: str):
+    """Serialize one operation across service instances in this process.
+
+    SQLite/provider idempotency remains the cross-process safety boundary. This
+    process-local lock prevents a second in-process caller from mistaking another
+    live worker's IN_PROGRESS state for a crashed execution.
+    """
+    with _OPERATION_LOCKS_GUARD:
+        entry = _OPERATION_LOCKS.get(operation_id)
+        lock = Lock() if entry is None else entry[0]
+        reference_count = 0 if entry is None else entry[1]
+        _OPERATION_LOCKS[operation_id] = (lock, reference_count + 1)
+
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+        with _OPERATION_LOCKS_GUARD:
+            current = _OPERATION_LOCKS.get(operation_id)
+            if current is not None and current[0] is lock:
+                if current[1] <= 1:
+                    _OPERATION_LOCKS.pop(operation_id, None)
+                else:
+                    _OPERATION_LOCKS[operation_id] = (lock, current[1] - 1)
+
+
+def _serialize_operation(method):
+    @wraps(method)
+    def wrapped(self, operation_id, *args, **kwargs):
+        with _operation_execution_lock(operation_id):
+            return method(self, operation_id, *args, **kwargs)
+
+    return wrapped
 
 
 class AmbiguousExternalActionError(RuntimeError):
@@ -16,6 +60,7 @@ class AmbiguousExternalActionError(RuntimeError):
 class ExternalActionAdapter(Protocol):
     """Provider-neutral boundary for a consequential external action."""
 
+    @_serialize_operation
     def execute(
         self,
         operation_id: str,
@@ -66,8 +111,10 @@ class ExternalActionService:
     ) -> ExternalActionOperation:
         """Execute a prepared action once after explicit human approval.
 
-        An operation already left in ``in_progress`` is ambiguous: it is moved to
-        ``reconciliation_required`` and the adapter is deliberately not called.
+        An operation already left in ``in_progress`` after this process has acquired
+        its operation lock is ambiguous: it is moved to ``reconciliation_required``
+        and the adapter is deliberately not called. Concurrent in-process callers
+        wait for the active worker and then observe its durable terminal result.
         """
         operation = self._require_operation(operation_id)
         if operation.status in {
