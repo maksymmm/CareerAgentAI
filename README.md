@@ -619,8 +619,7 @@ The same WSGI service exposes a dependency-free candidate sandbox at
 `GET /sandbox/candidate`. It can start a sandbox run, inspect its status, load the
 current candidate-visible approval prompt, continue recovery, and submit approve or
 decline decisions. From an owner-scoped application detail, the candidate can also
-record a version-bound withdrawal in the local tracker. This does not notify the
-employer or retract a submitted application. The static page contains no credentials
+record a version-bound withdrawal in the local tracker. This does not send a withdrawal notice or retract a submitted application. The static page contains no credentials
 or durable state: the candidate enters a bearer token that stays only in the tab's
 memory.
 An accessible dashboard navigation landmark links to start, inspection, pending
