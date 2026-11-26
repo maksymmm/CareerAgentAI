@@ -1,35 +1,34 @@
-# ADR 0029: Candidate message no-effect recovery across runtime restart
+# ADR 0029: Candidate message workflow through authenticated HTTP and UI
 
 - Status: Proposed
 - Date: 2026-11-26
 
 ## Context
 
-The candidate career loop already models a separately approved recruiter/employer
-message, but the authenticated candidate start contract did not expose the optional
-sender, recipient, subject, and body fields. The sandbox runtime also did not expose
-the SQLite communication provider's deterministic outcome plan, so the complete
-candidate HTTP path could not prove a definite no-delivery retry after process loss.
+The autonomous career loop already supported a separately approved recruiter/employer
+message, but the authenticated candidate start request and browser sandbox did not
+expose sender, recipient, subject, or body. As a result, a candidate using the
+published HTTP/UI workflow could not enter the message intent that the loop's
+existing approval state machine expects.
 
 ## Decision
 
 - Extend the strict candidate start request with optional paired sender/recipient
   identifiers and bounded message subject/body fields. The browser sandbox exposes
-  the same optional inputs. The exact message still requires its own version-bound
-  candidate approval before delivery.
-- Inject a deterministic outcome plan into the SQLite communication provider through
-  the sandbox runtime only; the default provider remains local and no-network.
-- Add an end-to-end RuntimeCandidateApp/HTTP regression that records NO_EFFECT for
-  the first delivery attempt, closes and recreates the runtime on the same SQLite
-  database, verifies owner isolation and provider-inert status/prompt reads, then
-  requires an explicit authenticated POST /continue before retrying the same
-  operation ID and message intent.
-- Assert one successful durable delivery, stable intent fingerprint, outbound
-  message state, and terminal restart replay without another provider attempt.
+  the same optional inputs.
+- Require sender and recipient together; message content is accepted only when the
+  identity pair is supplied. Publish matching constraints and dependencies in OpenAPI.
+- Preserve the existing separate, version-bound message approval gate. Creating a
+  run may persist a draft but must not create a provider delivery; only approval of
+  the exact immutable draft may invoke the local SQLite sandbox provider.
+- Add an end-to-end authenticated HTTP regression that approves the application,
+  verifies the message remains a draft with no delivery attempt, approves the exact
+  message, verifies exactly one durable sandbox delivery, and confirms terminal
+  status replay after runtime restart.
 
 ## Consequences
 
-The candidate HTTP/UI workflow can now reach its existing message approval gate,
-and definite no-effect recovery is exercised across a real runtime restart using
-the SQLite sandbox provider. The test does not send a real message or establish
-retry semantics for a future external mailbox provider.
+The candidate API and browser sandbox can exercise the complete application-then-
+message approval workflow without bypassing the published owner-scoped HTTP boundary.
+The provider remains local and no-network; this decision does not add a real mailbox
+integration or change communication no-effect recovery semantics.

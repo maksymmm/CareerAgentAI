@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
-from pathlib import Path
 
 from career_agent_ai.application.api.candidate_approval_api import (
     candidate_approval_openapi_document,
@@ -13,9 +12,6 @@ from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.jobs.location import Location
 from career_agent_ai.application.runtime.composition import RuntimeCandidateApp
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
-from career_agent_ai.application.storage.sqlite_sandbox_communication_provider import (
-    SandboxCommunicationOutcome,
-)
 
 
 def _request(runtime, method: str, path: str, body=None, *, token: str = "valid"):
@@ -38,7 +34,7 @@ def _request(runtime, method: str, path: str, body=None, *, token: str = "valid"
     return status, dict(headers), json.loads(response)
 
 
-def _runtime(path, communication_outcome_plan):
+def _runtime(path):
     job = Job.create(
         job_id="job-1",
         title="Logistics Coordinator",
@@ -53,7 +49,6 @@ def _runtime(path, communication_outcome_plan):
             "valid": "candidate-1",
             "foreign": "candidate-2",
         }.get(token),
-        sandbox_communication_outcome_plan=communication_outcome_plan,
     )
 
 
@@ -103,24 +98,14 @@ def _approve(runtime, run_id: str):
         },
     )
     assert status == "200 OK"
-    return result
+    return prompt, result
 
 
-def test_candidate_message_no_effect_requires_explicit_continue_after_runtime_restart(
+def test_candidate_message_start_api_requires_separate_approval_before_sandbox_delivery(
     tmp_path,
 ):
-    path = tmp_path / "candidate-message-no-effect.sqlite"
-    plan_calls = []
-
-    def outcome_plan(operation_id: str, attempt_no: int) -> SandboxCommunicationOutcome:
-        plan_calls.append((operation_id, attempt_no))
-        if attempt_no == 1:
-            return SandboxCommunicationOutcome.NO_EFFECT
-        if attempt_no == 2:
-            return SandboxCommunicationOutcome.SUCCESS
-        raise AssertionError("The candidate workflow attempted an unexpected delivery.")
-
-    first = _runtime(path, outcome_plan)
+    path = tmp_path / "candidate-message-http.sqlite"
+    first = _runtime(path)
     try:
         status, headers, started = _request(
             first,
@@ -128,7 +113,7 @@ def test_candidate_message_no_effect_requires_explicit_continue_after_runtime_re
             "/v1/candidate/runs",
             {
                 "schema_version": 1,
-                "run_id": "message-no-effect-restart",
+                "run_id": "candidate-message-http",
                 "keyword": "Logistics",
                 "candidate_profile": (
                     "Logistics professional with warehouse picking, packing, "
@@ -146,39 +131,42 @@ def test_candidate_message_no_effect_requires_explicit_continue_after_runtime_re
         assert started["phase"] == "application_approval"
         run_id = started["run_id"]
 
-        application_approval = _approve(first, run_id)
-        assert application_approval == {"run_id": run_id, "phase": "message_approval"}
+        application_prompt, application_result = _approve(first, run_id)
+        assert application_prompt["action_kind"] == "approve_application"
+        assert application_result == {"run_id": run_id, "phase": "message_approval"}
 
-        status, _, message_prompt = _request(
-            first, "GET", f"/v1/candidate/runs/{run_id}/approval"
-        )
-        assert status == "200 OK"
-        message_id = message_prompt["details"]["message_id"]
+        before_message_approval = _communication_rows(path)
+        assert before_message_approval[0] == []
+        assert before_message_approval[2] == []
+        assert len(before_message_approval[3]) == 1
+        assert before_message_approval[3][0][-1] == "draft"
+        assert before_message_approval[4] == [
+            (f"{run_id}:message", "draft")
+        ]
 
-        status, _, after_no_effect = _request(
-            first,
-            "POST",
-            f"/v1/candidate/runs/{run_id}/approval",
-            {
-                "schema_version": 1,
-                "run_id": run_id,
-                "state_version": message_prompt["state_version"],
-                "action_fingerprint": message_prompt["action_fingerprint"],
-                "decision": "approve",
-            },
-        )
-        assert status == "200 OK"
-        assert after_no_effect == {"run_id": run_id, "phase": "message_send"}
-        assert plan_calls == [(f"{run_id}:message-send", 1)]
+        message_prompt, message_result = _approve(first, run_id)
+        assert message_prompt["action_kind"] == "approve_message"
+        assert message_prompt["details"] == {
+            "message_id": f"{run_id}:message",
+            "sender": "candidate@example.test",
+            "recipient": "recruiter@example.test",
+            "subject": "Application follow-up",
+            "body": "I would welcome a conversation about the logistics role.",
+        }
+        assert message_result == {"run_id": run_id, "phase": "complete"}
     finally:
         first.close()
 
     operation_id = f"{run_id}:message-send"
-    first_rows = _communication_rows(path)
-    attempts, intents, deliveries, messages, provider_messages = first_rows
-    assert attempts == [(operation_id, 1, "no_effect")]
+    message_id = f"{run_id}:message"
+    completed_rows = _communication_rows(path)
+    attempts, intents, deliveries, messages, provider_messages = completed_rows
+    assert attempts == [(operation_id, 1, "success")]
     assert len(intents) == 1 and intents[0][0] == operation_id
-    assert deliveries == []
+    assert len(deliveries) == 1
+    assert deliveries[0][0] == operation_id
+    assert deliveries[0][1] == intents[0][1]
+    assert deliveries[0][2:] == (message_id, "send", 0)
     assert messages == [
         (
             message_id,
@@ -186,12 +174,12 @@ def test_candidate_message_no_effect_requires_explicit_continue_after_runtime_re
             "recruiter@example.test",
             "Application follow-up",
             "I would welcome a conversation about the logistics role.",
-            "draft",
+            "outbound",
         )
     ]
-    assert provider_messages == [(message_id, "draft")]
+    assert provider_messages == [(message_id, "outbound")]
 
-    second = _runtime(path, outcome_plan)
+    second = _runtime(path)
     try:
         status, _, foreign = _request(
             second, "GET", f"/v1/candidate/runs/{run_id}/status", token="foreign"
@@ -199,76 +187,27 @@ def test_candidate_message_no_effect_requires_explicit_continue_after_runtime_re
         assert status == "404 Not Found"
         assert foreign == {"error": "not_found"}
 
-        status, _, observed = _request(
-            second, "GET", f"/v1/candidate/runs/{run_id}/status"
-        )
-        assert status == "200 OK"
-        assert observed["phase"] == "message_send"
-        assert observed["waiting_for_human"] is False
-        assert observed["terminal"] is False
-
-        status, _, unavailable = _request(
-            second, "GET", f"/v1/candidate/runs/{run_id}/approval"
-        )
-        assert status == "409 Conflict"
-        assert unavailable == {"error": "approval_unavailable"}
-        assert _communication_rows(path) == first_rows
-        assert plan_calls == [(operation_id, 1)]
-
-        status, _, resumed = _request(
-            second, "POST", f"/v1/candidate/runs/{run_id}/continue"
-        )
-        assert status == "200 OK"
-        assert resumed == {"run_id": run_id, "phase": "complete"}
-    finally:
-        second.close()
-
-    completed_rows = _communication_rows(path)
-    attempts, intents, deliveries, messages, provider_messages = completed_rows
-    assert attempts == [
-        (operation_id, 1, "no_effect"),
-        (operation_id, 2, "success"),
-    ]
-    assert len(intents) == 1 and intents[0][0] == operation_id
-    assert len(deliveries) == 1
-    assert deliveries[0][0] == operation_id
-    assert deliveries[0][1] == intents[0][1]
-    assert deliveries[0][2:] == (message_id, "send", 0)
-    assert messages[0][0] == message_id and messages[0][-1] == "outbound"
-    assert provider_messages == [(message_id, "outbound")]
-    assert plan_calls == [(operation_id, 1), (operation_id, 2)]
-
-    third = _runtime(path, outcome_plan)
-    try:
         status, _, terminal = _request(
-            third, "GET", f"/v1/candidate/runs/{run_id}/status"
+            second, "GET", f"/v1/candidate/runs/{run_id}/status"
         )
         assert status == "200 OK"
         assert terminal["phase"] == "complete"
         assert terminal["terminal"] is True
 
         status, _, replayed = _request(
-            third, "POST", f"/v1/candidate/runs/{run_id}/continue"
+            second, "POST", f"/v1/candidate/runs/{run_id}/continue"
         )
         assert status == "200 OK"
         assert replayed == {"run_id": run_id, "phase": "complete"}
     finally:
-        third.close()
+        second.close()
 
     assert _communication_rows(path) == completed_rows
-    assert len(plan_calls) == 2
 
 
 def test_candidate_start_rejects_incomplete_message_identity_pair_before_storage(tmp_path):
     path = tmp_path / "incomplete-message.sqlite"
-    plan_calls = []
-    runtime = _runtime(
-        path,
-        lambda operation_id, attempt_no: (
-            plan_calls.append((operation_id, attempt_no))
-            or SandboxCommunicationOutcome.SUCCESS
-        ),
-    )
+    runtime = _runtime(path)
     try:
         status, _, response = _request(
             runtime,
@@ -285,7 +224,6 @@ def test_candidate_start_rejects_incomplete_message_identity_pair_before_storage
         assert status == "400 Bad Request"
         assert response["error"] == "invalid_request"
         assert not path.exists()
-        assert plan_calls == []
     finally:
         runtime.close()
 
@@ -318,6 +256,8 @@ def test_candidate_start_openapi_and_browser_ui_publish_optional_message_workflo
 
 
 def test_candidate_ci_enforces_independent_coverage_gate_after_pytest():
+    from pathlib import Path
+
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     test_job = workflow.split("  release-evidence:", 1)[0]
     pytest_command = "python -m pytest"

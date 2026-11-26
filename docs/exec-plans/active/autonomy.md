@@ -1593,14 +1593,14 @@ owner-scoped intent discovery after browser reload and version-bound reconciliat
 
 
 
-Candidate HTTP message workflow and no-effect restart recovery: the authenticated
-start contract and sandbox UI now accept optional paired sender/recipient identifiers
-plus a bounded subject/body. The sandbox runtime can inject a deterministic SQLite
-communication outcome plan. An end-to-end RuntimeCandidateApp/HTTP regression approves
-the exact message draft, records a first NO_EFFECT delivery attempt, closes and reopens
-the runtime, proves owner isolation and provider-inert status/prompt reads, then
-requires an explicit POST /continue to retry the same operation and message intent.
-The second attempt creates exactly one durable sandbox delivery; a further restart
-does not add an attempt. No real outbound message or network provider is used.
-See ADR 0029. Next: expose the candidate-approved interview/calendar path through the
-same strict start contract and add deterministic no-effect/restart recovery coverage.
+Candidate message start API and browser workflow: the strict authenticated start
+contract and sandbox UI now accept optional paired sender/recipient identifiers with
+bounded subject/body fields. OpenAPI publishes the same pair/content dependencies.
+An end-to-end RuntimeCandidateApp/HTTP regression advances through application
+approval, confirms the message remains a draft with no provider attempt before its
+separate version-bound approval, then verifies exactly one durable SQLite sandbox
+delivery and terminal status replay after runtime restart. No real outbound message
+or network provider is used. See ADR 0029. The separate communication outcome-plan
+and definite no-effect restart contracts remain in the independent provider-hardening
+work. Next: expose the candidate-approved interview/calendar path through the same
+strict HTTP/UI contract and reconcile the existing calendar recovery PRs.
