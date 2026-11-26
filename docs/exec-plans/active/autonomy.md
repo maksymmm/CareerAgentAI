@@ -1590,3 +1590,17 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Candidate HTTP message workflow and no-effect restart recovery: the authenticated
+start contract and sandbox UI now accept optional paired sender/recipient identifiers
+plus a bounded subject/body. The sandbox runtime can inject a deterministic SQLite
+communication outcome plan. An end-to-end RuntimeCandidateApp/HTTP regression approves
+the exact message draft, records a first NO_EFFECT delivery attempt, closes and reopens
+the runtime, proves owner isolation and provider-inert status/prompt reads, then
+requires an explicit POST /continue to retry the same operation and message intent.
+The second attempt creates exactly one durable sandbox delivery; a further restart
+does not add an attempt. No real outbound message or network provider is used.
+See ADR 0029. Next: expose the candidate-approved interview/calendar path through the
+same strict start contract and add deterministic no-effect/restart recovery coverage.

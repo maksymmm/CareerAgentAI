@@ -487,7 +487,10 @@ class CandidateApprovalWSGIApp:
         payload: Mapping[str, Any], *, user_id: str
     ) -> tuple[CareerLoopRequest, str]:
         """Build a sandbox run request bound to the authenticated candidate."""
-        allowed = {"schema_version", "run_id", "keyword", "candidate_profile", "location"}
+        allowed = {
+            "schema_version", "run_id", "keyword", "candidate_profile", "location",
+            "sender", "recipient", "message_subject", "message_body",
+        }
         required = {"schema_version", "run_id", "keyword", "candidate_profile"}
         unknown = set(payload) - allowed
         missing = required - set(payload)
@@ -511,11 +514,43 @@ class CandidateApprovalWSGIApp:
         location = CandidateApprovalWSGIApp._strict_start_text(
             payload.get("location", ""), "location", maximum=500, allow_empty=True
         )
+        message_fields = {"sender", "recipient", "message_subject", "message_body"}
+        if message_fields.intersection(payload) and not {"sender", "recipient"} <= set(payload):
+            raise ValueError("sender and recipient must be supplied together.")
+        sender = (
+            CandidateApprovalWSGIApp._strict_start_text(
+                payload["sender"], "sender", maximum=200
+            )
+            if "sender" in payload else ""
+        )
+        recipient = (
+            CandidateApprovalWSGIApp._strict_start_text(
+                payload["recipient"], "recipient", maximum=200
+            )
+            if "recipient" in payload else ""
+        )
+        message_subject = (
+            CandidateApprovalWSGIApp._strict_start_text(
+                payload["message_subject"], "message_subject", maximum=500
+            )
+            if "message_subject" in payload else "Application follow-up"
+        )
+        message_body = (
+            CandidateApprovalWSGIApp._strict_start_text(
+                payload["message_body"], "message_body", maximum=100_000
+            )
+            if "message_body" in payload
+            else "I am interested in this opportunity."
+        )
         request = CareerLoopRequest(
             user_id=user_id,
             keyword=keyword,
             candidate_profile=candidate_profile,
             location=location,
+            sender=sender,
+            recipient=recipient,
+            message_subject=message_subject,
+            message_body=message_body,
         )
         return request, CandidateApprovalWSGIApp._owner_scoped_run_id(
             request.user_id, run_id
@@ -860,7 +895,31 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                 "type": "string", "maxLength": 500,
                 "pattern": f"^(?:|{_STRICT_START_TEXT_PATTERN[1:-1]})$",
             },
+            "sender": {
+                "type": "string", "minLength": 1, "maxLength": 200,
+                "pattern": _STRICT_START_TEXT_PATTERN,
+            },
+            "recipient": {
+                "type": "string", "minLength": 1, "maxLength": 200,
+                "pattern": _STRICT_START_TEXT_PATTERN,
+            },
+            "message_subject": {
+                "type": "string", "minLength": 1, "maxLength": 500,
+                "pattern": _STRICT_START_TEXT_PATTERN,
+            },
+            "message_body": {
+                "type": "string", "minLength": 1, "maxLength": 100_000,
+                "pattern": _STRICT_START_TEXT_PATTERN,
+            },
         },
+        "allOf": [
+            {"if": {"required": ["sender"]}, "then": {"required": ["recipient"]}},
+            {"if": {"required": ["recipient"]}, "then": {"required": ["sender"]}},
+            {
+                "if": {"anyOf": [{"required": ["message_subject"]}, {"required": ["message_body"]}]},
+                "then": {"required": ["sender", "recipient"]},
+            },
+        ],
         "additionalProperties": False,
     }
     recovery_conflict_schema = {

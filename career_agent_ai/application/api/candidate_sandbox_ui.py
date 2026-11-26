@@ -58,6 +58,11 @@ _HTML = r"""<!doctype html>
     <label>Job keywords <input id="keyword" required></label>
     <label>Location <input id="location"></label>
     <label>Candidate profile <textarea id="profile" required></textarea></label>
+    <p class="muted">Optional message workflow: provide both sender and recipient. The exact draft requires a separate candidate approval before sandbox delivery.</p>
+    <label>Message sender <input id="message-sender" maxlength="200" autocomplete="off"></label>
+    <label>Message recipient <input id="message-recipient" maxlength="200" autocomplete="off"></label>
+    <label>Message subject <input id="message-subject" maxlength="500" value="Application follow-up"></label>
+    <label>Message body <textarea id="message-body" maxlength="100000">I am interested in this opportunity.</textarea></label>
     <button id="start" type="button">Start run</button>
   </fieldset>
   <fieldset id="inspect-panel" tabindex="-1">
@@ -984,11 +989,26 @@ _HTML = r"""<!doctype html>
       const startContextGeneration = inputContextGeneration;
       const requestedRunId = byId('start-run-id').value;
       try {
+        const sender = byId('message-sender').value;
+        const recipient = byId('message-recipient').value;
+        const messageSubject = byId('message-subject').value;
+        const messageBody = byId('message-body').value;
+        if (Boolean(sender.trim()) !== Boolean(recipient.trim())) {
+          throw new Error('Provide both sender and recipient to enable messaging.');
+        }
+        if (sender.trim() && (!messageSubject.trim() || !messageBody.trim())) {
+          throw new Error('Message subject and body are required when messaging is enabled.');
+        }
+        const startBody = {schema_version: 1, run_id: requestedRunId,
+          keyword: byId('keyword').value, candidate_profile: byId('profile').value,
+          location: byId('location').value};
+        if (sender.trim() && recipient.trim()) {
+          Object.assign(startBody, {sender, recipient, message_subject: messageSubject,
+            message_body: messageBody});
+        }
         const payload = await call('/v1/candidate/runs', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({schema_version: 1, run_id: requestedRunId,
-            keyword: byId('keyword').value, candidate_profile: byId('profile').value,
-            location: byId('location').value}),
+          body: JSON.stringify(startBody),
         }, 'Run start request failed.');
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
             Object.keys(payload).length !== 2 || !Object.hasOwn(payload, 'run_id') ||
@@ -1023,11 +1043,14 @@ _HTML = r"""<!doctype html>
     }
     byId('run-id').addEventListener('input', invalidateInputContext);
     byId('token').addEventListener('input', invalidateInputContext);
-    for (const id of ['start-run-id', 'keyword', 'location', 'profile']) {
+    for (const id of ['start-run-id', 'keyword', 'location', 'profile', 'message-sender',
+      'message-recipient', 'message-subject', 'message-body']) {
       byId(id).addEventListener('input', invalidateInputContext);
     }
     byId('clear-session').addEventListener('click', () => {
-      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id', 'run-phase', 'application-status', 'event-status']) byId(id).value = '';
+      for (const id of ['token', 'profile', 'keyword', 'location', 'run-id', 'start-run-id',
+        'message-sender', 'message-recipient', 'message-subject', 'message-body',
+        'run-phase', 'application-status', 'event-status']) byId(id).value = '';
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });
