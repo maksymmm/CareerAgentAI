@@ -1,3 +1,13 @@
+Candidate terminal-decline restart acceptance: an explicit decline at the application,
+message, or interview approval gate remains terminal after a new RuntimeCandidateApp
+opens the same SQLite database. Authenticated status restores the exact terminal
+snapshot; authenticated POST /continue returns the same FAILED phase without advancing
+the state version or changing provider attempt/effect ledgers. Parameterized production-
+composition regressions cover all three human gates and preserve only effects from
+earlier approved gates. ADR 0024 records the contract.
+Next: exact-head full CI/coverage and Codex code/security review; then continue
+candidate workflow recovery and sandbox-provider integration hardening.
+
 Relevance boundary follow-up: hyphens are separators between complete technology
 identifiers and location tokens, while letters, digits, underscore, plus, hash and
 period remain part of identifier boundaries. Java matches Java-based and New matches
