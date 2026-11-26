@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate browser recovery for application and communication timeouts:
+the Chromium acceptance now restarts the runtime after an application
+`TIMEOUT_AFTER_EFFECT`, reauthenticates and reconciles the exact provider
+submission ID, then repeats the lifecycle for a message `TIMEOUT_AFTER_EFFECT`.
+Both reconciliation actions require a fresh owner-scoped version snapshot and
+explicit candidate attestation. The same run then completes its sandbox calendar
+action. The test asserts exactly one application submission, one outbound
+message and one calendar effect, with zero provider replays.
+
+Next: extend the same restart contract to candidate-approved employer withdrawal,
+including durable withdrawal intent discovery and receipt reconciliation.
