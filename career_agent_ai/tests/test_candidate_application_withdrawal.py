@@ -293,7 +293,7 @@ def test_withdrawal_openapi_is_authenticated_strict_and_tracker_only():
         "type": "boolean", "const": True
     }
     assert operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"] == "no-store"
-    assert "no employer notification" in operation["responses"]["200"]["description"]
+    assert "no withdrawal notice" in operation["responses"]["200"]["description"]
 
 
 def test_runtime_withdrawal_survives_restart_and_rejects_stale_replay(tmp_path):
