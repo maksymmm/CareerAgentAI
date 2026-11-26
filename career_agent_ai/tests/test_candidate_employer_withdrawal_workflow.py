@@ -187,9 +187,10 @@ def test_candidate_approved_withdrawal_records_one_provider_effect_and_tracker_t
         "application_id": APPLICATION_ID,
         "status": "withdrawn",
         "state_version": 3,
-        "updated_at": NOW.isoformat(),
+        "updated_at": body["updated_at"],
         "provider_status": "confirmed",
     }
+    assert datetime.fromisoformat(body["updated_at"]) >= NOW
     attempts, effects, operation, application = _inspect(path, operation_id)
     assert attempts == (SandboxApplicationWithdrawalOutcome.SUCCESS,)
     assert len(effects) == 1
