@@ -1229,3 +1229,55 @@ def test_ci_enforces_independent_coverage_gate_after_pytest():
     pytest_step = workflow.index("python -m pytest")
     coverage_gate = workflow.index("python -m coverage report --fail-under=90")
     assert coverage_gate > pytest_step
+
+
+def test_pending_decline_collection_rejects_detached_operation_rewritten_for_foreign_owner(tmp_path):
+    path = tmp_path / "decline-intent-detached-owner-tamper.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(
+        path,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    assert candidate.decline()[0] == "202 Accepted"
+
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            """
+            SELECT operation_id, payload_json
+            FROM external_action_operations
+            WHERE action_type = 'calendar.decline'
+            """
+        ).fetchone()
+        assert row is not None
+        old_operation_id, payload_json = row
+        payload = json.loads(payload_json)
+        payload["candidate_id"] = "candidate-2"
+        new_operation_id = CandidateScheduleDeclineWSGIApp._operation_id(
+            "candidate-2", EVENT_ID, 1
+        )
+        connection.execute(
+            """
+            UPDATE external_action_operations
+            SET operation_id = ?, payload_json = ?
+            WHERE operation_id = ?
+            """,
+            (
+                new_operation_id,
+                json.dumps(payload, separators=(",", ":")),
+                old_operation_id,
+            ),
+        )
+        assert connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0] is None
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert Candidate(path).pending_page() == (
+        "409 Conflict", {"error": "approval_conflict"}
+    )
+    assert _stored_event(path).status == ScheduleStatus.DECLINED
+    assert _effect_count(path) == 1
