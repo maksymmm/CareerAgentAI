@@ -385,21 +385,12 @@ def _run_parallel(path, work):
 def test_concurrent_submissions_through_the_service_yield_one_provider_effect(path):
     Stack(path).close()
     outcomes = _run_parallel(path, lambda s: s.service.submit(OP, **_submit_kwargs()))
-    assert all(o is None or isinstance(o, dict) for o in outcomes), outcomes
+    assert all(isinstance(o, dict) for o in outcomes), outcomes
 
     verifier = Stack(path, evidence=True)
+    assert verifier.status() == ExternalActionStatus.SUCCEEDED
     assert len(verifier.provider.ledger_entries()) == 1
     assert verifier.provider.attempts(OP) == (OUTCOME.SUCCESS,)
-    if verifier.status() == REQUIRED:
-        # A concurrent worker may conservatively move the shared in-progress
-        # operation to reconciliation_required before the first worker persists
-        # its success. Resolve that known race from the provider's own ledger.
-        evidence = verifier.provider.verify_submission(OP)
-        assert evidence.state == EvidenceState.PRESENT
-        verifier.service.resolve_reconciliation(
-            OP, submitted=True, provider_submission_id=evidence.provider_submission_id
-        )
-    assert verifier.status() == ExternalActionStatus.SUCCEEDED
     result = verifier.service.submit(OP, **_submit_kwargs())
     assert result["provider_submission_id"] == PID
     assert len(verifier.provider.ledger_entries()) == 1
