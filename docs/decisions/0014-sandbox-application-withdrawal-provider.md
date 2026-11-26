@@ -21,7 +21,11 @@ effect must be reconciled from durable evidence and must never create a second e
 Add `SQLiteSandboxApplicationWithdrawalProvider` as a provider-only integration
 primitive. It is permanently no-network and reports `is_dry_run = True`.
 
-The adapter binds an operation ID to a fingerprint containing the application ID and
+Before binding any withdrawal intent, the adapter verifies an exact prior row in
+`sandbox_submission_ledger` for both the application ID and provider submission ID
+while holding the same writer lock. A missing submission table or mismatched/absent
+row fails before intent, attempt, or outcome-plan consumption. The adapter then binds
+an operation ID to a fingerprint containing the application ID and
 the previously recorded provider submission ID. A unique application constraint
 prevents a second withdrawal operation from being bound to the same application.
 Attempts and effects are stored separately and transactionally.
