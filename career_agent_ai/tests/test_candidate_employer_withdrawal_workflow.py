@@ -695,62 +695,67 @@ def test_candidate_browser_recovers_timeout_after_runtime_restart_without_provid
     first_runtime = _app(path, plan)
     first_server, first_thread = _start_candidate_browser_server(first_runtime)
     port = first_server.server_port
+    first_stopped = False
     second_runtime = None
     second_server = None
     second_thread = None
     try:
         with sync_playwright() as playwright:
             browser, page = _open_candidate_browser(playwright, first_server)
-            page.locator("#confirm-employer-withdrawal").check()
-            page.locator("#withdraw-employer-application").click()
-            page.locator("#employer-withdrawal-state").get_by_text(
-                "Reload the application detail"
-            ).wait_for()
+            try:
+                page.locator("#confirm-employer-withdrawal").check()
+                page.locator("#withdraw-employer-application").click()
+                page.locator("#employer-withdrawal-state").get_by_text(
+                    "Reload the application detail"
+                ).wait_for()
 
-            attempts, effects, operation, application = _inspect(path, operation_id)
-            assert attempts == (SandboxApplicationWithdrawalOutcome.TIMEOUT_AFTER_EFFECT,)
-            assert len(effects) == 1 and effects[0].replays == 0
-            assert operation.status is ExternalActionStatus.RECONCILIATION_REQUIRED
-            assert application.status is JobApplicationStatus.APPLIED
+                attempts, effects, operation, application = _inspect(path, operation_id)
+                assert attempts == (SandboxApplicationWithdrawalOutcome.TIMEOUT_AFTER_EFFECT,)
+                assert len(effects) == 1 and effects[0].replays == 0
+                assert operation.status is ExternalActionStatus.RECONCILIATION_REQUIRED
+                assert application.status is JobApplicationStatus.APPLIED
 
-            first_server.shutdown()
-            first_thread.join(timeout=5)
-            assert not first_thread.is_alive()
-            first_server.server_close()
-            first_runtime.close()
+                first_server.shutdown()
+                first_thread.join(timeout=5)
+                assert not first_thread.is_alive()
+                first_server.server_close()
+                first_stopped = True
+                first_runtime.close()
 
-            def forbid_provider_retry(_operation_id, _attempt):
-                raise AssertionError("durable evidence must be reconciled before provider retry")
+                def forbid_provider_retry(_operation_id, _attempt):
+                    raise AssertionError("durable evidence must be reconciled before provider retry")
 
-            second_runtime = _app(path, forbid_provider_retry)
-            second_server, second_thread = _start_candidate_browser_server(
-                second_runtime, port=port
-            )
-            page.reload(wait_until="domcontentloaded")
-            assert page.locator("#token").input_value() == ""
-            page.locator("#token").fill("valid")
-            page.locator("#list-applications").click()
-            page.locator("#owned-applications button").first.wait_for()
-            page.locator("#owned-applications button").first.click()
-            page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
-            page.locator("#confirm-employer-withdrawal").check()
-            page.locator("#withdraw-employer-application").click()
-            page.locator("#employer-withdrawal-state").get_by_text(
-                "Sandbox provider confirmed"
-            ).wait_for()
-            assert '"status": "withdrawn"' in page.locator(
-                "#application-detail"
-            ).text_content()
-            browser.close()
+                second_runtime = _app(path, forbid_provider_retry)
+                second_server, second_thread = _start_candidate_browser_server(
+                    second_runtime, port=port
+                )
+                page.reload(wait_until="domcontentloaded")
+                assert page.locator("#token").input_value() == ""
+                page.locator("#token").fill("valid")
+                page.locator("#list-applications").click()
+                page.locator("#owned-applications button").first.wait_for()
+                page.locator("#owned-applications button").first.click()
+                page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
+                page.locator("#confirm-employer-withdrawal").check()
+                page.locator("#withdraw-employer-application").click()
+                page.locator("#employer-withdrawal-state").get_by_text(
+                    "Sandbox provider confirmed"
+                ).wait_for()
+                assert '"status": "withdrawn"' in page.locator(
+                    "#application-detail"
+                ).text_content()
+            finally:
+                browser.close()
     finally:
         if second_server is not None:
             second_server.shutdown()
             second_thread.join(timeout=5)
             assert not second_thread.is_alive()
             second_server.server_close()
-        else:
+        elif not first_stopped:
             first_server.shutdown()
             first_thread.join(timeout=5)
+            assert not first_thread.is_alive()
             first_server.server_close()
         first_runtime.close()
         if second_runtime is not None:
