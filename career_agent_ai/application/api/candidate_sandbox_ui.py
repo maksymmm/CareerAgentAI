@@ -157,7 +157,7 @@ _HTML = r"""<!doctype html>
     <pre id="application-detail" role="region" aria-labelledby="application-detail-title" aria-busy="false"></pre>
     <button id="load-application-history" type="button" disabled>Load application history</button>
     <button id="withdraw-application" type="button" disabled>Mark application as withdrawn</button>
-    <p class="muted">This records your decision in the local tracker only. It does not notify the employer or retract a submitted application.</p>
+    <p class="muted">This records your decision in the local tracker only. It does not send a withdrawal notice or retract a submitted application.</p>
     <p id="application-history-state" role="status"></p>
     <h3 id="application-history-title" class="visually-hidden">Application history</h3>
     <pre id="application-history" role="region" aria-labelledby="application-history-title" aria-busy="false"></pre>
@@ -558,7 +558,7 @@ _HTML = r"""<!doctype html>
         throw new Error('Select a fresh, withdrawable application snapshot first.');
       }
       if (!window.confirm(
-        'Mark this application as withdrawn in your tracker? The employer will not be notified and no submitted application will be retracted.'
+        'Mark this application as withdrawn in your tracker? No withdrawal notice will be sent and no submitted application will be retracted.'
       )) return;
       const generation = applicationDetailGeneration;
       applicationWithdrawalInFlight = true;
@@ -594,7 +594,7 @@ _HTML = r"""<!doctype html>
         applicationVersionFloor = result.state_version;
         updateApplicationWithdrawalControl();
         byId('application-detail-state').textContent =
-          'Marked withdrawn in the local tracker. No employer notification was sent.';
+          'Marked withdrawn in the local tracker. No withdrawal notice was sent.';
         const row = Array.from(byId('owned-applications').children)
           .find(candidate => candidate.dataset.applicationId === applicationId);
         const summary = row && row.querySelector('[data-role="application-summary"]');
