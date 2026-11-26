@@ -179,3 +179,19 @@ def test_concurrent_send_waits_for_committed_timeout_effect_and_replays_after_re
         assert messages == [(_MESSAGE.message_id, MessageDirection.OUTBOUND.value)]
     finally:
         restarted.close()
+
+
+def test_ci_runs_independent_coverage_gate_after_full_pytest():
+    """The CI workflow must enforce coverage independently after the full test suite."""
+    from pathlib import Path
+
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    assert "name: Run test suite" in workflow
+    assert "name: Enforce independent coverage threshold" in workflow
+    assert "python -m pytest" in workflow
+    assert "python -m coverage report --fail-under=90" in workflow
+    assert workflow.index("python -m pytest") < workflow.index(
+        "python -m coverage report --fail-under=90"
+    )
