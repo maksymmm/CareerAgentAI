@@ -1707,6 +1707,14 @@ _HTML = r"""<!doctype html>
           clearEventDetail();
           byId('event-decline-state').textContent =
             'Sandbox provider confirmed the decline. Reload events for the latest snapshot.';
+        } else if (result.provider_status === 'no_effect_confirmed') {
+          if (!['proposed', 'reschedule_requested'].includes(result.status) ||
+              result.state_version !== version) {
+            throw new Error('Invalid no-effect decline snapshot.');
+          }
+          clearEventDetail();
+          byId('event-decline-state').textContent =
+            'Sandbox provider confirmed no decline effect. Reload the event and make a new explicit decision before retrying.';
         } else {
           throw new Error('Unexpected decline outcome.');
         }
