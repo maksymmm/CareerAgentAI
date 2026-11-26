@@ -255,3 +255,39 @@ def test_concurrent_same_intent_produces_one_effect_and_one_attempt(tmp_path):
     )
     assert verifier.ledger_entries()[0].replays == 1
     database.close()
+
+def test_interrupted_before_effect_can_retry_after_restart_without_replay(tmp_path):
+    path = tmp_path / "interrupted.sqlite"
+    plan = scripted_withdrawal_outcomes(
+        {
+            "withdraw:op-interrupted": (
+                SandboxApplicationWithdrawalOutcome.INTERRUPTED_BEFORE_EFFECT,
+                SandboxApplicationWithdrawalOutcome.SUCCESS,
+            )
+        }
+    )
+    database, provider = _provider(path, plan)
+    with pytest.raises(ConnectionError, match="connection was interrupted"):
+        provider.withdraw(
+            "withdraw:op-interrupted", "application-interrupted", "submission-interrupted"
+        )
+    assert provider.attempts("withdraw:op-interrupted") == (
+        SandboxApplicationWithdrawalOutcome.INTERRUPTED_BEFORE_EFFECT,
+    )
+    assert provider.effect_count("withdraw:op-interrupted") == 0
+    assert provider.verify_withdrawal("withdraw:op-interrupted").state is (
+        WithdrawalEvidenceState.ABSENT_CONFIRMED
+    )
+    database.close()
+
+    reopened, recovered = _provider(path, plan)
+    receipt = recovered.withdraw(
+        "withdraw:op-interrupted", "application-interrupted", "submission-interrupted"
+    )
+    assert receipt.replays == 0
+    assert recovered.attempts("withdraw:op-interrupted") == (
+        SandboxApplicationWithdrawalOutcome.INTERRUPTED_BEFORE_EFFECT,
+        SandboxApplicationWithdrawalOutcome.SUCCESS,
+    )
+    assert recovered.effect_count("withdraw:op-interrupted") == 1
+    reopened.close()
