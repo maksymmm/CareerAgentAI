@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Communication provider concurrency hardening: a new provider-boundary regression
+uses independent SQLite connections to race the same send operation while the first
+transaction is held inside a TIMEOUT_AFTER_EFFECT outcome. The first request commits
+one outbound message and loses its response; the duplicate waits for the writer,
+returns the exact durable message, and does not invoke the outcome plan again. A third
+provider instance verifies positive evidence and replays after restart without another
+attempt or message. The ledger must contain one attempt, one delivery, one outbound
+message, and two counted replays. Synthetic addresses and the no-network SQLite
+provider only. Next: extend the same concurrency contract to communication replies and
+exercise candidate-approved interview reschedule/decline browser recovery with exact
+owner, event-version, and provider-effect fencing.
