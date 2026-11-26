@@ -38,6 +38,9 @@ jobs:
             sleep "$((attempt * 15))"
           done
 
+      - name: Enforce independent coverage threshold
+        run: python -m coverage report --fail-under=90
+
       - name: Run test suite
         run: |
           python -m pytest             --cov=career_agent_ai             --cov-report=term-missing             --cov-fail-under=90
