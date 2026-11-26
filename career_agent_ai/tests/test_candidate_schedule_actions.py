@@ -1657,3 +1657,153 @@ def test_candidate_dashboard_paginates_pending_reschedules_and_revalidates_stale
             connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
         )
     assert final_counts == baseline_counts
+
+
+def test_candidate_dashboard_ignores_delayed_pending_reschedule_page_after_selection(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from wsgiref.simple_server import WSGIRequestHandler, make_server
+
+    path = tmp_path / "candidate-browser-delayed-pending-reschedule-page.sqlite"
+    events = tuple(
+        _event(
+            f"pending-reschedule-delay-{index:03d}",
+            start_at=datetime(2026, 12, 1, 9, 0, tzinfo=timezone.utc)
+            + timedelta(days=index),
+        )
+        for index in range(26)
+    )
+    _seed(path, *events)
+    first = Candidate(
+        path, lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT
+    )
+    try:
+        for index, event in enumerate(events):
+            target_start = datetime(
+                2026, 12, 1, 12, 0, tzinfo=timezone(timedelta(hours=1))
+            ) + timedelta(days=index)
+            status, result = first.call(
+                CandidateScheduleActionWSGIApp.RESCHEDULE_PATH,
+                body=_body(
+                    event_id=event.event_id,
+                    start_at=target_start.isoformat(),
+                    end_at=(target_start + timedelta(hours=1)).isoformat(),
+                ),
+            )
+            assert status == "202 Accepted"
+            assert result["outcome"] == "reconciliation_required"
+    finally:
+        first.close()
+
+    with sqlite3.connect(path) as connection:
+        baseline_counts = (
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_attempts").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
+        )
+    assert baseline_counts == (len(events), len(events))
+
+    restarted = Candidate(path)
+    page_two_started = Event()
+    release_page_two = Event()
+
+    def delayed_app(environ, start_response):
+        is_page_two = (
+            environ.get("PATH_INFO") == CandidateScheduleActionWSGIApp.PENDING_COLLECTION_PATH
+            and "after=" in environ.get("QUERY_STRING", "")
+        )
+        if is_page_two:
+            page_two_started.set()
+            if not release_page_two.wait(timeout=10):
+                raise RuntimeError("Timed out waiting to release the delayed discovery page.")
+        return restarted.app(environ, start_response)
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server(
+        "127.0.0.1", 0, delayed_app, handler_class=QuietHandler
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+                page.evaluate(
+                    """() => {
+                      const originalFetch = window.fetch.bind(window);
+                      window.__delayedPendingPageConsumed = false;
+                      window.fetch = async (...args) => {
+                        const response = await originalFetch(...args);
+                        const input = args[0];
+                        const url = typeof input === 'string' ? input : input.url;
+                        if (url.includes('/v1/candidate/schedule-event/reschedule-intents') &&
+                            url.includes('after=')) {
+                          await response.clone().arrayBuffer();
+                          window.__delayedPendingPageConsumed = true;
+                        }
+                        return response;
+                      };
+                    }"""
+                )
+                page.locator("#token").fill("owner-token")
+                page.locator("#list-pending-reschedules").click()
+
+                expected_first = (
+                    "Review pending reschedule for event " + events[0].event_id
+                )
+                expected_last = (
+                    "Review pending reschedule for event " + events[24].event_id
+                )
+                page.get_by_role("button", name=expected_last).wait_for()
+                buttons = page.locator("#pending-reschedule-items button")
+                assert buttons.count() == 25
+
+                next_page = page.locator("#next-pending-reschedules")
+                assert not next_page.is_disabled()
+                next_page.click()
+                assert page_two_started.wait(timeout=5)
+
+                # The first page remains selectable while page two is delayed. Selection
+                # must invalidate the entire collection before the delayed response lands.
+                page.get_by_role("button", name=expected_first).click()
+                assert buttons.count() == 0
+                assert next_page.is_disabled()
+                assert page.locator("#list-pending-reschedules").is_enabled()
+
+                release_page_two.set()
+                page.wait_for_function(
+                    "() => window.__delayedPendingPageConsumed === true"
+                )
+                page.locator("#reschedule-reconciliation-state").get_by_text(
+                    "An ambiguous reschedule was restored from durable storage"
+                ).wait_for()
+
+                # The stale page response must not repopulate the list or restore its
+                # cursor after the authoritative event and per-event reads complete.
+                assert buttons.count() == 0
+                assert next_page.is_disabled()
+
+                # A fresh explicit discovery must still work after the invalidated
+                # request finishes; its stale finally block cannot poison the new state.
+                page.locator("#list-pending-reschedules").click()
+                page.get_by_role("button", name=expected_last).wait_for()
+                assert buttons.count() == 25
+                assert not next_page.is_disabled()
+            finally:
+                browser.close()
+    finally:
+        release_page_two.set()
+        server.shutdown()
+        thread.join(timeout=10)
+        server.server_close()
+        restarted.close()
+
+    with sqlite3.connect(path) as connection:
+        final_counts = (
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_attempts").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM sandbox_calendar_effects").fetchone()[0],
+        )
+    assert final_counts == baseline_counts
