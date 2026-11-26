@@ -5,14 +5,15 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from hashlib import sha256
-from threading import Barrier, Thread
+from threading import Barrier, Event, Lock, Thread
 
 import pytest
 
 from career_agent_ai.application.api import candidate_approval_openapi_document
-from career_agent_ai.application.career import ApplicationSubmissionService
+from career_agent_ai.application.career import ApplicationSubmissionService, EvidenceState
 from career_agent_ai.application.career.application_submission import PreSubmissionError
 from career_agent_ai.application.external_actions import (
     ExternalActionService,
@@ -580,3 +581,95 @@ def test_openapi_contract_exposes_no_new_sandbox_provider_surface():
     assert methods == {"post"}
     assert "409" in paths[route]["post"]["responses"]
     assert not [p for p in paths if "ledger" in p or "provider" in p or "sandbox-" in p]
+
+
+
+def test_concurrent_timeout_after_effect_replay_is_exactly_once_across_restart(path):
+    """A same-key duplicate observes one committed submission after the first response is lost."""
+    setup = SQLiteDatabase(str(path))
+    SQLiteSandboxSubmissionProvider(setup)
+    setup.close()
+
+    start = Event()
+    ready = (Event(), Event())
+    calling = (Event(), Event())
+    plan_entered = Event()
+    release_plan = Event()
+    plan_lock = Lock()
+    plan_calls: list[tuple[str, int]] = []
+
+    def plan(operation_id: str, attempt_no: int) -> SandboxOutcome:
+        with plan_lock:
+            plan_calls.append((operation_id, attempt_no))
+        plan_entered.set()
+        if not release_plan.wait(timeout=10):
+            raise TimeoutError("Test did not release the application provider plan.")
+        return OUTCOME.TIMEOUT_AFTER_EFFECT
+
+    args = (OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
+
+    def submit(index: int):
+        database = SQLiteDatabase(str(path))
+        provider = SQLiteSandboxSubmissionProvider(database, plan)
+        ready[index].set()
+        try:
+            if not start.wait(timeout=10):
+                raise TimeoutError("Concurrent application submission was not released.")
+            calling[index].set()
+            return provider.submit(*args)
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(submit, index) for index in range(2)]
+        try:
+            assert ready[0].wait(timeout=5)
+            assert ready[1].wait(timeout=5)
+            start.set()
+            assert calling[0].wait(timeout=5)
+            assert calling[1].wait(timeout=5)
+            assert plan_entered.wait(timeout=5)
+
+            # The first connection holds BEGIN IMMEDIATE while the duplicate waits.
+            assert not any(future.done() for future in futures)
+        finally:
+            release_plan.set()
+
+        done, pending = wait(futures, timeout=10)
+        assert not pending
+        failures = [future.exception() for future in done]
+        assert sum(isinstance(error, TimeoutError) for error in failures) == 1
+        successful = [
+            future.result()
+            for future in futures
+            if future.exception() is None
+        ]
+
+    expected = {
+        "job_id": "job-1",
+        "application_id": "application-1",
+        "provider_submission_id": "fake:application-1",
+        "artifact_sha256": DIGEST,
+        "candidate_snapshot_sha256": SNAPSHOT,
+    }
+    assert successful == [expected]
+    assert plan_calls == [(OP, 1)]
+
+    restarted = Stack(path, always(OUTCOME.NO_EFFECT), evidence=True)
+    evidence = restarted.provider.verify_submission(OP)
+    assert evidence.state == EvidenceState.PRESENT
+    assert evidence.job_id == "job-1"
+    assert evidence.application_id == "application-1"
+    assert evidence.provider_submission_id == "fake:application-1"
+    assert evidence.artifact_sha256 == DIGEST
+    assert evidence.candidate_snapshot_sha256 == SNAPSHOT
+
+    # A fresh provider replays the committed effect without consuming its plan.
+    assert restarted.provider.submit(*args) == expected
+    assert restarted.provider.attempts(OP) == (OUTCOME.TIMEOUT_AFTER_EFFECT,)
+    entry = restarted.provider.observe(OP)
+    assert entry is not None
+    assert entry.replays == 2  # one concurrent duplicate plus one restart replay
+    assert len(restarted.provider.ledger_entries()) == 1
+    assert plan_calls == [(OP, 1)]
+    restarted.close()
