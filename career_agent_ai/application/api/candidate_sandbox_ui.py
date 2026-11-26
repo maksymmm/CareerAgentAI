@@ -1287,6 +1287,7 @@ _HTML = r"""<!doctype html>
         byId('decline').disabled = false;
       } catch (error) {
         if (promptGeneration === approvalPromptGeneration) {
+          invalidateCancellationEligibility();
           byId('action-title').textContent = error.code === 'approval_unavailable'
             ? 'Approval is no longer available. Refresh run status.'
             : error.code === 'approval_conflict'
@@ -1296,7 +1297,6 @@ _HTML = r"""<!doctype html>
         throw error;
       } finally {
         promptInFlight = false;
-        updateCancellationControl();
         updateCancellationControl();
         if (activePromptLoadGeneration === promptGeneration) {
           activePromptLoadGeneration = null;
