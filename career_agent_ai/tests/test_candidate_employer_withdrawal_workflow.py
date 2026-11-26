@@ -628,3 +628,50 @@ def test_candidate_browser_requires_fresh_explicit_confirmation_after_no_effect(
     assert operation.status is ExternalActionStatus.SUCCEEDED
     assert application.status is JobApplicationStatus.WITHDRAWN
     assert application.version == 3
+
+
+def test_candidate_browser_history_advance_invalidates_old_withdrawal_confirmation(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "candidate-employer-withdrawal-stale-confirmation.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    app = _app(path)
+    server, thread = _start_candidate_browser_server(app)
+    try:
+        with sync_playwright() as playwright:
+            browser, page = _open_candidate_browser(playwright, server)
+            confirmation = page.locator("#confirm-employer-withdrawal")
+            submit = page.locator("#withdraw-employer-application")
+            confirmation.check()
+            assert submit.is_enabled()
+
+            # Simulate a second candidate tab completing the same approved action.
+            status, _, body = _request(app, _body())
+            assert status == "200 OK"
+            assert body["provider_status"] == "confirmed"
+
+            page.locator("#load-application-history").click()
+            page.wait_for_function(
+                "JSON.parse(document.querySelector('#application-history').textContent).state_version === 3"
+            )
+            assert not confirmation.is_checked()
+            assert confirmation.is_disabled()
+            assert submit.is_disabled()
+            assert '"status": "withdrawn"' in page.locator(
+                "#application-detail"
+            ).text_content()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        app.close()
+
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == (SandboxApplicationWithdrawalOutcome.SUCCESS,)
+    assert len(effects) == 1 and effects[0].replays == 0
+    assert operation.status is ExternalActionStatus.SUCCEEDED
+    assert application.status is JobApplicationStatus.WITHDRAWN
+    assert application.version == 3
