@@ -50,6 +50,17 @@ class JobApplicationRepository(ABC):
     ) -> JobApplication | None:
         """Return an application by identifier."""
 
+    def get_owned(self, application_id: str, *, user_id: str) -> JobApplication | None:
+        """Return an application only when it belongs to the supplied owner.
+
+        Storage adapters should override this method to apply the owner predicate
+        before decoding private aggregate children.
+        """
+        application = self.get(application_id)
+        if application is None or application.user_id != user_id:
+            return None
+        return application
+
     @abstractmethod
     def list(
         self,
