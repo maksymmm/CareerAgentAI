@@ -510,9 +510,7 @@ def _open_candidate_browser(playwright, server):
     page.locator("#list-applications").click()
     page.locator("#owned-applications button").first.wait_for()
     page.locator("#owned-applications button").first.click()
-    page.wait_for_function(
-        "JSON.parse(document.querySelector('#application-detail').textContent).status === 'applied'"
-    )
+    page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
     return browser, page
 
 
@@ -535,9 +533,7 @@ def test_candidate_browser_explicitly_approves_sandbox_employer_withdrawal_and_r
             confirmation.check()
             assert submit.is_enabled()
             submit.click()
-            page.wait_for_function(
-                "document.querySelector('#employer-withdrawal-state').textContent.includes('Sandbox provider confirmed')"
-            )
+            page.locator("#employer-withdrawal-state").get_by_text("Sandbox provider confirmed").wait_for()
             detail = page.locator("#application-detail").text_content()
             assert '"status": "withdrawn"' in detail
             assert '"state_version": 3' in detail
@@ -545,9 +541,7 @@ def test_candidate_browser_explicitly_approves_sandbox_employer_withdrawal_and_r
             assert submit.is_disabled()
 
             page.locator("#load-application-history").click()
-            page.wait_for_function(
-                "JSON.parse(document.querySelector('#application-history').textContent).items.some(item => item.to_status === 'withdrawn')"
-            )
+            page.locator("#application-history").get_by_text('"to_status": "withdrawn"').wait_for()
             assert "No real employer was contacted" in page.locator(
                 "#employer-withdrawal-state"
             ).text_content()
@@ -586,9 +580,7 @@ def test_candidate_browser_requires_fresh_explicit_confirmation_after_no_effect(
             browser, page = _open_candidate_browser(playwright, server)
             page.locator("#confirm-employer-withdrawal").check()
             page.locator("#withdraw-employer-application").click()
-            page.wait_for_function(
-                "document.querySelector('#employer-withdrawal-state').textContent.includes('No automatic retry occurred')"
-            )
+            page.locator("#employer-withdrawal-state").get_by_text("No automatic retry occurred").wait_for()
             assert page.locator("#application-detail").text_content() == ""
             assert page.locator("#confirm-employer-withdrawal").is_disabled()
             assert page.locator("#withdraw-employer-application").is_disabled()
@@ -601,14 +593,10 @@ def test_candidate_browser_requires_fresh_explicit_confirmation_after_no_effect(
 
             # A new detail read and a second explicit checkbox decision are required.
             page.locator("#owned-applications button").first.click()
-            page.wait_for_function(
-                "JSON.parse(document.querySelector('#application-detail').textContent).status === 'applied'"
-            )
+            page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
             page.locator("#confirm-employer-withdrawal").check()
             page.locator("#withdraw-employer-application").click()
-            page.wait_for_function(
-                "document.querySelector('#employer-withdrawal-state').textContent.includes('Sandbox provider confirmed')"
-            )
+            page.locator("#employer-withdrawal-state").get_by_text("Sandbox provider confirmed").wait_for()
             assert '"status": "withdrawn"' in page.locator(
                 "#application-detail"
             ).text_content()
@@ -653,9 +641,7 @@ def test_candidate_browser_history_advance_invalidates_old_withdrawal_confirmati
             assert body["provider_status"] == "confirmed"
 
             page.locator("#load-application-history").click()
-            page.wait_for_function(
-                "JSON.parse(document.querySelector('#application-history').textContent).state_version === 3"
-            )
+            page.locator("#application-history").get_by_text('"state_version": 3').wait_for()
             assert not confirmation.is_checked()
             assert confirmation.is_disabled()
             assert submit.is_disabled()
