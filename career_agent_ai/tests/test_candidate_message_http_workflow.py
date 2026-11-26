@@ -278,6 +278,8 @@ def test_candidate_ci_enforces_independent_coverage_gate_after_pytest():
 
     assert pytest_command in test_job
     assert coverage_command in test_job
+    assert "id: pytest" in test_job
+    assert "if: ${{ always() && !cancelled() && steps.pytest.outcome != 'skipped' }}" in test_job
     assert test_job.index(pytest_command) < test_job.index(coverage_command)
 
 
