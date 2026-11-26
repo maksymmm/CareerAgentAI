@@ -34,7 +34,7 @@ The write path:
 - returns a minimal versioned result and requires a fresh read after conflicts.
 
 The candidate dashboard labels this action as a local tracker update and explains
-that no employer notification is sent and no previously submitted application is
+that no withdrawal notice is sent and no previously submitted application is
 retracted.
 
 ## Consequences
