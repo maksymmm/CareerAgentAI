@@ -1590,3 +1590,23 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate interview calendar no-effect retry after runtime restart:
+
+A new RuntimeCandidateApp regression drives application approval and one sandbox
+message delivery to the interview-approval gate. The SQLite sandbox calendar provider
+then durably records a `NO_EFFECT` attempt before returning its pre-effect failure.
+The candidate run remains in the approved `INTERVIEW_ACCEPT` recovery phase, the
+schedule event remains proposed, and the calendar effect ledger is empty. After the
+first runtime closes and a second runtime opens the same database, authenticated
+`/continue` reopens the same failed operation ID and succeeds on attempt two.
+
+The regression proves one accepted calendar effect, zero calendar replays, one
+application submission, one outbound sandbox message, and terminal candidate
+`COMPLETE`. It distinguishes a confirmed pre-effect failure from the existing
+timeout-after-effect reconciliation path. All provider effects are synthetic and
+SQLite-local.
+
+Next: exact-head CI and independent review, then reconcile this no-effect retry with
+the full-provider timeout-after-effect acceptance without duplicating provider effects.
