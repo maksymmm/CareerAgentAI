@@ -1668,3 +1668,14 @@ a fresh detail read and a second explicit decision. The UI clearly identifies th
 SQLite sandbox boundary and states that no real employer was contacted. See ADR 0016.
 Next: add browser reload/restart coverage for the same durable employer-withdrawal
 operation and verify status through a read-only candidate-owned projection.
+
+
+Employer withdrawal restart recovery: a new Chromium regression drives a durable
+TIMEOUT_AFTER_EFFECT, makes the first provider-evidence lookup unavailable, closes
+RuntimeCandidateApp and the browser, then restores a second runtime over the same
+SQLite database. A fresh owner-scoped application read and explicit candidate
+confirmation reconcile the existing effect from provider evidence. The second runtime
+fails the test if it invokes the provider again. Assertions require one attempt, one
+effect, zero replays, a SUCCEEDED external action, and a WITHDRAWN tracker at version 3.
+See ADR 0021. Next: exact-head full CI/coverage and independent code/security review,
+then continue withdrawal audit/recovery hardening.

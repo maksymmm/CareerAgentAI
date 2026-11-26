@@ -488,7 +488,7 @@ def test_concurrent_duplicate_candidate_approvals_create_one_provider_effect(tmp
     app.close()
 
 
-def _start_candidate_browser_server(app):
+def _start_candidate_browser_server(app, port=0):
     from threading import Thread
     from wsgiref.simple_server import WSGIRequestHandler, make_server
 
@@ -496,7 +496,7 @@ def _start_candidate_browser_server(app):
         def log_message(self, format, *args):
             pass
 
-    server = make_server("127.0.0.1", 0, app, handler_class=QuietHandler)
+    server = make_server("127.0.0.1", port, app, handler_class=QuietHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
@@ -657,6 +657,112 @@ def test_candidate_browser_history_advance_invalidates_old_withdrawal_confirmati
 
     attempts, effects, operation, application = _inspect(path, operation_id)
     assert attempts == (SandboxApplicationWithdrawalOutcome.SUCCESS,)
+    assert len(effects) == 1 and effects[0].replays == 0
+    assert operation.status is ExternalActionStatus.SUCCEEDED
+    assert application.status is JobApplicationStatus.WITHDRAWN
+    assert application.version == 3
+
+
+def test_candidate_browser_recovers_timeout_after_runtime_restart_without_provider_replay(
+    tmp_path, monkeypatch
+):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "candidate-employer-withdrawal-runtime-restart.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    plan = scripted_withdrawal_outcomes({
+        operation_id: [SandboxApplicationWithdrawalOutcome.TIMEOUT_AFTER_EFFECT]
+    })
+
+    original_verify = SQLiteSandboxApplicationWithdrawalProvider.verify_withdrawal
+    evidence_reads = 0
+
+    def evidence_unavailable_once(self, *args, **kwargs):
+        nonlocal evidence_reads
+        evidence_reads += 1
+        if evidence_reads == 1:
+            raise RuntimeError("simulated process loss before reconciliation")
+        return original_verify(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        SQLiteSandboxApplicationWithdrawalProvider,
+        "verify_withdrawal",
+        evidence_unavailable_once,
+    )
+
+    first_runtime = _app(path, plan)
+    first_server, first_thread = _start_candidate_browser_server(first_runtime)
+    port = first_server.server_port
+    first_stopped = False
+    second_runtime = None
+    second_server = None
+    second_thread = None
+    try:
+        with sync_playwright() as playwright:
+            browser, page = _open_candidate_browser(playwright, first_server)
+            try:
+                page.locator("#confirm-employer-withdrawal").check()
+                page.locator("#withdraw-employer-application").click()
+                page.locator("#employer-withdrawal-state").get_by_text(
+                    "Reload the application detail"
+                ).wait_for()
+
+                attempts, effects, operation, application = _inspect(path, operation_id)
+                assert attempts == (SandboxApplicationWithdrawalOutcome.TIMEOUT_AFTER_EFFECT,)
+                assert len(effects) == 1 and effects[0].replays == 0
+                assert operation.status is ExternalActionStatus.RECONCILIATION_REQUIRED
+                assert application.status is JobApplicationStatus.APPLIED
+
+                first_server.shutdown()
+                first_thread.join(timeout=5)
+                assert not first_thread.is_alive()
+                first_server.server_close()
+                first_stopped = True
+                first_runtime.close()
+
+                def forbid_provider_retry(_operation_id, _attempt):
+                    raise AssertionError("durable evidence must be reconciled before provider retry")
+
+                second_runtime = _app(path, forbid_provider_retry)
+                second_server, second_thread = _start_candidate_browser_server(
+                    second_runtime, port=port
+                )
+                page.reload(wait_until="domcontentloaded")
+                assert page.locator("#token").input_value() == ""
+                page.locator("#token").fill("valid")
+                page.locator("#list-applications").click()
+                page.locator("#owned-applications button").first.wait_for()
+                page.locator("#owned-applications button").first.click()
+                page.locator("#application-detail").get_by_text('"status": "applied"').wait_for()
+                page.locator("#confirm-employer-withdrawal").check()
+                page.locator("#withdraw-employer-application").click()
+                page.locator("#employer-withdrawal-state").get_by_text(
+                    "Sandbox provider confirmed"
+                ).wait_for()
+                assert '"status": "withdrawn"' in page.locator(
+                    "#application-detail"
+                ).text_content()
+            finally:
+                browser.close()
+    finally:
+        if second_server is not None:
+            second_server.shutdown()
+            second_thread.join(timeout=5)
+            assert not second_thread.is_alive()
+            second_server.server_close()
+        elif not first_stopped:
+            first_server.shutdown()
+            first_thread.join(timeout=5)
+            assert not first_thread.is_alive()
+            first_server.server_close()
+        first_runtime.close()
+        if second_runtime is not None:
+            second_runtime.close()
+
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == (SandboxApplicationWithdrawalOutcome.TIMEOUT_AFTER_EFFECT,)
     assert len(effects) == 1 and effects[0].replays == 0
     assert operation.status is ExternalActionStatus.SUCCEEDED
     assert application.status is JobApplicationStatus.WITHDRAWN
