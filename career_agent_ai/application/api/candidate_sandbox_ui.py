@@ -178,7 +178,19 @@ _HTML = r"""<!doctype html>
     <h3 id="event-detail-title">Event detail</h3>
     <p id="event-detail-state" role="status"></p>
     <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
-    <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
+    <fieldset id="event-decline-panel" aria-busy="false">
+      <legend>Candidate-approved interview decline</legend>
+      <p id="event-decline-state" role="status">Select a proposed event and load its current detail before declining.</p>
+      <label class="attestation"><input id="confirm-event-decline" type="checkbox" disabled> I explicitly confirm that I want to decline this displayed interview proposal in the sandbox.</label>
+      <button id="decline-event" type="button" disabled>Decline selected event</button>
+      <label class="attestation"><input id="event-decline-reconciliation-verified" type="checkbox" disabled> I checked the sandbox provider's durable outcome for this exact event version.</label>
+      <div class="actions">
+        <button id="confirm-event-decline-completed" type="button" disabled>Confirm decline completed</button>
+        <button id="confirm-event-decline-not-completed" type="button" disabled>Confirm no decline effect</button>
+      </div>
+      <p class="muted">An ambiguous result blocks retries until sandbox evidence is reconciled. No real calendar is contacted or changed.</p>
+    </fieldset>
+    <p class="muted">Schedule snapshots are read-only; the separate decline control requires a fresh event version and explicit confirmation.</p>
   </section>
   <section aria-labelledby="interview-intents-title">
     <h2 id="interview-intents-title" tabindex="-1">Pending interview actions</h2>
@@ -210,6 +222,11 @@ _HTML = r"""<!doctype html>
     let messageReconciliationVersion = null;
     let interviewReconciliationAvailable = false;
     let interviewReconciliationVersion = null;
+    let eventDeclineInFlight = false;
+    let eventDeclineAvailable = false;
+    let eventDeclineVersion = null;
+    let eventDeclineReconciliationAvailable = false;
+    let eventDeclineReconciliationVersion = null;
     let selectedInterviewIntent = null;
     let interviewIntentsGeneration = 0;
     let nextInterviewIntentCursor = null;
@@ -312,10 +329,68 @@ _HTML = r"""<!doctype html>
     }
     let eventVersionFloorId = null;
     let eventVersionFloor = null;
+    function invalidateEventDecline(message =
+      'Select a proposed event and load its current detail before declining.') {
+      eventDeclineAvailable = false;
+      eventDeclineVersion = null;
+      eventDeclineReconciliationAvailable = false;
+      eventDeclineReconciliationVersion = null;
+      byId('confirm-event-decline').checked = false;
+      byId('confirm-event-decline').disabled = true;
+      byId('decline-event').disabled = true;
+      byId('event-decline-reconciliation-verified').checked = false;
+      byId('event-decline-reconciliation-verified').disabled = true;
+      byId('confirm-event-decline-completed').disabled = true;
+      byId('confirm-event-decline-not-completed').disabled = true;
+      byId('event-decline-state').textContent = message;
+    }
+    function enableEventDecline(version) {
+      eventDeclineAvailable = true;
+      eventDeclineVersion = version;
+      eventDeclineReconciliationAvailable = false;
+      eventDeclineReconciliationVersion = null;
+      byId('event-decline-state').textContent =
+        'Review the selected event, then explicitly confirm this sandbox decline.';
+      byId('confirm-event-decline').checked = false;
+      byId('confirm-event-decline').disabled = false;
+      byId('decline-event').disabled = true;
+      byId('event-decline-reconciliation-verified').checked = false;
+      byId('event-decline-reconciliation-verified').disabled = true;
+      byId('confirm-event-decline-completed').disabled = true;
+      byId('confirm-event-decline-not-completed').disabled = true;
+    }
+    function enableEventDeclineReconciliation(version) {
+      eventDeclineAvailable = false;
+      eventDeclineVersion = null;
+      eventDeclineReconciliationAvailable = true;
+      eventDeclineReconciliationVersion = version;
+      byId('event-decline-state').textContent =
+        'The provider response was ambiguous. Verify the durable sandbox outcome before recording it.';
+      byId('confirm-event-decline').checked = false;
+      byId('confirm-event-decline').disabled = true;
+      byId('decline-event').disabled = true;
+      byId('event-decline-reconciliation-verified').checked = false;
+      byId('event-decline-reconciliation-verified').disabled = false;
+      byId('confirm-event-decline-completed').disabled = true;
+      byId('confirm-event-decline-not-completed').disabled = true;
+    }
+    byId('confirm-event-decline').addEventListener('change', () => {
+      byId('decline-event').disabled =
+        !eventDeclineAvailable || !byId('confirm-event-decline').checked || eventDeclineInFlight;
+    });
+    byId('event-decline-reconciliation-verified').addEventListener('change', () => {
+      const enabled = eventDeclineReconciliationAvailable &&
+        byId('event-decline-reconciliation-verified').checked && !eventDeclineInFlight;
+      byId('confirm-event-decline-completed').disabled = !enabled;
+      byId('confirm-event-decline-not-completed').disabled = !enabled;
+    });
     function clearEventDetail() {
       if (eventDetailTrigger && eventDetailTrigger.isConnected) eventDetailTrigger.disabled = false;
       eventDetailTrigger = null;
       eventDetailGeneration += 1;
+      selectedEventId = null;
+      selectedEventVersion = null;
+      invalidateEventDecline();
       byId('event-detail').setAttribute('aria-busy', 'false');
       byId('event-detail').textContent = '';
       byId('event-detail-state').textContent = '';
@@ -351,6 +426,11 @@ _HTML = r"""<!doctype html>
         eventVersionFloor = snapshot.state_version;
         byId('event-detail').textContent = JSON.stringify(snapshot, null, 2);
         byId('event-detail-state').textContent = 'Read-only event detail.';
+        if (['proposed', 'reschedule_requested'].includes(snapshot.status)) {
+          enableEventDecline(snapshot.state_version);
+        } else {
+          invalidateEventDecline('Only proposed or reschedule-requested events can be declined.');
+        }
       } catch (error) {
         if (generation === eventDetailGeneration) {
           clearEventDetail(); byId('event-detail-state').textContent = 'Select the event again to retry.';
@@ -1581,6 +1661,130 @@ _HTML = r"""<!doctype html>
       guarded(() => reconcileInterview(true)));
     byId('confirm-calendar-not-completed').addEventListener('click', () =>
       guarded(() => reconcileInterview(false)));
+    function validEventDeclineResult(result, eventIdentifier) {
+      return result && typeof result === 'object' && !Array.isArray(result) &&
+        Object.keys(result).length === 5 &&
+        result.schema_version === 1 && result.event_id === eventIdentifier &&
+        ['proposed', 'reschedule_requested', 'declined'].includes(result.status) &&
+        Number.isSafeInteger(result.state_version) && result.state_version >= 1 &&
+        ['confirmed', 'reconciliation_required', 'no_effect_confirmed'].includes(result.provider_status);
+    }
+    async function declineSelectedEvent() {
+      if (!eventDeclineAvailable || selectedEventId === null ||
+          selectedEventVersion === null || eventDeclineVersion !== selectedEventVersion) {
+        throw new Error('Reload the selected event before declining.');
+      }
+      if (!byId('confirm-event-decline').checked) {
+        throw new Error('Explicit candidate confirmation is required.');
+      }
+      if (eventDeclineInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current candidate action to finish.');
+      }
+      const eventIdentifier = selectedEventId;
+      const version = eventDeclineVersion;
+      eventDeclineInFlight = true;
+      byId('event-decline-panel').setAttribute('aria-busy', 'true');
+      invalidateEventDecline('Submitting the explicitly confirmed sandbox decline…');
+      try {
+        const result = await call('/v1/candidate/schedule-event/decline', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({schema_version: 1, event_id: eventIdentifier,
+            state_version: version, confirm_decline: true}),
+        }, 'Schedule decline request failed.');
+        if (!validEventDeclineResult(result, eventIdentifier)) {
+          throw new Error('Invalid schedule decline response.');
+        }
+        if (result.provider_status === 'reconciliation_required') {
+          if (result.state_version !== version ||
+              !['proposed', 'reschedule_requested'].includes(result.status)) {
+            throw new Error('Invalid ambiguous decline snapshot.');
+          }
+          enableEventDeclineReconciliation(version);
+        } else if (result.provider_status === 'confirmed') {
+          if (result.status !== 'declined' || result.state_version !== version + 1) {
+            throw new Error('Invalid confirmed decline snapshot.');
+          }
+          clearEventDetail();
+          byId('event-decline-state').textContent =
+            'Sandbox provider confirmed the decline. Reload events for the latest snapshot.';
+        } else {
+          throw new Error('Unexpected decline outcome.');
+        }
+        show({status: result.provider_status === 'confirmed' ? 200 : 202,
+          payload: {event_id: eventIdentifier, status: result.status,
+            state_version: result.state_version, provider_status: result.provider_status}});
+      } catch (error) {
+        invalidateEventDecline(error.code === 'approval_conflict'
+          ? 'Event version changed. Reload the event before deciding again.'
+          : 'Decline result is uncertain. Reload the event before taking another action.');
+        throw error;
+      } finally {
+        eventDeclineInFlight = false;
+        byId('event-decline-panel').setAttribute('aria-busy', 'false');
+      }
+    }
+    async function reconcileSelectedEventDecline(completed) {
+      if (!eventDeclineReconciliationAvailable || selectedEventId === null ||
+          eventDeclineReconciliationVersion === null ||
+          eventDeclineReconciliationVersion !== selectedEventVersion) {
+        throw new Error('Reload the event and pending decline evidence before reconciling.');
+      }
+      if (!byId('event-decline-reconciliation-verified').checked) {
+        throw new Error('Explicit evidence attestation is required.');
+      }
+      if (eventDeclineInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current candidate action to finish.');
+      }
+      const eventIdentifier = selectedEventId;
+      const version = eventDeclineReconciliationVersion;
+      eventDeclineInFlight = true;
+      byId('event-decline-panel').setAttribute('aria-busy', 'true');
+      invalidateEventDecline('Reconciling durable sandbox provider evidence…');
+      try {
+        const result = await call('/v1/candidate/schedule-event/decline-reconciliation', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({schema_version: 1, event_id: eventIdentifier,
+            state_version: version, completed, confirm_reconciliation: true}),
+        }, 'Schedule decline reconciliation failed.');
+        if (!validEventDeclineResult(result, eventIdentifier)) {
+          throw new Error('Invalid schedule decline reconciliation response.');
+        }
+        if (completed) {
+          if (result.provider_status !== 'confirmed' || result.status !== 'declined' ||
+              result.state_version !== version + 1) {
+            throw new Error('Provider evidence did not confirm the expected decline.');
+          }
+          clearEventDetail();
+          byId('event-decline-state').textContent =
+            'Sandbox provider evidence confirmed the decline. Reload events for the latest snapshot.';
+        } else {
+          if (result.provider_status !== 'no_effect_confirmed' ||
+              !['proposed', 'reschedule_requested'].includes(result.status) ||
+              result.state_version !== version) {
+            throw new Error('Provider evidence did not confirm absence of the decline effect.');
+          }
+          clearEventDetail();
+          byId('event-decline-state').textContent =
+            'No decline effect was confirmed. Reload the event and make a new explicit decision before retrying.';
+        }
+        show({status: 200, payload: {event_id: eventIdentifier, status: result.status,
+          state_version: result.state_version, provider_status: result.provider_status}});
+      } catch (error) {
+        invalidateEventDecline(error.code === 'approval_conflict'
+          ? 'Provider evidence conflicts or the event changed. Reload the event.'
+          : 'Reconciliation result is uncertain. Reload the event before retrying.');
+        throw error;
+      } finally {
+        eventDeclineInFlight = false;
+        byId('event-decline-panel').setAttribute('aria-busy', 'false');
+      }
+    }
+    byId('decline-event').addEventListener('click', () =>
+      guarded(() => declineSelectedEvent(), true));
+    byId('confirm-event-decline-completed').addEventListener('click', () =>
+      guarded(() => reconcileSelectedEventDecline(true), true));
+    byId('confirm-event-decline-not-completed').addEventListener('click', () =>
+      guarded(() => reconcileSelectedEventDecline(false), true));
   </script>
 </body>
 </html>
