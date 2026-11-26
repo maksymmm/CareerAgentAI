@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Application provider concurrent timeout-after-effect recovery: a two-connection
+SQLite regression holds one same-key submission inside the provider transaction while
+a duplicate starts, commits one TIMEOUT_AFTER_EFFECT attempt/effect, and proves the
+duplicate receives the exact durable submission without a second outcome-plan call.
+A fresh provider verifies positive submission evidence after restart and replays the
+same result without another attempt or effect. Assertions require one attempt, one
+ledger row, and exactly two counted replays (concurrent duplicate plus restart replay).
+The test uses synthetic application identifiers and a temporary SQLite file only.
+See ADR 0027. Next: exact-head full CI/coverage and independent code/security review,
+then close the cross-provider concurrent timeout-after-effect parity gap.
