@@ -755,7 +755,7 @@ def test_pending_decline_scan_uses_composite_index_without_temporary_sort(tmp_pa
         plan = connection.execute(
             """
             EXPLAIN QUERY PLAN
-            SELECT operation_id, payload_json
+            SELECT operation_id, payload_json, status
             FROM external_action_operations
             WHERE action_type = ?
               AND status IN (?, ?)
