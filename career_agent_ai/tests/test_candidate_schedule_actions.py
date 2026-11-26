@@ -1632,8 +1632,14 @@ def test_candidate_dashboard_paginates_pending_reschedules_and_revalidates_stale
                     "() => document.querySelector('#event-detail-state')?.textContent === "
                     "'Select the event again to retry.'"
                 )
-                assert page.locator("#reschedule-panel").is_disabled()
-                assert page.locator("#reschedule-reconciliation-panel").is_disabled()
+                controls = page.locator("#reschedule-panel").evaluate(
+                    "(element) => ({disabled: element.disabled, requestDisabled: "
+                    "element.querySelector('#request-reschedule').disabled, "
+                    "reconciliationDisabled: document.querySelector('#reschedule-reconciliation-panel').disabled})"
+                )
+                print("STALE_RESCHEDULE_CONTROLS", controls)
+                assert controls["requestDisabled"]
+                assert controls["reconciliationDisabled"]
                 assert page.locator("#reschedule-reconciliation-verified").is_disabled()
                 assert page.locator("#confirm-reschedule-completed").is_disabled()
                 assert page.locator("#confirm-reschedule-no-effect").is_disabled()
