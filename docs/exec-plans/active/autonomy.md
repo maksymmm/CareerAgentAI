@@ -1612,3 +1612,14 @@ action. The lock is intentionally process-local; after restart an `IN_PROGRESS`
 operation remains ambiguous and is resolved only from the provider's durable evidence.
 The concurrent application-submission regression verifies both callers observe one
 terminal success with one provider attempt/effect.
+
+
+Sandbox withdrawal evidence identity binding: withdrawal reconciliation can now be
+scoped to the exact application ID and provider submission ID. Under the SQLite writer
+lock, the provider cross-checks immutable intent and effect identities; missing or
+mismatched intent and corrupted effect/intent pairs fail closed instead of being
+misreported as confirmed absence for another application. Regression coverage proves
+present evidence binding, no-effect absence binding, partial-identity rejection, and
+corrupt-ledger rejection. Next: wire the adapter through a separately approved,
+owner/version-fenced candidate workflow with durable external-action status; retain the
+tracker-only withdrawal semantics until that workflow is independently reviewed.
