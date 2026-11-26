@@ -1588,5 +1588,13 @@ fractional/negative values, non-finite JSON constants and values above the stora
 range return sanitized 400 responses without reaching a provider resolver. OpenAPI
 publishes the same bound; HTTP regressions cover all three reconciliation routes,
 including the maximum accepted value. No provider I/O or durable mutation is added.
-Next: finish durable recovery for pending candidate interview actions, including
-owner-scoped intent discovery after browser reload and version-bound reconciliation.
+Pending interview reconciliation recovery: an authenticated owner-scoped GET now
+reconstructs the durable calendar intent after browser reload, including employer,
+event type, location, local date/time, timezone/offset and current schedule status. The
+projection is bound to the run state version, excludes internal operation IDs and
+provider identifiers, verifies the schedule event still belongs to the candidate's
+application, and performs no provider I/O or state mutation. The candidate dashboard
+loads this context after a fresh status read and keeps reconciliation controls disabled
+unless the returned identity, phase and version exactly match (ADR 0004).
+Next: add explicit provider-evidence lookup to the candidate recovery UX so candidates
+can distinguish verified PRESENT, ABSENT_CONFIRMED and UNKNOWN without guessing an ID.

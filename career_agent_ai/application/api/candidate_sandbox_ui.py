@@ -121,6 +121,7 @@ _HTML = r"""<!doctype html>
   <fieldset id="interview-reconciliation-panel" tabindex="-1" aria-busy="false">
     <legend>Interview calendar reconciliation</legend>
     <p id="interview-reconciliation-state" role="status">Refresh a run in interview reconciliation before recording independently verified calendar evidence.</p>
+    <pre id="interview-reconciliation-intent" role="region" aria-label="Pending interview intent"></pre>
     <label>Provider event ID
       <input id="provider-event-id" autocomplete="off" maxlength="1000" disabled>
     </label>
@@ -872,22 +873,68 @@ _HTML = r"""<!doctype html>
       byId('confirm-delivered').disabled = true;
       byId('confirm-not-delivered').disabled = true;
     }
+    function validInterviewReconciliationIntent(value, runId, stateVersion) {
+      const rootFields = ['schema_version', 'run_id', 'state_version', 'phase', 'action'];
+      const actionFields = ['title', 'event_id', 'employer', 'event_type', 'location',
+        'local_date', 'local_start_time', 'local_end_date', 'local_end_time', 'timezone',
+        'utc_offset', 'end_utc_offset', 'status', 'instruction'];
+      const text = (item, maximum, optional = false) =>
+        typeof item === 'string' && item.length <= maximum && item === item.trim() &&
+        !/[\u0000-\u001f\u007f]/.test(item) &&
+        !/[\uD800-\uDFFF]/.test(item) && (optional || item.length > 0);
+      const optionalText = item => item === null || text(item, 32);
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+          Object.keys(value).length !== rootFields.length ||
+          !rootFields.every(field => Object.hasOwn(value, field)) ||
+          value.schema_version !== 1 || value.run_id !== runId ||
+          value.state_version !== stateVersion || value.phase !== 'interview_reconciliation' ||
+          !value.action || typeof value.action !== 'object' || Array.isArray(value.action) ||
+          Object.keys(value.action).length !== actionFields.length ||
+          !actionFields.every(field => Object.hasOwn(value.action, field))) return false;
+      const action = value.action;
+      return text(action.title, 500) &&
+        text(action.event_id, 200) &&
+        /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}$/.test(action.event_id) &&
+        text(action.employer, 500) &&
+        ['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(action.event_type) &&
+        text(action.location, 2000, true) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(action.local_date) &&
+        text(action.local_start_time, 32) &&
+        (action.local_end_date === null || /^\d{4}-\d{2}-\d{2}$/.test(action.local_end_date)) &&
+        optionalText(action.local_end_time) &&
+        text(action.timezone, 100) &&
+        text(action.utc_offset, 16) &&
+        optionalText(action.end_utc_offset) &&
+        ['proposed', 'accepted', 'declined', 'reschedule_requested', 'cancelled'].includes(action.status) &&
+        text(action.instruction, 500);
+    }
     function invalidateInterviewReconciliation(message =
       'Refresh a run in interview reconciliation before recording independently verified calendar evidence.') {
       interviewReconciliationAvailable = false;
       interviewReconciliationVersion = null;
       byId('interview-reconciliation-state').textContent = message;
+      byId('interview-reconciliation-intent').textContent = '';
       byId('provider-event-id').value = '';
       byId('provider-event-id').disabled = true;
       setReconciliationAttestation('interview-reconciliation-verified', false);
       byId('confirm-calendar-completed').disabled = true; byId('confirm-calendar-not-completed').disabled = true;
     }
-    function enableInterviewReconciliation(version) {
+    function enableInterviewReconciliation(version, action) {
       if (interviewReconciliationVersion !== version) byId('provider-event-id').value = '';
       interviewReconciliationAvailable = true;
       interviewReconciliationVersion = version;
       byId('interview-reconciliation-state').textContent =
         'Verify the calendar provider outcome outside this sandbox, then record one result for the displayed version.';
+      byId('interview-reconciliation-intent').textContent = [
+        'Employer: ' + action.employer,
+        'Event: ' + action.event_type + ' (' + action.event_id + ')',
+        'When: ' + action.local_date + ' ' + action.local_start_time + ' (' +
+          action.timezone + ', UTC' + action.utc_offset + ')',
+        action.local_end_time ? 'Until: ' + action.local_end_date + ' ' + action.local_end_time : '',
+        action.location ? 'Location: ' + action.location : '',
+        'Current schedule status: ' + action.status,
+        action.instruction,
+      ].filter(Boolean).join('\n');
       byId('provider-event-id').disabled = false;
       setReconciliationAttestation('interview-reconciliation-verified', true);
       byId('confirm-calendar-completed').disabled = true;
@@ -1069,7 +1116,25 @@ _HTML = r"""<!doctype html>
           invalidateMessageReconciliation();
         }
         if (snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human) {
-          enableInterviewReconciliation(snapshot.state_version);
+          try {
+            const intent = await call(
+              '/v1/candidate/runs/' + encodeURIComponent(runId) + '/interview-reconciliation',
+              {}, 'Interview reconciliation context request failed.', true
+            );
+            if (statusContextGeneration !== inputContextGeneration ||
+                runId !== byId('run-id').value) return;
+            if (!validInterviewReconciliationIntent(intent, runId, snapshot.state_version)) {
+              throw new Error('Invalid interview reconciliation context.');
+            }
+            enableInterviewReconciliation(snapshot.state_version, intent.action);
+          } catch (error) {
+            if (statusContextGeneration === inputContextGeneration &&
+                runId === byId('run-id').value) {
+              invalidateInterviewReconciliation(
+                'Interview reconciliation context could not be verified. Refresh run status.'
+              );
+            }
+          }
         } else {
           invalidateInterviewReconciliation();
         }

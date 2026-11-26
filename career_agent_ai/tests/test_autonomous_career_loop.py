@@ -4156,3 +4156,78 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+
+
+def test_interview_reconciliation_context_is_owner_scoped_and_survives_restart(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-reconciliation-context.sqlite")
+    run_id = "interview-reconciliation-context"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_APPROVAL
+
+    attempts = {"count": 0}
+
+    def ambiguous_accept(*args, **kwargs):
+        attempts["count"] += 1
+        raise RuntimeError("calendar response outcome unknown")
+
+    monkeypatch.setattr(calendar_provider, "accept", ambiguous_accept)
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.INTERVIEW_RECONCILIATION
+    context = loop.get_interview_reconciliation_context(run_id, user_id="user-1")
+    assert context["phase"] == CareerLoopPhase.INTERVIEW_RECONCILIATION.value
+    assert context["state_version"] == loop.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"]
+    assert context["action"]["event_id"] == "interview-1"
+    assert context["action"]["employer"] == "Acme Logistics"
+    assert context["action"]["status"] == ScheduleStatus.PROPOSED.value
+    assert "operation_id" not in context["action"]
+    assert attempts["count"] == 1
+    database.close()
+
+    database, restarted, _, _, _, _, _, restarted_provider = build_stack(path)
+    restored = restarted.get_interview_reconciliation_context(
+        run_id, user_id="user-1"
+    )
+    assert restored == context
+    with pytest.raises(KeyError):
+        restarted.get_interview_reconciliation_context(
+            run_id, user_id="another-candidate"
+        )
+    assert restarted_provider.calls == []
+    assert restarted.get_candidate_run_status(
+        run_id, user_id="user-1"
+    )["state_version"] == context["state_version"]
+    database.close()
+
+
+def test_interview_reconciliation_context_rejects_stale_phase_without_provider_io(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "interview-reconciliation-context-stale.sqlite")
+    run_id = "interview-reconciliation-context-stale"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    loop.start(request(), run_id=run_id)
+    loop.resume(run_id, approved=True, user_id="user-1")
+    loop.resume(run_id, approved=True, user_id="user-1")
+    monkeypatch.setattr(
+        calendar_provider, "accept",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unknown outcome")),
+    )
+    loop.resume(run_id, approved=True, user_id="user-1")
+    state = loop._states.get(run_id)
+    assert state is not None
+    state.phase = CareerLoopPhase.COMPLETE
+    state.pending_human_action = None
+    state.touch()
+    loop._states.save(state)
+    with pytest.raises(CareerLoopConflictError):
+        loop.get_interview_reconciliation_context(run_id, user_id="user-1")
+    assert len(calendar_provider.calls) == 1
+    database.close()

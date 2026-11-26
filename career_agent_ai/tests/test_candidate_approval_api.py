@@ -42,6 +42,31 @@ class Loop:
         assert (run_id, user_id) == ("run-1", "candidate-1")
         return self.prompt
 
+    def get_interview_reconciliation_context(self, run_id, *, user_id):
+        assert (run_id, user_id) == ("run-1", "candidate-1")
+        return {
+            "schema_version": 1,
+            "run_id": run_id,
+            "state_version": 23,
+            "phase": "interview_reconciliation",
+            "action": {
+                "title": "Reconcile ambiguous interview/calendar response",
+                "event_id": "interview-1",
+                "employer": "Acme Logistics",
+                "event_type": "interview",
+                "location": "Karlsruhe",
+                "local_date": "2026-11-10",
+                "local_start_time": "10:00:00",
+                "local_end_date": None,
+                "local_end_time": None,
+                "timezone": "Europe/Berlin",
+                "utc_offset": "+01:00",
+                "end_utc_offset": None,
+                "status": "proposed",
+                "instruction": "Verify with the calendar provider whether the interview acceptance was recorded before continuing.",
+            },
+        }
+
     def resume_candidate_submission(self, *, user_id, submission):
         assert user_id == "candidate-1"
         self.submission = submission
@@ -242,17 +267,41 @@ def test_interview_reconciliation_rejects_ambiguous_or_identity_bearing_body(bod
     assert not hasattr(loop, "interview_reconciliation_call")
 
 
-def test_interview_reconciliation_openapi_is_strict_and_post_only():
+def test_interview_reconciliation_openapi_documents_owner_scoped_get_and_strict_post():
     route = "/v1/candidate/runs/{run_id}/interview-reconciliation"
-    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    operations = candidate_approval_openapi_document()["paths"][route]
+    get_operation = operations["get"]
+    assert get_operation["security"] == [{"bearerAuth": []}]
+    context_schema = get_operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert context_schema["additionalProperties"] is False
+    assert context_schema["required"] == [
+        "schema_version", "run_id", "state_version", "phase", "action",
+    ]
+    action_schema = context_schema["properties"]["action"]
+    assert action_schema["additionalProperties"] is False
+    assert "operation_id" not in action_schema["properties"]
+    assert get_operation["responses"]["409"]["content"]["application/json"]["schema"]["properties"]["error"]["const"] == "approval_conflict"
+
+    operation = operations["post"]
     schema = operation["requestBody"]["content"]["application/json"]["schema"]
     assert schema["additionalProperties"] is False
     assert schema["allOf"][0]["then"]["required"] == ["provider_event_id"]
     assert operation["responses"]["409"]["content"]["application/json"]["schema"]["properties"]["error"]["const"] == "approval_conflict"
-    (status, headers), _ = request(app(Loop()), method="GET",
-        path="/v1/candidate/runs/run-1/interview-reconciliation")
+
+    (status, headers), payload = request(
+        app(Loop()), method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert payload["state_version"] == 23
+    assert payload["action"]["event_id"] == "interview-1"
+    (status, headers), _ = request(
+        app(Loop()), method="DELETE",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+    )
     assert status == "405 Method Not Allowed"
-    assert ("Allow", "POST") in headers
+    assert ("Allow", "GET, POST") in headers
 
 
 def test_runtime_candidate_app_delegates_application_reconciliation(monkeypatch, tmp_path):
@@ -345,6 +394,49 @@ def test_runtime_candidate_app_delegates_interview_reconciliation(monkeypatch, t
         "run_id": "run-1", "user_id": "candidate-1", "completed": True,
         "provider_event_id": "calendar-confirmed", "expected_state_version": 19,
     }
+
+
+def test_runtime_candidate_app_delegates_interview_reconciliation_context(monkeypatch, tmp_path):
+    from career_agent_ai.application.runtime import composition
+
+    observed = {}
+
+    class DurableLoop:
+        def get_interview_reconciliation_context(self, run_id, **kwargs):
+            observed.update(run_id=run_id, **kwargs)
+            return {
+                "schema_version": 1, "run_id": run_id, "state_version": 7,
+                "phase": "interview_reconciliation",
+                "action": {
+                    "title": "Reconcile ambiguous interview/calendar response",
+                    "event_id": "interview-1", "employer": "Acme Logistics",
+                    "event_type": "interview", "location": "Karlsruhe",
+                    "local_date": "2026-11-10", "local_start_time": "10:00:00",
+                    "local_end_date": None, "local_end_time": None,
+                    "timezone": "Europe/Berlin", "utc_offset": "+01:00",
+                    "end_utc_offset": None, "status": "proposed",
+                    "instruction": "Verify the provider outcome before continuing.",
+                },
+            }
+
+    monkeypatch.setattr(
+        composition, "_build_candidate_loop",
+        lambda database, jobs, plan=None: DurableLoop(),
+    )
+    runtime = composition.RuntimeCandidateApp(
+        database_path=str(tmp_path / "runtime-interview-context.sqlite"),
+        jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    (status, _), payload = request(
+        runtime, method="GET",
+        path="/v1/candidate/runs/run-1/interview-reconciliation",
+    )
+    runtime.close()
+
+    assert status == "200 OK"
+    assert payload["run_id"] == "run-1"
+    assert observed == {"run_id": "run-1", "user_id": "candidate-1"}
 
 
 def request(
@@ -1794,6 +1886,24 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
                     "phase": "interview_reconciliation", "waiting_for_human": True,
                     "terminal": False}
 
+        def get_interview_reconciliation_context(self, run_id, *, user_id):
+            assert (run_id, user_id) == ("run-1", "candidate-1")
+            return {
+                "schema_version": 1, "run_id": run_id,
+                "state_version": self.status_version,
+                "phase": "interview_reconciliation",
+                "action": {
+                    "title": "Reconcile ambiguous interview/calendar response",
+                    "event_id": "interview-1", "employer": "Acme Logistics",
+                    "event_type": "interview", "location": "Karlsruhe",
+                    "local_date": "2026-11-10", "local_start_time": "10:00:00",
+                    "local_end_date": None, "local_end_time": None,
+                    "timezone": "Europe/Berlin", "utc_offset": "+01:00",
+                    "end_utc_offset": None, "status": "proposed",
+                    "instruction": "Verify with the calendar provider whether the interview acceptance was recorded before continuing.",
+                },
+            }
+
         def resolve_interview_reconciliation(self, run_id, **kwargs):
             self.resolutions.append((run_id, kwargs))
             return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
@@ -1816,6 +1926,17 @@ def test_candidate_sandbox_browser_submits_versioned_interview_reconciliation():
             page.locator("#status").click()
             page.locator("#interview-reconciliation-state").get_by_text(
                 "Verify the calendar provider outcome outside this sandbox", exact=False
+            ).wait_for()
+            page.locator("#interview-reconciliation-intent").get_by_text(
+                "Acme Logistics", exact=False
+            ).wait_for()
+            assert "interview-1" in page.locator("#interview-reconciliation-intent").inner_text()
+            page.reload()
+            page.locator("#token").fill("valid")
+            page.locator("#run-id").fill("run-1")
+            page.locator("#status").click()
+            page.locator("#interview-reconciliation-intent").get_by_text(
+                "Acme Logistics", exact=False
             ).wait_for()
             page.locator("#provider-event-id").fill("version-23-evidence")
             loop.status_version = 29
@@ -1888,6 +2009,10 @@ def test_candidate_sandbox_ui_is_public_static_and_hardened():
     assert 'id="reconciliation-panel"' in html
     assert 'id="message-reconciliation-panel"' in html
     assert 'id="interview-reconciliation-panel"' in html
+    assert 'id="interview-reconciliation-intent"' in html
+    assert "validInterviewReconciliationIntent" in html
+    assert "'/v1/candidate/runs/' + encodeURIComponent(runId) + '/interview-reconciliation'" in html
+    assert "enableInterviewReconciliation(snapshot.state_version, intent.action)" in html
     assert 'id="provider-submission-id"' in html
     for attestation_id in (
         "application-reconciliation-verified",

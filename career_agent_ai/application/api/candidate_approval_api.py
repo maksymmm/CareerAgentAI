@@ -46,6 +46,9 @@ class CandidateApprovalLoop(Protocol):
     ): ...
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str): ...
     def get_candidate_run_status(self, run_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def get_interview_reconciliation_context(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]: ...
     def list_run_statuses(self, *, user_id: str, limit: int = 25, after: str | None = None,
                           phase: CareerLoopPhase | None = None) -> dict[str, Any]: ...
 
@@ -391,10 +394,17 @@ class CandidateApprovalWSGIApp:
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
             if parts[4] == "interview-reconciliation":
+                if method == "GET":
+                    return self._respond(
+                        start_response, "200 OK",
+                        self._loop.get_interview_reconciliation_context(
+                            run_id, user_id=user_id
+                        ),
+                    )
                 if method != "POST":
                     return self._respond(
                         start_response, "405 Method Not Allowed",
-                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                        {"error": "method_not_allowed"}, [("Allow", "GET, POST")],
                     )
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
                 if media_type.strip().casefold() != "application/json":
@@ -834,6 +844,55 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "then": {"required": ["provider_event_id"]},
             "else": {"not": {"required": ["provider_event_id"]}},
         }],
+    }
+    interview_reconciliation_context_schema = {
+        "type": "object",
+        "required": ["schema_version", "run_id", "state_version", "phase", "action"],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "state_version": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_SQLITE_STATE_VERSION,
+            },
+            "phase": {"type": "string", "const": "interview_reconciliation"},
+            "action": {
+                "type": "object",
+                "required": [
+                    "title", "event_id", "employer", "event_type", "location",
+                    "local_date", "local_start_time", "local_end_date",
+                    "local_end_time", "timezone", "utc_offset", "end_utc_offset",
+                    "status", "instruction",
+                ],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "event_id": {
+                        "type": "string", "minLength": 1, "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$",
+                    },
+                    "employer": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["interview", "trial_day", "phone_call", "video_call", "other"],
+                    },
+                    "location": {"type": "string", "maxLength": 2000},
+                    "local_date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+                    "local_start_time": {"type": "string", "minLength": 1, "maxLength": 32},
+                    "local_end_date": {"type": ["string", "null"], "maxLength": 10},
+                    "local_end_time": {"type": ["string", "null"], "maxLength": 32},
+                    "timezone": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "utc_offset": {"type": "string", "minLength": 1, "maxLength": 16},
+                    "end_utc_offset": {"type": ["string", "null"], "maxLength": 16},
+                    "status": {
+                        "type": "string",
+                        "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"],
+                    },
+                    "instruction": {"type": "string", "minLength": 1, "maxLength": 500},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "additionalProperties": False,
     }
     start_schema = {
         "type": "object",
@@ -1282,23 +1341,59 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                     "schema": {"type": "string", "minLength": 1, "maxLength": 200,
                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"},
                 }],
+                "get": {
+                    "operationId": "getCandidateInterviewReconciliationContext",
+                    "security": [{"bearerAuth": []}],
+                    "responses": {
+                        "200": {
+                            "description": "Owner-scoped durable interview reconciliation intent",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": content(interview_reconciliation_context_schema),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "Run is no longer awaiting interview reconciliation",
+                            "content": content(approval_conflict_schema),
+                        },
+                        "405": {
+                            "description": "Only GET and POST are allowed",
+                            "content": content(error_schema),
+                        },
+                    },
+                },
                 "post": {
                     "operationId": "resolveCandidateInterviewReconciliation",
                     "security": [{"bearerAuth": []}],
-                    "requestBody": {"required": True,
-                                    "content": content(interview_reconciliation_schema)},
+                    "requestBody": {
+                        "required": True,
+                        "content": content(interview_reconciliation_schema),
+                    },
                     "responses": {
-                        "200": {"description": "Provider-verified outcome persisted and loop continued",
-                                "content": content({"type": "object",
-                                    "required": ["run_id", "phase"],
-                                    "properties": {"run_id": {"type": "string"},
-                                                   "phase": {"type": "string"}},
-                                    "additionalProperties": False})},
+                        "200": {
+                            "description": "Provider-verified outcome persisted and loop continued",
+                            "content": content({
+                                "type": "object",
+                                "required": ["run_id", "phase"],
+                                "properties": {
+                                    "run_id": {"type": "string"},
+                                    "phase": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            }),
+                        },
                         **common_responses,
-                        "409": {"description": "Observed state is stale or another execution owns the run",
-                                "content": content(approval_conflict_schema)},
-                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
-                        "415": {"description": "Request body is not application/json", "content": content(error_schema)},
+                        "409": {
+                            "description": "Observed state is stale or another execution owns the run",
+                            "content": content(approval_conflict_schema),
+                        },
+                        "405": {
+                            "description": "Only GET and POST are allowed",
+                            "content": content(error_schema),
+                        },
+                        "415": {
+                            "description": "Request body is not application/json",
+                            "content": content(error_schema),
+                        },
                     },
                 },
             },

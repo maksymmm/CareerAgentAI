@@ -323,6 +323,32 @@ class _RequestCandidateLoop:
         finally:
             database.close()
 
+    def get_interview_reconciliation_context(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]:
+        """Read the owned pending interview intent without invoking a calendar provider."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._sandbox_outcome_plan
+            ).get_interview_reconciliation_context(run_id, user_id=user_id)
+        finally:
+            database.close()
+
+    def get_interview_reconciliation_context(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]:
+        """Load the durable owner-scoped interview intent for one authenticated request."""
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._outcome_plan
+            ).get_interview_reconciliation_context(run_id, user_id=user_id)
+        finally:
+            database.close()
+
     def get_candidate_approval_prompt(self, run_id: str, *, user_id: str):
         """Load one owner-scoped prompt using request-thread storage."""
         database = SQLiteDatabase(self._database_path)

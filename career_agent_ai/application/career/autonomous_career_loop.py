@@ -489,6 +489,65 @@ class AutonomousCareerLoop:
                 pass
         return self._continue(state)
 
+    def get_interview_reconciliation_context(
+        self, run_id: str, *, user_id: str
+    ) -> dict[str, Any]:
+        """Return a minimal owner-scoped view of the durable pending calendar intent."""
+        state = self._owned_state(run_id, user_id)
+        action = state.pending_human_action
+        if (
+            state.phase != CareerLoopPhase.INTERVIEW_RECONCILIATION
+            or action is None
+            or action.kind != HumanActionKind.RECONCILE_INTERVIEW_RESPONSE
+        ):
+            raise CareerLoopConflictError(
+                "Career loop is not awaiting interview reconciliation."
+            )
+        event_id = action.details.get("event_id")
+        if (
+            not isinstance(event_id, str)
+            or not event_id
+            or event_id != state.request.schedule_event_id
+        ):
+            raise RuntimeError("Interview reconciliation intent has no valid event identity.")
+        try:
+            event = self._scheduling.get_event(event_id)
+            view = self._scheduling.human_view(event_id)
+        except KeyError as exc:
+            raise RuntimeError("Interview reconciliation event is unavailable.") from exc
+        if (
+            event.candidate_id != state.request.user_id
+            or event.application_id != state.application_id
+        ):
+            raise RuntimeError(
+                "Interview reconciliation event is not bound to the owned application."
+            )
+        return {
+            "schema_version": 1,
+            "run_id": state.run_id,
+            "state_version": state.version,
+            "phase": state.phase.value,
+            "action": {
+                "title": "Reconcile ambiguous interview/calendar response",
+                "event_id": view.event_id,
+                "employer": view.employer_name,
+                "event_type": view.event_type.value,
+                "location": view.location,
+                "local_date": view.local_date,
+                "local_start_time": view.local_start_time,
+                "local_end_date": view.local_end_date,
+                "local_end_time": view.local_end_time,
+                "timezone": view.timezone_name,
+                "utc_offset": view.utc_offset,
+                "end_utc_offset": view.end_utc_offset,
+                "status": view.status.value,
+                "instruction": (
+                    "Verify with the calendar provider whether the interview "
+                    "acceptance was recorded before continuing."
+                ),
+            },
+        }
+
     def resolve_interview_reconciliation(
         self,
         run_id: str,
