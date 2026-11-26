@@ -1605,3 +1605,17 @@ includes foreign malformed payload isolation, keyset pagination, stale/corrupt b
 rejection, strict HTTP/OpenAPI, Chromium restart discovery and stale-version fencing.
 Next: extend the same candidate-safe discovery/recovery contract to explicitly approved
 interview decline and reschedule actions without exposing provider identities.
+
+
+Candidate-approved interview decline delivered: the dashboard now exposes an explicit,
+owner-scoped `POST /v1/candidate/schedule-event/decline` action bound to the displayed
+event version. The runtime derives a stable owner/event/version operation ID and routes
+only through `SchedulingService` plus `SQLiteSandboxCalendarProvider`. Definite
+no-effect outcomes require a fresh read and a new candidate confirmation; ambiguous
+timeouts return a reconciliation-required receipt and are resolved from durable sandbox
+provider evidence without replaying the effect. The API omits internal operation and
+provider identifiers. See ADR 0020.
+
+Next: extend the same candidate-approved, version-fenced contract to interview
+reschedule requests, including exact timezone-aware target-slot confirmation and
+conflict checking before the sandbox provider effect.
