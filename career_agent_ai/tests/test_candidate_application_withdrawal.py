@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
+from pathlib import Path
 
 import pytest
 
@@ -103,13 +104,15 @@ def test_withdrawal_service_persists_candidate_decision_and_preserves_submission
     repository.add(submitted)
     database.close()
 
+    service_database = SQLiteDatabase(str(path))
     service = CandidateApplicationWithdrawalService(
-        SQLiteJobApplicationRepository(SQLiteDatabase(str(path))),
+        SQLiteJobApplicationRepository(service_database),
         clock=lambda: now + timedelta(seconds=2),
     )
     result = service.record_withdrawal(
         "application-1", user_id="candidate-1", expected_state_version=2
     )
+    service_database.close()
 
     assert result == {
         "application_id": "application-1",
@@ -401,12 +404,15 @@ def test_candidate_browser_records_tracker_withdrawal_without_employer_action():
             page.locator("#token").fill("valid")
             page.locator("#list-applications").click()
             page.get_by_role("button", name="View application 1: application-1").click()
-            page.locator("#withdraw-application").wait_for(state="visible")
-            assert page.locator("#withdraw-application").is_enabled()
+            page.wait_for_function(
+                "document.querySelector('#withdraw-application') && "
+                "!document.querySelector('#withdraw-application').disabled"
+            )
             page.locator("#withdraw-application").click()
-            page.locator("#application-detail-state").get_by_text(
-                "No employer notification was sent.", exact=False
-            ).wait_for()
+            page.wait_for_function(
+                "document.querySelector('#application-detail-state').textContent.includes("
+                "'No employer notification was sent.')"
+            )
             assert '"status": "withdrawn"' in page.locator("#application-detail").inner_text()
             assert '"state_version": 3' in page.locator("#application-detail").inner_text()
             assert page.locator("#withdraw-application").is_disabled()
@@ -424,3 +430,14 @@ def test_candidate_browser_records_tracker_withdrawal_without_employer_action():
             ]) == 1
         finally:
             browser.close()
+
+
+
+def test_ci_runs_independent_coverage_cli_after_pytest():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    pytest_step = workflow.index("python -m pytest --cov=career_agent_ai") if "python -m pytest --cov=career_agent_ai" in workflow else workflow.index("--cov=career_agent_ai")
+    independent_gate = workflow.index(
+        "python -m coverage report --fail-under=90"
+    )
+    assert pytest_step < independent_gate
+    assert "Enforce independent coverage threshold" in workflow
