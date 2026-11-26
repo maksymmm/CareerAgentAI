@@ -17,6 +17,7 @@ from career_agent_ai.application.runtime.composition import (
     build_candidate_sandbox_app_from_env,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+from career_agent_ai.application.scheduling.models import ScheduleEvent, ScheduleEventType
 from career_agent_ai.application.storage.sqlite_scheduling_repository import (
     SQLiteSchedulingRepository,
 )
@@ -153,17 +154,11 @@ def test_candidate_message_no_effect_retries_after_restart_without_replaying_app
         database = SQLiteDatabase(database_path)
         try:
             SQLiteSchedulingRepository(database).create(
-                __import__(
-                    "career_agent_ai.application.scheduling.models",
-                    fromlist=["ScheduleEvent", "ScheduleEventType"],
-                ).ScheduleEvent(
+                ScheduleEvent(
                     event_id=event_id,
                     candidate_id="candidate-1",
                     employer_name="Sandbox Logistics",
-                    event_type=__import__(
-                        "career_agent_ai.application.scheduling.models",
-                        fromlist=["ScheduleEventType"],
-                    ).ScheduleEventType.INTERVIEW,
+                    event_type=ScheduleEventType.INTERVIEW,
                     location="Karlsruhe",
                     start_at=NOW + timedelta(days=2),
                     end_at=NOW + timedelta(days=2, hours=1),
@@ -210,13 +205,11 @@ def test_candidate_message_no_effect_retries_after_restart_without_replaying_app
             database.close()
 
         assert failed_message == (ExternalActionStatus.FAILED.value,)
-        assert message_attempts_before == [
-            (
-                message_attempts_before[0][0],
-                1,
-                SandboxCommunicationOutcome.NO_EFFECT.value,
-            )
-        ]
+        assert len(message_attempts_before) == 1
+        assert message_attempts_before[0][1:] == (
+            1,
+            SandboxCommunicationOutcome.NO_EFFECT.value,
+        )
         assert deliveries_before == 0
         assert application_ledger_before == (1, 0, 0)
 
