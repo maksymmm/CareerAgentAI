@@ -110,6 +110,7 @@ def _seed_interview_intent(
             user_id=owner,
             keyword="logistics",
             candidate_profile="Experienced logistics professional.",
+            schedule_event_id=event_id,
         ),
         phase=CareerLoopPhase.INTERVIEW_RECONCILIATION,
         pending_human_action=HumanActionEvent(
@@ -439,3 +440,24 @@ def test_ci_enforces_independent_coverage_gate_after_full_pytest():
     independent_gate = workflow.index("python -m coverage report --fail-under=90")
     assert independent_gate > pytest_gate
     assert "- name: Enforce independent coverage threshold" in workflow
+
+
+def test_projection_rejects_run_request_bound_to_a_different_event(tmp_path):
+    path = tmp_path / "request-event-mismatch.sqlite"
+    _seed_interview_intent(path)
+    database = SQLiteDatabase(str(path))
+    row = database.connection.execute(
+        "SELECT payload_json FROM autonomous_career_loops WHERE run_id = ?",
+        ("run-1",),
+    ).fetchone()
+    payload = json.loads(row[0])
+    payload["request"]["schedule_event_id"] = "different-event"
+    database.connection.execute(
+        "UPDATE autonomous_career_loops SET payload_json = ? WHERE run_id = ?",
+        (json.dumps(payload, sort_keys=True, separators=(",", ":")), "run-1"),
+    )
+    database.connection.commit()
+    database.close()
+
+    with pytest.raises(ValueError, match="Persisted candidate interview intent is malformed"):
+        SQLiteCandidateInterviewIntents(str(path)).list_page(user_id="candidate-1")

@@ -121,6 +121,8 @@ class SQLiteCandidateInterviewIntents:
             details = action["details"]
             operation_id = cls._identifier(details["operation_id"], "operation_id")
             event_id = cls._identifier(details["event_id"], "event_id")
+            if request.get("schedule_event_id") != event_id:
+                raise ValueError("run request event mismatch")
 
             event_row = connection.execute(
                 "SELECT " + _EVENT_COLUMNS +

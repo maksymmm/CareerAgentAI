@@ -21,8 +21,8 @@ identify the candidate's pending action.
 Add a bounded read-only `GET /v1/candidate/interview-intents` projection. It filters
 `autonomous_career_loops` by authenticated owner and interview-reconciliation phase
 before parsing the payload, then cross-checks the pending human action against the
-same owner's schedule event, active action claim, and exact durable `calendar.accept`
-operation payload/status.
+same owner's schedule event, active action claim, exact durable `calendar.accept`
+operation payload/status, and the run request's `schedule_event_id`.
 
 The response contains only the run ID, run state version, action type/status, and a
 candidate-safe event snapshot. It never returns the internal operation ID, provider
