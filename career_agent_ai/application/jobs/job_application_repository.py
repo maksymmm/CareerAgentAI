@@ -50,6 +50,17 @@ class JobApplicationRepository(ABC):
     ) -> JobApplication | None:
         """Return an application by identifier."""
 
+    def get_owned(self, application_id: str, *, user_id: str) -> JobApplication | None:
+        """Return an application only when it belongs to the supplied owner.
+
+        Adapters should scope the lookup before decoding private aggregate children.
+        The fallback preserves compatibility for legacy repository implementations.
+        """
+        application = self.get(application_id)
+        if application is None or application.user_id != user_id:
+            return None
+        return application
+
     @abstractmethod
     def list(
         self,

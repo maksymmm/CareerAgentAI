@@ -156,10 +156,12 @@ _HTML = r"""<!doctype html>
     <p id="application-detail-state" role="status"></p>
     <pre id="application-detail" role="region" aria-labelledby="application-detail-title" aria-busy="false"></pre>
     <button id="load-application-history" type="button" disabled>Load application history</button>
+    <button id="withdraw-application" type="button" disabled>Mark application as withdrawn</button>
+    <p class="muted">This records your decision in the local tracker only. It does not send a withdrawal notice or retract a submitted application.</p>
     <p id="application-history-state" role="status"></p>
     <h3 id="application-history-title" class="visually-hidden">Application history</h3>
     <pre id="application-history" role="region" aria-labelledby="application-history-title" aria-busy="false"></pre>
-    <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
+    <p class="muted">Application lists and history are read-only snapshots. The detail action can record a local withdrawal only; it never contacts the employer.</p>
   </section>
   <section aria-labelledby="schedule-title">
     <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
@@ -415,9 +417,16 @@ _HTML = r"""<!doctype html>
     let applicationDetailTrigger = null;
     let selectedApplicationId = null;
     let selectedApplicationVersion = null;
+    let selectedApplicationStatus = null;
+    let applicationWithdrawalInFlight = false;
     let applicationVersionFloorId = null;
     let applicationVersionFloor = null;
     let applicationHistoryGeneration = 0;
+    function updateApplicationWithdrawalControl() {
+      const withdrawable = ['saved', 'applied', 'interview', 'offer'].includes(selectedApplicationStatus);
+      byId('withdraw-application').disabled = applicationWithdrawalInFlight ||
+        selectedApplicationId === null || selectedApplicationVersion === null || !withdrawable;
+    }
     function clearApplicationHistory() {
       applicationHistoryGeneration += 1;
       byId('application-history').setAttribute('aria-busy', 'false');
@@ -430,6 +439,8 @@ _HTML = r"""<!doctype html>
       clearApplicationHistory();
       selectedApplicationId = null;
       selectedApplicationVersion = null;
+      selectedApplicationStatus = null;
+      updateApplicationWithdrawalControl();
       byId('load-application-history').disabled = true;
       applicationDetailGeneration += 1;
       byId('application-detail').setAttribute('aria-busy', 'false');
@@ -468,6 +479,8 @@ _HTML = r"""<!doctype html>
         byId('application-detail-state').textContent = 'Read-only application detail.';
         selectedApplicationId = applicationId;
         selectedApplicationVersion = item.state_version;
+        selectedApplicationStatus = item.status;
+        updateApplicationWithdrawalControl();
         applicationVersionFloorId = applicationId;
         applicationVersionFloor = item.state_version;
         byId('load-application-history').disabled = false;
@@ -536,6 +549,76 @@ _HTML = r"""<!doctype html>
     }
     byId('load-application-history').addEventListener(
       'click', () => guarded(loadApplicationHistory, true));
+    byId('withdraw-application').addEventListener('click', () => guarded(async () => {
+      const applicationId = selectedApplicationId;
+      const stateVersion = selectedApplicationVersion;
+      if (applicationWithdrawalInFlight || applicationId === null ||
+          !Number.isSafeInteger(stateVersion) ||
+          !['saved', 'applied', 'interview', 'offer'].includes(selectedApplicationStatus)) {
+        throw new Error('Select a fresh, withdrawable application snapshot first.');
+      }
+      if (!window.confirm(
+        'Mark this application as withdrawn in your tracker? No withdrawal notice will be sent and no submitted application will be retracted.'
+      )) return;
+      const generation = applicationDetailGeneration;
+      applicationWithdrawalInFlight = true;
+      updateApplicationWithdrawalControl();
+      clearApplicationHistory();
+      try {
+        const result = await call('/v1/candidate/application/withdraw', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            schema_version: 1,
+            application_id: applicationId,
+            state_version: stateVersion,
+            confirm_withdrawal: true,
+          }),
+        }, 'Application withdrawal request failed.', true);
+        if (generation !== applicationDetailGeneration || selectedApplicationId !== applicationId) return;
+        if (!result || typeof result !== 'object' || Array.isArray(result) ||
+            Object.keys(result).length !== 4 || result.application_id !== applicationId ||
+            result.status !== 'withdrawn' || result.state_version !== stateVersion + 1 ||
+            typeof result.updated_at !== 'string' || result.updated_at.length > 64 ||
+            !Number.isFinite(Date.parse(result.updated_at))) {
+          throw new Error('Invalid application withdrawal response.');
+        }
+        const snapshot = JSON.parse(byId('application-detail').textContent);
+        snapshot.status = 'withdrawn';
+        snapshot.state_version = result.state_version;
+        snapshot.updated_at = result.updated_at;
+        byId('application-detail').textContent = JSON.stringify(snapshot, null, 2);
+        selectedApplicationStatus = 'withdrawn';
+        selectedApplicationVersion = result.state_version;
+        applicationVersionFloorId = applicationId;
+        applicationVersionFloor = result.state_version;
+        updateApplicationWithdrawalControl();
+        byId('application-detail-state').textContent =
+          'Marked withdrawn in the local tracker. No withdrawal notice was sent.';
+        const row = Array.from(byId('owned-applications').children)
+          .find(candidate => candidate.dataset.applicationId === applicationId);
+        const summary = row && row.querySelector('[data-role="application-summary"]');
+        if (row && byId('application-status').value !== '' &&
+            byId('application-status').value !== 'withdrawn') {
+          row.remove();
+        } else if (summary) {
+          summary.textContent = snapshot.job_title + ' — ' + snapshot.company_id +
+            ' — withdrawn — version ' + result.state_version + ' — ' + applicationId;
+        }
+        byId('applications-state').textContent =
+          'The selected application was updated. Other pages remain unchanged; reload them to refresh snapshots.';
+      } catch (error) {
+        if (generation === applicationDetailGeneration) {
+          clearApplicationDetail();
+          byId('application-detail-state').textContent =
+            'Withdrawal was not confirmed. Select the application and refresh its status before retrying.';
+        }
+        throw error;
+      } finally {
+        applicationWithdrawalInFlight = false;
+        updateApplicationWithdrawalControl();
+      }
+    }, true));
     function clearApplications() {
       clearApplicationDetail();
       applicationVersionFloorId = null;
@@ -601,8 +684,12 @@ _HTML = r"""<!doctype html>
         }
         for (const [index, item] of page.items.entries()) {
           const row = document.createElement('li');
-          row.textContent = (item.job_title || item.job_id) + ' — ' + item.company_id +
+          row.dataset.applicationId = item.application_id;
+          const summary = document.createElement('span');
+          summary.dataset.role = 'application-summary';
+          summary.textContent = (item.job_title || item.job_id) + ' — ' + item.company_id +
             ' — ' + item.status + ' — version ' + item.state_version + ' — ' + item.application_id;
+          row.append(summary);
           const button = document.createElement('button');
           button.type = 'button';
           button.textContent = 'View application';

@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate-declared application withdrawal: the candidate dashboard now exposes an
+explicit, owner-scoped, positive-state-version POST for recording `withdrawn` in the
+local application tracker. SQLite scopes the row by owner before decoding private
+children, and the existing repository CAS rejects stale state or an active submission
+claim. Prior application submission operation links remain intact. The operation does
+not contact the employer, retract a submitted application, send a message, or invoke
+any provider. HTTP/OpenAPI, restart/history, owner isolation, stale-version, claim-race,
+and Chromium regressions cover the contract (ADR 0013).
+Next: exact-head full CI and independent coverage CLI gate, then review the candidate
+withdrawal boundary before any separate employer-facing provider operation is designed.

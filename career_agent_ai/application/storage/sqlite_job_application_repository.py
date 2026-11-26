@@ -64,6 +64,20 @@ class SQLiteJobApplicationRepository(JobApplicationRepository):
         ).fetchone()
         return None if row is None else self._load(row)
 
+    def get_owned(self, application_id: str, *, user_id: str) -> JobApplication | None:
+        """Load only an application row already scoped to its authenticated owner."""
+        normalized_id = self._required_filter(application_id, "application_id")
+        normalized_owner = self._required_filter(user_id, "user_id")
+        row = self._database.connection.execute(
+            """SELECT application_id, user_id, job_id, company_id, status,
+                      created_at, updated_at, version, serialization_version,
+                      job_title, job_skills_json
+               FROM job_applications
+               WHERE application_id = ? AND user_id = ?""",
+            (normalized_id, normalized_owner),
+        ).fetchone()
+        return None if row is None else self._load(row)
+
     def list(self, user_id: str) -> tuple[JobApplication, ...]:
         """Return one user's applications in stable chronological order."""
         return self.find(ApplicationQuery(user_id=user_id))

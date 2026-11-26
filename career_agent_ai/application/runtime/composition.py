@@ -46,6 +46,9 @@ from career_agent_ai.application.external_actions.external_action_repository imp
 )
 from career_agent_ai.application.jobs.job import Job
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+from career_agent_ai.application.jobs.candidate_application_withdrawal_service import (
+    CandidateApplicationWithdrawalService,
+)
 from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.observability import OperationalIssue
 from career_agent_ai.application.search.job_provider import JobProvider
@@ -119,6 +122,26 @@ class RuntimeOperationalApp:
     def __exit__(self, *_: object) -> None:
         """Prevent new requests on context exit."""
         self.close()
+
+
+def _record_candidate_application_withdrawal(
+    database_path: str,
+    application_id: str,
+    *,
+    user_id: str,
+    expected_state_version: int,
+) -> dict[str, object]:
+    """Run one tracker-only withdrawal with a request-owned SQLite connection."""
+    database = SQLiteDatabase(database_path)
+    try:
+        repository = SQLiteJobApplicationRepository(database)
+        service = CandidateApplicationWithdrawalService(repository)
+        return service.record_withdrawal(
+            application_id, user_id=user_id,
+            expected_state_version=expected_state_version,
+        )
+    finally:
+        database.close()
 
 
 class RuntimeCandidateApp:
@@ -212,6 +235,17 @@ class RuntimeCandidateApp:
         return SQLiteCandidateApplications(self._database_path).get_history(
             application_id, user_id=user_id)
 
+    def record_application_withdrawal(
+        self, application_id: str, *, user_id: str, expected_state_version: int
+    ) -> dict[str, object]:
+        """Record a local, owner-scoped withdrawal without employer/provider I/O."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        return _record_candidate_application_withdrawal(
+            self._database_path, application_id, user_id=user_id,
+            expected_state_version=expected_state_version,
+        )
+
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read trusted caller's event details without calendar I/O or writes."""
         if self._closed:
@@ -271,6 +305,15 @@ class _RequestCandidateLoop:
         """Read authenticated owner's snapshot without constructing writable storage."""
         return SQLiteCandidateApplications(self._database_path).get_snapshot(
             application_id, user_id=user_id)
+
+    def record_application_withdrawal(
+        self, application_id: str, *, user_id: str, expected_state_version: int
+    ) -> dict[str, object]:
+        """Record a local withdrawal after the HTTP adapter has authenticated the owner."""
+        return _record_candidate_application_withdrawal(
+            self._database_path, application_id, user_id=user_id,
+            expected_state_version=expected_state_version,
+        )
 
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
