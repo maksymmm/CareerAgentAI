@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from datetime import datetime, timedelta, timezone
 from threading import Thread
@@ -55,7 +56,7 @@ def _request(runtime, path: str, *, method: str = "GET", body=None):
             "HTTP_AUTHORIZATION": "Bearer owner",
             "CONTENT_TYPE": "application/json",
             "CONTENT_LENGTH": str(len(encoded)),
-            "wsgi.input": __import__("io").BytesIO(encoded),
+            "wsgi.input": io.BytesIO(encoded),
         },
         lambda status, headers: responses.append((status, headers)),
     )
@@ -147,7 +148,6 @@ def test_candidate_browser_recovers_calendar_timeout_after_runtime_restart_witho
     second = None
     server = None
     server_thread = None
-    browser = None
     try:
         started = first.start(
             CareerLoopRequest(
@@ -220,59 +220,60 @@ def test_candidate_browser_recovers_calendar_timeout_after_runtime_restart_witho
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page()
-            url = f"http://127.0.0.1:{port}/sandbox/candidate"
-            page.goto(url)
-            page.locator("#token").fill("owner")
-            page.locator("#run-id").fill(run_id)
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
-            expect(page.locator("#provider-event-id")).to_be_enabled()
-            expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
-
-            # The dashboard intentionally keeps credentials and selected state in tab memory.
-            page.locator("#clear-session").click()
-            expect(page.locator("#token")).to_have_value("")
-            expect(page.locator("#run-id")).to_have_value("")
-
-            _stop_server(server, server_thread)
-            server = None
-            server_thread = None
-            first.close()
-
-            # Rebind the same local origin to a new RuntimeCandidateApp over the same SQLite file.
-            second = build_runtime()
-            server = make_server("127.0.0.1", port, second, handler_class=QuietHandler)
-            server_thread = Thread(target=server.serve_forever, daemon=True)
-            server_thread.start()
-            page.reload(wait_until="domcontentloaded")
-            expect(page.locator("#token")).to_have_value("")
-            expect(page.locator("#run-id")).to_have_value("")
-
-            page.locator("#token").fill("owner")
-            page.locator("#run-id").fill(run_id)
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
-            expect(page.locator("#provider-event-id")).to_be_enabled()
-            page.locator("#provider-event-id").fill(provider_event_id)
-            page.locator("#interview-reconciliation-verified").check()
-            expect(page.locator("#confirm-calendar-completed")).to_be_enabled()
-            page.locator("#confirm-calendar-completed").click()
-            expect(page.locator("#interview-reconciliation-state")).to_contain_text(
-                "Reconciliation finished"
-            )
-            expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
-
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text("Finished")
-            expect(page.locator("#run-overview")).to_contain_text("complete")
-            expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
-            expect(page.locator("#confirm-calendar-not-completed")).to_be_disabled()
-
+            try:
+                page = browser.new_page()
+                url = f"http://127.0.0.1:{port}/sandbox/candidate"
+                page.goto(url)
+                page.locator("#token").fill("owner")
+                page.locator("#run-id").fill(run_id)
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
+                expect(page.locator("#provider-event-id")).to_be_enabled()
+                expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
+    
+                # The dashboard intentionally keeps credentials and selected state in tab memory.
+                page.locator("#clear-session").click()
+                expect(page.locator("#token")).to_have_value("")
+                expect(page.locator("#run-id")).to_have_value("")
+    
+                _stop_server(server, server_thread)
+                server = None
+                server_thread = None
+                first.close()
+    
+                # Rebind the same local origin to a new RuntimeCandidateApp over the same SQLite file.
+                second = build_runtime()
+                server = make_server("127.0.0.1", port, second, handler_class=QuietHandler)
+                server_thread = Thread(target=server.serve_forever, daemon=True)
+                server_thread.start()
+                page.reload(wait_until="domcontentloaded")
+                expect(page.locator("#token")).to_have_value("")
+                expect(page.locator("#run-id")).to_have_value("")
+    
+                page.locator("#token").fill("owner")
+                page.locator("#run-id").fill(run_id)
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
+                expect(page.locator("#provider-event-id")).to_be_enabled()
+                page.locator("#provider-event-id").fill(provider_event_id)
+                page.locator("#interview-reconciliation-verified").check()
+                expect(page.locator("#confirm-calendar-completed")).to_be_enabled()
+                page.locator("#confirm-calendar-completed").click()
+                expect(page.locator("#interview-reconciliation-state")).to_contain_text(
+                    "Reconciliation finished"
+                )
+                expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
+    
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text("Finished")
+                expect(page.locator("#run-overview")).to_contain_text("complete")
+                expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
+                expect(page.locator("#confirm-calendar-not-completed")).to_be_disabled()
+    
+            finally:
+                browser.close()
     finally:
         _stop_server(server, server_thread)
-        if browser is not None:
-            browser.close()
         first.close()
         if second is not None:
             second.close()
