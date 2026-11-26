@@ -66,9 +66,10 @@ class CandidateScheduleActionWSGIApp:
     """Expose one human-approved reschedule workflow using only a SQLite sandbox provider."""
 
     PENDING_PATH = "/v1/candidate/schedule-event/reschedule-pending"
+    PENDING_COLLECTION_PATH = "/v1/candidate/schedule-event/reschedule-intents"
     RESCHEDULE_PATH = "/v1/candidate/schedule-event/reschedule"
     RECONCILIATION_PATH = "/v1/candidate/schedule-event/reschedule-reconciliation"
-    ROUTES = frozenset({PENDING_PATH, RESCHEDULE_PATH, RECONCILIATION_PATH})
+    ROUTES = frozenset({PENDING_PATH, PENDING_COLLECTION_PATH, RESCHEDULE_PATH, RECONCILIATION_PATH})
     MAX_BODY_BYTES = 16_384
 
     def __init__(
@@ -94,7 +95,7 @@ class CandidateScheduleActionWSGIApp:
         path = environ.get("PATH_INFO")
         if path not in self.ROUTES:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-        required_method = "GET" if path == self.PENDING_PATH else "POST"
+        required_method = "GET" if path in {self.PENDING_PATH, self.PENDING_COLLECTION_PATH} else "POST"
         raw_method = environ.get("REQUEST_METHOD")
         if (
             not isinstance(raw_method, str)
@@ -140,7 +141,9 @@ class CandidateScheduleActionWSGIApp:
             )
 
         try:
-            if path == self.PENDING_PATH:
+            if path == self.PENDING_COLLECTION_PATH:
+                request = self._pending_collection_request(environ)
+            elif path == self.PENDING_PATH:
                 request = self._pending_request(environ)
             else:
                 media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
@@ -161,6 +164,8 @@ class CandidateScheduleActionWSGIApp:
             )
 
         try:
+            if path == self.PENDING_COLLECTION_PATH:
+                return self._pending_page(start_response, user_id, request)
             if path == self.PENDING_PATH:
                 return self._pending(start_response, user_id, request)
             if path == self.RESCHEDULE_PATH:
@@ -220,6 +225,39 @@ class CandidateScheduleActionWSGIApp:
         if event_id != pairs[0][1]:
             raise ValueError("event_id must be canonical.")
         return {"event_id": event_id}
+
+    @classmethod
+    def _pending_collection_request(cls, environ: Mapping[str, Any]) -> dict[str, Any]:
+        """Parse a bounded keyset page for owner-scoped pending reschedule intents."""
+        query = environ.get("QUERY_STRING", "")
+        if (
+            not isinstance(query, str)
+            or len(query) > 1000
+            or re.search(r"%(?![0-9A-Fa-f]{2})", query)
+        ):
+            raise ValueError("Pending reschedule collection query is invalid.")
+        pairs = parse_qsl(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=2,
+            errors="strict",
+        )
+        values = dict(pairs)
+        if len(values) != len(pairs) or set(values) - {"limit", "after"}:
+            raise ValueError("Pending reschedule collection query has unknown or duplicate fields.")
+        raw_limit = values.get("limit", "25")
+        if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 3:
+            raise ValueError("limit must be a bounded decimal integer.")
+        limit = int(raw_limit)
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100.")
+        after = values.get("after")
+        if after is not None:
+            normalized = validate_schedule_identifier(after, "after")
+            if normalized != after:
+                raise ValueError("after must be a canonical event identifier.")
+        return {"limit": limit, "after": after}
 
     @staticmethod
     def _pending_operation_ids(connection, event_id: str) -> tuple[str, ...]:
@@ -281,6 +319,210 @@ class CandidateScheduleActionWSGIApp:
                         "More than one ambiguous reschedule is bound to this event."
                     )
         return tuple(matches)
+
+    def _pending_page(
+        self, start_response, user_id: str, request: Mapping[str, Any]
+    ) -> Iterable[bytes]:
+        """List bounded, owner-scoped ambiguous reschedules without writes or provider I/O."""
+        limit = request["limit"]
+        after = request["after"]
+        database = SQLiteDatabase.open_read_only(self._database_path)
+        try:
+            connection = database.connection
+            connection.execute("BEGIN")
+            operation_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'external_action_operations'"
+            ).fetchone()
+            schedule_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'scheduling_events'"
+            ).fetchone()
+            if operation_table is None or schedule_table is None:
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    {"schema_version": 1, "items": [], "next_after": None},
+                )
+
+            # A malformed operation still fails closed when an owned event points to it.
+            malformed = connection.execute(
+                """
+                SELECT o.operation_id
+                FROM external_action_operations AS o INDEXED BY idx_external_actions_type_status
+                JOIN scheduling_events AS e
+                  ON e.active_action_operation_id = o.operation_id
+                WHERE o.action_type = ?
+                  AND o.status IN (?, ?)
+                  AND e.candidate_id = ?
+                  AND json_valid(o.payload_json) = 0
+                LIMIT 1
+                """,
+                (
+                    "calendar.reschedule",
+                    ExternalActionStatus.IN_PROGRESS.value,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                    user_id,
+                ),
+            ).fetchone()
+            if malformed is not None:
+                raise SchedulingOperationConflict(
+                    "An owned pending reschedule has malformed durable evidence."
+                )
+
+            rows = connection.execute(
+                """
+                SELECT
+                    o.operation_id, o.payload_json, o.status,
+                    e.event_id, e.candidate_id, e.employer_name, e.event_type, e.location,
+                    e.start_at, e.start_epoch_us, e.end_at, e.end_epoch_us,
+                    e.timezone_name, e.status, e.version, e.created_at, e.updated_at,
+                    e.active_action_operation_id
+                FROM external_action_operations AS o INDEXED BY idx_external_actions_type_status
+                JOIN scheduling_events AS e
+                  ON e.active_action_operation_id = o.operation_id
+                  OR e.event_id = CASE
+                       WHEN json_valid(o.payload_json)
+                       THEN json_extract(o.payload_json, '$.event_id')
+                       ELSE NULL
+                     END
+                WHERE o.action_type = ?
+                  AND o.status IN (?, ?)
+                  AND e.candidate_id = ?
+                LIMIT 1001
+                """,
+                (
+                    "calendar.reschedule",
+                    ExternalActionStatus.IN_PROGRESS.value,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+                    user_id,
+                ),
+            ).fetchall()
+            if len(rows) > 1000:
+                raise SchedulingOperationConflict(
+                    "Too many pending reschedules to discover safely."
+                )
+
+            def object_pairs(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("Persisted operation payload contains duplicate members.")
+                    result[key] = value
+                return result
+
+            def reject_constant(value):
+                raise ValueError("Persisted operation payload contains a non-finite number.")
+
+            items_by_event: dict[str, dict[str, Any]] = {}
+            lease_path = candidate_schedule_execution_lease_database_path(self._database_path)
+            for row in rows:
+                (
+                    operation_id, payload_json, operation_status, joined_event_id,
+                    candidate_id, _employer_name, _event_type, _location,
+                    _start_at, _start_epoch_us, _end_at, _end_epoch_us,
+                    _timezone_name, _event_status, _event_version,
+                    _created_at, _updated_at, active_operation_id,
+                ) = row
+                try:
+                    payload = json.loads(
+                        payload_json,
+                        object_pairs_hook=object_pairs,
+                        parse_constant=reject_constant,
+                    )
+                    if not isinstance(payload, dict):
+                        raise ValueError("Persisted operation payload must be an object.")
+                    event_id = validate_schedule_identifier(payload.get("event_id"), "event_id")
+                    if event_id != joined_event_id or candidate_id != user_id:
+                        raise ValueError("Pending reschedule owner or event identity does not match.")
+                    state_version = payload.get("event_version")
+                    if type(state_version) is not int or not 1 <= state_version <= _MAX_STATE_VERSION:
+                        raise ValueError("Persisted reschedule source version is invalid.")
+                    start_at = self._instant(payload.get("start_at"), "start_at")
+                    raw_end = payload.get("end_at")
+                    end_at = None if raw_end is None else self._instant(raw_end, "end_at")
+                    raw_timezone = payload.get("timezone_name")
+                    timezone_name = validate_timezone_name(raw_timezone)
+                    if timezone_name != raw_timezone or (end_at is not None and end_at <= start_at):
+                        raise ValueError("Persisted reschedule target is invalid.")
+                    source_start = self._instant(payload.get("event_start_at"), "event_start_at")
+                    raw_source_end = payload.get("event_end_at")
+                    source_end = (
+                        None
+                        if raw_source_end is None
+                        else self._instant(raw_source_end, "event_end_at")
+                    )
+                    raw_source_timezone = payload.get("event_timezone_name")
+                    source_timezone = validate_timezone_name(raw_source_timezone)
+                    if source_timezone != raw_source_timezone:
+                        raise ValueError("Persisted reschedule source timezone is invalid.")
+                    source_status = ScheduleStatus(payload.get("event_status"))
+                    event_row = (
+                        joined_event_id, candidate_id, _employer_name, _event_type, _location,
+                        _start_at, _start_epoch_us, _end_at, _end_epoch_us, _timezone_name,
+                        _event_status, None, None, _event_version, _created_at, _updated_at,
+                    )
+                    event = SQLiteSchedulingRepository._event_from_row(event_row)
+                    source_matches = (
+                        event.version == state_version
+                        and event.start_at == source_start
+                        and event.end_at == source_end
+                        and event.timezone_name == source_timezone
+                        and event.status == source_status
+                    )
+                    target_already_applied = (
+                        state_version < _MAX_STATE_VERSION
+                        and event.version == state_version + 1
+                        and event.status == ScheduleStatus.RESCHEDULE_REQUESTED
+                        and event.start_at == start_at
+                        and event.end_at == end_at
+                        and event.timezone_name == timezone_name
+                    )
+                    if not (source_matches or target_already_applied):
+                        raise ValueError("Pending reschedule no longer matches its source or target event.")
+                    if active_operation_id not in (None, operation_id):
+                        raise ValueError("Pending reschedule event pointer is inconsistent.")
+                    expected_operation_id = self._operation_id(
+                        user_id, event_id, state_version, start_at, end_at, timezone_name
+                    )
+                    if operation_id != expected_operation_id:
+                        raise ValueError("Pending reschedule operation identity is invalid.")
+                    if event_id in items_by_event:
+                        raise ValueError("More than one pending reschedule is bound to an event.")
+                    if SQLiteCandidateScheduleExecutionLeaseRepository.is_active_for_event_path(
+                        lease_path, event_id
+                    ):
+                        visible_status = "running"
+                    elif operation_status == ExternalActionStatus.IN_PROGRESS.value:
+                        visible_status = "in_progress"
+                    else:
+                        visible_status = "reconciliation_required"
+                    items_by_event[event_id] = {
+                        "event": self._event_snapshot(event),
+                        "state_version": state_version,
+                        "operation_status": visible_status,
+                    }
+                except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                    raise SchedulingOperationConflict(
+                        "An owned pending reschedule has inconsistent durable evidence."
+                    ) from exc
+
+            ordered = [
+                items_by_event[event_id]
+                for event_id in sorted(items_by_event)
+                if after is None or event_id > after
+            ]
+            page = ordered[:limit]
+            next_after = (
+                page[-1]["event"]["event_id"] if len(ordered) > limit else None
+            )
+            return self._respond(
+                start_response,
+                "200 OK",
+                {"schema_version": 1, "items": page, "next_after": next_after},
+            )
+        finally:
+            database.close()
 
     def _pending(
         self, start_response, user_id: str, request: Mapping[str, str]
@@ -965,7 +1207,67 @@ def candidate_schedule_action_openapi_paths() -> dict[str, Any]:
             },
         },
     }
+    collection_event_properties = dict(event_properties)
+    collection_event_properties["status"] = {
+        "type": "string",
+        "enum": ["proposed", "accepted", "declined", "reschedule_requested", "cancelled"],
+    }
+    collection_event_properties["state_version"] = {
+        "type": "integer", "minimum": 1, "maximum": _MAX_STATE_VERSION,
+    }
+    collection_item = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["event", "state_version", "operation_status"],
+        "properties": {
+            "event": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(collection_event_properties),
+                "properties": collection_event_properties,
+            },
+            "state_version": {
+                "type": "integer", "minimum": 1, "maximum": _MAX_STATE_VERSION,
+            },
+            "operation_status": {
+                "type": "string",
+                "enum": ["running", "in_progress", "reconciliation_required"],
+            },
+        },
+    }
+    collection_response = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["schema_version", "items", "next_after"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "items": {"type": "array", "maxItems": 100, "items": collection_item},
+            "next_after": {**event_properties["event_id"], "type": ["string", "null"]},
+        },
+    }
     return {
+        CandidateScheduleActionWSGIApp.PENDING_COLLECTION_PATH: {
+            "get": {
+                "operationId": "listCandidatePendingInterviewReschedules",
+                "security": [{"bearerAuth": []}],
+                "parameters": [
+                    {"name": "limit", "in": "query", "schema": {
+                        "type": "integer", "minimum": 1, "maximum": 100, "default": 25}},
+                    {"name": "after", "in": "query", "description": "Exclusive owner-scoped event-ID cursor",
+                     "schema": event_properties["event_id"]},
+                ],
+                "responses": {
+                    "200": {"description": "Bounded owner-scoped pending reschedules; discovery is read-only and never calls the provider",
+                            "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                            "content": json_content(collection_response)},
+                    "400": {"description": "Invalid collection query", "content": json_content(error_schema)},
+                    "401": {"description": "Authentication required", "content": json_content(error_schema)},
+                    "405": {"description": "Only GET is allowed", "content": json_content(error_schema)},
+                    "409": {"description": "Pending durable intent is ambiguous or inconsistent", "content": json_content(error_schema)},
+                    "503": {"description": "Durable storage is unavailable", "content": json_content(error_schema)},
+                },
+            },
+        },
         CandidateScheduleActionWSGIApp.PENDING_PATH: {
             "get": {
                 "operationId": "getCandidatePendingInterviewReschedule",
