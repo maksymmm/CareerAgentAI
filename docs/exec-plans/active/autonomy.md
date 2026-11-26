@@ -1606,3 +1606,9 @@ busy-writer behavior, missing-submission rejection, and concurrent same-intent c
 Next: wire this adapter only through a distinct candidate-approved employer
 withdrawal operation with owner/version fencing and durable external-action status;
 never reinterpret local tracker withdrawal as employer-side completion.
+Same-process external-action execution is now serialized by operation ID across
+service instances, so a live worker is not mistaken for a crashed `IN_PROGRESS`
+action. The lock is intentionally process-local; after restart an `IN_PROGRESS`
+operation remains ambiguous and is resolved only from the provider's durable evidence.
+The concurrent application-submission regression verifies both callers observe one
+terminal success with one provider attempt/effect.
