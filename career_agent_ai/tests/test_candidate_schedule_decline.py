@@ -260,6 +260,41 @@ def test_candidate_decline_rejects_foreign_and_stale_events_before_provider_io(t
     runtime.close()
 
 
+def test_candidate_decline_no_effect_requires_a_fresh_explicit_retry(tmp_path):
+    path = tmp_path / "candidate-decline-no-effect.sqlite"
+    _seed_event(path)
+    runtime = _runtime(
+        path,
+        plan=lambda _operation_id, attempt: (
+            SandboxCalendarOutcome.NO_EFFECT
+            if attempt == 1
+            else SandboxCalendarOutcome.SUCCESS
+        ),
+    )
+
+    status, _, first = _request(
+        runtime, path="/v1/candidate/schedule-event/decline",
+        method="POST", body=_decline_body(),
+    )
+    assert status == "200 OK"
+    assert first["provider_status"] == "no_effect_confirmed"
+    assert first["status"] == "proposed"
+    assert first["state_version"] == 1
+    assert _counts(path) == (1, 0, ("proposed", 1))
+
+    # A new explicit candidate confirmation reuses the same version-bound intent.
+    status, _, second = _request(
+        runtime, path="/v1/candidate/schedule-event/decline",
+        method="POST", body=_decline_body(),
+    )
+    assert status == "200 OK"
+    assert second["provider_status"] == "confirmed"
+    assert second["status"] == "declined"
+    assert second["state_version"] == 2
+    assert _counts(path) == (2, 1, ("declined", 2))
+    runtime.close()
+
+
 def test_candidate_decline_reconciliation_rejects_a_claim_that_disagrees_with_evidence(tmp_path):
     path = tmp_path / "candidate-decline-evidence.sqlite"
     _seed_event(path)
