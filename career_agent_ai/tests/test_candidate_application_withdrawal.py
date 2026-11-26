@@ -441,3 +441,77 @@ def test_ci_runs_independent_coverage_cli_after_pytest():
     )
     assert pytest_step < independent_gate
     assert "Enforce independent coverage threshold" in workflow
+
+
+
+def test_withdrawal_uses_monotonic_timestamp_and_rejects_naive_clock(tmp_path):
+    path = tmp_path / "clock.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    latest = datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)
+    application = _application().transition(
+        JobApplicationStatus.APPLIED, occurred_at=latest
+    )
+    repository.add(application)
+    monotonic = CandidateApplicationWithdrawalService(
+        repository, clock=lambda: latest - timedelta(seconds=10)
+    )
+    result = monotonic.record_withdrawal(
+        "application-1", user_id="candidate-1", expected_state_version=2
+    )
+    assert result["updated_at"] == latest.isoformat()
+    assert repository.get("application-1").timeline[-1].occurred_at == latest
+
+    second = _application("application-2").transition(
+        JobApplicationStatus.APPLIED, occurred_at=latest
+    )
+    repository.add(second)
+    invalid_clock = CandidateApplicationWithdrawalService(
+        repository, clock=lambda: datetime(2026, 1, 1)
+    )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        invalid_clock.record_withdrawal(
+            "application-2", user_id="candidate-1", expected_state_version=2
+        )
+    assert repository.get("application-2") == second
+    database.close()
+
+
+@pytest.mark.parametrize("application_id,user_id", [
+    ("", "candidate-1"), (" padded", "candidate-1"),
+    ("application-1", ""), ("application-1", "candidate-1 "),
+])
+def test_withdrawal_service_rejects_noncanonical_identifiers(
+    tmp_path, application_id, user_id
+):
+    path = tmp_path / "identifier.sqlite"
+    database = SQLiteDatabase(str(path))
+    repository = SQLiteJobApplicationRepository(database)
+    service = CandidateApplicationWithdrawalService(repository)
+    with pytest.raises(ValueError):
+        service.record_withdrawal(
+            application_id, user_id=user_id, expected_state_version=1
+        )
+    assert repository.get("application-1") is None
+    database.close()
+
+
+def test_runtime_public_withdrawal_method_requires_open_runtime(tmp_path):
+    path = tmp_path / "runtime-method.sqlite"
+    database = SQLiteDatabase(str(path))
+    SQLiteJobApplicationRepository(database).add(_application())
+    database.close()
+    runtime = RuntimeCandidateApp(
+        database_path=str(path), jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    result = runtime.record_application_withdrawal(
+        "application-1", user_id="candidate-1", expected_state_version=1
+    )
+    assert result["status"] == "withdrawn"
+    assert result["state_version"] == 2
+    runtime.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        runtime.record_application_withdrawal(
+            "application-1", user_id="candidate-1", expected_state_version=2
+        )
