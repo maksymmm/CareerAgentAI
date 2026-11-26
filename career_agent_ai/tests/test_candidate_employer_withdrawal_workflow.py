@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO
+import sqlite3
 import json
 
 import pytest
@@ -10,9 +11,6 @@ import pytest
 from career_agent_ai.application.external_actions import ExternalActionStatus
 from career_agent_ai.application.external_actions.external_action_operation import (
     ExternalActionOperation,
-)
-from career_agent_ai.application.external_actions.external_action_repository import (
-    ExternalActionOperationRepository,
 )
 from career_agent_ai.application.jobs.candidate_employer_application_withdrawal_service import (
     CandidateEmployerApplicationWithdrawalService,
@@ -289,7 +287,7 @@ def test_foreign_owner_and_missing_submission_fail_before_withdrawal_provider_ef
     missing_path = tmp_path / "missing-submission.sqlite"
     _seed_application(missing_path, with_submission=False)
     missing_app = _app(missing_path)
-    status, _, body = _request(missing_app, _body())
+    status, _, body = _request(missing_app, _body(state_version=1))
     assert status == "409 Conflict"
     assert body == {"error": "approval_conflict"}
     attempts, effects, _, application = _inspect(missing_path, operation_id)
@@ -339,3 +337,51 @@ def test_employer_withdrawal_openapi_is_strict_and_separate_from_tracker_only_ac
     assert operation["responses"]["200"]["description"].startswith(
         "Candidate-approved sandbox provider withdrawal"
     )
+
+
+def test_foreign_owner_lookup_does_not_decode_corrupt_private_application_children(tmp_path):
+    path = tmp_path / "foreign-corrupt-application.sqlite"
+    _seed_application(path)
+    raw = sqlite3.connect(path)
+    raw.execute(
+        "UPDATE job_applications SET job_skills_json = 'not-json' WHERE application_id = ?",
+        (APPLICATION_ID,),
+    )
+    raw.commit()
+    raw.close()
+
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    app = _app(path, token_owner="another-candidate")
+    status, _, body = _request(app, _body())
+    assert status == "404 Not Found"
+    assert body == {"error": "not_found"}
+
+    database = SQLiteDatabase(str(path))
+    provider = SQLiteSandboxApplicationWithdrawalProvider(database)
+    assert provider.attempts(operation_id) == ()
+    assert provider.ledger_entries() == ()
+    database.close()
+    app.close()
+
+
+def test_stale_version_and_get_method_fail_before_provider_effect(tmp_path):
+    path = tmp_path / "candidate-withdrawal-stale.sqlite"
+    _seed_application(path)
+    operation_id = CandidateEmployerApplicationWithdrawalService.operation_id_for(
+        USER_ID, APPLICATION_ID
+    )
+    app = _app(path)
+
+    stale_status, _, stale_body = _request(app, _body(state_version=1))
+    assert stale_status == "409 Conflict"
+    assert stale_body == {"error": "approval_conflict"}
+    get_status, _, get_body = _request(app, _body(), method="GET")
+    assert get_status == "405 Method Not Allowed"
+    assert get_body == {"error": "method_not_allowed"}
+
+    attempts, effects, operation, application = _inspect(path, operation_id)
+    assert attempts == () and effects == () and operation is None
+    assert application.status is JobApplicationStatus.APPLIED
+    app.close()
