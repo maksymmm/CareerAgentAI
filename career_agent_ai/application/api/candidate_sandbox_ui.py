@@ -161,7 +161,7 @@ _HTML = r"""<!doctype html>
     <p id="application-history-state" role="status"></p>
     <h3 id="application-history-title" class="visually-hidden">Application history</h3>
     <pre id="application-history" role="region" aria-labelledby="application-history-title" aria-busy="false"></pre>
-    <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
+    <p class="muted">Application lists and history are read-only snapshots. The detail action can record a local withdrawal only; it never contacts the employer.</p>
   </section>
   <section aria-labelledby="schedule-title">
     <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
@@ -598,9 +598,13 @@ _HTML = r"""<!doctype html>
         const row = Array.from(byId('owned-applications').children)
           .find(candidate => candidate.dataset.applicationId === applicationId);
         const summary = row && row.querySelector('[data-role="application-summary"]');
-        if (summary) summary.textContent =
-          snapshot.job_title + ' — ' + snapshot.company_id +
-          ' — withdrawn — version ' + result.state_version + ' — ' + applicationId;
+        if (row && byId('application-status').value !== '' &&
+            byId('application-status').value !== 'withdrawn') {
+          row.remove();
+        } else if (summary) {
+          summary.textContent = snapshot.job_title + ' — ' + snapshot.company_id +
+            ' — withdrawn — version ' + result.state_version + ' — ' + applicationId;
+        }
         byId('applications-state').textContent =
           'The selected application was updated. Other pages remain unchanged; reload them to refresh snapshots.';
       } catch (error) {
