@@ -135,6 +135,10 @@ def test_candidate_decline_remains_terminal_after_runtime_restart(
         run_id=run_id,
     )
     assert started.phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert started.run_id != run_id
+    # Candidate HTTP routes use the durable owner-scoped ID returned by start,
+    # not the client-supplied correlation ID.
+    run_id = started.run_id
 
     database = SQLiteDatabase(database_path)
     try:
