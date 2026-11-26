@@ -173,6 +173,23 @@ class RuntimeCandidateApp:
         finally:
             database.close()
 
+    def cancel_run(
+        self, run_id: str, *, user_id: str, expected_state_version: int
+    ):
+        """Cancel one version-matched candidate approval gate using durable storage."""
+        if self._closed:
+            raise RuntimeError("Candidate sandbox runtime is closed.")
+        database = SQLiteDatabase(self._database_path)
+        try:
+            return _build_candidate_loop(
+                database, self._jobs, self._sandbox_outcome_plan
+            ).cancel_run(
+                run_id, user_id=user_id,
+                expected_state_version=expected_state_version,
+            )
+        finally:
+            database.close()
+
     def close(self) -> None:
         """Prevent new requests and sandbox runs."""
         self._closed = True
