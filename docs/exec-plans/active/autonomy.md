@@ -1590,3 +1590,17 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate definite-no-effect application recovery now has an HTTP/runtime restart
+acceptance contract. A candidate approves one exact application intent, the SQLite
+sandbox records a first NO_EFFECT attempt, and the runtime closes while the run remains
+in application-submit recovery. After restart, owner-scoped status and unavailable
+approval-prompt reads are proven not to invoke the provider or mutate attempt/effect
+history. Only an explicit authenticated POST to the continue route retries the same
+approved operation; the second attempt succeeds, exactly one provider effect is
+committed, and the tracker advances from saved to applied. A further restart and
+continue after COMPLETE adds no attempt. Foreign-owner status remains hidden.
+See ADR 0028. Next: carry the same explicit no-effect/restart contract to communication
+and interview provider recovery, then resolve the independent live-operation fencing
+review before revisiting the service-level concurrency regression.
