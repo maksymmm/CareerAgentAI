@@ -432,10 +432,12 @@ _HTML = r"""<!doctype html>
     let selectedApplicationStatus = null;
     let selectedApplicationSnapshot = null;
     let employerWithdrawalInFlight = false;
+    let employerWithdrawalConfirmed = false;
     let employerWithdrawalGeneration = 0;
     function clearEmployerWithdrawal(message = '') {
       employerWithdrawalGeneration += 1;
       employerWithdrawalInFlight = false;
+      employerWithdrawalConfirmed = false;
       byId('confirm-employer-withdrawal').checked = false;
       byId('confirm-employer-withdrawal').disabled = true;
       byId('withdraw-employer-application').disabled = true;
@@ -450,6 +452,9 @@ _HTML = r"""<!doctype html>
         !eligible || !confirmation.checked || employerWithdrawalInFlight;
       if (selectedApplicationId === null) {
         byId('employer-withdrawal-state').textContent = '';
+      } else if (employerWithdrawalConfirmed && selectedApplicationStatus === 'withdrawn') {
+        byId('employer-withdrawal-state').textContent =
+          'Sandbox provider confirmed the employer-side withdrawal. No real employer was contacted.';
       } else if (!eligible) {
         byId('employer-withdrawal-state').textContent =
           'Sandbox employer withdrawal is available only for applied, interview, or offer applications.';
@@ -674,6 +679,7 @@ _HTML = r"""<!doctype html>
         clearApplicationHistory();
         confirmation.checked = false;
         employerWithdrawalInFlight = false;
+        employerWithdrawalConfirmed = true;
         completed = true;
         updateEmployerWithdrawalControls();
         byId('employer-withdrawal-state').textContent =
