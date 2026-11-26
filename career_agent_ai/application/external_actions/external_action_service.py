@@ -60,7 +60,6 @@ class AmbiguousExternalActionError(RuntimeError):
 class ExternalActionAdapter(Protocol):
     """Provider-neutral boundary for a consequential external action."""
 
-    @_serialize_operation
     def execute(
         self,
         operation_id: str,
@@ -103,6 +102,7 @@ class ExternalActionService:
         """Return an existing operation without changing its durable state."""
         return self._repository.get(operation_id)
 
+    @_serialize_operation
     def execute(
         self,
         operation_id: str,
