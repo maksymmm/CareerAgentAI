@@ -41,6 +41,13 @@ writer or ambient caller-owned transaction raises an error; it is never translat
 into `ABSENT_CONFIRMED`. Provider construction rejects an ambient transaction
 before schema DDL and never commits caller-owned work.
 
+The generic external-action service serializes same-process execution calls by
+operation ID so a second live worker does not misclassify the first worker's
+`IN_PROGRESS` state as a crashed execution. The in-memory lock does not survive a
+process restart: a recovered `IN_PROGRESS` operation remains ambiguous and must be
+resolved from provider evidence. Cross-process duplicate-effect safety remains the
+responsibility of the provider's durable idempotency ledger.
+
 ## Scope and safety boundary
 
 This ADR does not wire employer withdrawal into the candidate HTTP API, runtime,
