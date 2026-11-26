@@ -159,7 +159,18 @@ _HTML = r"""<!doctype html>
     <p id="application-history-state" role="status"></p>
     <h3 id="application-history-title" class="visually-hidden">Application history</h3>
     <pre id="application-history" role="region" aria-labelledby="application-history-title" aria-busy="false"></pre>
-    <p class="muted">Read-only tracker snapshots; this list cannot approve or submit applications.</p>
+    <fieldset id="employer-withdrawal-panel">
+      <legend>Employer-side withdrawal (sandbox)</legend>
+      <p id="employer-withdrawal-help">Select an applied, interview, or offer application to review this separate action.</p>
+      <label class="attestation">
+        <input id="confirm-employer-withdrawal" type="checkbox" disabled>
+        I explicitly approve the sandbox provider withdrawal for this application.
+      </label>
+      <button id="withdraw-employer-application" type="button" disabled>Withdraw with sandbox provider</button>
+      <p id="employer-withdrawal-state" role="status" aria-live="polite"></p>
+      <p class="muted">This action uses only the local SQLite sandbox provider. It does not contact an employer. Every retry requires a fresh application read and a new explicit confirmation.</p>
+    </fieldset>
+    <p class="muted">Tracker snapshots are read-only; employer-side withdrawal is a separate, explicitly approved sandbox action.</p>
   </section>
   <section aria-labelledby="schedule-title">
     <h2 id="schedule-title" tabindex="-1">My interviews and events</h2>
@@ -418,6 +429,35 @@ _HTML = r"""<!doctype html>
     let applicationVersionFloorId = null;
     let applicationVersionFloor = null;
     let applicationHistoryGeneration = 0;
+    let selectedApplicationStatus = null;
+    let selectedApplicationSnapshot = null;
+    let employerWithdrawalInFlight = false;
+    let employerWithdrawalGeneration = 0;
+    function clearEmployerWithdrawal(message = '') {
+      employerWithdrawalGeneration += 1;
+      employerWithdrawalInFlight = false;
+      byId('confirm-employer-withdrawal').checked = false;
+      byId('confirm-employer-withdrawal').disabled = true;
+      byId('withdraw-employer-application').disabled = true;
+      byId('employer-withdrawal-state').textContent = message;
+    }
+    function updateEmployerWithdrawalControls() {
+      const eligible = selectedApplicationId !== null &&
+        ['applied', 'interview', 'offer'].includes(selectedApplicationStatus);
+      const confirmation = byId('confirm-employer-withdrawal');
+      confirmation.disabled = !eligible || employerWithdrawalInFlight;
+      byId('withdraw-employer-application').disabled =
+        !eligible || !confirmation.checked || employerWithdrawalInFlight;
+      if (selectedApplicationId === null) {
+        byId('employer-withdrawal-state').textContent = '';
+      } else if (!eligible) {
+        byId('employer-withdrawal-state').textContent =
+          'Sandbox employer withdrawal is available only for applied, interview, or offer applications.';
+      } else if (!employerWithdrawalInFlight) {
+        byId('employer-withdrawal-state').textContent =
+          'A separate explicit confirmation is required. No employer is contacted by this sandbox action.';
+      }
+    }
     function clearApplicationHistory() {
       applicationHistoryGeneration += 1;
       byId('application-history').setAttribute('aria-busy', 'false');
@@ -428,8 +468,11 @@ _HTML = r"""<!doctype html>
       if (applicationDetailTrigger && applicationDetailTrigger.isConnected) applicationDetailTrigger.disabled = false;
       applicationDetailTrigger = null;
       clearApplicationHistory();
+      clearEmployerWithdrawal();
       selectedApplicationId = null;
       selectedApplicationVersion = null;
+      selectedApplicationStatus = null;
+      selectedApplicationSnapshot = null;
       byId('load-application-history').disabled = true;
       applicationDetailGeneration += 1;
       byId('application-detail').setAttribute('aria-busy', 'false');
@@ -468,9 +511,12 @@ _HTML = r"""<!doctype html>
         byId('application-detail-state').textContent = 'Read-only application detail.';
         selectedApplicationId = applicationId;
         selectedApplicationVersion = item.state_version;
+        selectedApplicationStatus = item.status;
+        selectedApplicationSnapshot = snapshot;
         applicationVersionFloorId = applicationId;
         applicationVersionFloor = item.state_version;
         byId('load-application-history').disabled = false;
+        updateEmployerWithdrawalControls();
       } catch (error) {
         if (generation === applicationDetailGeneration) {
           clearApplicationDetail();
@@ -515,11 +561,35 @@ _HTML = r"""<!doctype html>
         selectedApplicationVersion = history.state_version;
         applicationVersionFloorId = applicationId;
         applicationVersionFloor = history.state_version;
+        if (selectedApplicationSnapshot) {
+          const latestTransition = history.items.at(-1);
+          if (latestTransition) {
+            selectedApplicationStatus = latestTransition.to_status;
+            selectedApplicationSnapshot = {
+              ...selectedApplicationSnapshot,
+              status: latestTransition.to_status,
+              state_version: history.state_version,
+              updated_at: latestTransition.occurred_at,
+            };
+            byId('application-detail').textContent =
+              JSON.stringify(selectedApplicationSnapshot, null, 2);
+            byId('application-detail-state').textContent =
+              'Application detail advanced to the latest verified history version.';
+          } else {
+            selectedApplicationSnapshot = {
+              ...selectedApplicationSnapshot,
+              state_version: history.state_version,
+            };
+            byId('application-detail').textContent =
+              JSON.stringify(selectedApplicationSnapshot, null, 2);
+          }
+        }
         const snapshot = {schema_version: 1, application_id: applicationId, state_version: history.state_version,
           items: history.items.map(item => ({sequence: item.sequence, from_status: item.from_status,
             to_status: item.to_status, occurred_at: item.occurred_at}))};
         byId('application-history').textContent = JSON.stringify(snapshot, null, 2);
         byId('application-history-state').textContent = history.items.length ? 'Read-only application history.' : 'No status transitions yet.';
+        updateEmployerWithdrawalControls();
       } catch (error) {
         if (generation === applicationHistoryGeneration) {
           clearApplicationHistory();
@@ -536,6 +606,100 @@ _HTML = r"""<!doctype html>
     }
     byId('load-application-history').addEventListener(
       'click', () => guarded(loadApplicationHistory, true));
+    async function withdrawSelectedApplication() {
+      const applicationId = selectedApplicationId;
+      const stateVersion = selectedApplicationVersion;
+      const confirmation = byId('confirm-employer-withdrawal');
+      if (employerWithdrawalInFlight) {
+        throw new Error('An employer-withdrawal request is already in progress.');
+      }
+      if (
+        applicationId === null ||
+        !Number.isSafeInteger(stateVersion) ||
+        !['applied', 'interview', 'offer'].includes(selectedApplicationStatus) ||
+        !confirmation.checked
+      ) {
+        throw new Error('Load the current application and explicitly confirm the sandbox withdrawal first.');
+      }
+      const generation = employerWithdrawalGeneration;
+      let completed = false;
+      employerWithdrawalInFlight = true;
+      confirmation.disabled = true;
+      byId('withdraw-employer-application').disabled = true;
+      byId('employer-withdrawal-state').textContent =
+        'Waiting for the explicitly approved sandbox provider result…';
+      try {
+        const result = await call('/v1/candidate/application/withdraw-employer', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            schema_version: 1,
+            application_id: applicationId,
+            state_version: stateVersion,
+            confirm_employer_withdrawal: true,
+          }),
+        }, 'Employer withdrawal result was not confirmed. Reload the application before any new explicit request.', true);
+        if (generation !== employerWithdrawalGeneration || applicationId !== selectedApplicationId) return;
+        const expectedKeys = [
+          'application_id', 'provider_status', 'state_version', 'status', 'updated_at',
+        ];
+        if (
+          !result ||
+          Object.keys(result).length !== expectedKeys.length ||
+          !expectedKeys.every(key => Object.prototype.hasOwnProperty.call(result, key)) ||
+          result.application_id !== applicationId ||
+          result.provider_status !== 'confirmed' ||
+          result.status !== 'withdrawn' ||
+          result.state_version !== stateVersion + 1 ||
+          typeof result.updated_at !== 'string' ||
+          result.updated_at.length > 64 ||
+          !Number.isFinite(Date.parse(result.updated_at))
+        ) {
+          throw new Error('Invalid employer-withdrawal response.');
+        }
+        selectedApplicationStatus = 'withdrawn';
+        selectedApplicationVersion = result.state_version;
+        applicationVersionFloorId = applicationId;
+        applicationVersionFloor = result.state_version;
+        selectedApplicationSnapshot = {
+          ...selectedApplicationSnapshot,
+          status: 'withdrawn',
+          state_version: result.state_version,
+          updated_at: result.updated_at,
+        };
+        byId('application-detail').textContent =
+          JSON.stringify(selectedApplicationSnapshot, null, 2);
+        byId('application-detail-state').textContent =
+          'Employer-side withdrawal confirmed by the SQLite sandbox provider.';
+        clearApplicationHistory();
+        confirmation.checked = false;
+        employerWithdrawalInFlight = false;
+        completed = true;
+        updateEmployerWithdrawalControls();
+        byId('employer-withdrawal-state').textContent =
+          'Sandbox provider confirmed the employer-side withdrawal. No real employer was contacted. Reload the application list to refresh its status.';
+        byId('applications-state').textContent =
+          'Application status changed. Reload the list to refresh this page.';
+      } catch (error) {
+        if (generation === employerWithdrawalGeneration) {
+          clearApplicationDetail();
+          byId('employer-withdrawal-state').textContent = error.status === 409
+            ? 'The application changed or the provider reported no confirmed effect. Reload the application detail and explicitly confirm a new request if appropriate. No automatic retry occurred.'
+            : 'The provider result was not confirmed in this response. Reload the application detail before any new explicit request. No automatic retry occurred.';
+        }
+        throw error;
+      } finally {
+        if (generation === employerWithdrawalGeneration) {
+          employerWithdrawalInFlight = false;
+          if (!completed) updateEmployerWithdrawalControls();
+        }
+      }
+    }
+    byId('confirm-employer-withdrawal').addEventListener(
+      'change', updateEmployerWithdrawalControls);
+    byId('withdraw-employer-application').addEventListener(
+      'click', () => guarded(withdrawSelectedApplication, true));
+
     function clearApplications() {
       clearApplicationDetail();
       applicationVersionFloorId = null;
