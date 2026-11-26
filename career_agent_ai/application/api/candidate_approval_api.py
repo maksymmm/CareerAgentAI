@@ -226,6 +226,8 @@ class CandidateApprovalWSGIApp:
                             completed=completed,
                         )
                         status = "200 OK"
+                except CandidateApprovalConflictError:
+                    raise
                 except (TypeError, ValueError, InvalidOperation) as exc:
                     return self._respond(
                         start_response, "400 Bad Request",
