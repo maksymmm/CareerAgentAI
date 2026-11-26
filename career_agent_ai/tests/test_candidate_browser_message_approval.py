@@ -204,3 +204,21 @@ def test_candidate_browser_requires_separate_application_and_message_approval_be
         )
     ]
     assert completed["provider_messages"] == [(message_id, "outbound")]
+
+
+
+def test_ci_enforces_independent_coverage_gate_after_pytest():
+    from pathlib import Path
+
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    test_job = workflow.split("  release-evidence:", 1)[0]
+    pytest_command = "python -m pytest"
+    coverage_command = "python -m coverage report --fail-under=90"
+
+    assert pytest_command in test_job
+    assert coverage_command in test_job
+    assert "id: pytest" in test_job
+    assert "if: ${{ always() && !cancelled() && steps.pytest.outcome != 'skipped' }}" in test_job
+    assert test_job.index(pytest_command) < test_job.index(coverage_command)
