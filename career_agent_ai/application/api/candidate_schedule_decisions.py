@@ -771,15 +771,28 @@ class CandidateScheduleDeclineWSGIApp:
 
             records = self._pending_operation_records(connection)
             owner_records: dict[str, dict[str, Any]] = {}
+            seen_event_ids: set[str] = set()
             for record in records:
-                if record["candidate_id"] != user_id:
-                    continue
                 event_id = record["event_id"]
-                if event_id in owner_records:
+                if event_id in seen_event_ids:
                     raise SchedulingOperationConflict(
-                        "More than one ambiguous decline is bound to an owned event."
+                        "More than one ambiguous decline is bound to an event."
                     )
-                owner_records[event_id] = record
+                seen_event_ids.add(event_id)
+                event_owner = connection.execute(
+                    "SELECT candidate_id FROM scheduling_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if record["candidate_id"] == user_id:
+                    if event_owner is None or event_owner[0] != user_id:
+                        raise SchedulingOperationConflict(
+                            "An ambiguous decline does not reference an owned event."
+                        )
+                    owner_records[event_id] = record
+                elif event_owner is not None and event_owner[0] == user_id:
+                    raise SchedulingOperationConflict(
+                        "An owned event has an ambiguous decline with a conflicting owner."
+                    )
 
             # Catch active pointers to missing or mismatched ambiguous decline rows.
             active_rows = connection.execute(
