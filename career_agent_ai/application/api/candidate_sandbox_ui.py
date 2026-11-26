@@ -609,6 +609,10 @@ _HTML = r"""<!doctype html>
             'Review pending reschedule for event ' + event.event_id);
           button.addEventListener('click', () => {
             if (generation === pendingRescheduleCollectionGeneration) {
+              // Collection rows are discovery hints, not durable selections. Invalidate
+              // every page before the authoritative event and per-event reads so a late
+              // page response cannot repopulate a stale recovery list.
+              clearPendingRescheduleCollection();
               guarded(() => loadEventDetail(event.event_id, event.state_version, button), true);
             }
           });
