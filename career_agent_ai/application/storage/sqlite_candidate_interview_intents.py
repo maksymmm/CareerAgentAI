@@ -20,7 +20,7 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 _EVENT_COLUMNS = (
     "event_id, candidate_id, employer_name, event_type, location, "
     "start_at, start_epoch_us, end_at, end_epoch_us, timezone_name, "
-    "status, NULL, NULL, version, created_at, updated_at "
+    "status, NULL, NULL, version, created_at, updated_at, "
 )
 _REQUIRED_OPERATION_FIELDS = {
     "event_id",

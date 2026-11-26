@@ -357,77 +357,75 @@ def test_candidate_can_discover_interview_intent_after_runtime_and_browser_resta
     thread.start()
     second = None
     second_thread = None
-    browser = None
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page()
-            url = f"http://127.0.0.1:{port}/sandbox/candidate"
-            page.goto(url)
-            page.locator("#token").fill("owner-token")
-            page.locator("#load-interview-intents").click()
-            expect(page.locator("#pending-interview-intents button")).to_have_count(1)
+            try:
+                page = browser.new_page()
+                url = f"http://127.0.0.1:{port}/sandbox/candidate"
+                page.goto(url)
+                page.locator("#token").fill("owner-token")
+                page.locator("#load-interview-intents").click()
+                expect(page.locator("#pending-interview-intents button")).to_have_count(1)
 
-            _stop_server(server, thread)
-            server = None
-            first.close()
-            second = build_runtime()
-            server = make_server("127.0.0.1", port, second, handler_class=QuietHandler)
-            second_thread = Thread(target=server.serve_forever, daemon=True)
-            second_thread.start()
+                _stop_server(server, thread)
+                server = None
+                first.close()
+                second = build_runtime()
+                server = make_server("127.0.0.1", port, second, handler_class=QuietHandler)
+                second_thread = Thread(target=server.serve_forever, daemon=True)
+                second_thread.start()
 
-            page.reload(wait_until="domcontentloaded")
-            expect(page.locator("#token")).to_have_value("")
-            expect(page.locator("#run-id")).to_have_value("")
-            page.locator("#token").fill("owner-token")
-            page.locator("#load-interview-intents").click()
-            expect(page.locator("#pending-interview-intents button")).to_have_count(1)
+                page.reload(wait_until="domcontentloaded")
+                expect(page.locator("#token")).to_have_value("")
+                expect(page.locator("#run-id")).to_have_value("")
+                page.locator("#token").fill("owner-token")
+                page.locator("#load-interview-intents").click()
+                expect(page.locator("#pending-interview-intents button")).to_have_count(1)
 
-            # Simulate a concurrent durable transition after the intent page was read.
-            database = SQLiteDatabase(str(path))
-            row = database.connection.execute(
-                "SELECT payload_json, version FROM autonomous_career_loops WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-            payload = json.loads(row[0])
-            payload["version"] = row[1] + 1
-            database.connection.execute(
-                "UPDATE autonomous_career_loops SET payload_json = ?, version = ? WHERE run_id = ?",
-                (json.dumps(payload, sort_keys=True, separators=(",", ":")),
-                 row[1] + 1, run_id),
-            )
-            database.connection.commit()
-            database.close()
+                # Simulate a concurrent durable transition after the intent page was read.
+                database = SQLiteDatabase(str(path))
+                row = database.connection.execute(
+                    "SELECT payload_json, version FROM autonomous_career_loops WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                payload = json.loads(row[0])
+                payload["version"] = row[1] + 1
+                database.connection.execute(
+                    "UPDATE autonomous_career_loops SET payload_json = ?, version = ? WHERE run_id = ?",
+                    (json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                     row[1] + 1, run_id),
+                )
+                database.connection.commit()
+                database.close()
 
-            page.locator("#pending-interview-intents button").click()
-            expect(page.locator("#run-id")).to_have_value(run_id)
-            expect(page.locator("#interview-reconciliation-state")).to_contain_text("stale")
-            expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
+                page.locator("#pending-interview-intents button").click()
+                expect(page.locator("#run-id")).to_have_value(run_id)
+                expect(page.locator("#interview-reconciliation-state")).to_contain_text("stale")
+                expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
 
-            page.locator("#load-interview-intents").click()
-            expect(page.locator("#pending-interview-intents button")).to_have_count(1)
-            page.locator("#pending-interview-intents button").click()
-            expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
-            expect(page.locator("#interview-intent-detail")).to_contain_text("Sandbox Logistics")
-            expect(page.locator("#interview-intent-detail")).to_contain_text(run_id)
-            expect(page.locator("#provider-event-id")).to_be_enabled()
-            expect(page.locator("#interview-reconciliation-verified")).to_be_enabled()
-            expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
+                page.locator("#load-interview-intents").click()
+                expect(page.locator("#pending-interview-intents button")).to_have_count(1)
+                page.locator("#pending-interview-intents button").click()
+                expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
+                expect(page.locator("#interview-intent-detail")).to_contain_text("Sandbox Logistics")
+                expect(page.locator("#interview-intent-detail")).to_contain_text(run_id)
+                expect(page.locator("#provider-event-id")).to_be_enabled()
+                expect(page.locator("#interview-reconciliation-verified")).to_be_enabled()
+                expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
 
-            page.locator("#provider-event-id").fill("sandbox-provider-event-1")
-            page.locator("#interview-reconciliation-verified").check()
-            expect(page.locator("#confirm-calendar-completed")).to_be_enabled()
+                page.locator("#provider-event-id").fill("sandbox-provider-event-1")
+                page.locator("#interview-reconciliation-verified").check()
+                expect(page.locator("#confirm-calendar-completed")).to_be_enabled()
 
-            page.locator("#clear-session").click()
-            expect(page.locator("#token")).to_have_value("")
-            expect(page.locator("#run-id")).to_have_value("")
-            expect(page.locator("#pending-interview-intents")).to_be_empty()
-            expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
-            browser.close()
-            browser = None
+                page.locator("#clear-session").click()
+                expect(page.locator("#token")).to_have_value("")
+                expect(page.locator("#run-id")).to_have_value("")
+                expect(page.locator("#pending-interview-intents")).to_be_empty()
+                expect(page.locator("#confirm-calendar-completed")).to_be_disabled()
+            finally:
+                browser.close()
     finally:
-        if browser is not None:
-            browser.close()
         _stop_server(server, second_thread if second_thread is not None else thread)
         first.close()
         if second is not None:
