@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from threading import Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
@@ -108,75 +107,75 @@ def test_candidate_browser_requires_separate_application_and_message_approval_be
     server = make_server("127.0.0.1", 0, runtime, handler_class=QuietHandler)
     server_thread = Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    browser = None
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            try:
+                page = browser.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
 
-            page.locator("#token").fill("owner")
-            page.locator("#run-id").fill(run_id)
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text(
-                "application approval"
-            )
-            page.locator("#prompt").click()
-            expect(page.locator("#approve")).to_be_enabled()
-            expect(page.locator("#action-details")).to_contain_text(
-                "Logistics Coordinator"
-            )
-
-            before_application_approval = _communication_snapshot(database_path)
-            assert before_application_approval["attempts"] == []
-            assert before_application_approval["intents"] == []
-            assert before_application_approval["deliveries"] == []
-            assert before_application_approval["messages"] == []
-            assert before_application_approval["provider_messages"] == []
-
-            # Application approval creates only the immutable message draft.
-            page.locator("#approve").click()
-            expect(page.locator("#result")).to_contain_text("message_approval")
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text(
-                "message approval"
-            )
-            page.locator("#prompt").click()
-            expect(page.locator("#approve")).to_be_enabled()
-            for expected in message.values():
-                expect(page.locator("#action-details")).to_contain_text(expected)
-
-            before_message_approval = _communication_snapshot(database_path)
-            assert before_message_approval["attempts"] == []
-            assert before_message_approval["intents"] == []
-            assert before_message_approval["deliveries"] == []
-            assert before_message_approval["messages"] == [
-                (
-                    f"{run_id}:message",
-                    message["sender"],
-                    message["recipient"],
-                    message["subject"],
-                    message["body"],
-                    "draft",
+                page.locator("#token").fill("owner")
+                page.locator("#run-id").fill(run_id)
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text(
+                    "application approval"
                 )
-            ]
-            assert before_message_approval["provider_messages"] == [
-                (f"{run_id}:message", "draft")
-            ]
+                page.locator("#prompt").click()
+                expect(page.locator("#approve")).to_be_enabled()
+                expect(page.locator("#action-details")).to_contain_text(
+                    "Logistics Coordinator"
+                )
 
-            # Only the second, exact message approval may invoke the sandbox provider.
-            page.locator("#approve").click()
-            expect(page.locator("#result")).to_contain_text('"phase": "complete"')
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text("Finished")
-            expect(page.locator("#run-overview")).to_contain_text("complete")
+                before_application_approval = _communication_snapshot(database_path)
+                assert before_application_approval["attempts"] == []
+                assert before_application_approval["intents"] == []
+                assert before_application_approval["deliveries"] == []
+                assert before_application_approval["messages"] == []
+                assert before_application_approval["provider_messages"] == []
 
-            page.locator("#clear-session").click()
-            expect(page.locator("#token")).to_have_value("")
-            expect(page.locator("#run-id")).to_have_value("")
+                # Application approval creates only the immutable message draft.
+                page.locator("#approve").click()
+                expect(page.locator("#result")).to_contain_text("message_approval")
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text(
+                    "message approval"
+                )
+                page.locator("#prompt").click()
+                expect(page.locator("#approve")).to_be_enabled()
+                for expected in message.values():
+                    expect(page.locator("#action-details")).to_contain_text(expected)
+
+                before_message_approval = _communication_snapshot(database_path)
+                assert before_message_approval["attempts"] == []
+                assert before_message_approval["intents"] == []
+                assert before_message_approval["deliveries"] == []
+                assert before_message_approval["messages"] == [
+                    (
+                        f"{run_id}:message",
+                        message["sender"],
+                        message["recipient"],
+                        message["subject"],
+                        message["body"],
+                        "draft",
+                    )
+                ]
+                assert before_message_approval["provider_messages"] == [
+                    (f"{run_id}:message", "draft")
+                ]
+
+                # Only the second, exact message approval may invoke the sandbox provider.
+                page.locator("#approve").click()
+                expect(page.locator("#result")).to_contain_text('"phase": "complete"')
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text("Finished")
+                expect(page.locator("#run-overview")).to_contain_text("complete")
+
+                page.locator("#clear-session").click()
+                expect(page.locator("#token")).to_have_value("")
+                expect(page.locator("#run-id")).to_have_value("")
+            finally:
+                browser.close()
     finally:
-        if browser is not None:
-            browser.close()
         server.shutdown()
         server_thread.join(timeout=5)
         assert not server_thread.is_alive()
@@ -204,7 +203,6 @@ def test_candidate_browser_requires_separate_application_and_message_approval_be
         )
     ]
     assert completed["provider_messages"] == [(message_id, "outbound")]
-
 
 
 def test_ci_enforces_independent_coverage_gate_after_pytest():
