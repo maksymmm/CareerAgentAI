@@ -47,6 +47,7 @@ _HTML = r"""<!doctype html>
     <a href="#overview-title">Run overview</a>
     <a href="#applications-title">My applications</a>
     <a href="#schedule-title">Interviews and events</a>
+    <a href="#interview-intents-title">Pending interview actions</a>
   </nav>
   <main id="dashboard-content" tabindex="-1">
   <label>Bearer token <input id="token" type="password" autocomplete="off" required></label>
@@ -179,6 +180,16 @@ _HTML = r"""<!doctype html>
     <pre id="event-detail" role="region" aria-labelledby="event-detail-title" aria-busy="false"></pre>
     <p class="muted">Read-only schedule. No accept, decline, reschedule or calendar actions.</p>
   </section>
+  <section aria-labelledby="interview-intents-title">
+    <h2 id="interview-intents-title" tabindex="-1">Pending interview actions</h2>
+    <button id="load-interview-intents" type="button">Find pending interview actions</button>
+    <ul id="pending-interview-intents" aria-label="Pending interview actions" aria-busy="false"></ul>
+    <p id="interview-intents-state" role="status">Load owner-scoped pending interview actions after signing in.</p>
+    <button id="next-interview-intents" type="button" disabled>Next pending action page</button>
+    <h3 id="interview-intent-detail-title">Selected interview action</h3>
+    <pre id="interview-intent-detail" role="region" aria-labelledby="interview-intent-detail-title"></pre>
+    <p class="muted">Only pending sandbox interview actions for this authenticated candidate are listed. Select one to load a fresh run status. Internal operation IDs and provider event IDs are never exposed.</p>
+  </section>
   <h2 id="result-title">Result</h2>
   <pre id="result" role="region" aria-labelledby="result-title" aria-live="polite">Ready.</pre>
   <a href="#candidate-top">Back to dashboard navigation</a>
@@ -199,6 +210,10 @@ _HTML = r"""<!doctype html>
     let messageReconciliationVersion = null;
     let interviewReconciliationAvailable = false;
     let interviewReconciliationVersion = null;
+    let selectedInterviewIntent = null;
+    let interviewIntentsGeneration = 0;
+    let nextInterviewIntentCursor = null;
+    let interviewIntentsInFlight = false;
     let latestStartRequest = 0;
     let approvalPromptGeneration = 0;
     let latestResultRequest = 0;
@@ -965,6 +980,125 @@ _HTML = r"""<!doctype html>
         throw error;
       }
     }
+    const validRunIdentifier = value => typeof value === 'string' && value.length > 0 &&
+      value.length <= 200 && /^[A-Za-z0-9][A-Za-z0-9._:@+-]*$/.test(value);
+    function clearInterviewIntents() {
+      interviewIntentsGeneration += 1;
+      interviewIntentsInFlight = false;
+      selectedInterviewIntent = null;
+      nextInterviewIntentCursor = null;
+      byId('pending-interview-intents').replaceChildren();
+      byId('pending-interview-intents').setAttribute('aria-busy', 'false');
+      byId('interview-intents-state').textContent =
+        'Load owner-scoped pending interview actions after signing in.';
+      byId('next-interview-intents').disabled = true;
+      byId('load-interview-intents').disabled = false;
+      byId('interview-intent-detail').textContent = '';
+    }
+    function validateInterviewIntent(item) {
+      const fields = ['run_id', 'state_version', 'action_type', 'operation_status', 'event'];
+      if (!item || typeof item !== 'object' || Array.isArray(item) ||
+          Object.keys(item).length !== fields.length || !fields.every(key => Object.hasOwn(item, key)) ||
+          !validRunIdentifier(item.run_id) || !Number.isSafeInteger(item.state_version) ||
+          item.state_version < 1 || item.action_type !== 'calendar.accept' ||
+          item.operation_status !== 'reconciliation_required') {
+        throw new Error('Invalid pending interview intent.');
+      }
+      const event = eventSnapshot(item.event);
+      if (!['proposed', 'reschedule_requested'].includes(event.status)) {
+        throw new Error('Invalid pending interview event.');
+      }
+      return {run_id: item.run_id, state_version: item.state_version,
+        action_type: item.action_type, operation_status: item.operation_status, event};
+    }
+    async function loadInterviewIntents(after = null) {
+      if (interviewIntentsInFlight) throw new Error('Pending interview actions are already loading.');
+      const generation = ++interviewIntentsGeneration;
+      const cursor = after;
+      if (cursor === null) {
+        selectedInterviewIntent = null;
+        byId('pending-interview-intents').replaceChildren();
+        byId('interview-intent-detail').textContent = '';
+        nextInterviewIntentCursor = null;
+      }
+      interviewIntentsInFlight = true;
+      byId('load-interview-intents').disabled = true;
+      byId('next-interview-intents').disabled = true;
+      byId('pending-interview-intents').setAttribute('aria-busy', 'true');
+      byId('interview-intents-state').textContent = 'Loading pending interview actions…';
+      try {
+        const page = await call('/v1/candidate/interview-intents?limit=25' +
+          (cursor === null ? '' : '&after=' + encodeURIComponent(cursor)), {},
+          'Pending interview actions request failed.', true);
+        if (generation !== interviewIntentsGeneration) return;
+        if (!page || typeof page !== 'object' || Array.isArray(page) ||
+            Object.keys(page).length !== 3 ||
+            !['schema_version', 'items', 'next_after'].every(key => Object.hasOwn(page, key)) ||
+            page.schema_version !== 1 || !Array.isArray(page.items) || page.items.length > 25 ||
+            !(page.next_after === null || validRunIdentifier(page.next_after))) {
+          throw new Error('Invalid pending interview action page.');
+        }
+        const items = page.items.map(validateInterviewIntent);
+        if (!items.every((item, index) =>
+            item.run_id > (index ? items[index - 1].run_id : (cursor || ''))) ||
+            (page.next_after !== null &&
+              (page.next_after !== items.at(-1)?.run_id || items.length !== 25))) {
+          throw new Error('Invalid pending interview action cursor.');
+        }
+        for (const item of items) {
+          const row = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = item.event.employer_name + ' — ' + item.event.local_date +
+            ' ' + item.event.local_start_time + ' ' + item.event.timezone_name +
+            ' — run ' + item.run_id;
+          button.addEventListener('click', () => selectInterviewIntent(item));
+          row.appendChild(button);
+          byId('pending-interview-intents').appendChild(row);
+        }
+        nextInterviewIntentCursor = page.next_after;
+        byId('next-interview-intents').disabled = page.next_after === null;
+        byId('interview-intents-state').textContent = pageSummary(
+          items.length, 'pending interview action', 'pending interview actions',
+          page.next_after !== null, items.length ? 'Select an action to refresh its run status.' :
+          'No pending interview actions were found.');
+      } catch (error) {
+        if (generation === interviewIntentsGeneration) {
+          byId('pending-interview-intents').replaceChildren();
+          nextInterviewIntentCursor = null;
+          byId('next-interview-intents').disabled = true;
+          byId('interview-intents-state').textContent =
+            'Pending interview actions could not be verified. Load them again.';
+        }
+        throw error;
+      } finally {
+        if (generation === interviewIntentsGeneration) {
+          interviewIntentsInFlight = false;
+          byId('load-interview-intents').disabled = false;
+          byId('pending-interview-intents').setAttribute('aria-busy', 'false');
+        }
+      }
+    }
+    function selectInterviewIntent(intent) {
+      if (startInFlight || statusInFlight || promptInFlight || recoveryInFlight ||
+          decisionInFlight || reconciliationInFlight) {
+        throw new Error('Wait for the current workflow request to finish.');
+      }
+      const selected = intent;
+      byId('run-id').value = selected.run_id;
+      invalidateInputContext();
+      selectedInterviewIntent = selected;
+      byId('interview-intent-detail').textContent = JSON.stringify({
+        run_id: selected.run_id,
+        state_version: selected.state_version,
+        action_type: selected.action_type,
+        operation_status: selected.operation_status,
+        event: selected.event
+      }, null, 2);
+      byId('interview-intents-state').textContent =
+        'Selected action. Loading a fresh owner-scoped run status before enabling reconciliation.';
+      byId('status').click();
+    }
     async function guarded(operation, preserveOverview = false) {
       try { await operation(); } catch (error) {
         if (error.resultRequest === undefined || error.resultRequest === latestResultRequest) {
@@ -1011,6 +1145,7 @@ _HTML = r"""<!doctype html>
     }));
     function invalidateInputContext() {
       clearOverview();
+      clearInterviewIntents();
       selectedRunVersion = null;
       inputContextGeneration += 1;
       latestResultRequest += 1;
@@ -1031,6 +1166,11 @@ _HTML = r"""<!doctype html>
       clearEvents(); clearApplications(); clearRunList(); invalidateInputContext();
       byId('result').textContent = 'Session cleared from this tab. Enter credentials again to continue.';
     });
+    byId('load-interview-intents').addEventListener('click', () =>
+      guarded(() => loadInterviewIntents(), true));
+    byId('next-interview-intents').addEventListener('click', () => guarded(() => {
+      if (nextInterviewIntentCursor !== null) return loadInterviewIntents(nextInterviewIntentCursor);
+    }, true));
     byId('status').addEventListener('click', () => guarded(async () => {
       if (statusInFlight) throw new Error('A status refresh is already in progress.');
       if (startInFlight) throw new Error('Wait for the run start to finish.');
@@ -1058,6 +1198,27 @@ _HTML = r"""<!doctype html>
           throw new Error('Invalid status snapshot.');
         }
         selectedRunVersion = snapshot.state_version;
+        const selectedIntent = selectedInterviewIntent;
+        const selectedIntentMatches = selectedIntent === null || (
+          selectedIntent.run_id === runId &&
+          selectedIntent.state_version === snapshot.state_version &&
+          snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human);
+        if (selectedIntent && !selectedIntentMatches) {
+          selectedInterviewIntent = null;
+          byId('interview-intent-detail').textContent = '';
+          byId('interview-intents-state').textContent =
+            'The selected intent changed after it was listed. Reload pending interview actions.';
+        } else if (selectedIntent) {
+          byId('interview-intent-detail').textContent = JSON.stringify({
+            run_id: selectedIntent.run_id,
+            state_version: selectedIntent.state_version,
+            action_type: selectedIntent.action_type,
+            operation_status: selectedIntent.operation_status,
+            event: selectedIntent.event
+          }, null, 2);
+          byId('interview-intents-state').textContent =
+            'Fresh run status matches the selected interview intent version.';
+        }
         if (snapshot.phase === 'application_reconciliation' && snapshot.waiting_for_human) {
           enableApplicationReconciliation(snapshot.state_version);
         } else {
@@ -1068,10 +1229,11 @@ _HTML = r"""<!doctype html>
         } else {
           invalidateMessageReconciliation();
         }
-        if (snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human) {
+        if (snapshot.phase === 'interview_reconciliation' && snapshot.waiting_for_human && selectedIntentMatches) {
           enableInterviewReconciliation(snapshot.state_version);
         } else {
-          invalidateInterviewReconciliation();
+          invalidateInterviewReconciliation(selectedIntent && !selectedIntentMatches
+            ? 'Pending interview intent is stale. Reload it before reconciling.' : undefined);
         }
         if (approvalPrompt && (snapshot.state_version !== approvalPrompt.state_version ||
             approvalPhases[approvalPrompt.action_kind] !== snapshot.phase ||
@@ -1396,8 +1558,16 @@ _HTML = r"""<!doctype html>
         }
         show({status: 200, payload: {run_id: result.run_id, phase: result.phase}});
         invalidateApprovalPrompt('Reconciliation finished. Load the current approval prompt.');
+        selectedInterviewIntent = null;
+        byId('interview-intent-detail').textContent = '';
+        byId('interview-intents-state').textContent =
+          'Interview action reconciled. Reload pending interview actions for the latest state.';
         invalidateInterviewReconciliation('Reconciliation finished. Refresh run status.');
       } catch (error) {
+        selectedInterviewIntent = null;
+        byId('interview-intent-detail').textContent = '';
+        byId('interview-intents-state').textContent =
+          'Interview action outcome is uncertain or stale. Reload pending interview actions.';
         invalidateInterviewReconciliation(error.code === 'approval_conflict'
           ? 'Run state changed. Refresh run status before reconciling.'
           : 'Reconciliation result is uncertain. Refresh run status before retrying.');

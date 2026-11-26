@@ -1590,3 +1590,18 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Candidate interview intent discovery delivered: a bounded authenticated
+`GET /v1/candidate/interview-intents` lists only the caller's pending
+`calendar.accept` reconciliation actions. The read-only projection filters loop
+ownership and phase in SQL before parsing, then cross-checks the pending action,
+owner-scoped run request/event identity, schedule row, active action claim, exact prepared event version/slot and
+durable external-action status in one SQLite read snapshot. Its response excludes
+operation IDs, provider event IDs, application IDs and owner IDs. The dashboard can
+rediscover the action after a browser/runtime restart; selecting it requires a fresh
+owner-scoped run-status read, and the existing reconciliation controls remain disabled
+unless phase and state version exactly match the discovered intent. Regression coverage
+includes foreign malformed payload isolation, keyset pagination, stale/corrupt binding
+rejection, strict HTTP/OpenAPI, Chromium restart discovery and stale-version fencing.
+Next: extend the same candidate-safe discovery/recovery contract to explicitly approved
+interview decline and reschedule actions without exposing provider identities.
