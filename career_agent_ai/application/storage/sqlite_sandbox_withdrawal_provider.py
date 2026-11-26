@@ -268,17 +268,36 @@ class SQLiteSandboxApplicationWithdrawalProvider:
         return receipt
 
     def verify_withdrawal(
-        self, operation_id: str
+        self,
+        operation_id: str,
+        *,
+        application_id: str | None = None,
+        provider_submission_id: str | None = None,
     ) -> SandboxApplicationWithdrawalEvidence:
-        """Read authoritative evidence while holding the SQLite writer lock.
+        """Read evidence bound to the immutable intent under the SQLite writer lock.
 
-        A busy or caller-owned transaction raises instead of being interpreted as
-        confirmed absence. The read transaction is always rolled back after inspection.
+        Callers reconciling a candidate action must supply both expected identity
+        fields. A missing or differently bound intent is not evidence of absence for
+        that candidate. A busy or caller-owned transaction always raises.
         """
         operation_id = _identifier(operation_id, "operation_id")
+        if (application_id is None) != (provider_submission_id is None):
+            raise ValueError(
+                "application_id and provider_submission_id must be supplied together."
+            )
+        if application_id is not None:
+            application_id = _identifier(application_id, "application_id")
+            provider_submission_id = _identifier(
+                provider_submission_id, "provider_submission_id", maximum=1_000
+            )
         connection = self._database.connection
         self._begin(connection)
         try:
+            intent = connection.execute(
+                "SELECT application_id, provider_submission_id "
+                "FROM sandbox_application_withdrawal_intents WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
             row = connection.execute(
                 "SELECT application_id, provider_submission_id, provider_withdrawal_id "
                 "FROM sandbox_application_withdrawal_effects WHERE operation_id = ?",
@@ -286,6 +305,21 @@ class SQLiteSandboxApplicationWithdrawalProvider:
             ).fetchone()
         finally:
             connection.rollback()
+
+        if row is not None and (intent is None or tuple(row[:2]) != tuple(intent)):
+            raise PreApplicationWithdrawalError(
+                "Sandbox withdrawal effect does not match its durable intent."
+            )
+        if application_id is not None:
+            expected = (application_id, provider_submission_id)
+            if intent is None or tuple(intent) != expected:
+                raise PreApplicationWithdrawalError(
+                    "Sandbox withdrawal evidence is not bound to the expected application submission."
+                )
+            if row is not None and tuple(row[:2]) != expected:
+                raise PreApplicationWithdrawalError(
+                    "Sandbox withdrawal effect is not bound to the expected application submission."
+                )
         if row is None:
             return SandboxApplicationWithdrawalEvidence(
                 WithdrawalEvidenceState.ABSENT_CONFIRMED
