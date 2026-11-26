@@ -59,6 +59,7 @@ from career_agent_ai.application.scheduling import (
 )
 from career_agent_ai.application.search.search_service import SearchService
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
+    SQLiteCandidateRunStatusProjection,
     SQLiteCareerLoopRepository,
 )
 from career_agent_ai.application.storage.sqlite_communication_repository import (
@@ -4156,3 +4157,132 @@ def test_legacy_application_approval_is_upgraded_with_candidate_digest(
     )
     database.close()
 
+
+
+
+@pytest.mark.parametrize(
+    ("gate", "expected_application_status", "expected_message_direction"),
+    [
+        ("application", JobApplicationStatus.SAVED, None),
+        ("message", JobApplicationStatus.APPLIED, "draft"),
+        ("interview", JobApplicationStatus.APPLIED, "outbound"),
+    ],
+)
+def test_candidate_cancellation_at_ordinary_approval_gates_survives_restart_without_compensation(
+    tmp_path, gate, expected_application_status, expected_message_direction
+):
+    path = str(tmp_path / f"candidate-cancel-{gate}.sqlite")
+    run_id = f"candidate-cancel-{gate}"
+    database, loop, applications, messages, scheduling, *_ = build_stack(path)
+    if gate == "interview":
+        add_interview(scheduling, f"{run_id}:application")
+
+    result = loop.start(request(with_schedule=gate == "interview"), run_id=run_id)
+    assert result.phase is CareerLoopPhase.APPLICATION_APPROVAL
+    if gate in {"message", "interview"}:
+        result = loop.resume(run_id, approved=True, user_id="user-1")
+        assert result.phase is CareerLoopPhase.MESSAGE_APPROVAL
+    if gate == "interview":
+        result = loop.resume(run_id, approved=True, user_id="user-1")
+        assert result.phase is CareerLoopPhase.INTERVIEW_APPROVAL
+
+    before = loop.get_candidate_run_status(run_id, user_id="user-1")
+    assert before["waiting_for_human"] is True
+    assert before["terminal"] is False
+    database.close()
+
+    (
+        database, restarted, applications, messages, scheduling,
+        submission_provider, communication_provider, calendar_provider,
+    ) = build_stack(path)
+    cancelled = restarted.cancel_run(
+        run_id, user_id="user-1",
+        expected_state_version=before["state_version"],
+    )
+    assert cancelled.phase is CareerLoopPhase.CANCELLED
+    assert cancelled.completed is False
+    assert cancelled.human_action is None
+    assert cancelled.error == "candidate_cancelled"
+
+    status = restarted.get_candidate_run_status(run_id, user_id="user-1")
+    assert status["phase"] == "cancelled"
+    assert status["terminal"] is True
+    assert status["waiting_for_human"] is False
+    assert SQLiteCandidateRunStatusProjection(database).get(
+        run_id, user_id="user-1"
+    ) == status
+
+    state = restarted._states.get(run_id)
+    assert state is not None and state.pending_human_action is None
+    application = applications.get(state.application_id)
+    assert application is not None
+    assert application.status is expected_application_status
+    if expected_message_direction is not None:
+        message = messages.get(state.message_id)
+        assert message is not None
+        assert message.direction.value == expected_message_direction
+    if gate == "interview":
+        assert scheduling.get_event("interview-1").status is ScheduleStatus.PROPOSED
+
+    replay = restarted.continue_run(run_id, user_id="user-1")
+    assert replay.phase is CareerLoopPhase.CANCELLED
+    assert submission_provider.calls == []
+    assert communication_provider.calls == []
+    assert calendar_provider.calls == []
+    database.close()
+
+
+def test_candidate_cancellation_rejects_stale_foreign_and_reconciliation_requests(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "candidate-cancel-fences.sqlite")
+    database, loop, _, _, _, submission_provider, _, _ = build_stack(
+        path, with_schedule=False
+    )
+    run_id = "candidate-cancel-fences"
+    started = loop.start(request(with_schedule=False), run_id=run_id)
+    assert started.phase is CareerLoopPhase.APPLICATION_APPROVAL
+    version = loop.get_candidate_run_status(run_id, user_id="user-1")["state_version"]
+
+    with pytest.raises(KeyError):
+        loop.cancel_run(
+            run_id, user_id="another-candidate",
+            expected_state_version=version,
+        )
+    with pytest.raises(CareerLoopConflictError):
+        loop.cancel_run(
+            run_id, user_id="user-1",
+            expected_state_version=version + 1,
+        )
+    assert loop.get_candidate_run_status(run_id, user_id="user-1")["phase"] == "application_approval"
+
+    repository = loop._submission._external_actions._repository
+    original_transition = repository.transition
+    failed_once = {"value": False}
+
+    def fail_success_write_once(
+        operation_id, expected_status, status, *, result=None, error=None
+    ):
+        if status == ExternalActionStatus.SUCCEEDED and not failed_once["value"]:
+            failed_once["value"] = True
+            raise sqlite3.OperationalError("success row temporarily unavailable")
+        return original_transition(
+            operation_id, expected_status, status, result=result, error=error
+        )
+
+    monkeypatch.setattr(repository, "transition", fail_success_write_once)
+    ambiguous = loop.resume(run_id, approved=True, user_id="user-1")
+    assert ambiguous.phase is CareerLoopPhase.APPLICATION_RECONCILIATION
+    observed = loop.get_candidate_run_status(run_id, user_id="user-1")
+    persisted_before = loop._states.get(run_id)
+    with pytest.raises(CareerLoopConflictError):
+        loop.cancel_run(
+            run_id, user_id="user-1",
+            expected_state_version=observed["state_version"],
+        )
+    persisted_after = loop._states.get(run_id)
+    assert persisted_after.phase is CareerLoopPhase.APPLICATION_RECONCILIATION
+    assert persisted_after.pending_human_action == persisted_before.pending_human_action
+    assert persisted_after.version == persisted_before.version
+    assert len(submission_provider.calls) == 1
+    database.close()

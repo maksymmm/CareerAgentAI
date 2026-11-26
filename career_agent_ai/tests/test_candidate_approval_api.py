@@ -51,6 +51,11 @@ class Loop:
         assert (run_id, user_id) == ("run-1", "candidate-1")
         return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="complete"))
 
+    def cancel_run(self, run_id, *, user_id, expected_state_version):
+        assert (run_id, user_id) == ("run-1", "candidate-1")
+        self.cancellation = (run_id, user_id, expected_state_version)
+        return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="cancelled"))
+
     def resolve_application_reconciliation(
         self, run_id, *, user_id, submitted, provider_submission_id=None,
         expected_state_version=None,
@@ -3154,3 +3159,124 @@ def test_post_approval_accepts_maximum_sqlite_state_version():
     assert status == "200 OK"
     assert response == {"run_id": "run-1", "phase": "message_approval"}
     assert loop.submission.state_version == (1 << 63) - 1
+
+
+
+def test_candidate_cancel_route_binds_authenticated_owner_and_exact_version():
+    loop = Loop()
+    (status, headers), body = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/cancel",
+        body={"schema_version": 1, "state_version": 17},
+    )
+    assert status == "200 OK"
+    assert ("Cache-Control", "no-store") in headers
+    assert body == {"run_id": "run-1", "phase": "cancelled"}
+    assert loop.cancellation == ("run-1", "candidate-1", 17)
+
+
+@pytest.mark.parametrize("body", [
+    {},
+    {"schema_version": 1},
+    {"schema_version": True, "state_version": 7},
+    {"schema_version": 1, "state_version": -1},
+    {"schema_version": 1, "state_version": 1.5},
+    {"schema_version": 1, "state_version": 7, "user_id": "candidate-1"},
+])
+def test_candidate_cancel_rejects_ambiguous_or_identity_bearing_body(body):
+    loop = Loop()
+    (status, _), payload = request(
+        app(loop), method="POST",
+        path="/v1/candidate/runs/run-1/cancel", body=body,
+    )
+    assert status == "400 Bad Request"
+    assert payload["error"] == "invalid_request"
+    assert not hasattr(loop, "cancellation")
+
+
+def test_candidate_cancel_rejects_versions_above_sqlite_limit_before_loop():
+    loop = Loop()
+    raw_json = b'{"schema_version":1,"state_version":9223372036854775808}'
+    (status, _), payload = request_raw(
+        app(loop), path="/v1/candidate/runs/run-1/cancel", raw_json=raw_json,
+    )
+    assert status == "400 Bad Request"
+    assert payload == {"error": "invalid_request"}
+    assert not hasattr(loop, "cancellation")
+
+
+def test_candidate_cancel_is_post_only_and_openapi_is_strict():
+    route = "/v1/candidate/runs/{run_id}/cancel"
+    operation = candidate_approval_openapi_document()["paths"][route]["post"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert operation["security"] == [{"bearerAuth": []}]
+    assert schema["required"] == ["schema_version", "state_version"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["state_version"]["maximum"] == (1 << 63) - 1
+    conflict = operation["responses"]["409"]["content"]["application/json"]["schema"]
+    assert conflict["properties"]["error"]["const"] == "approval_conflict"
+
+    (status, headers), body = request(
+        app(Loop()), method="GET",
+        path="/v1/candidate/runs/run-1/cancel",
+    )
+    assert status == "405 Method Not Allowed"
+    assert ("Allow", "POST") in headers
+    assert body == {"error": "method_not_allowed"}
+
+
+def test_candidate_cancel_maps_durable_gate_conflicts_to_sanitized_409():
+    class ConflictLoop(Loop):
+        def cancel_run(self, run_id, *, user_id, expected_state_version):
+            raise CareerLoopConflictError("private workflow state")
+
+    (status, _), body = request(
+        app(ConflictLoop()), method="POST",
+        path="/v1/candidate/runs/run-1/cancel",
+        body={"schema_version": 1, "state_version": 3},
+    )
+    assert status == "409 Conflict"
+    assert body == {"error": "approval_conflict"}
+
+
+def test_runtime_candidate_app_delegates_candidate_cancellation(monkeypatch, tmp_path):
+    from career_agent_ai.application.runtime import composition
+
+    observed = {}
+
+    class DurableLoop:
+        def cancel_run(self, run_id, **kwargs):
+            observed.update(run_id=run_id, **kwargs)
+            return SimpleNamespace(run_id=run_id, phase=SimpleNamespace(value="cancelled"))
+
+    monkeypatch.setattr(
+        composition, "_build_candidate_loop",
+        lambda database, jobs, plan=None: DurableLoop(),
+    )
+    runtime = composition.RuntimeCandidateApp(
+        database_path=str(tmp_path / "runtime-cancel.sqlite"),
+        jobs=(),
+        resolve_bearer=lambda token: "candidate-1" if token == "valid" else None,
+    )
+    result = runtime.cancel_run(
+        "run-1", user_id="candidate-1", expected_state_version=9
+    )
+    assert result.phase.value == "cancelled"
+    assert observed == {
+        "run_id": "run-1", "user_id": "candidate-1",
+        "expected_state_version": 9,
+    }
+
+
+def test_candidate_sandbox_exposes_version_bound_cancellation_only_for_approval_gates():
+    from career_agent_ai.application.api.candidate_sandbox_ui import candidate_sandbox_html
+
+    html = candidate_sandbox_html()
+    if isinstance(html, bytes):
+        html = html.decode("utf-8")
+    assert 'id="cancel-run"' in html
+    assert "const cancellableApprovalPhases = new Set([" in html
+    assert "'application_approval', 'message_approval', 'interview_approval'" in html
+    assert "body: JSON.stringify({schema_version: 1, state_version: observedVersion})" in html
+    assert "Cancellation result is uncertain. Refresh status before continuing." in html
+    assert "it does not undo earlier submissions or deliveries." in html

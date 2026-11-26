@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+
+Candidate run cancellation at ordinary approval gates: the isolated candidate workflow
+change introduces a durable `cancelled` terminal phase and an owner-scoped,
+state-version-bound POST route. Cancellation is allowed only while waiting for an
+application, message or interview approval; active work and ambiguous provider
+reconciliation remain non-cancellable. Regression coverage verifies restart durability,
+terminal status projection, stale/foreign rejection, and preservation of earlier
+successful sandbox effects without compensation.
+Next: exact-head full CI and independent Codex review for the cancellation change;
+after integration, treat application withdrawal/provider compensation as a separate
+explicitly approved provider contract rather than an implicit consequence of stopping a run.

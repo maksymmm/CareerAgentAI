@@ -59,6 +59,7 @@ class CandidateApprovalLoop(Protocol):
                              status: ScheduleStatus | None = None) -> dict[str, Any]: ...
     def resume_candidate_submission(self, *, user_id: str, submission): ...
     def continue_run(self, run_id: str, *, user_id: str): ...
+    def cancel_run(self, run_id: str, *, user_id: str, expected_state_version: int): ...
     def resolve_application_reconciliation(
         self, run_id: str, *, user_id: str, submitted: bool,
         provider_submission_id: str | None = None,
@@ -151,7 +152,7 @@ class CandidateApprovalWSGIApp:
             len(parts) == 5
             and parts[:3] == ["v1", "candidate", "runs"]
             and parts[4] in {"approval", "continue", "status", "application-reconciliation",
-                             "message-reconciliation", "interview-reconciliation"}
+                             "message-reconciliation", "interview-reconciliation", "cancel"}
         )
         if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
@@ -299,6 +300,34 @@ class CandidateApprovalWSGIApp:
                 return self._respond(
                     start_response,
                     "201 Created",
+                    {"run_id": result.run_id, "phase": result.phase.value},
+                )
+            if parts[4] == "cancel":
+                if method != "POST":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    expected_state_version = self._cancellation(payload)
+                except (TypeError, ValueError, InvalidOperation) as exc:
+                    return self._respond(
+                        start_response, "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                result = self._loop.cancel_run(
+                    run_id, user_id=user_id,
+                    expected_state_version=expected_state_version,
+                )
+                return self._respond(
+                    start_response, "200 OK",
                     {"run_id": result.run_id, "phase": result.phase.value},
                 )
             if parts[4] == "status":
@@ -548,6 +577,18 @@ class CandidateApprovalWSGIApp:
                 raise ValueError(error)
             return int(value)
         raise ValueError(error)
+
+    @staticmethod
+    def _cancellation(payload: Mapping[str, Any]) -> int:
+        """Validate the strict state-version-only candidate cancellation body."""
+        if set(payload) != {"schema_version", "state_version"}:
+            raise ValueError("cancellation body has unknown or missing fields.")
+        if (
+            type(payload["schema_version"]) not in {int, float, Decimal}
+            or payload["schema_version"] != 1
+        ):
+            raise ValueError("schema_version must equal 1.")
+        return CandidateApprovalWSGIApp._reconciliation_state_version(payload["state_version"])
 
     @staticmethod
     def _application_reconciliation(
@@ -834,6 +875,15 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
             "then": {"required": ["provider_event_id"]},
             "else": {"not": {"required": ["provider_event_id"]}},
         }],
+    }
+    cancellation_schema = {
+        "type": "object",
+        "required": ["schema_version", "state_version"],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "state_version": {"type": "integer", "minimum": 0, "maximum": MAX_SQLITE_STATE_VERSION},
+        },
+        "additionalProperties": False,
     }
     start_schema = {
         "type": "object",
@@ -1192,6 +1242,35 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                             ),
                             "content": content(recovery_conflict_schema),
                         },
+                    },
+                },
+            },
+            "/v1/candidate/runs/{run_id}/cancel": {
+                "parameters": [{
+                    "name": "run_id", "in": "path", "required": True,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 200,
+                               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"},
+                }],
+                "post": {
+                    "operationId": "cancelCandidateRun",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {"required": True, "content": content(cancellation_schema)},
+                    "responses": {
+                        "200": {
+                            "description": "Ordinary pending approval cancelled; earlier provider effects remain unchanged",
+                            "content": content({
+                                "type": "object", "required": ["run_id", "phase"],
+                                "properties": {"run_id": {"type": "string"}, "phase": {"const": "cancelled"}},
+                                "additionalProperties": False,
+                            }),
+                        },
+                        **common_responses,
+                        "409": {
+                            "description": "Stale version, active worker, or a non-cancellable workflow phase",
+                            "content": content(approval_conflict_schema),
+                        },
+                        "405": {"description": "Only POST is allowed", "content": content(error_schema)},
+                        "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
                 },
             },

@@ -618,8 +618,12 @@ a pre-scope build is forbidden; candidate starts stay disabled until a safe roll
 The same WSGI service exposes a dependency-free candidate sandbox at
 `GET /sandbox/candidate`. It can start a sandbox run, inspect its status, load the
 current candidate-visible approval prompt, continue recovery, and submit approve or
-decline decisions. The static page contains no credentials or durable state: the
-candidate enters a bearer token that stays only in the tab's memory.
+decline decisions. At ordinary application, message and interview approval gates, the
+candidate can also cancel the remaining workflow with a state-version-bound request.
+Cancellation is unavailable during active execution or provider reconciliation and
+never compensates or deletes earlier successful application/message effects. The
+static page contains no credentials or durable state: the candidate enters a bearer
+token that stays only in the tab's memory.
 An accessible dashboard navigation landmark links to start, inspection, pending
 decision, overview, applications and interviews. Native fragment links move keyboard
 focus without API requests or credential/state changes; a return link reaches the top.
@@ -1041,3 +1045,15 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+
+Candidate run cancellation is a separate terminal state, not an application withdrawal
+or provider compensation. The authenticated POST
+`/v1/candidate/runs/{run_id}/cancel` accepts only schema version and the exact
+state version observed by the candidate. It is available only at the three ordinary
+approval gates, is fenced by the durable execution lease/CAS contract, and rejects
+stale versions, active workers and all reconciliation phases. A cancelled run cannot
+continue after restart. Earlier successful submissions and message deliveries remain
+in their existing durable records; no calendar, message or application provider is
+invoked by cancellation.
