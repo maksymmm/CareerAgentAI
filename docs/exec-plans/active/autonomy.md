@@ -1610,3 +1610,16 @@ nullable key from an open-ended event's prepared intent and prove the retry fail
 closed without a provider effect, while a present explicit null remains safely
 retryable after confirmed no-effect evidence. Next: exact-head full CI and Codex
 code/security review, then continue candidate interview acceptance workflow.
+
+
+Candidate interview-decline version-conflict handling: the browser now distinguishes a
+known 409 `approval_conflict` from an ambiguous provider outcome. It clears the stale
+event detail and candidate confirmation, requires a fresh authoritative event read,
+and only re-enables decline after a new explicit confirmation. A Chromium regression
+advances the SQLite event from proposed/version 1 to reschedule_requested/version 2
+after the candidate confirms the displayed version, then proves the stale request
+creates no decline intent, provider attempt, or effect. The CI test job now runs an
+independent `python -m coverage report --fail-under=90` gate even when pytest fails.
+Next: continue the candidate interview-acceptance workflow with browser/runtime restart
+and sandbox-provider evidence; keep the version-bound decline review chain isolated
+until its exact-head code/security review is complete.

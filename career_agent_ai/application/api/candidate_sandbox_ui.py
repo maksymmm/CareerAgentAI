@@ -488,9 +488,21 @@ _HTML = r"""<!doctype html>
           event_id: identifier, state_version: snapshot.state_version}});
       } catch (error) {
         if (generation === eventDetailGeneration) {
-          byId('decline-state').textContent = 'Decline result is uncertain. Reload the event before taking another action.';
-          clearDeclineState();
-          byId('decline-state').textContent = 'Decline result is uncertain. Reload the event before taking another action.';
+          if (error.code === 'approval_conflict') {
+            clearEventDetail();
+            selectedEventId = null;
+            selectedEventVersion = null;
+            byId('event-detail-state').textContent =
+              'The event changed after your confirmation. Select it again to review the current version.';
+            byId('decline-state').textContent =
+              'No decline was submitted. Review the current event before confirming again.';
+            error.message =
+              'The event changed after your confirmation. Reload and review the current version before deciding.';
+          } else {
+            byId('decline-state').textContent = 'Decline result is uncertain. Reload the event before taking another action.';
+            clearDeclineState();
+            byId('decline-state').textContent = 'Decline result is uncertain. Reload the event before taking another action.';
+          }
         }
         throw error;
       } finally {
