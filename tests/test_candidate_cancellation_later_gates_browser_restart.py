@@ -159,6 +159,7 @@ def test_candidate_cancellation_at_later_approval_gates_preserves_prior_effects_
     runtime1 = build_runtime()
     started = runtime1.start(request, run_id=run_id)
     assert started.phase is CareerLoopPhase.APPLICATION_APPROVAL
+    run_id = started.run_id
 
     if event_id is not None:
         database = SQLiteDatabase(str(database_path))
@@ -198,7 +199,10 @@ def test_candidate_cancellation_at_later_approval_gates_preserves_prior_effects_
                     f"http://127.0.0.1:{server1.server_port}/sandbox/candidate"
                 )
                 page1.locator("#token").fill("owner")
-                page1.locator("#run-id").fill(run_id)
+                page1.locator("#list-runs").click()
+                page1.locator("#owned-runs button").first.wait_for()
+                page1.locator("#owned-runs button").first.click()
+                assert page1.locator("#run-id").input_value() == run_id
 
                 page1.locator("#status").click()
                 expect(page1.locator("#run-overview")).to_contain_text(
@@ -298,7 +302,10 @@ def test_candidate_cancellation_at_later_approval_gates_preserves_prior_effects_
                     f"http://127.0.0.1:{server2.server_port}/sandbox/candidate"
                 )
                 page2.locator("#token").fill("owner")
-                page2.locator("#run-id").fill(run_id)
+                page2.locator("#list-runs").click()
+                page2.locator("#owned-runs button").first.wait_for()
+                page2.locator("#owned-runs button").first.click()
+                assert page2.locator("#run-id").input_value() == run_id
                 page2.locator("#status").click()
                 expect(page2.locator("#run-overview")).to_contain_text(
                     "Cancelled — cancelled"
