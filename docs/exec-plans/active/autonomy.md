@@ -1602,3 +1602,25 @@ connections to reproduce a duplicate during the provider call and cover stale ex
 clock skew, invalid bounds and concurrent terminal completion.
 Next: exact-head full CI and independent code/security review, then continue sandbox
 provider evidence hardening without coupling to unrelated correlation metadata.
+
+
+Candidate browser message no-effect recovery across runtime restart:
+
+A Chromium acceptance drives the actual candidate dashboard through the separate
+application and recruiter-message approval gates. The first approved message attempt
+returns a durable SQLite sandbox NO_EFFECT: the exact message remains a draft, the
+operation key is retained, and no delivery or outbound message exists. The first
+runtime and browser session close. A fresh RuntimeCandidateApp and Chromium session
+reopen the same SQLite database; authenticated Continue verifies provider absence and
+retries the same message operation. The candidate reaches the next interview-approval
+gate. Durable assertions prove one application submission, ordered message attempts
+NO_EFFECT then SUCCESS, one immutable intent, one delivery, zero replays, and one
+outbound message. The independent coverage CLI gate runs after pytest even when the
+test step fails.
+
+All effects remain in the synthetic no-network SQLite providers. No real message,
+recipient, application submission, or calendar mutation is performed.
+
+Next: add browser-level evidence for interview calendar NO_EFFECT recovery after
+runtime restart, building on the existing authenticated RuntimeCandidateApp recovery
+contract, and then complete the equivalent candidate interview-decline workflow.
