@@ -113,6 +113,9 @@ def test_interruption_before_calendar_effect_can_reopen_and_retry(tmp_path):
     )
     assert accepted is not None and accepted.status == ScheduleStatus.ACCEPTED
     assert provider.effect_count("accept:evidence") == 1
+    assert provider.verify_calendar_action(
+        "accept:evidence"
+    ).state == CalendarEvidenceState.PRESENT
 
 
 def test_calendar_provider_replays_and_rejects_changed_intent(tmp_path):
@@ -138,6 +141,9 @@ def test_calendar_provider_confirms_absence_and_rejects_nested_lookup(tmp_path):
         provider.decline("decline:evidence", _event())
     assert provider.verify_calendar_action(
         "decline:evidence"
+    ).state == CalendarEvidenceState.ABSENT_CONFIRMED
+    assert provider.verify_calendar_action(
+        "never-attempted"
     ).state == CalendarEvidenceState.ABSENT_CONFIRMED
     database.connection.execute("BEGIN")
     with pytest.raises(PreCalendarActionError, match="inside a transaction"):
@@ -199,3 +205,110 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
     with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
         service.resolve_reconciliation("accept:evidence", completed=True)
     assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_intent",
+        "fingerprint_mismatch",
+        "missing_effect",
+        "missing_attempt",
+        "attempt_gap",
+        "unknown_outcome",
+        "effect_after_attempt",
+        "unknown_action",
+        "malformed_event",
+    ],
+)
+def test_calendar_reconciliation_fails_closed_when_provider_ledgers_disagree(
+    tmp_path, corruption
+):
+    database = SQLiteDatabase(str(tmp_path / "calendar-ledger-integrity.db"))
+    service, provider, operations = _stack(
+        database,
+        lambda _key, _attempt: SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    source = _event()
+    service.add_event(source)
+    assert service.accept(
+        "accept:ledger-integrity", source.event_id, human_approved=True
+    ) is None
+
+    operation_id = "accept:ledger-integrity"
+    if corruption == "missing_intent":
+        database.connection.execute(
+            "DELETE FROM sandbox_calendar_intents WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "fingerprint_mismatch":
+        database.connection.execute(
+            "UPDATE sandbox_calendar_intents SET fingerprint = ? WHERE operation_id = ?",
+            ("0" * 64, operation_id),
+        )
+    elif corruption == "missing_effect":
+        database.connection.execute(
+            "DELETE FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "missing_attempt":
+        database.connection.execute(
+            "DELETE FROM sandbox_calendar_attempts WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "attempt_gap":
+        database.connection.execute(
+            "UPDATE sandbox_calendar_attempts SET attempt_no = 2 WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "unknown_outcome":
+        database.connection.execute(
+            "UPDATE sandbox_calendar_attempts SET outcome = 'unknown' WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "effect_after_attempt":
+        database.connection.execute(
+            "INSERT INTO sandbox_calendar_attempts VALUES (?, 2, ?)",
+            (operation_id, SandboxCalendarOutcome.NO_EFFECT.value),
+        )
+    elif corruption == "unknown_action":
+        database.connection.execute(
+            "UPDATE sandbox_calendar_effects SET action = 'cancel' WHERE operation_id = ?",
+            (operation_id,),
+        )
+    else:
+        database.connection.execute(
+            "UPDATE sandbox_calendar_effects SET event_json = '{' WHERE operation_id = ?",
+            (operation_id,),
+        )
+    database.connection.commit()
+
+    before = (
+        database.connection.execute(
+            "SELECT COUNT(*) FROM sandbox_calendar_attempts WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0],
+        database.connection.execute(
+            "SELECT COUNT(*) FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0],
+    )
+    with pytest.raises(CalendarReconciliationEvidenceError, match="evidence lookup failed"):
+        service.resolve_reconciliation(operation_id, completed=True)
+
+    assert operations.get(operation_id).status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    current = service.get_event(source.event_id)
+    assert current.status == ScheduleStatus.PROPOSED
+    assert current.version == 1
+    after = (
+        database.connection.execute(
+            "SELECT COUNT(*) FROM sandbox_calendar_attempts WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0],
+        database.connection.execute(
+            "SELECT COUNT(*) FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0],
+    )
+    assert after == before
+    database.close()

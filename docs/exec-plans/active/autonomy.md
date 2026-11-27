@@ -1,3 +1,14 @@
+Calendar sandbox evidence-ledger integrity: `verify_calendar_action` now reads the
+intent, ordered attempt history and effect under one SQLite writer snapshot. It rejects
+orphaned/mismatched rows, non-contiguous attempts, unknown outcomes, effect-producing
+attempts without an effect, effects without exactly one final effect-producing attempt,
+unknown action values and malformed event evidence. Absence is confirmed only from a
+consistent no-effect ledger; positive evidence requires matching intent/effect fingerprints.
+Regression cases corrupt each ledger layer and prove reconciliation remains
+`reconciliation_required` without additional writes. ADR 0039 records the provider
+contract. Next: apply equivalent cross-ledger consistency checks to sandbox mailbox and
+application-submission evidence.
+
 Relevance boundary follow-up: hyphens are separators between complete technology
 identifiers and location tokens, while letters, digits, underscore, plus, hash and
 period remain part of identifier boundaries. Java matches Java-based and New matches
