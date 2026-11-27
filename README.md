@@ -1041,3 +1041,10 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+Candidate interview reconciliation treats a stale calendar event as a durable
+approval conflict, not an internal server failure. A provider-applied acceptance may
+be reconciled only while the event is still at the exact source-version + 1 transition;
+if a later reschedule/re-accept advances the event, the authenticated reconciliation
+route returns `409 approval_conflict`, preserves the old operation as
+`reconciliation_required`, and performs no provider replay.
