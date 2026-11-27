@@ -422,7 +422,12 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
             state.application_id
         )
         assert application is not None
-        assert application.status is JobApplicationStatus.APPLIED
+        expected_application_status = (
+            JobApplicationStatus.INTERVIEW
+            if gate == "interview" and winner == "approve"
+            else JobApplicationStatus.APPLIED
+        )
+        assert application.status is expected_application_status
         counts = _sandbox_counts(database.connection)
         assert counts["sandbox_submission_attempts"] == 1
         assert counts["sandbox_submission_ledger"] == 1
