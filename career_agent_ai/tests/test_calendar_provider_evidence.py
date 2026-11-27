@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
+import sqlite3
 
 import pytest
 
@@ -57,6 +58,111 @@ def _stack(database, plan=None):
         events, provider, external, require_provider_evidence=True
     )
     return service, provider, operations
+
+
+def test_stale_accept_reconciliation_rejects_reaccepted_original_slot_after_version_advance(
+    tmp_path,
+):
+    class FailFirstSuccessRepository(SQLiteExternalActionOperationRepository):
+        def __init__(self, database):
+            self.fail_success_once = True
+            super().__init__(database)
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if status == ExternalActionStatus.SUCCEEDED and self.fail_success_once:
+                self.fail_success_once = False
+                raise sqlite3.OperationalError(
+                    "simulated terminal success write failure"
+                )
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase(str(tmp_path / "stale-accept.sqlite"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    events = SQLiteSchedulingRepository(database)
+    operations = FailFirstSuccessRepository(database)
+    external = ExternalActionService(
+        operations, SchedulingService.action_adapter(provider, events)
+    )
+    service = SchedulingService(
+        events, provider, external, require_provider_evidence=True
+    )
+    source = _event()
+    service.add_event(source)
+
+    # The first provider effect and local event transition commit, but the
+    # external-action terminal write fails, leaving a durable ambiguous operation.
+    assert service.accept(
+        "accept:ambiguous", source.event_id, human_approved=True
+    ) is None
+    ambiguous = operations.get("accept:ambiguous")
+    assert ambiguous is not None
+    assert ambiguous.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert provider.effect_count("accept:ambiguous") == 1
+    assert events.get(source.event_id).version == 2
+
+    moved_start = source.start_at + timedelta(days=2)
+    moved = service.reschedule(
+        "reschedule:move-away",
+        source.event_id,
+        start_at=moved_start,
+        end_at=moved_start + timedelta(hours=1),
+        timezone_name=source.timezone_name,
+        human_approved=True,
+    )
+    assert moved is not None and moved.version == 3
+
+    returned = service.reschedule(
+        "reschedule:return",
+        source.event_id,
+        start_at=source.start_at,
+        end_at=source.end_at,
+        timezone_name=source.timezone_name,
+        human_approved=True,
+    )
+    assert returned is not None and returned.version == 4
+
+    reaccepted = service.accept(
+        "accept:later", source.event_id, human_approved=True
+    )
+    assert reaccepted is not None
+    assert reaccepted.status == ScheduleStatus.ACCEPTED
+    assert reaccepted.version == 5
+    assert reaccepted.start_at == source.start_at
+    assert provider.effect_count("reschedule:move-away") == 1
+    assert provider.effect_count("reschedule:return") == 1
+    assert provider.effect_count("accept:later") == 1
+
+    # The old provider evidence is still present and has the original accepted
+    # slot, but it cannot attest the newer version-5 acceptance.
+    with pytest.raises(
+        ValueError,
+        match="Prepared scheduling intent is stale for the current event version",
+    ):
+        service.resolve_reconciliation("accept:ambiguous", completed=True)
+
+    assert (
+        operations.get("accept:ambiguous").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
+    assert events.get(source.event_id) == reaccepted
+    assert provider.effect_count("accept:ambiguous") == 1
+    assert provider.effect_count("reschedule:move-away") == 1
+    assert provider.effect_count("reschedule:return") == 1
+    assert provider.effect_count("accept:later") == 1
 
 
 def test_timeout_after_calendar_effect_requires_matching_evidence(tmp_path):

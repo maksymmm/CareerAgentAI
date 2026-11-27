@@ -514,6 +514,17 @@ class SchedulingService:
             and current.end_at == target_end
             and current.timezone_name == target_timezone
         )
+        # Acceptance is reversible: a later reschedule and re-accept can recreate
+        # the same status and slot. Only the exact source-version transition proves
+        # that this ambiguous operation produced the currently visible acceptance.
+        if (
+            action_type == "calendar.accept"
+            and already_completed
+            and current.version != source_version + 1
+        ):
+            raise ValueError(
+                "Prepared scheduling intent is stale for the current event version."
+            )
         if not already_completed:
             _CalendarActionAdapter._validate_prepared_source(current, operation.payload)
             updated = current.transition(

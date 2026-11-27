@@ -1590,3 +1590,14 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate interview acceptance stale-reconciliation fence:
+A provider-applied but terminal-write-ambiguous `calendar.accept` is considered
+already completed only when the current event is exactly source version + 1.
+Matching accepted status and source slot are insufficient after a later reschedule
+and re-accept cycle. A SQLite sandbox calendar regression proves that an old
+provider effect cannot attest the newer acceptance and leaves the old operation
+reconciliation_required without another provider effect.
+Next: exact-head CI and independent review, then continue bounded candidate
+interview recovery hardening.
