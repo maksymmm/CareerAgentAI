@@ -446,8 +446,10 @@ _HTML = r"""<!doctype html>
     }
     async function loadDeclineIntents(after = null) {
       if (declineIntentsInFlight) throw new Error('Pending declines are already loading.');
-      const generation = ++declineIntentsGeneration;
       const cursor = after;
+      const generation = cursor === null
+        ? ++declineIntentsGeneration
+        : declineIntentsGeneration;
       if (cursor === null) {
         nextDeclineIntentCursor = null;
         byId('pending-decline-intents').replaceChildren();
