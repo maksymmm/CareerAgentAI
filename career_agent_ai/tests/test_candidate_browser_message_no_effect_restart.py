@@ -275,29 +275,30 @@ def test_candidate_browser_recovers_confirmed_message_no_effect_after_runtime_re
         runtime2 = build_runtime()
         server2, thread2 = _start_server(runtime2)
 
-        browser2 = playwright.chromium.launch(headless=True)
-        try:
-            page = browser2.new_page()
-            page.goto(f"http://127.0.0.1:{server2.server_port}/sandbox/candidate")
-            page.locator("#token").fill("owner")
-            page.locator("#run-id").fill(run_id)
+        with sync_playwright() as playwright2:
+            browser2 = playwright2.chromium.launch(headless=True)
+            try:
+                page = browser2.new_page()
+                page.goto(f"http://127.0.0.1:{server2.server_port}/sandbox/candidate")
+                page.locator("#token").fill("owner")
+                page.locator("#run-id").fill(run_id)
 
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text("message send")
-            page.locator("#continue").click()
-            expect(page.locator("#result")).to_contain_text(
-                '"phase": "interview_approval"'
-            )
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text("message send")
+                page.locator("#continue").click()
+                expect(page.locator("#result")).to_contain_text(
+                    '"phase": "interview_approval"'
+                )
 
-            page.locator("#status").click()
-            expect(page.locator("#run-overview")).to_contain_text(
-                "interview approval"
-            )
-            page.locator("#prompt").click()
-            expect(page.locator("#approve")).to_be_enabled()
-            expect(page.locator("#action-details")).to_contain_text("Sandbox Logistics")
-        finally:
-            browser2.close()
+                page.locator("#status").click()
+                expect(page.locator("#run-overview")).to_contain_text(
+                    "interview approval"
+                )
+                page.locator("#prompt").click()
+                expect(page.locator("#approve")).to_be_enabled()
+                expect(page.locator("#action-details")).to_contain_text("Sandbox Logistics")
+            finally:
+                browser2.close()
     finally:
         if server2 is not None and runtime2 is not None:
             _stop_server(server2, thread2, runtime2)
