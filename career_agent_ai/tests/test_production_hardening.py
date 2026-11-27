@@ -2376,7 +2376,7 @@ def test_candidate_service_probe_routes_are_public_safe_and_read_only(tmp_path):
 
     database_path = tmp_path / "candidate.sqlite"
     database = SQLiteDatabase(str(database_path))
-    SQLiteCareerLoopRepository(database)
+    runtime_composition._build_candidate_loop(database, (), None)
     database.close()
     delegated = DelegatedApp()
     app = CandidateServiceWSGIApp(
@@ -3873,6 +3873,7 @@ def test_candidate_status_is_restart_safe_private_and_read_only(tmp_path, monkey
 
     database_path = str(tmp_path / 'status.sqlite')
     database = SQLiteDatabase(database_path)
+    runtime_composition._build_candidate_loop(database, (), None)
     repository = SQLiteCareerLoopRepository(database)
     state = CareerLoopState(
         run_id='scoped-v2:' + 'a' * 128, request=request(), phase=phase,
@@ -3950,6 +3951,7 @@ def test_candidate_status_does_not_recreate_missing_database(tmp_path):
 def test_candidate_status_checks_owner_before_decoding_malformed_payload(tmp_path):
     database_path = str(tmp_path / "malformed-foreign.sqlite")
     database = SQLiteDatabase(database_path)
+    runtime_composition._build_candidate_loop(database, (), None)
     repository = SQLiteCareerLoopRepository(database)
     foreign = CareerLoopState(run_id="foreign-run", request=CareerLoopRequest(
         user_id="user-2", keyword="logistics", candidate_profile=PROFILE,
