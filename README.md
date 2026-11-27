@@ -845,11 +845,16 @@ through `correlation_scope()`. Structured fields use bounded JSON-safe serializa
 and redact credential-like keys before formatting.
 
 `SQLiteOperationalProbe` provides a read-only view of failed, ambiguous, and stale
-external actions plus failed or non-human-gated stuck autonomous loops. A minimal WSGI
-adapter exposes public liveness at `GET /healthz` and bearer-authenticated operational
-issues at `GET /v1/operational/issues`. `openapi_document()` publishes the matching
-OpenAPI 3.1 contract. The operational endpoint is read-only and returns `no-store`
-responses.
+external actions plus failed or non-human-gated stuck autonomous loops. Its operational
+issue page is bounded (`limit=100` by default, maximum 500), uses status/phase-specific
+SQLite indexes, and returns `truncated=true` when more issues exist than the requested
+page. Missing recovery indexes fail closed instead of silently falling back to an
+unbounded scan. Malformed persisted loop payloads are surfaced as sanitized operational issues
+rather than copied into diagnostics. A minimal WSGI adapter exposes public liveness at
+`GET /healthz` and bearer-authenticated operational issues at
+`GET /v1/operational/issues`. `openapi_document()` publishes the matching OpenAPI 3.1
+contract, including the bounded `limit` parameter and truncation signal. The endpoint
+is read-only and returns `no-store` responses.
 
 `build_operational_app_from_env()` is the supported operational-service composition
 root. It validates `RuntimeConfig`, requires a 32-to-4096-character ASCII token from

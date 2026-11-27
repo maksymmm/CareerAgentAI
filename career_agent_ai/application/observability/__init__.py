@@ -1,6 +1,6 @@
 """Structured logging and operational-health primitives."""
 
-from .models import OperationalIssue, OperationalSeverity
+from .models import OperationalIssue, OperationalIssuePage, OperationalSeverity
 from .operational_probe import OperationalProbe
 from .structured_logging import (
     JsonLogFormatter,
@@ -15,6 +15,7 @@ from .structured_logging import (
 __all__ = [
     "JsonLogFormatter",
     "OperationalIssue",
+    "OperationalIssuePage",
     "OperationalProbe",
     "OperationalSeverity",
     "configure_structured_logging",

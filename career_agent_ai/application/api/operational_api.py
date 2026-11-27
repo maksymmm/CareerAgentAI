@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qs
 
-from career_agent_ai.application.observability import OperationalProbe
+from career_agent_ai.application.observability import OperationalIssuePage, OperationalProbe
 
 
 class OperationalApiService:
@@ -27,8 +27,8 @@ class OperationalApiService:
         """Return a minimal liveness payload without exposing secrets."""
         return {"status": "ok"}
 
-    def issues(self, *, stale_after_seconds: int) -> dict[str, Any]:
-        """Return failed/ambiguous/stuck work as a JSON-safe document."""
+    def issues(self, *, stale_after_seconds: int, limit: int = 100) -> dict[str, Any]:
+        """Return a bounded page of failed/ambiguous/stuck work."""
         if (
             not isinstance(stale_after_seconds, int)
             or isinstance(stale_after_seconds, bool)
@@ -36,16 +36,33 @@ class OperationalApiService:
             or stale_after_seconds > 604_800
         ):
             raise ValueError("stale_after_seconds must be between 1 and 604800.")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500.")
         now = self._clock()
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("operational API clock must return a timezone-aware datetime.")
         now = now.astimezone(timezone.utc)
-        issues = self._probe.inspect(
-            now=now,
-            stale_after_seconds=stale_after_seconds,
-        )
+        inspect_page = getattr(self._probe, "inspect_page", None)
+        if callable(inspect_page):
+            page = inspect_page(
+                now=now,
+                stale_after_seconds=stale_after_seconds,
+                limit=limit,
+            )
+            if not isinstance(page, OperationalIssuePage):
+                raise TypeError("Operational probe returned an invalid issue page.")
+            issues = page.issues
+            truncated = page.truncated
+        else:
+            legacy_issues = tuple(self._probe.inspect(
+                now=now,
+                stale_after_seconds=stale_after_seconds,
+            ))
+            truncated = len(legacy_issues) > limit
+            issues = legacy_issues[:limit]
         return {
             "generated_at": now.isoformat(),
+            "truncated": truncated,
             "issues": [
                 {
                     "issue_type": issue.issue_type,
@@ -140,8 +157,17 @@ class OperationalWSGIApp:
                     raise ValueError(
                         "stale_after_seconds must be between 1 and 604800."
                     )
+                limit_values = query.get("limit", ["100"])
+                if len(limit_values) != 1:
+                    raise ValueError("limit must be supplied at most once.")
                 try:
-                    payload = self._service.issues(stale_after_seconds=stale)
+                    limit = int(limit_values[0])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("limit must be an integer.") from exc
+                if limit < 1 or limit > 500:
+                    raise ValueError("limit must be between 1 and 500.")
+                try:
+                    payload = self._service.issues(stale_after_seconds=stale, limit=limit)
                     return self._respond(
                         start_response,
                         "200 OK",
@@ -249,6 +275,12 @@ def openapi_document() -> dict[str, Any]:
                     "security": [{"bearerAuth": []}],
                     "parameters": [
                         {
+                            "name": "limit",
+                            "in": "query",
+                            "required": False,
+                            "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                        },
+                        {
                             "name": "stale_after_seconds",
                             "in": "query",
                             "required": False,
@@ -267,7 +299,7 @@ def openapi_document() -> dict[str, Any]:
                                 "application/json": {
                                     "schema": {
                                         "type": "object",
-                                        "required": ["generated_at", "issues"],
+                                        "required": ["generated_at", "issues", "truncated"],
                                         "properties": {
                                             "generated_at": {
                                                 "type": "string",
@@ -277,6 +309,7 @@ def openapi_document() -> dict[str, Any]:
                                                 "type": "array",
                                                 "items": issue_schema,
                                             },
+                                            "truncated": {"type": "boolean"},
                                         },
                                         "additionalProperties": False,
                                     }

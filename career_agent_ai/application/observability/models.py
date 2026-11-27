@@ -40,3 +40,19 @@ class OperationalIssue:
         object.__setattr__(self, "issue_type", self.issue_type.strip())
         object.__setattr__(self, "entity_id", self.entity_id.strip())
         object.__setattr__(self, "details", MappingProxyType(dict(self.details)))
+
+
+@dataclass(frozen=True)
+class OperationalIssuePage:
+    """One bounded page of operational issues and its truncation signal."""
+
+    issues: tuple[OperationalIssue, ...]
+    truncated: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.issues, tuple) or any(
+            not isinstance(issue, OperationalIssue) for issue in self.issues
+        ):
+            raise TypeError("issues must be a tuple of OperationalIssue values.")
+        if not isinstance(self.truncated, bool):
+            raise TypeError("truncated must be a boolean.")
