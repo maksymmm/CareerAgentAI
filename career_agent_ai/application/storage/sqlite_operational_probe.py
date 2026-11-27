@@ -164,7 +164,7 @@ class SQLiteOperationalProbe:
             )
         )
 
-        issues: list[OperationalIssue] =
+        issues: list[OperationalIssue] = []
         truncated = False
 
         malformed = self._database.connection.execute(
