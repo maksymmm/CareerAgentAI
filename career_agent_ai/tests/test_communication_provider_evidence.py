@@ -114,6 +114,7 @@ def test_interrupted_before_effect_rejects_false_positive_then_retries(tmp_path)
         "send:evidence", "message-evidence", human_approved=True
     )
     assert delivered is not None and delivered.direction == MessageDirection.OUTBOUND
+    assert provider.verify_delivery("send:evidence").state == DeliveryEvidenceState.PRESENT
     assert provider.delivery_count("send:evidence") == 1
 
 
@@ -240,6 +241,7 @@ def test_successful_reply_evidence_retains_parent_binding(tmp_path):
         "unknown_action",
         "reply_without_parent",
         "message_not_outbound",
+        "message_fingerprint_mismatch",
         "missing_message",
         "malformed_message",
         "negative_replays",
@@ -329,6 +331,11 @@ def test_mailbox_reconciliation_fails_closed_when_provider_ledgers_disagree(
             "UPDATE sandbox_communication_messages SET direction = 'draft' "
             "WHERE message_id = ?",
             (prepared.message_id,),
+        )
+    elif corruption == "message_fingerprint_mismatch":
+        connection.execute(
+            "UPDATE sandbox_communication_messages SET body = ? WHERE message_id = ?",
+            ("Tampered provider body", prepared.message_id),
         )
     elif corruption == "missing_message":
         connection.execute(
