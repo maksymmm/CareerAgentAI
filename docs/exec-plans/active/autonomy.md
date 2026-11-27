@@ -1590,3 +1590,24 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate browser message no-effect recovery across runtime restart:
+
+A Chromium acceptance now drives the actual candidate dashboard through the separate
+application and recruiter-message approval gates. The first approved message attempt
+returns a durable SQLite sandbox NO_EFFECT: the exact message remains a draft, the
+operation key is retained, and no delivery or outbound message exists. The first
+runtime and browser session are closed. A fresh RuntimeCandidateApp and Chromium
+session reopen the same SQLite database; authenticated Continue verifies provider
+absence and retries the same message operation. The candidate reaches the next
+interview-approval gate. Durable assertions prove one application submission, ordered
+message attempts NO_EFFECT then SUCCESS, one immutable intent, one delivery, zero
+replays, and one outbound message. The independent coverage CLI gate now runs after
+the pytest coverage gate, including when pytest fails.
+
+All effects remain in the synthetic no-network SQLite providers. No real message,
+recipient, application submission, or calendar mutation is performed.
+
+Next: add the equivalent browser/runtime evidence for confirmed no-effect interview
+declines and reconcile candidate decline retry behavior with the provider-effect fence.
