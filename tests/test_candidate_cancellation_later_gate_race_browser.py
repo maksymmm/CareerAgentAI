@@ -118,7 +118,7 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
 
     client_run_id = f"candidate-cancel-{gate}-race-{winner}"
     database_path = str(tmp_path / f"{client_run_id}.sqlite")
-    event_id = f"{client_run_id}:interview" if gate == "interview" else None
+    event_id = f"{client_run_id}:interview"
     job = Job.create(
         job_id=f"{client_run_id}-job",
         title="Logistics Coordinator",
@@ -151,22 +151,21 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
     try:
         initial_state = SQLiteCareerLoopRepository(database).get(run_id)
         assert initial_state is not None
-        if event_id is not None:
-            SQLiteSchedulingRepository(database).create(
-                ScheduleEvent(
-                    event_id=event_id,
-                    candidate_id="candidate-1",
-                    employer_name="Sandbox Logistics",
-                    event_type=ScheduleEventType.INTERVIEW,
-                    location="Karlsruhe",
-                    start_at=NOW + timedelta(days=2),
-                    end_at=NOW + timedelta(days=2, hours=1),
-                    timezone_name="Europe/Berlin",
-                    application_id=initial_state.application_id,
-                    created_at=NOW,
-                    updated_at=NOW,
-                )
+        SQLiteSchedulingRepository(database).create(
+            ScheduleEvent(
+                event_id=event_id,
+                candidate_id="candidate-1",
+                employer_name="Sandbox Logistics",
+                event_type=ScheduleEventType.INTERVIEW,
+                location="Karlsruhe",
+                start_at=NOW + timedelta(days=2),
+                end_at=NOW + timedelta(days=2, hours=1),
+                timezone_name="Europe/Berlin",
+                application_id=initial_state.application_id,
+                created_at=NOW,
+                updated_at=NOW,
             )
+        )
     finally:
         database.close()
 
@@ -450,15 +449,14 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
         )
         assert message[0] == expected_direction
 
-        if event_id is not None:
-            event = SQLiteSchedulingRepository(database).get(event_id)
-            assert event is not None
-            if winner == "approve":
-                assert event.status is ScheduleStatus.ACCEPTED
-                assert event.version == 2
-            else:
-                assert event.status is ScheduleStatus.PROPOSED
-                assert event.version == 1
+        event = SQLiteSchedulingRepository(database).get(event_id)
+        assert event is not None
+        if gate == "interview" and winner == "approve":
+            assert event.status is ScheduleStatus.ACCEPTED
+            assert event.version == 2
+        else:
+            assert event.status is ScheduleStatus.PROPOSED
+            assert event.version == 1
 
         expected_phase = (
             CareerLoopPhase.CANCELLED
