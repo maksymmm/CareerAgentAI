@@ -60,7 +60,9 @@ def _stack(database, plan=None):
     return service, provider, operations
 
 
-def test_stale_accept_reconciliation_rejects_reaccepted_original_slot_after_version_advance(tmp_path):
+def test_stale_accept_reconciliation_rejects_reaccepted_original_slot_after_version_advance(
+    tmp_path,
+):
     class FailFirstSuccessRepository(SQLiteExternalActionOperationRepository):
         def __init__(self, database):
             self.fail_success_once = True
@@ -77,7 +79,9 @@ def test_stale_accept_reconciliation_rejects_reaccepted_original_slot_after_vers
         ):
             if status == ExternalActionStatus.SUCCEEDED and self.fail_success_once:
                 self.fail_success_once = False
-                raise sqlite3.OperationalError("simulated terminal success write failure")
+                raise sqlite3.OperationalError(
+                    "simulated terminal success write failure"
+                )
             return super().transition(
                 operation_id,
                 expected_status,
@@ -150,7 +154,10 @@ def test_stale_accept_reconciliation_rejects_reaccepted_original_slot_after_vers
     ):
         service.resolve_reconciliation("accept:ambiguous", completed=True)
 
-    assert operations.get("accept:ambiguous").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert (
+        operations.get("accept:ambiguous").status
+        == ExternalActionStatus.RECONCILIATION_REQUIRED
+    )
     assert events.get(source.event_id) == reaccepted
     assert provider.effect_count("accept:ambiguous") == 1
     assert provider.effect_count("reschedule:move-away") == 1
