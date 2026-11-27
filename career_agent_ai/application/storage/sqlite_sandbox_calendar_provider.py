@@ -12,6 +12,7 @@ from typing import Callable
 from career_agent_ai.application.scheduling.calendar_adapter import (
     CalendarEvidence,
     CalendarEvidenceState,
+    CalendarReconciliationEvidenceError,
     PreCalendarActionError,
 )
 from career_agent_ai.application.scheduling.fake_calendar_adapter import FakeCalendarAdapter
@@ -167,17 +168,92 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
             raise PreCalendarActionError(
                 "Sandbox calendar evidence cannot be verified inside a transaction."
             )
+        connection = self._database.connection
         self._begin()
         try:
-            row = self._database.connection.execute(
-                "SELECT event_json FROM sandbox_calendar_effects WHERE operation_id = ?",
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_calendar_intents WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
+            attempts = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_calendar_attempts "
+                "WHERE operation_id = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
+            effect = connection.execute(
+                "SELECT fingerprint, action, event_json FROM sandbox_calendar_effects "
+                "WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+
+            if not attempts:
+                if intent is not None or effect is not None:
+                    raise CalendarReconciliationEvidenceError(
+                        "Sandbox calendar evidence has an incomplete durable ledger."
+                    )
+                return CalendarEvidence(CalendarEvidenceState.ABSENT_CONFIRMED)
+            if intent is None:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar attempts have no durable intent."
+                )
+
+            attempt_numbers = [row[0] for row in attempts]
+            if attempt_numbers != list(range(1, len(attempts) + 1)):
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar attempt history is not contiguous."
+                )
+            outcomes = [row[1] for row in attempts]
+            valid_outcomes = {outcome.value for outcome in SandboxCalendarOutcome}
+            if any(outcome not in valid_outcomes for outcome in outcomes):
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar attempt history contains an unknown outcome."
+                )
+            effect_positions = [
+                index
+                for index, outcome in enumerate(outcomes)
+                if outcome
+                in {
+                    SandboxCalendarOutcome.SUCCESS.value,
+                    SandboxCalendarOutcome.TIMEOUT_AFTER_EFFECT.value,
+                }
+            ]
+
+            if effect is None:
+                if effect_positions:
+                    raise CalendarReconciliationEvidenceError(
+                        "Sandbox calendar recorded an effect-producing attempt without an effect."
+                    )
+                return CalendarEvidence(CalendarEvidenceState.ABSENT_CONFIRMED)
+            if len(effect_positions) != 1 or effect_positions[0] != len(outcomes) - 1:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar effect does not match its attempt history."
+                )
+            if effect[0] != intent[0]:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar effect fingerprint conflicts with its intent."
+                )
+            if effect[1] not in {"accept", "decline", "reschedule"}:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar effect has an unknown action."
+                )
+            try:
+                event = self._decode_event(effect[2])
+            except Exception as exc:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar effect contains malformed event evidence."
+                ) from exc
+            expected_status = {
+                "accept": ScheduleStatus.ACCEPTED,
+                "decline": ScheduleStatus.DECLINED,
+                "reschedule": ScheduleStatus.RESCHEDULE_REQUESTED,
+            }[effect[1]]
+            if event.status != expected_status or event.provider_event_id is None:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar event does not match its recorded action."
+                )
+            return CalendarEvidence(CalendarEvidenceState.PRESENT, event)
         finally:
-            self._database.connection.rollback()
-        if row is None:
-            return CalendarEvidence(CalendarEvidenceState.ABSENT_CONFIRMED)
-        return CalendarEvidence(CalendarEvidenceState.PRESENT, self._decode_event(row[0]))
+            connection.rollback()
 
     def effect_count(self, operation_id: str) -> int:
         return int(

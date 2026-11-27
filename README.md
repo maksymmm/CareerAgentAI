@@ -345,8 +345,10 @@ process-local state. Accept, decline, and reschedule intents are bound to their 
 operation IDs and replay with at most one simulated provider effect across restart.
 Ambiguous reconciliation is evidence-verified: completion requires the exact approved
 event/status/slot and provider event ID, while a no-effect claim requires authoritative
-absence under a SQLite writer lock. The provider is dry-run only and never contacts or
-modifies a real calendar.
+absence under a SQLite writer lock. Before returning either result, the provider cross-checks
+the durable intent, contiguous attempt history and effect ledger; orphaned or mismatched
+records fail closed instead of being interpreted as success or absence. The provider is
+dry-run only and never contacts or modifies a real calendar.
 
 The candidate sandbox offers Clear this tab's session: it removes the bearer token,
 profile/start inputs and all loaded run/application/event data, invalidates pending

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from career_agent_ai.application.api import openapi_document
 from career_agent_ai.application.communication.models import (
@@ -224,3 +225,23 @@ def test_production_config_does_not_create_writable_sqlite_uri(tmp_path):
 
     assert config.database_path == uri
     assert not database_path.exists()
+
+
+
+def test_candidate_ci_enforces_independent_coverage_gate_after_pytest():
+    """Keep the independent two-decimal coverage gate after the full test suite."""
+    workflow_path = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    )
+    workflow = workflow_path.read_text(encoding="utf-8")
+    pytest_step = workflow.index("name: Run test suite")
+    coverage_step = workflow.index("name: Enforce independent coverage threshold")
+
+    assert pytest_step < coverage_step
+    assert "id: test" in workflow[pytest_step:coverage_step]
+    assert (
+        "if: always() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure')"
+        in workflow[coverage_step:]
+    )
+    assert "--cov-fail-under=90" in workflow[pytest_step:coverage_step]
+    assert "python -m coverage report --precision=2 --fail-under=90" in workflow[coverage_step:]
