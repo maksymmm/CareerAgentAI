@@ -189,12 +189,12 @@ def test_candidate_stale_acceptance_reconciliation_returns_conflict_after_restar
                 "WHERE operation_id = ? ORDER BY attempt_no",
                 (old_operation_id,),
             ).fetchall()
-            assert attempts == [(1, "success")]
-            assert database.connection.execute(
+            assert [(row[0], row[1]) for row in attempts] == [(1, "success")]
+            assert tuple(database.connection.execute(
                 "SELECT status, version, active_action_operation_id "
                 "FROM scheduling_events WHERE event_id = ?",
                 (event_id,),
-            ).fetchone() == ("accepted", 2, None)
+            ).fetchone()) == ("accepted", 2, None)
         finally:
             database.close()
 
@@ -312,15 +312,15 @@ def test_candidate_stale_acceptance_reconciliation_returns_conflict_after_restar
 
         database = SQLiteDatabase(database_path)
         try:
-            assert database.connection.execute(
+            assert tuple(database.connection.execute(
                 "SELECT status FROM external_action_operations WHERE operation_id = ?",
                 (old_operation_id,),
-            ).fetchone() == (ExternalActionStatus.RECONCILIATION_REQUIRED.value,)
-            assert database.connection.execute(
+            ).fetchone()) == (ExternalActionStatus.RECONCILIATION_REQUIRED.value,)
+            assert tuple(database.connection.execute(
                 "SELECT status, version, active_action_operation_id "
                 "FROM scheduling_events WHERE event_id = ?",
                 (event_id,),
-            ).fetchone() == ("accepted", 5, None)
+            ).fetchone()) == ("accepted", 5, None)
             assert database.connection.execute(
                 "SELECT COUNT(*) FROM sandbox_calendar_attempts"
             ).fetchone()[0] == 4
@@ -330,10 +330,10 @@ def test_candidate_stale_acceptance_reconciliation_returns_conflict_after_restar
             assert database.connection.execute(
                 "SELECT COALESCE(SUM(replays), 0) FROM sandbox_calendar_effects"
             ).fetchone()[0] == 0
-            assert database.connection.execute(
+            assert tuple(database.connection.execute(
                 "SELECT status FROM external_action_operations "
                 "WHERE operation_id = 'candidate-stale-acceptance-later'"
-            ).fetchone() == (ExternalActionStatus.SUCCEEDED.value,)
+            ).fetchone()) == (ExternalActionStatus.SUCCEEDED.value,)
         finally:
             database.close()
     finally:
