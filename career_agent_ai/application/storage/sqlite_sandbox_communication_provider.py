@@ -10,6 +10,7 @@ from hashlib import sha256
 from typing import Callable
 
 from career_agent_ai.application.communication.communication_adapter import (
+    CommunicationReconciliationEvidenceError,
     DeliveryEvidence,
     DeliveryEvidenceState,
     PreDeliveryCommunicationError,
@@ -171,26 +172,119 @@ class SQLiteSandboxCommunicationProvider(FakeCommunicationAdapter):
         return delivered
 
     def verify_delivery(self, operation_id: str) -> DeliveryEvidence:
+        """Verify one delivery against its complete durable mailbox ledger.
+
+        Intent, ordered attempts, delivery and message are read under one SQLite
+        writer snapshot. Partial or contradictory evidence is never interpreted as
+        either successful delivery or confirmed absence.
+        """
         operation_id = validate_identifier(operation_id, "operation_id")
-        if self._database.connection.in_transaction:
+        connection = self._database.connection
+        if connection.in_transaction:
             raise PreDeliveryCommunicationError(
                 "Sandbox delivery evidence cannot be verified inside a transaction."
             )
         self._begin()
         try:
-            row = self._database.connection.execute(
-                "SELECT message_id FROM sandbox_communication_deliveries "
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_communication_intents "
                 "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
-            message = None if row is None else self._load_message(row[0])
+            attempts = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+                "WHERE operation_id = ? ORDER BY attempt_no",
+                (operation_id,),
+            ).fetchall()
+            delivery = connection.execute(
+                "SELECT fingerprint, message_id, action, replays "
+                "FROM sandbox_communication_deliveries WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+
+            if not attempts:
+                if intent is not None or delivery is not None:
+                    raise CommunicationReconciliationEvidenceError(
+                        "Sandbox communication evidence has an incomplete durable ledger."
+                    )
+                return DeliveryEvidence(DeliveryEvidenceState.ABSENT_CONFIRMED)
+            if intent is None:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication attempts have no durable intent."
+                )
+
+            attempt_numbers = [row[0] for row in attempts]
+            if attempt_numbers != list(range(1, len(attempts) + 1)):
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication attempt history is not contiguous."
+                )
+            outcomes = [row[1] for row in attempts]
+            valid_outcomes = {outcome.value for outcome in SandboxCommunicationOutcome}
+            if any(outcome not in valid_outcomes for outcome in outcomes):
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication attempt history contains an unknown outcome."
+                )
+            effect_positions = [
+                index
+                for index, outcome in enumerate(outcomes)
+                if outcome
+                in {
+                    SandboxCommunicationOutcome.SUCCESS.value,
+                    SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT.value,
+                }
+            ]
+
+            if delivery is None:
+                if effect_positions:
+                    raise CommunicationReconciliationEvidenceError(
+                        "Sandbox communication recorded an effect-producing attempt "
+                        "without a delivery."
+                    )
+                return DeliveryEvidence(DeliveryEvidenceState.ABSENT_CONFIRMED)
+
+            if len(effect_positions) != 1 or effect_positions[0] != len(outcomes) - 1:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication delivery does not match its attempt history."
+                )
+            intent_fingerprint = intent[0]
+            delivery_fingerprint, message_id, action, replays = delivery
+            if delivery_fingerprint != intent_fingerprint:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication delivery fingerprint conflicts with its intent."
+                )
+            if action not in {"send", "reply"}:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication delivery has an unknown action."
+                )
+            if not isinstance(replays, int) or isinstance(replays, bool) or replays < 0:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication replay counter is malformed."
+                )
+            try:
+                message = self._load_message(message_id)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication delivery contains malformed message evidence."
+                ) from exc
+            if message is None:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication delivery references a missing message."
+                )
+            if message.direction != MessageDirection.OUTBOUND:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication delivery message is not outbound."
+                )
+            if action == "reply" and message.in_reply_to is None:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication reply evidence has no parent message."
+                )
+            if self._fingerprint(action, message) != intent_fingerprint:
+                raise CommunicationReconciliationEvidenceError(
+                    "Sandbox communication message does not match its durable intent."
+                )
+            return DeliveryEvidence(DeliveryEvidenceState.PRESENT, message)
         finally:
-            self._database.connection.rollback()
-        if row is None:
-            return DeliveryEvidence(DeliveryEvidenceState.ABSENT_CONFIRMED)
-        if message is None:
-            raise ValueError("Sandbox delivery evidence references a missing message.")
-        return DeliveryEvidence(DeliveryEvidenceState.PRESENT, message)
+            connection.rollback()
 
     def delivery_count(self, operation_id: str) -> int:
         return int(

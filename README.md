@@ -307,10 +307,14 @@ attempt, message, and delivery ledgers survive request/process restarts, bind ea
 operation ID to one canonical message intent, and enforce at most one simulated
 delivery. Ambiguous delivery reconciliation is fail-closed: `delivered=true` requires
 the exact outbound provider message, while `delivered=false` requires authoritative
-absence under a SQLite writer lock. A timeout after the effect therefore cannot be
-reopened into a duplicate send, and an interruption before the effect can be safely
-reopened and retried. Neither provider performs network I/O or needs credentials; no
-production communication provider or credential configuration is included.
+absence under a SQLite writer lock. Before either result is returned, the provider
+cross-checks the durable intent, contiguous attempt history, delivery fingerprint,
+action, replay counter and outbound message snapshot; orphaned or contradictory rows
+fail closed instead of being interpreted as success or absence. A timeout after the
+effect therefore cannot be reopened into a duplicate send, and an interruption before
+the effect can be safely reopened and retried. Neither provider performs network I/O
+or needs credentials; no production communication provider or credential
+configuration is included.
 
 The candidate sandbox composes a durable application-submission provider
 (`SQLiteSandboxSubmissionProvider`) instead of an in-memory fake. Its SQLite sandbox ledger

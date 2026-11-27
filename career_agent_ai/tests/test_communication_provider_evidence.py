@@ -114,6 +114,7 @@ def test_interrupted_before_effect_rejects_false_positive_then_retries(tmp_path)
         "send:evidence", "message-evidence", human_approved=True
     )
     assert delivered is not None and delivered.direction == MessageDirection.OUTBOUND
+    assert provider.verify_delivery("send:evidence").state == DeliveryEvidenceState.PRESENT
     assert provider.delivery_count("send:evidence") == 1
 
 
@@ -170,3 +171,241 @@ def test_service_requires_a_verifiable_provider():
         CommunicationService(
             messages, provider, external, require_provider_evidence=True
         )
+
+
+def test_successful_send_evidence_validates_the_complete_mailbox_ledger(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "verified-send.sqlite"))
+    service, provider, _ = _stack(database, None)
+    prepared = _message()
+    service.create_draft(prepared)
+
+    delivered = service.send("send:verified-ledger", prepared.message_id, human_approved=True)
+
+    assert delivered == CommunicationMessage(
+        **{**prepared.__dict__, "direction": MessageDirection.OUTBOUND}
+    )
+    evidence = provider.verify_delivery("send:verified-ledger")
+    assert evidence.state == DeliveryEvidenceState.PRESENT
+    assert evidence.message == delivered
+    assert provider.delivery_count("send:verified-ledger") == 1
+    database.close()
+
+
+def test_successful_reply_evidence_retains_parent_binding(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "verified-reply.sqlite"))
+    service, provider, _ = _stack(database, None)
+    messages = SQLiteCommunicationRepository(database)
+    parent = CommunicationMessage(
+        **{
+            **_message().__dict__,
+            "message_id": "parent-evidence",
+            "direction": MessageDirection.INBOUND,
+        }
+    )
+    messages.save(parent)
+    reply = CommunicationMessage(
+        **{
+            **_message().__dict__,
+            "message_id": "reply-evidence",
+            "in_reply_to": parent.message_id,
+        }
+    )
+
+    delivered = service.reply(
+        "reply:verified-ledger",
+        parent.message_id,
+        reply,
+        human_approved=True,
+    )
+
+    assert delivered is not None
+    evidence = provider.verify_delivery("reply:verified-ledger")
+    assert evidence.state == DeliveryEvidenceState.PRESENT
+    assert evidence.message == delivered
+    assert delivered.in_reply_to == parent.message_id
+    database.close()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_intent",
+        "orphan_intent",
+        "intent_fingerprint_mismatch",
+        "delivery_fingerprint_mismatch",
+        "missing_delivery",
+        "missing_attempt",
+        "attempt_gap",
+        "unknown_outcome",
+        "effect_after_attempt",
+        "unknown_action",
+        "reply_without_parent",
+        "message_not_outbound",
+        "message_fingerprint_mismatch",
+        "missing_message",
+        "malformed_message",
+        "negative_replays",
+    ],
+)
+def test_mailbox_reconciliation_fails_closed_when_provider_ledgers_disagree(
+    tmp_path, corruption
+):
+    database = SQLiteDatabase(str(tmp_path / "mailbox-ledger-integrity.sqlite"))
+    service, provider, operations = _stack(
+        database,
+        lambda _key, _attempt: SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT,
+    )
+    prepared = _message()
+    service.create_draft(prepared)
+    operation_id = "send:ledger-integrity"
+    assert service.send(
+        operation_id, prepared.message_id, human_approved=True
+    ) is None
+    assert operations.get(operation_id).status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+    connection = database.connection
+    if corruption == "missing_intent":
+        connection.execute(
+            "DELETE FROM sandbox_communication_intents WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "orphan_intent":
+        connection.execute(
+            "DELETE FROM sandbox_communication_attempts WHERE operation_id = ?",
+            (operation_id,),
+        )
+        connection.execute(
+            "DELETE FROM sandbox_communication_deliveries WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "intent_fingerprint_mismatch":
+        connection.execute(
+            "UPDATE sandbox_communication_intents SET fingerprint = ? WHERE operation_id = ?",
+            ("0" * 64, operation_id),
+        )
+    elif corruption == "delivery_fingerprint_mismatch":
+        connection.execute(
+            "UPDATE sandbox_communication_deliveries SET fingerprint = ? WHERE operation_id = ?",
+            ("0" * 64, operation_id),
+        )
+    elif corruption == "missing_delivery":
+        connection.execute(
+            "DELETE FROM sandbox_communication_deliveries WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "missing_attempt":
+        connection.execute(
+            "DELETE FROM sandbox_communication_attempts WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "attempt_gap":
+        connection.execute(
+            "UPDATE sandbox_communication_attempts SET attempt_no = 2 WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "unknown_outcome":
+        connection.execute(
+            "UPDATE sandbox_communication_attempts SET outcome = 'unknown' "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "effect_after_attempt":
+        connection.execute(
+            "INSERT INTO sandbox_communication_attempts VALUES (?, 2, ?)",
+            (operation_id, SandboxCommunicationOutcome.NO_EFFECT.value),
+        )
+    elif corruption == "unknown_action":
+        connection.execute(
+            "UPDATE sandbox_communication_deliveries SET action = 'forward' "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "reply_without_parent":
+        connection.execute(
+            "UPDATE sandbox_communication_deliveries SET action = 'reply' "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "message_not_outbound":
+        connection.execute(
+            "UPDATE sandbox_communication_messages SET direction = 'draft' "
+            "WHERE message_id = ?",
+            (prepared.message_id,),
+        )
+    elif corruption == "message_fingerprint_mismatch":
+        connection.execute(
+            "UPDATE sandbox_communication_messages SET body = ? WHERE message_id = ?",
+            ("Tampered provider body", prepared.message_id),
+        )
+    elif corruption == "missing_message":
+        connection.execute(
+            "DELETE FROM sandbox_communication_messages WHERE message_id = ?",
+            (prepared.message_id,),
+        )
+    elif corruption == "malformed_message":
+        connection.execute(
+            "UPDATE sandbox_communication_messages SET created_at = 'not-a-timestamp' "
+            "WHERE message_id = ?",
+            (prepared.message_id,),
+        )
+    else:
+        connection.execute(
+            "UPDATE sandbox_communication_deliveries SET replays = -1 "
+            "WHERE operation_id = ?",
+            (operation_id,),
+        )
+    connection.commit()
+
+    before = (
+        connection.execute(
+            "SELECT operation_id, attempt_no, outcome FROM sandbox_communication_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_no",
+            (operation_id,),
+        ).fetchall(),
+        connection.execute(
+            "SELECT operation_id, fingerprint, message_id, action, replays "
+            "FROM sandbox_communication_deliveries WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall(),
+        connection.execute(
+            "SELECT message_id, direction, created_at FROM sandbox_communication_messages "
+            "WHERE message_id = ?",
+            (prepared.message_id,),
+        ).fetchall(),
+    )
+    with pytest.raises(
+        CommunicationReconciliationEvidenceError,
+        match="Provider evidence lookup failed",
+    ):
+        service.resolve_reconciliation(operation_id, delivered=True)
+
+    assert operations.get(operation_id).status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert service.get_persisted(prepared.message_id).direction == MessageDirection.DRAFT
+    after = (
+        connection.execute(
+            "SELECT operation_id, attempt_no, outcome FROM sandbox_communication_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_no",
+            (operation_id,),
+        ).fetchall(),
+        connection.execute(
+            "SELECT operation_id, fingerprint, message_id, action, replays "
+            "FROM sandbox_communication_deliveries WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchall(),
+        connection.execute(
+            "SELECT message_id, direction, created_at FROM sandbox_communication_messages "
+            "WHERE message_id = ?",
+            (prepared.message_id,),
+        ).fetchall(),
+    )
+    assert after == before
+    database.close()
+
+
+def test_never_attempted_mailbox_operation_is_confirmed_absent(tmp_path):
+    database = SQLiteDatabase(str(tmp_path / "never-attempted.sqlite"))
+    provider = SQLiteSandboxCommunicationProvider(database)
+    evidence = provider.verify_delivery("never-attempted")
+    assert evidence.state == DeliveryEvidenceState.ABSENT_CONFIRMED
+    assert provider.delivery_count("never-attempted") == 0
+    database.close()
