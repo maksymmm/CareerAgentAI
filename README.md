@@ -865,13 +865,19 @@ for deployment lifecycle hooks.
 The deployable candidate service also exposes unauthenticated `GET /healthz` liveness
 and `GET /readyz` readiness probes. Readiness opens the configured durable SQLite file
 in read-only mode and returns a sanitized `503` when storage is missing, unavailable,
-or lacks any required durable career-loop column; it never creates or migrates a
-replacement database. Startup applies the same complete-schema validation after the
-SQLite integrity check. Candidate workflow routes retain bearer authentication, and
-all probe responses disable modern and legacy caching with `Cache-Control: no-store`
-and `Pragma: no-cache`. Probe requests require an explicit, exact `GET`
-WSGI method; missing, differently cased, non-string, and other methods receive `405`
-without opening candidate storage.
+or lacks any required career-loop or candidate provider-ledger table/column; it never
+creates or migrates a replacement database. A singleton schema-version manifest is
+recorded only after application, communication, scheduling, external-action and sandbox
+provider schemas validate. Existing databases with candidate history cannot adopt the
+manifest if a required provider ledger is missing. Startup applies the same complete
+schema validation after the SQLite integrity check. Authenticated candidate API routes
+repeat a read-only schema gate after bearer authentication, preventing request-local
+composition from silently recreating a lost provider ledger as empty. Unauthenticated
+requests still reach the API's bearer-authentication boundary without opening storage.
+All probe responses disable modern and legacy caching with `Cache-Control: no-store`
+and `Pragma: no-cache`. Probe requests require an explicit, exact `GET` WSGI method;
+missing, differently cased, non-string, and other methods receive `405` without
+opening candidate storage.
 Candidate workflow routes apply the same fail-closed parsing before authentication or
 workflow access. Canonical but unsupported HTTP verbs continue to the matched route's
 method gate so each `405` advertises its exact `Allow` contract instead of a generic

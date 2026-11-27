@@ -1,3 +1,16 @@
+Candidate provider-ledger bootstrap and readiness fencing: the candidate runtime
+now records a singleton schema-version manifest only after the application, communication,
+scheduling, external-action and all three sandbox-provider ledger schemas validate.
+Before request-local repository/provider constructors run, an existing manifest is checked
+read-only; a legacy database without a manifest may adopt it only when no candidate history
+exists or every required table and provider-ledger column is already present. Missing
+provider tables are rejected before `CREATE TABLE IF NOT EXISTS` can recreate them as empty.
+Readiness validates the complete manifest/schema, and authenticated candidate API requests
+repeat the read-only schema gate after bearer authentication. SQLite regressions cover each
+provider ledger, legacy adoption, missing columns, health/readiness behavior, and the absence
+of implicit ledger recreation. ADR 0049 records the boundary. Next: exact-head full CI/coverage
+and independent code/security review, then continue bounded candidate workflow recovery.
+
 Relevance boundary follow-up: hyphens are separators between complete technology
 identifiers and location tokens, while letters, digits, underscore, plus, hash and
 period remain part of identifier boundaries. Java matches Java-based and New matches
