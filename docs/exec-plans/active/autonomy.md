@@ -1624,3 +1624,16 @@ a SQLite trigger that rejects only the terminal success write, then proves one p
 effect, pointerless pending recovery, and successful evidence reconciliation without a
 second effect. Next: exact-head full CI, both coverage gates, and Codex code/security
 review.
+
+
+Candidate pointerless decline browser recovery: a Chromium acceptance now drives a
+candidate-approved calendar decline through the authenticated runtime, injects a
+SQLite failure only for the terminal `succeeded` write after the provider effect and
+declined event transition commit, then restarts the runtime and browser over the same
+database. The fresh dashboard restores the sole pointerless
+`reconciliation_required` operation, keeps reconciliation disabled until explicit
+candidate attestation, and completes from durable provider evidence without replay.
+The regression requires one attempt, one decline effect, zero replays, and the exact
+declined target version. ADR 0046 records the browser-level recovery boundary.
+Next: exact-head full CI, both coverage gates, and independent code/security review;
+then extend the same recovery proof to candidate-approved reschedule operations.
