@@ -72,10 +72,10 @@ class ExternalActionService:
     ) -> ExternalActionOperation:
         """Execute once, while protecting a live provider call from duplicate recovery.
 
-        A duplicate observes an in-progress operation unchanged during the bounded
-        grace period. Only older operations are promoted to reconciliation, and
-        this recovery transition never invokes the adapter. Future timestamps are
-        treated conservatively as live to avoid clock-skew-induced early recovery.
+        A live ``in_progress`` operation is not reclassified during its grace period.
+        If concurrent callers both observe ``prepared``, only the compare-and-swap
+        winner may invoke the adapter; a loser re-reads and returns the unchanged
+        durable winner without executing the provider.
         """
         if (
             type(stale_after_seconds) is not int
@@ -134,11 +134,27 @@ class ExternalActionService:
                     "Consequential external actions are disabled by runtime policy."
                 )
 
-        operation = self._repository.transition(
-            operation.operation_id,
-            ExternalActionStatus.PREPARED,
-            ExternalActionStatus.IN_PROGRESS,
-        )
+        try:
+            operation = self._repository.transition(
+                operation.operation_id,
+                ExternalActionStatus.PREPARED,
+                ExternalActionStatus.IN_PROGRESS,
+            )
+        except OperationConflictError:
+            # Another caller may have claimed this prepared operation after our
+            # initial read. Return that durable winner only when the operation's
+            # identity and payload are unchanged; never call the adapter on a lost
+            # compare-and-swap.
+            current = self._repository.get(operation.operation_id)
+            if (
+                current is None
+                or current.operation_id != operation.operation_id
+                or current.action_type != operation.action_type
+                or dict(current.payload) != dict(operation.payload)
+                or current.status == ExternalActionStatus.PREPARED
+            ):
+                raise
+            return current
         try:
             result = self._adapter.execute(
                 operation.operation_id,
