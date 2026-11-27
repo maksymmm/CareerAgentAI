@@ -365,6 +365,40 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
                 assert loser_conflicted.is_set()
                 assert not controller_timed_out.is_set()
 
+                if (
+                    gate == "interview"
+                    and winner == "approve"
+                    and outcomes["approve"]["body"].get("phase") != "complete"
+                ):
+                    diagnostic_db = SQLiteDatabase(database_path)
+                    try:
+                        operation = diagnostic_db.connection.execute(
+                            "SELECT operation_id, action_type, status, error "
+                            "FROM external_action_operations "
+                            "WHERE action_type = 'calendar.accept'"
+                        ).fetchall()
+                        attempts = diagnostic_db.connection.execute(
+                            "SELECT operation_id, attempt_no, outcome "
+                            "FROM sandbox_calendar_attempts"
+                        ).fetchall()
+                        effects = diagnostic_db.connection.execute(
+                            "SELECT operation_id, action, replays "
+                            "FROM sandbox_calendar_effects"
+                        ).fetchall()
+                        event = diagnostic_db.connection.execute(
+                            "SELECT status, version, provider_event_id, "
+                            "active_action_operation_id FROM scheduling_events "
+                            "WHERE event_id = ?",
+                            (event_id,),
+                        ).fetchone()
+                    finally:
+                        diagnostic_db.close()
+                    raise AssertionError(
+                        "Interview acceptance did not reach complete: "
+                        f"operations={operation!r}, attempts={attempts!r}, "
+                        f"effects={effects!r}, event={event!r}"
+                    )
+
                 approved_phase = (
                     "interview_approval" if gate == "message" else "complete"
                 )
