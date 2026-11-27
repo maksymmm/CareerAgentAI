@@ -9,7 +9,7 @@ from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 import pytest
 
 
-NOW = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc)
 
 
 class QuietHandler(WSGIRequestHandler):
@@ -104,9 +104,6 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
         ScheduleEvent,
         ScheduleEventType,
         ScheduleStatus,
-    )
-    from career_agent_ai.application.scheduling.scheduling_service import (
-        _CalendarActionAdapter,
     )
     from career_agent_ai.application.storage.sqlite_career_loop_repository import (
         SQLiteCareerLoopRepository,
@@ -234,39 +231,6 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
 
     monkeypatch.setattr(
         SQLiteCareerLoopRepository, "claim_execution", controlled_claim
-    )
-
-    transition_errors = []
-    completion_errors = []
-    original_transition = _CalendarActionAdapter._validated_transition
-    original_complete = SQLiteSchedulingRepository.complete_action
-
-    def traced_transition(action_type, prepared, delivered, payload):
-        try:
-            return original_transition(action_type, prepared, delivered, payload)
-        except Exception as exc:
-            transition_errors.append((type(exc).__name__, str(exc)))
-            raise
-
-    def traced_complete(repository, event, operation_id, *, expected_version):
-        try:
-            return original_complete(
-                repository,
-                event,
-                operation_id,
-                expected_version=expected_version,
-            )
-        except Exception as exc:
-            completion_errors.append((type(exc).__name__, str(exc)))
-            raise
-
-    monkeypatch.setattr(
-        _CalendarActionAdapter,
-        "_validated_transition",
-        staticmethod(traced_transition),
-    )
-    monkeypatch.setattr(
-        SQLiteSchedulingRepository, "complete_action", traced_complete
     )
 
     class RaceGate:
@@ -400,48 +364,6 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
                 assert not release_controller.is_alive()
                 assert loser_conflicted.is_set()
                 assert not controller_timed_out.is_set()
-
-                if (
-                    gate == "interview"
-                    and winner == "approve"
-                    and outcomes["approve"]["body"].get("phase") != "complete"
-                ):
-                    diagnostic_db = SQLiteDatabase(database_path)
-                    try:
-                        operation = diagnostic_db.connection.execute(
-                            "SELECT operation_id, action_type, status, error "
-                            "FROM external_action_operations "
-                            "WHERE action_type = 'calendar.accept'"
-                        ).fetchall()
-                        attempts = diagnostic_db.connection.execute(
-                            "SELECT operation_id, attempt_no, outcome "
-                            "FROM sandbox_calendar_attempts"
-                        ).fetchall()
-                        effects = diagnostic_db.connection.execute(
-                            "SELECT operation_id, action, replays "
-                            "FROM sandbox_calendar_effects"
-                        ).fetchall()
-                        event = diagnostic_db.connection.execute(
-                            "SELECT status, version, provider_event_id, "
-                            "active_action_operation_id FROM scheduling_events "
-                            "WHERE event_id = ?",
-                            (event_id,),
-                        ).fetchone()
-                        all_events = diagnostic_db.connection.execute(
-                            "SELECT event_id, status, version, provider_event_id, "
-                            "active_action_operation_id FROM scheduling_events "
-                            "ORDER BY event_id"
-                        ).fetchall()
-                    finally:
-                        diagnostic_db.close()
-                    raise AssertionError(
-                        "Interview acceptance did not reach complete: "
-                        f"operations={operation!r}, attempts={attempts!r}, "
-                        f"effects={effects!r}, event={event!r}, "
-                        f"all_events={all_events!r}, "
-                        f"transition_errors={transition_errors!r}, "
-                        f"completion_errors={completion_errors!r}"
-                    )
 
                 approved_phase = (
                     "interview_approval" if gate == "message" else "complete"
