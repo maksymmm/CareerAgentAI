@@ -1617,3 +1617,16 @@ Next: add deterministic delayed-page response coverage, then extend the same own
 
 Candidate reschedule delayed-page response fencing: a deterministic Chromium regression holds the second keyset page at the loopback WSGI boundary while the candidate selects a row from the first page. After selection invalidates the collection, the delayed response is released and must not repopulate rows or restore the old cursor. The authoritative per-event recovery read completes, a fresh explicit discovery loads the first page, and durable sandbox provider attempt/effect counts remain unchanged. ADR 0036 records the response-ordering contract.
 Next: extend owner-scoped discovery and the same stale-response fencing to candidate interview declines.
+
+Candidate reschedule pointerless provider-effect recovery: a Chromium regression now
+covers the crash window where the SQLite sandbox calendar provider has committed a
+reschedule and the event has advanced to the exact target at source version + 1, but a
+trigger rejects the terminal external-action `succeeded` write after the event pointer
+is cleared. After a full candidate runtime and browser restart, owner-scoped discovery
+still finds the operation, authoritative event/pending reads restore the exact target,
+and all evidence controls remain disabled until a fresh candidate attestation. Positive
+durable provider evidence then completes reconciliation without another provider attempt,
+effect, or replay. ADR 0037 records the fail-closed pointerless recovery contract.
+Next: exact-head full CI and independent code/security review; then add a stale-attestation
+regression where a competing event-version advance occurs between recovery display and
+candidate reconciliation.
