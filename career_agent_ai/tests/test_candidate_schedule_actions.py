@@ -1952,6 +1952,7 @@ def test_candidate_browser_recovers_pointerless_provider_applied_reschedule_afte
             server = None
             thread = None
             first.close()
+            first = None
 
             second = Candidate(path)
             second_server, second_thread = serve(second)
@@ -2016,7 +2017,8 @@ def test_candidate_browser_recovers_pointerless_provider_applied_reschedule_afte
                 stop(server, thread)
             if second_server is not None:
                 stop(second_server, second_thread)
-            first.close()
+            if first is not None:
+                first.close()
             if second is not None:
                 second.close()
             browser.close()
