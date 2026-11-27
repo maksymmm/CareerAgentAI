@@ -391,7 +391,8 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
                     final_phase = approved_phase
 
                 page.locator("#status").click()
-                expect(page.locator("#run-overview")).to_contain_text(final_phase)
+                display_phase = final_phase.replace("_", " ")
+                expect(page.locator("#run-overview")).to_contain_text(display_phase)
                 final_status = json.loads(page.locator("#result").text_content())[
                     "payload"
                 ]
@@ -414,7 +415,7 @@ def test_candidate_cancel_and_later_approval_race_has_one_winner(
         _stop(server, server_thread)
         runtime.close()
 
-    database = SQLiteDatabase.open_read_only(database_path)
+    database = SQLiteDatabase(database_path)
     try:
         state = SQLiteCareerLoopRepository(database).get(run_id)
         assert state is not None
