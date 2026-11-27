@@ -232,3 +232,19 @@ def test_candidate_cancellation_is_browser_confirmed_and_terminal_after_runtime_
         assert projection[1] == first_snapshot["state_version"]
     finally:
         database.close()
+
+
+def test_candidate_ci_enforces_precise_independent_coverage_after_pytest():
+    from pathlib import Path
+
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    pytest_command = "python -m pytest"
+    coverage_command = "python -m coverage report --precision=2 --fail-under=90"
+    assert pytest_command in workflow
+    assert coverage_command in workflow
+    assert workflow.index("Run test suite") < workflow.index(
+        "Enforce independent coverage threshold"
+    )
+    assert "steps.pytest.outcome != 'skipped'" in workflow
