@@ -25,7 +25,8 @@ from career_agent_ai.application.storage.sqlite_scheduling_repository import (
 
 OWNER = "candidate-1"
 EVENT_ID = "browser-pointerless-decline-event"
-NOW = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+# Keep the persisted source timestamp safely before the CI runner clock.
+NOW = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
 
 
 class QuietHandler(WSGIRequestHandler):
@@ -43,8 +44,8 @@ def _seed_event(path):
                 employer_name="Sandbox GmbH",
                 event_type=ScheduleEventType.INTERVIEW,
                 location="Sandbox video room",
-                start_at=NOW + timedelta(days=11),
-                end_at=NOW + timedelta(days=11, hours=1),
+                start_at=NOW + timedelta(days=18),
+                end_at=NOW + timedelta(days=18, hours=1),
                 timezone_name="Europe/Berlin",
                 status=ScheduleStatus.PROPOSED,
                 provider_event_id="fake-" + EVENT_ID,
@@ -116,11 +117,10 @@ def _durable_snapshot(path):
         connection.close()
 
 
-def _open_event_in_browser(page, base_url):
+def _open_event_in_browser(page, base_url, expect):
     page.goto(base_url + "/sandbox/candidate")
     page.locator("#token").fill("owner-token")
     page.locator("#list-events").click()
-    expect = pytest.importorskip("playwright.sync_api").expect
     expect(page.locator("#owned-events")).to_contain_text("Sandbox GmbH")
     page.locator("#owned-events button").click()
     expect(page.locator("#event-detail")).to_contain_text(EVENT_ID)
@@ -176,7 +176,7 @@ def test_browser_recovers_pointerless_provider_applied_decline_after_restart(
             first_server, first_thread = _serve(first_runtime)
             first_page = browser.new_page()
             _open_event_in_browser(
-                first_page, f"http://127.0.0.1:{first_server.server_port}"
+                first_page, f"http://127.0.0.1:{first_server.server_port}", expect
             )
             expect(first_page.locator("#decline-confirmed")).to_be_enabled()
             first_page.locator("#decline-confirmed").check()
@@ -214,7 +214,7 @@ def test_browser_recovers_pointerless_provider_applied_decline_after_restart(
             second_server, second_thread = _serve(second_runtime)
             second_page = browser.new_page()
             _open_event_in_browser(
-                second_page, f"http://127.0.0.1:{second_server.server_port}"
+                second_page, f"http://127.0.0.1:{second_server.server_port}", expect
             )
 
             expect(second_page.locator("#decline-reconciliation-panel")).to_be_enabled()
