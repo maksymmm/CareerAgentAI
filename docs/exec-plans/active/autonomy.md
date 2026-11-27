@@ -1,3 +1,17 @@
+Mailbox sandbox evidence-ledger integrity: `verify_delivery` now reads the durable
+intent, ordered attempt history, delivery record and provider message under one SQLite
+writer snapshot. It rejects orphaned or mismatched intent/delivery rows, non-contiguous
+attempts, unknown outcomes/actions, missing effects after effect-producing outcomes,
+effects without exactly one final effect-producing attempt, negative replay counters,
+non-outbound or malformed messages, and reply records without a parent binding.
+Confirmed absence is returned only for a consistent no-effect history; positive
+evidence requires the stored message fingerprint to match both durable ledgers.
+Fifteen corruption regressions prove reconciliation stays
+`reconciliation_required` without provider or ledger writes. ADR 0004 records the
+mailbox contract. The CI workflow also enforces an independent two-decimal coverage
+gate after pytest, including when tests fail. Next: apply equivalent cross-ledger
+checks to sandbox application-submission evidence.
+
 Relevance boundary follow-up: hyphens are separators between complete technology
 identifiers and location tokens, while letters, digits, underscore, plus, hash and
 period remain part of identifier boundaries. Java matches Java-based and New matches
