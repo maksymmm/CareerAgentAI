@@ -17,6 +17,9 @@ from career_agent_ai.application.scheduling import (
     ScheduleStatus,
     SchedulingService,
 )
+from career_agent_ai.application.scheduling.scheduling_repository import (
+    SchedulingOperationConflict,
+)
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 from career_agent_ai.application.storage.sqlite_external_action_repository import (
     SQLiteExternalActionOperationRepository,
@@ -149,7 +152,7 @@ def test_stale_accept_reconciliation_rejects_reaccepted_original_slot_after_vers
     # The old provider evidence is still present and has the original accepted
     # slot, but it cannot attest the newer version-5 acceptance.
     with pytest.raises(
-        ValueError,
+        SchedulingOperationConflict,
         match="Prepared scheduling intent is stale for the current event version",
     ):
         service.resolve_reconciliation("accept:ambiguous", completed=True)

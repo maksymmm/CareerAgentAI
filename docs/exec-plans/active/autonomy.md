@@ -1601,3 +1601,18 @@ provider effect cannot attest the newer acceptance and leaves the old operation
 reconciliation_required without another provider effect.
 Next: exact-head CI and independent review, then continue bounded candidate
 interview recovery hardening.
+
+Candidate interview acceptance stale-reconciliation API conflict:
+the service-level exact-version fence now raises the typed
+`SchedulingOperationConflict` when an older provider-applied acceptance is
+presented after the event has moved beyond source version + 1. The autonomous
+career loop translates only that typed scheduling conflict into its durable
+`CareerLoopConflictError`, so the authenticated candidate route returns
+`409 approval_conflict` rather than a sanitized 500. The old operation remains
+`reconciliation_required`; the event and provider ledgers are unchanged, and no
+provider replay occurs. HTTP/SQLite regression covers an actual candidate run,
+a terminal-write failure, later move-away/return/re-accept effects, runtime restart,
+and the stale candidate attestation. CI now runs the independent two-decimal
+coverage CLI after pytest even when pytest fails (unless cancelled).
+Next: exact-head full CI with both coverage gates and independent Codex code/security
+review, then continue candidate workflow recovery hardening.
