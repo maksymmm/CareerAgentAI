@@ -446,8 +446,10 @@ _HTML = r"""<!doctype html>
     }
     async function loadDeclineIntents(after = null) {
       if (declineIntentsInFlight) throw new Error('Pending declines are already loading.');
-      const generation = ++declineIntentsGeneration;
       const cursor = after;
+      const generation = cursor === null
+        ? ++declineIntentsGeneration
+        : declineIntentsGeneration;
       if (cursor === null) {
         nextDeclineIntentCursor = null;
         byId('pending-decline-intents').replaceChildren();
@@ -502,8 +504,11 @@ _HTML = r"""<!doctype html>
           button.setAttribute('aria-label', 'Recover pending decline ' + (index + 1) +
             ': ' + item.event.event_id);
           button.addEventListener('click', () => {
-            if (generation === declineIntentsGeneration) guarded(
-              () => loadEventDetail(item.event.event_id, item.event.state_version, button), true);
+            if (generation === declineIntentsGeneration) {
+              clearDeclineIntents();
+              guarded(
+                () => loadEventDetail(item.event.event_id, item.event.state_version, button), true);
+            }
           });
           row.appendChild(button);
           byId('pending-decline-intents').appendChild(row);
