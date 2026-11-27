@@ -1602,3 +1602,14 @@ connections to reproduce a duplicate during the provider call and cover stale ex
 clock skew, invalid bounds and concurrent terminal completion.
 Next: exact-head full CI and independent code/security review, then continue sandbox
 provider evidence hardening without coupling to unrelated correlation metadata.
+
+
+Candidate sandbox communication concurrent timeout-after-effect recovery: two independent
+SQLite connections now race the same immutable message send while the first provider call
+holds its writer transaction. The first commits one `TIMEOUT_AFTER_EFFECT` attempt and one
+outbound delivery; the duplicate waits, observes the exact durable delivery, and records
+only a replay. A fresh provider instance verifies positive delivery evidence and replays
+the same message after restart without another attempt or effect. ADR 0043 records the
+provider-boundary contract. The test uses only synthetic `.example.test` identities and
+the no-network SQLite sandbox. Next: apply the same concurrent ambiguous-outcome proof
+to application submission and calendar provider recovery.

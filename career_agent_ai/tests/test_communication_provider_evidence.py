@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from threading import Event, Lock
 
 import pytest
 
@@ -170,3 +172,133 @@ def test_service_requires_a_verifiable_provider():
         CommunicationService(
             messages, provider, external, require_provider_evidence=True
         )
+
+
+
+def test_concurrent_timeout_after_effect_delivery_has_one_effect_and_restart_replay(tmp_path):
+    """A same-key duplicate waits for the committed sandbox delivery, then replays it."""
+    path = str(tmp_path / "concurrent-message-delivery.sqlite")
+    setup = SQLiteDatabase(path)
+    setup_provider = SQLiteSandboxCommunicationProvider(setup)
+    message = _message()
+    assert setup_provider.draft(message) == message
+    setup.close()
+
+    start = Event()
+    ready = (Event(), Event())
+    begin_entered = (Event(), Event())
+    plan_entered = Event()
+    release_plan = Event()
+    plan_lock = Lock()
+    plan_calls: list[tuple[str, int]] = []
+    operation_id = "send:concurrent-timeout-after-effect"
+
+    def plan(key: str, attempt_no: int) -> SandboxCommunicationOutcome:
+        with plan_lock:
+            plan_calls.append((key, attempt_no))
+        plan_entered.set()
+        if not release_plan.wait(timeout=5):
+            raise TimeoutError("Test did not release the communication provider plan.")
+        return SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT
+
+    class ObservedProvider(SQLiteSandboxCommunicationProvider):
+        def __init__(self, database, outcome_plan, index):
+            self._begin_observed = begin_entered[index]
+            super().__init__(database, outcome_plan)
+
+        def _begin(self):
+            self._begin_observed.set()
+            super()._begin()
+
+    def deliver(index: int):
+        database = SQLiteDatabase(path)
+        provider = ObservedProvider(database, plan, index)
+        ready[index].set()
+        if not start.wait(timeout=5):
+            database.close()
+            raise TimeoutError("Concurrent communication start was not released.")
+        try:
+            return provider.send(operation_id, message)
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(deliver, 0)
+        second = executor.submit(deliver, 1)
+        assert ready[0].wait(timeout=5)
+        assert ready[1].wait(timeout=5)
+        start.set()
+        assert plan_entered.wait(timeout=5)
+        assert begin_entered[0].wait(timeout=5)
+        assert begin_entered[1].wait(timeout=5)
+        try:
+            # One request holds the SQLite writer transaction inside the outcome plan;
+            # the duplicate has reached BEGIN IMMEDIATE and must wait for that commit.
+            for future in (first, second):
+                with pytest.raises(FutureTimeoutError):
+                    future.result(timeout=0.05)
+        finally:
+            release_plan.set()
+
+        outcomes = []
+        for future in (first, second):
+            try:
+                outcomes.append(("returned", future.result(timeout=5)))
+            except TimeoutError:
+                outcomes.append(("timeout_after_effect", None))
+
+    returned = [value for kind, value in outcomes if kind == "returned"]
+    timed_out = [kind for kind, _ in outcomes if kind == "timeout_after_effect"]
+    assert len(returned) == 1
+    assert len(timed_out) == 1
+    delivered = returned[0]
+    assert delivered.message_id == message.message_id
+    assert delivered.direction == MessageDirection.OUTBOUND
+    assert plan_calls == [(operation_id, 1)]
+
+    verification = SQLiteDatabase(path)
+    verifier = SQLiteSandboxCommunicationProvider(
+        verification,
+        lambda *_: pytest.fail("Evidence verification must not call the outcome plan."),
+    )
+    attempts = verification.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+        "WHERE operation_id = ? ORDER BY attempt_no",
+        (operation_id,),
+    ).fetchall()
+    delivery = verification.connection.execute(
+        "SELECT action, replays, message_id FROM sandbox_communication_deliveries "
+        "WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone()
+    stored_message = verification.connection.execute(
+        "SELECT direction FROM sandbox_communication_messages WHERE message_id = ?",
+        (message.message_id,),
+    ).fetchone()
+    assert attempts == [(1, SandboxCommunicationOutcome.TIMEOUT_AFTER_EFFECT.value)]
+    assert delivery == ("send", 1, message.message_id)
+    assert stored_message == (MessageDirection.OUTBOUND.value,)
+    assert verifier.delivery_count(operation_id) == 1
+    evidence = verifier.verify_delivery(operation_id)
+    assert evidence.state == DeliveryEvidenceState.PRESENT
+    assert evidence.message == delivered
+    verification.close()
+
+    restarted = SQLiteDatabase(path)
+    replay_provider = SQLiteSandboxCommunicationProvider(
+        restarted,
+        lambda *_: pytest.fail("A durable restart replay must not call the outcome plan."),
+    )
+    assert replay_provider.send(operation_id, message) == delivered
+    assert restarted.connection.execute(
+        "SELECT attempt_no, outcome FROM sandbox_communication_attempts "
+        "WHERE operation_id = ? ORDER BY attempt_no",
+        (operation_id,),
+    ).fetchall() == attempts
+    assert restarted.connection.execute(
+        "SELECT action, replays, message_id FROM sandbox_communication_deliveries "
+        "WHERE operation_id = ?",
+        (operation_id,),
+    ).fetchone() == ("send", 2, message.message_id)
+    assert replay_provider.delivery_count(operation_id) == 1
+    restarted.close()
