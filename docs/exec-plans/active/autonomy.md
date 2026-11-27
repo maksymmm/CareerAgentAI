@@ -1635,11 +1635,17 @@ independent code/security review.
 
 Candidate cancellation/approval race hardening: two independent SQLite-backed loop workers now
 race a candidate's version-bound cancellation against the exact approval prompt observed at
-the same state version. The regression deterministically holds the winning execution lease
-while the competing worker attempts its claim, proving there is one winner. Cancellation
-winning leaves the run terminal with zero application operations/provider attempts; approval
-winning commits exactly one application submission and advances to message approval while
-cancellation conflicts. The approval winner may create one local draft but does not send; the losing worker performs no provider calls, and both paths assert zero calendar attempts. The
-test uses separate SQLite connections and local fake adapters only; no live provider effects.
-Next: exercise the same race through authenticated Chromium/WSGI and then rerun exact-head
-full CI plus independent code/security review.
+the same state version. ADR 0043 records both deterministic winner orderings: cancellation
+leaves the application saved with zero external-action operations, while approval commits
+exactly one application submission and advances to message approval with only a local draft.
+The losing worker conflicts before any provider call.
+
+The authenticated browser/API follow-up now sends cancellation and approval POSTs concurrently
+through a threaded loopback WSGI server backed by the real RuntimeCandidateApp and SQLite
+sandbox providers. The test holds the selected winner after its durable lease commits, then
+proves the losing HTTP request returns 409 for the same owner/run/state version. Cancellation
+winning leaves all provider ledgers empty; approval winning records one application submission,
+no communication delivery, and no calendar effect. The browser's final status agrees with the
+durable SQLite state. ADR 0044 records the HTTP/provider boundary proof.
+Next: extend the concurrent cancellation-versus-approval proof to the message and interview
+approval gates, then rerun exact-head full CI and request independent code/security review.
