@@ -1643,9 +1643,11 @@ Next: implement the same candidate-safe discovery contract for reschedule intent
 an isolated branch, reusing the reschedule workflow's durable target snapshot and
 version-bound reconciliation only after its existing review findings are resolved.
 
-Candidate interview-decline discovery selection fencing: selecting a pending decline
-now invalidates and clears the entire discovery collection synchronously before loading
-the authoritative owned event and per-event pending snapshot. A deterministic Chromium
+Candidate interview-decline discovery selection fencing: keyset pages share one collection
+generation, so a first-page row remains selectable while a later page is in flight. A fresh
+first-page load starts a new generation. Selecting a pending decline invalidates and clears
+the entire collection synchronously before loading the authoritative owned event and
+per-event pending snapshot. A deterministic Chromium
 regression seeds 26 ambiguous declines in the SQLite sandbox, holds the second keyset
 page at the authenticated loopback WSGI boundary, selects a first-page event, then
 releases and fully consumes the delayed response. The test proves the stale response
