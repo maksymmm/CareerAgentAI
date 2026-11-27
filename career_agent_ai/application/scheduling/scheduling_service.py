@@ -514,6 +514,14 @@ class SchedulingService:
             and current.end_at == target_end
             and current.timezone_name == target_timezone
         )
+        if (
+            action_type == "calendar.reschedule"
+            and already_completed
+            and current.version != source_version + 1
+        ):
+            raise ValueError(
+                "Completed calendar event no longer matches the approved operation version."
+            )
         if not already_completed:
             _CalendarActionAdapter._validate_prepared_source(current, operation.payload)
             updated = current.transition(
