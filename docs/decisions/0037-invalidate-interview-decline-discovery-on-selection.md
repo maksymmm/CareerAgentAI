@@ -17,9 +17,11 @@ stale rows or restore a cursor after the candidate has moved into event recovery
 
 ## Decision
 
-When a pending-decline row is selected, synchronously call the existing
-clearDeclineIntents invalidation before starting the authoritative event-detail and
-per-event pending reads.
+Keep one collection generation stable across its keyset pages so first-page rows
+remain selectable while a later page is in flight. A fresh first-page load starts a
+new generation. When a pending-decline row is selected, synchronously call the
+existing clearDeclineIntents invalidation before starting the authoritative
+event-detail and per-event pending reads.
 
 The generation check remains the authority for rejecting the late page response.
 The existing per-event endpoint remains the only source that can restore pending
