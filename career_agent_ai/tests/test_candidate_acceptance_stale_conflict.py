@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     CareerLoopRequest,
