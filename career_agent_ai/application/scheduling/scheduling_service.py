@@ -29,7 +29,11 @@ from .models import (
     validate_schedule_identifier,
     validate_timezone_name,
 )
-from .scheduling_repository import SchedulingConflictError, SchedulingRepository
+from .scheduling_repository import (
+    SchedulingConflictError,
+    SchedulingOperationConflict,
+    SchedulingRepository,
+)
 
 
 def _serialize_schedule_event(event: ScheduleEvent) -> dict[str, Any]:
@@ -522,7 +526,7 @@ class SchedulingService:
             and already_completed
             and current.version != source_version + 1
         ):
-            raise ValueError(
+            raise SchedulingOperationConflict(
                 "Prepared scheduling intent is stale for the current event version."
             )
         if not already_completed:
