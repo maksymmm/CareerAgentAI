@@ -21,6 +21,7 @@ from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
 
 from .composition import RuntimeCandidateApp, build_candidate_sandbox_app_from_env
 from .config import RuntimeConfig
+from .candidate_schema import _validate_candidate_schema
 
 
 _READINESS_INTEGRITY_BUDGET_SECONDS = 0.05
@@ -102,26 +103,18 @@ class CandidateServiceConfig:
         return self.user_id if hmac.compare_digest(presented_bytes, expected) else None
 
 
-_REQUIRED_LOOP_COLUMNS = frozenset(
-    {
-        "run_id",
-        "owner_user_id",
-        "phase",
-        "payload_json",
-        "updated_at",
-        "version",
-        "execution_claim_owner",
-        "execution_claim_expires_at",
-    }
-)
-
-
-def _validate_loop_schema(connection: Any) -> None:
-    """Reject missing or partially migrated candidate loop storage."""
-    rows = connection.execute("PRAGMA table_info(autonomous_career_loops)").fetchall()
-    columns = {row[1] for row in rows}
-    if not _REQUIRED_LOOP_COLUMNS.issubset(columns):
-        raise RuntimeError("candidate schema is unavailable")
+def _candidate_schema_available(database_path: str) -> bool:
+    """Check the complete candidate schema without creating or migrating storage."""
+    database = None
+    try:
+        database = SQLiteDatabase.open_read_only(database_path)
+        _validate_candidate_schema(database.connection)
+        return True
+    except Exception:
+        return False
+    finally:
+        if database is not None:
+            database.close()
 
 
 class CandidateServiceWSGIApp:
@@ -134,9 +127,37 @@ class CandidateServiceWSGIApp:
         ("Pragma", "no-cache"),
     )
 
-    def __init__(self, app: RuntimeCandidateApp, *, database_path: str) -> None:
+    def __init__(
+        self,
+        app: RuntimeCandidateApp,
+        *,
+        database_path: str,
+        resolve_bearer: Callable[[str], str | None] | None = None,
+    ) -> None:
         self._app = app
         self._database_path = database_path
+        self._resolve_bearer = resolve_bearer
+
+    def _is_authenticated_candidate(self, environ: Mapping[str, Any]) -> bool:
+        """Resolve the same bearer token before opening candidate storage."""
+        if self._resolve_bearer is None:
+            return False
+        authorization = environ.get("HTTP_AUTHORIZATION")
+        if not isinstance(authorization, str):
+            return False
+        scheme, separator, credentials = authorization.partition(" ")
+        token = (
+            credentials.strip()
+            if separator and scheme.casefold() == "bearer"
+            else ""
+        )
+        if not token:
+            return False
+        try:
+            return bool(self._resolve_bearer(token))
+        except Exception:
+            # The delegated API retains its existing sanitized resolver error path.
+            return False
 
     @staticmethod
     def _respond(
@@ -158,6 +179,17 @@ class CandidateServiceWSGIApp:
     ) -> Iterable[bytes]:
         path = environ.get("PATH_INFO", "")
         if path not in {"/healthz", "/readyz"}:
+            method = environ.get("REQUEST_METHOD")
+            if (
+                isinstance(path, str)
+                and path.startswith("/v1/candidate/")
+                and method in ("GET", "POST")
+                and self._is_authenticated_candidate(environ)
+                and not _candidate_schema_available(self._database_path)
+            ):
+                return self._respond(
+                    start_response, "503 Service Unavailable", self._UNAVAILABLE_BODY
+                )
             return self._app(environ, start_response)
         # Probe authorization is method-bound. A malformed WSGI request must
         # not silently become a GET and disclose liveness or readiness.
@@ -183,7 +215,7 @@ class CandidateServiceWSGIApp:
             # cannot leave the candidate workflow accepting traffic.
             if not _bounded_integrity_check(database.connection):
                 raise RuntimeError("candidate storage integrity check failed")
-            _validate_loop_schema(database.connection)
+            _validate_candidate_schema(database.connection)
         except Exception:
             return self._respond(
                 start_response, "503 Service Unavailable", self._UNAVAILABLE_BODY
@@ -205,7 +237,7 @@ def _validate_candidate_storage(database_path: str) -> None:
         database = SQLiteDatabase.open_read_only(database_path)
         if database.connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
             raise RuntimeError("candidate storage integrity check failed")
-        _validate_loop_schema(database.connection)
+        _validate_candidate_schema(database.connection)
     except Exception as exc:
         raise RuntimeError("Candidate storage failed startup validation.") from exc
     finally:
@@ -267,7 +299,9 @@ def build_candidate_service_from_env(
         environ=environ,
     )
     app = CandidateServiceWSGIApp(
-        candidate_app, database_path=runtime_config.database_path
+        candidate_app,
+        database_path=runtime_config.database_path,
+        resolve_bearer=config.resolve_bearer,
     )
     try:
         _validate_candidate_storage(runtime_config.database_path)

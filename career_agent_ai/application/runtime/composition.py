@@ -85,6 +85,10 @@ from career_agent_ai.application.storage.sqlite_scheduling_repository import (
 )
 
 from .config import RuntimeConfig
+from .candidate_schema import (
+    _ensure_candidate_schema_manifest,
+    _prepare_candidate_schema,
+)
 
 
 class RuntimeOperationalApp:
@@ -479,6 +483,7 @@ def _build_candidate_loop(
     outcome_plan: SandboxOutcomePlan | None = None,
 ) -> AutonomousCareerLoop:
     """Build one loop whose repositories share a request-owned connection."""
+    _prepare_candidate_schema(database.connection)
     job_repository = InMemoryJobRepository()
     for job in jobs:
         job_repository.add(job)
@@ -522,7 +527,7 @@ def _build_candidate_loop(
         ),
         require_provider_evidence=True,
     )
-    return AutonomousCareerLoop(
+    loop = AutonomousCareerLoop(
         agent_factory=factory,
         application_repository=applications,
         submission_service=submission,
@@ -530,6 +535,8 @@ def _build_candidate_loop(
         scheduling_service=scheduling,
         state_repository=SQLiteCareerLoopRepository(database),
     )
+    _ensure_candidate_schema_manifest(database.connection)
+    return loop
 
 
 class _RequestSQLiteOperationalProbe:
