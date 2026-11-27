@@ -1657,3 +1657,16 @@ and a succeeded external-action operation. Next: exact-head CI/coverage and revi
 the acceptance recovery stack, then continue candidate decline/reschedule parity.
 
 Candidate sandbox provider composition now accepts a dedicated `sandbox_calendar_outcome_plan` independently from the application-submission plan. Runtime request composition passes it through the calendar provider used by candidate interview acceptance, so timeout-after-effect and no-replay recovery are deterministic at the HTTP/runtime boundary. The exact-head Chromium restart regression exercises this path against the same durable SQLite database.
+
+
+Candidate interview acceptance confirmed-no-effect recovery across runtime restart:
+the real SQLite sandbox provider now has a Chromium regression for the definite
+NO_EFFECT path, complementing the existing timeout-after-effect test. Runtime one
+records a no-effect attempt and exits; runtime two restores the owner-scoped failed
+operation without invoking the provider during discovery. Only a fresh explicit
+candidate Accept click retries the same event-version operation. The test proves the
+provider attempts are exactly no_effect then success, the accepted event advances
+once to version 2, and one durable calendar effect exists with zero replays. The
+candidate test branch also enforces the independent coverage report --fail-under=90
+gate even when pytest fails. Next: exact-head full CI and Codex code/security review,
+then continue candidate acceptance/decline parity.
