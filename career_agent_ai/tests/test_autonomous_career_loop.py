@@ -4286,3 +4286,154 @@ def test_candidate_cancellation_rejects_stale_foreign_and_reconciliation_request
     assert persisted_after.version == persisted_before.version
     assert len(submission_provider.calls) == 1
     database.close()
+
+
+
+@pytest.mark.parametrize("winner", ["cancel", "approve"])
+def test_candidate_cancellation_and_approval_race_has_one_version_bound_winner(
+    tmp_path, winner
+):
+    """Cancellation and approval compete for one durable execution lease."""
+    from threading import Barrier, Lock
+
+    path = str(tmp_path / f"candidate-cancel-approval-race-{winner}.sqlite")
+    run_id = f"candidate-cancel-approval-race-{winner}"
+    database, starter, *_ = build_stack(path, with_schedule=False)
+    started = starter.start(request(with_schedule=False), run_id=run_id)
+    assert started.phase is CareerLoopPhase.APPLICATION_APPROVAL
+    prompt = starter.get_candidate_approval_prompt(run_id, user_id="user-1")
+    submission = _submission_for(prompt)
+    database.close()
+
+    snapshots_ready = Barrier(2)
+    winner_claimed = Event()
+    release_winner = Event()
+    initialization_lock = Lock()
+
+    def run_action(role):
+        with initialization_lock:
+            (
+                worker_database,
+                loop,
+                applications,
+                messages,
+                scheduling,
+                submission_provider,
+                communication_provider,
+                calendar_provider,
+            ) = build_stack(path, with_schedule=False)
+
+        original_owned_state = loop._owned_state
+        first_snapshot = {"value": True}
+
+        def synchronized_owned_state(*args, **kwargs):
+            state = original_owned_state(*args, **kwargs)
+            if first_snapshot["value"]:
+                first_snapshot["value"] = False
+                snapshots_ready.wait(timeout=10)
+            return state
+
+        loop._owned_state = synchronized_owned_state
+
+        original_claim = loop._states.claim_execution
+        first_claim = {"value": True}
+
+        def controlled_claim(*args, **kwargs):
+            if first_claim["value"]:
+                first_claim["value"] = False
+                if role == winner:
+                    original_claim(*args, **kwargs)
+                    winner_claimed.set()
+                    if not release_winner.wait(timeout=10):
+                        raise TimeoutError("Winning execution lease was not released.")
+                    return None
+                if not winner_claimed.wait(timeout=10):
+                    raise TimeoutError("Winning execution lease was not acquired.")
+            return original_claim(*args, **kwargs)
+
+        loop._states.claim_execution = controlled_claim
+        try:
+            try:
+                if role == "cancel":
+                    result = loop.cancel_run(
+                        run_id,
+                        user_id="user-1",
+                        expected_state_version=prompt.state_version,
+                    )
+                else:
+                    result = loop.resume_candidate_submission(
+                        user_id="user-1",
+                        submission=submission,
+                    )
+                outcome = "won"
+                phase = result.phase.value
+            except CareerLoopConflictError:
+                outcome = "conflict"
+                phase = None
+
+            return {
+                "role": role,
+                "outcome": outcome,
+                "phase": phase,
+                "application_attempts": len(submission_provider.calls),
+                "communication_attempts": len(communication_provider.calls),
+                "communication_actions": [action for action, _ in communication_provider.calls],
+                "calendar_attempts": len(calendar_provider.calls),
+            }
+        finally:
+            worker_database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cancel_future = executor.submit(run_action, "cancel")
+        approval_future = executor.submit(run_action, "approve")
+        winner_future = cancel_future if winner == "cancel" else approval_future
+        loser_future = approval_future if winner == "cancel" else cancel_future
+        try:
+            loser_result = loser_future.result(timeout=15)
+            assert loser_result["outcome"] == "conflict"
+        finally:
+            release_winner.set()
+        winner_result = winner_future.result(timeout=15)
+
+    assert winner_result["outcome"] == "won"
+    assert winner_result["role"] == winner
+    assert winner_result["calendar_attempts"] == 0
+    assert loser_result["application_attempts"] == 0
+    assert loser_result["communication_attempts"] == 0
+    assert loser_result["communication_actions"] == []
+    assert loser_result["calendar_attempts"] == 0
+
+    database, final_loop, applications, messages, *_ = build_stack(path, with_schedule=False)
+    try:
+        status = final_loop.get_candidate_run_status(run_id, user_id="user-1")
+        state = final_loop._states.get(run_id)
+        application = applications.get(state.application_id)
+        assert application is not None
+        if winner == "cancel":
+            assert winner_result["phase"] == CareerLoopPhase.CANCELLED.value
+            assert winner_result["application_attempts"] == 0
+            assert winner_result["communication_attempts"] == 0
+            assert winner_result["communication_actions"] == []
+            assert status["phase"] == CareerLoopPhase.CANCELLED.value
+            assert status["terminal"] is True
+            assert status["waiting_for_human"] is False
+            assert application.status is JobApplicationStatus.SAVED
+            expected_operations = 0
+        else:
+            assert winner_result["phase"] == CareerLoopPhase.MESSAGE_APPROVAL.value
+            assert winner_result["application_attempts"] == 1
+            assert winner_result["communication_attempts"] == 1
+            assert winner_result["communication_actions"] == ["draft"]
+            assert messages.get(state.message_id).direction.value == "draft"
+            assert status["phase"] == CareerLoopPhase.MESSAGE_APPROVAL.value
+            assert status["terminal"] is False
+            assert status["waiting_for_human"] is True
+            assert application.status is JobApplicationStatus.APPLIED
+            expected_operations = 1
+
+        operation_count = database.connection.execute(
+            "SELECT COUNT(*) FROM external_action_operations"
+        ).fetchone()[0]
+        assert operation_count == expected_operations
+    finally:
+        database.close()

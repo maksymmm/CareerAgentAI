@@ -1631,3 +1631,15 @@ after a new RuntimeCandidateApp/browser session and explicit Continue. ADR 0042 
 the no-compensation contract. Next: extend browser cancellation coverage to stale-version
 and competing-approval races at later gates, then rerun exact-head full CI and request
 independent code/security review.
+
+
+Candidate cancellation/approval race hardening: two independent SQLite-backed loop workers now
+race a candidate's version-bound cancellation against the exact approval prompt observed at
+the same state version. The regression deterministically holds the winning execution lease
+while the competing worker attempts its claim, proving there is one winner. Cancellation
+winning leaves the run terminal with zero application operations/provider attempts; approval
+winning commits exactly one application submission and advances to message approval while
+cancellation conflicts. The approval winner may create one local draft but does not send; the losing worker performs no provider calls, and both paths assert zero calendar attempts. The
+test uses separate SQLite connections and local fake adapters only; no live provider effects.
+Next: exercise the same race through authenticated Chromium/WSGI and then rerun exact-head
+full CI plus independent code/security review.
