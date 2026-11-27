@@ -242,6 +242,15 @@ class SQLiteSandboxCalendarProvider(FakeCalendarAdapter):
                 raise CalendarReconciliationEvidenceError(
                     "Sandbox calendar effect contains malformed event evidence."
                 ) from exc
+            expected_status = {
+                "accept": ScheduleStatus.ACCEPTED,
+                "decline": ScheduleStatus.DECLINED,
+                "reschedule": ScheduleStatus.RESCHEDULE_REQUESTED,
+            }[effect[1]]
+            if event.status != expected_status or event.provider_event_id is None:
+                raise CalendarReconciliationEvidenceError(
+                    "Sandbox calendar event does not match its recorded action."
+                )
             return CalendarEvidence(CalendarEvidenceState.PRESENT, event)
         finally:
             connection.rollback()

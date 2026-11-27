@@ -218,6 +218,7 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
         "unknown_outcome",
         "effect_after_attempt",
         "unknown_action",
+        "action_status_mismatch",
         "malformed_event",
     ],
 )
@@ -274,6 +275,11 @@ def test_calendar_reconciliation_fails_closed_when_provider_ledgers_disagree(
     elif corruption == "unknown_action":
         database.connection.execute(
             "UPDATE sandbox_calendar_effects SET action = 'cancel' WHERE operation_id = ?",
+            (operation_id,),
+        )
+    elif corruption == "action_status_mismatch":
+        database.connection.execute(
+            "UPDATE sandbox_calendar_effects SET action = 'decline' WHERE operation_id = ?",
             (operation_id,),
         )
     else:

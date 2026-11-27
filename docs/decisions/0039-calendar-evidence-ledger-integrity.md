@@ -29,7 +29,8 @@ evidence.
   be the final attempt for the operation.
 - The effect fingerprint must match the intent fingerprint, and the action must be one
   of `accept`, `decline` or `reschedule`.
-- The stored event must decode as a valid scheduling event.
+- The stored event must decode as a valid scheduling event whose lifecycle status
+  agrees with the recorded action and whose provider event ID is present.
 
 Any inconsistent, orphaned or malformed record raises an evidence error. It is never
 converted into confirmed absence or successful completion. The check is read-only and

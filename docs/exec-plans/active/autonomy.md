@@ -2,7 +2,7 @@ Calendar sandbox evidence-ledger integrity: `verify_calendar_action` now reads t
 intent, ordered attempt history and effect under one SQLite writer snapshot. It rejects
 orphaned/mismatched rows, non-contiguous attempts, unknown outcomes, effect-producing
 attempts without an effect, effects without exactly one final effect-producing attempt,
-unknown action values and malformed event evidence. Absence is confirmed only from a
+unknown action values, action/status mismatches and malformed event evidence. Absence is confirmed only from a
 consistent no-effect ledger; positive evidence requires matching intent/effect fingerprints.
 Regression cases corrupt each ledger layer and prove reconciliation remains
 `reconciliation_required` without additional writes. ADR 0039 records the provider
