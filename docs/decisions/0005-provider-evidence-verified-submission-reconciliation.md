@@ -5,8 +5,9 @@ Status: accepted (candidate sandbox). Scope: application.submit.
 ## Decision
 
 The SQLite sandbox submission provider treats its intent, ordered attempt history, and
-submission effect as one durable evidence record. verify_submission() reads all three
-under one SQLite writer snapshot.
+submission effect as one durable evidence record. Both verify_submission() and submit()
+read and validate all three under one SQLite writer snapshot before classifying evidence,
+appending an attempt, or replaying an effect.
 
 A completely empty ledger, or a durable intent with a contiguous sequence of known
 no-effect attempts and no effect, may confirm absence. A present submission requires
@@ -17,8 +18,9 @@ replay counter. Orphaned or partial rows, gaps, unknown outcomes, an effect miss
 after an effect-producing attempt, multiple effects, attempts after an effect, malformed
 payloads, and histories above 1,000 attempts fail closed.
 
-Verification is read-only: it does not increment replay counters, append attempts, repair
-the ledger, or call a provider. The contract is limited to the permanently no-network
+Evidence verification is read-only: it does not increment replay counters, append attempts,
+repair the ledger, or call a provider. The submit path performs the same validation before
+any new attempt, replay-counter increment, or outcome-plan consumption. The contract is limited to the permanently no-network
 SQLite sandbox and is not evidence about a live employer ATS.
 
 ## Consequences

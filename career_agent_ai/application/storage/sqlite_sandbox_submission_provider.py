@@ -163,6 +163,7 @@ class SQLiteSandboxSubmissionProvider:
         connection = self._database.connection
         self._begin(connection)
         try:
+            self._submission_evidence_in_transaction(operation_id)
             self._bind_intent(operation_id, fingerprint)
             existing = self._load(operation_id)
             if existing is not None:
@@ -216,18 +217,23 @@ class SQLiteSandboxSubmissionProvider:
         return tuple(SandboxOutcome(row[0]) for row in rows)
 
     def verify_submission(self, operation_id: str) -> SubmissionEvidence:
-        """Return authoritative evidence after validating the complete durable ledger.
-
-        Intent, ordered attempts, and effect are read under one SQLite writer snapshot.
-        An empty ledger or a complete no-effect history can confirm absence. A present
-        effect must be bound to the intent and exactly one final effect-producing attempt.
-        """
+        """Return authoritative evidence after validating the complete durable ledger."""
         connection = self._database.connection
         if connection.in_transaction:
             raise PreSubmissionError(
                 "Sandbox evidence cannot be verified inside an existing transaction."
             )
         self._begin(connection)
+        try:
+            return self._submission_evidence_in_transaction(operation_id)
+        finally:
+            connection.rollback()
+
+    def _submission_evidence_in_transaction(
+        self, operation_id: str
+    ) -> SubmissionEvidence:
+        """Validate intent, attempts, and effect while the caller holds the writer lock."""
+        connection = self._database.connection
         try:
             intent = connection.execute(
                 "SELECT fingerprint FROM sandbox_submission_intents "
@@ -293,7 +299,14 @@ class SQLiteSandboxSubmissionProvider:
                     "Sandbox submission effect identity conflicts with its intent."
                 )
 
-            job_id, application_id, artifact_sha256, candidate_snapshot_sha256, provider_id, replays = row[2:]
+            (
+                job_id,
+                application_id,
+                artifact_sha256,
+                candidate_snapshot_sha256,
+                provider_id,
+                replays,
+            ) = row[2:]
             identity_fields = (job_id, application_id, provider_id)
             if any(
                 not isinstance(value, str) or not value or value.strip() != value
@@ -335,8 +348,6 @@ class SQLiteSandboxSubmissionProvider:
             raise PreSubmissionError(
                 "Sandbox submission evidence is malformed or inconsistent."
             ) from exc
-        finally:
-            connection.rollback()
 
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:

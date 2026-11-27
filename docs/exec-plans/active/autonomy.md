@@ -1592,8 +1592,8 @@ Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
 
 
-Sandbox application-submission evidence integrity: the SQLite verifier now reads intent,
-ordered attempt history and provider effect under one writer snapshot. Absence is
+Sandbox application-submission evidence integrity: both the SQLite verifier and submit
+retry path now read intent, ordered attempt history and provider effect under one writer snapshot. Absence is
 confirmed only for an all-empty ledger or a contiguous history of known no-effect
 attempts. A present effect requires exactly one final effect-producing attempt, a
 recomputed intent/payload fingerprint match, the deterministic provider submission ID,
@@ -1601,5 +1601,5 @@ and a valid replay counter. Orphaned/partial rows, attempt gaps, unknown outcome
 missing effects after effect-producing outcomes, post-effect attempts and histories
 above 1,000 attempts fail closed without provider or ledger writes. HTTP/service
 regressions prove a corrupted ledger remains reconciliation-required after evidence
-lookup. Next: continue candidate workflow recovery hardening and exact-head independent
+lookup. A retry also validates the pre-existing ledger before binding an intent or consuming a provider outcome plan, so corruption cannot be repaired by a new attempt. Next: continue candidate workflow recovery hardening and exact-head independent
 review; do not infer live ATS evidence from the local sandbox ledger.

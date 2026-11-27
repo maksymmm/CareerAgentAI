@@ -773,6 +773,9 @@ def test_corrupt_submission_evidence_fails_closed_without_reconciliation_writes(
     before = _submission_evidence_rows(stack)
 
     with pytest.raises(PreSubmissionError):
+        stack.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
+    assert _submission_evidence_rows(stack) == before
+    with pytest.raises(PreSubmissionError):
         stack.provider.verify_submission(OP)
     with pytest.raises(ReconciliationEvidenceError):
         stack.service.resolve_reconciliation(

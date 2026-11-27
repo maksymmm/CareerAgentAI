@@ -1045,13 +1045,13 @@ same maximum. Rejected observations leave provider and durable workflow state un
 
 ## Sandbox application-submission evidence integrity
 
-The SQLite sandbox submission verifier reads the durable intent, ordered attempt history,
-and provider effect under one writer snapshot. It confirms absence only for a completely
+The SQLite sandbox submission verifier and retry path read the durable intent, ordered attempt history,
+and provider effect under one writer snapshot before classifying evidence or appending an attempt. They confirm absence only for a completely
 empty ledger or a contiguous history containing exclusively no-effect outcomes. A
 present submission requires exactly one final effect-producing attempt, matching intent
 and recomputed payload fingerprints, the deterministic provider submission ID, and a
 valid non-negative replay counter. Orphaned rows, gaps, unknown outcomes, missing or
 contradictory effects, malformed identifiers/digests, and histories above 1,000 attempts
-fail closed. Evidence verification is read-only and never retries a provider operation.
+fail closed. Evidence verification is read-only; a submit retry also refuses to extend or repair a corrupted ledger.
 This contract applies only to the no-network SQLite sandbox provider; it does not enable
 or claim verification for a live employer ATS.
