@@ -378,6 +378,27 @@ class SQLiteCareerLoopRepository:
             ON autonomous_career_loops(owner_user_id, phase, run_id)
             """
         )
+        self._database.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_autonomous_loop_failed_updated
+            ON autonomous_career_loops(julianday(updated_at), run_id)
+            WHERE phase = 'failed'
+            """
+        )
+        self._database.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_autonomous_loop_stale_updated
+            ON autonomous_career_loops(julianday(updated_at), run_id)
+            WHERE phase NOT IN ('complete', 'failed')
+            """
+        )
+        self._database.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_autonomous_loop_malformed_updated
+            ON autonomous_career_loops(julianday(updated_at), run_id)
+            WHERE json_valid(payload_json) = 0
+            """
+        )
         self._database.connection.commit()
 
     @classmethod
