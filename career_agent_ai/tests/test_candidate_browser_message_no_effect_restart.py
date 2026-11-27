@@ -113,7 +113,7 @@ def test_candidate_browser_recovers_confirmed_message_no_effect_after_runtime_re
         "subject": "Logistics coordinator application",
         "body": "I would welcome a conversation about the logistics coordinator role.",
     }
-    run_id = "candidate-browser-message-no-effect-restart"
+    requested_run_id = "candidate-browser-message-no-effect-restart"
     event_id = "candidate-browser-message-no-effect-event"
     job = Job.create(
         job_id="browser-message-no-effect-job",
@@ -180,9 +180,11 @@ def test_candidate_browser_recovers_confirmed_message_no_effect_after_runtime_re
             message_body=message["body"],
             schedule_event_id=event_id,
         ),
-        run_id=run_id,
+        run_id=requested_run_id,
     )
     assert started.phase is CareerLoopPhase.APPLICATION_APPROVAL
+    assert isinstance(started.run_id, str) and started.run_id
+    run_id = started.run_id
 
     database = SQLiteDatabase(str(database_path))
     try:
