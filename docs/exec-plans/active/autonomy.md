@@ -6,7 +6,7 @@ effects without exactly one final effect-producing attempt, negative replay coun
 non-outbound or malformed messages, and reply records without a parent binding.
 Confirmed absence is returned only for a consistent no-effect history; positive
 evidence requires the stored message fingerprint to match both durable ledgers.
-Fifteen corruption regressions prove reconciliation stays
+Sixteen corruption regressions prove reconciliation stays
 `reconciliation_required` without provider or ledger writes. ADR 0004 records the
 mailbox contract. The CI workflow also enforces an independent two-decimal coverage
 gate after pytest, including when tests fail. Next: apply equivalent cross-ledger
