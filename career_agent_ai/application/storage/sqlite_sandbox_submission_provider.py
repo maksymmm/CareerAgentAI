@@ -47,6 +47,14 @@ SandboxOutcomePlan = Callable[[str, int], SandboxOutcome]
 _NO_EFFECT_OUTCOMES = frozenset(
     {SandboxOutcome.NO_EFFECT, SandboxOutcome.RETRYABLE_NO_EFFECT}
 )
+_EFFECT_OUTCOMES = frozenset(
+    {
+        SandboxOutcome.SUCCESS,
+        SandboxOutcome.TIMEOUT_AFTER_EFFECT,
+        SandboxOutcome.EVIDENCE_MISMATCH,
+    }
+)
+_MAX_VERIFIED_ATTEMPTS = 1_000
 _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS sandbox_submission_intents (
@@ -208,11 +216,11 @@ class SQLiteSandboxSubmissionProvider:
         return tuple(SandboxOutcome(row[0]) for row in rows)
 
     def verify_submission(self, operation_id: str) -> SubmissionEvidence:
-        """Return authoritative evidence for one key under the writer lock.
+        """Return authoritative evidence after validating the complete durable ledger.
 
-        The sandbox commits the attempt and its effect atomically, so a missing row is
-        evidence of absence. Taking the writer lock first serializes this read with any
-        in-flight submit, so a pending effect can never be observed as absent.
+        Intent, ordered attempts, and effect are read under one SQLite writer snapshot.
+        An empty ledger or a complete no-effect history can confirm absence. A present
+        effect must be bound to the intent and exactly one final effect-producing attempt.
         """
         connection = self._database.connection
         if connection.in_transaction:
@@ -221,19 +229,114 @@ class SQLiteSandboxSubmissionProvider:
             )
         self._begin(connection)
         try:
+            intent = connection.execute(
+                "SELECT fingerprint FROM sandbox_submission_intents "
+                "WHERE idempotency_key = ?",
+                (operation_id,),
+            ).fetchone()
+            attempts = connection.execute(
+                "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
+                "WHERE idempotency_key = ? ORDER BY attempt_no LIMIT ?",
+                (operation_id, _MAX_VERIFIED_ATTEMPTS + 1),
+            ).fetchall()
             row = self._load(operation_id)
+            if len(attempts) > _MAX_VERIFIED_ATTEMPTS:
+                raise PreSubmissionError(
+                    "Sandbox submission attempt history exceeds the verification limit."
+                )
+            if intent is None:
+                if attempts or row is not None:
+                    raise PreSubmissionError(
+                        "Sandbox submission evidence contains rows without a durable intent."
+                    )
+                return SubmissionEvidence(EvidenceState.ABSENT_CONFIRMED)
+
+            fingerprint = intent[0]
+            if not _is_sha256(fingerprint):
+                raise PreSubmissionError(
+                    "Sandbox submission intent fingerprint is malformed."
+                )
+            if not attempts:
+                raise PreSubmissionError(
+                    "Sandbox submission intent has no durable attempt history."
+                )
+
+            effect_attempts: list[int] = []
+            for expected_attempt, attempt_row in enumerate(attempts, start=1):
+                attempt_no, outcome_value = attempt_row
+                if type(attempt_no) is not int or attempt_no != expected_attempt:
+                    raise PreSubmissionError(
+                        "Sandbox submission attempt history is not contiguous."
+                    )
+                try:
+                    outcome = SandboxOutcome(outcome_value)
+                except (TypeError, ValueError) as exc:
+                    raise PreSubmissionError(
+                        "Sandbox submission attempt has an unknown outcome."
+                    ) from exc
+                if outcome in _EFFECT_OUTCOMES:
+                    effect_attempts.append(expected_attempt)
+
+            if row is None:
+                if effect_attempts:
+                    raise PreSubmissionError(
+                        "Sandbox submission effect is missing after an effect-producing attempt."
+                    )
+                return SubmissionEvidence(EvidenceState.ABSENT_CONFIRMED)
+
+            if len(effect_attempts) != 1 or effect_attempts[0] != len(attempts):
+                raise PreSubmissionError(
+                    "Sandbox submission effect is not bound to one final provider attempt."
+                )
+            if len(row) != 8 or row[0] != operation_id or row[1] != fingerprint:
+                raise PreSubmissionError(
+                    "Sandbox submission effect identity conflicts with its intent."
+                )
+
+            job_id, application_id, artifact_sha256, candidate_snapshot_sha256, provider_id, replays = row[2:]
+            identity_fields = (job_id, application_id, provider_id)
+            if any(
+                not isinstance(value, str) or not value or value.strip() != value
+                for value in identity_fields
+            ):
+                raise PreSubmissionError(
+                    "Sandbox submission effect contains a malformed identifier."
+                )
+            if not _is_sha256(artifact_sha256) or not _is_sha256(candidate_snapshot_sha256):
+                raise PreSubmissionError(
+                    "Sandbox submission effect contains a malformed digest."
+                )
+            if _fingerprint(
+                job_id, application_id, artifact_sha256, candidate_snapshot_sha256
+            ) != fingerprint:
+                raise PreSubmissionError(
+                    "Sandbox submission effect fields do not match the intent fingerprint."
+                )
+            if provider_id != f"fake:{application_id}":
+                raise PreSubmissionError(
+                    "Sandbox provider submission ID does not match the application identity."
+                )
+            if type(replays) is not int or replays < 0:
+                raise PreSubmissionError(
+                    "Sandbox submission replay counter is malformed."
+                )
+
+            return SubmissionEvidence(
+                EvidenceState.PRESENT,
+                job_id=job_id,
+                application_id=application_id,
+                provider_submission_id=provider_id,
+                artifact_sha256=artifact_sha256,
+                candidate_snapshot_sha256=candidate_snapshot_sha256,
+            )
+        except PreSubmissionError:
+            raise
+        except Exception as exc:
+            raise PreSubmissionError(
+                "Sandbox submission evidence is malformed or inconsistent."
+            ) from exc
         finally:
             connection.rollback()
-        if row is None:
-            return SubmissionEvidence(EvidenceState.ABSENT_CONFIRMED)
-        return SubmissionEvidence(
-            EvidenceState.PRESENT,
-            job_id=row[2],
-            application_id=row[3],
-            provider_submission_id=row[6],
-            artifact_sha256=row[4],
-            candidate_snapshot_sha256=row[5],
-        )
 
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
@@ -354,6 +457,15 @@ class SQLiteSandboxSubmissionProvider:
             "artifact_sha256": returned_digest,
             "candidate_snapshot_sha256": candidate_snapshot_sha256,
         }
+
+
+def _is_sha256(value: Any) -> bool:
+    """Return whether value is a canonical lowercase SHA-256 digest."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _fingerprint(*parts: str) -> str:

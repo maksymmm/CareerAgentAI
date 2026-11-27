@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Sandbox application-submission evidence integrity: the SQLite verifier now reads intent,
+ordered attempt history and provider effect under one writer snapshot. Absence is
+confirmed only for an all-empty ledger or a contiguous history of known no-effect
+attempts. A present effect requires exactly one final effect-producing attempt, a
+recomputed intent/payload fingerprint match, the deterministic provider submission ID,
+and a valid replay counter. Orphaned/partial rows, attempt gaps, unknown outcomes,
+missing effects after effect-producing outcomes, post-effect attempts and histories
+above 1,000 attempts fail closed without provider or ledger writes. HTTP/service
+regressions prove a corrupted ledger remains reconciliation-required after evidence
+lookup. Next: continue candidate workflow recovery hardening and exact-head independent
+review; do not infer live ATS evidence from the local sandbox ledger.

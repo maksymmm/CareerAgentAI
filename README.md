@@ -1041,3 +1041,17 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+## Sandbox application-submission evidence integrity
+
+The SQLite sandbox submission verifier reads the durable intent, ordered attempt history,
+and provider effect under one writer snapshot. It confirms absence only for a completely
+empty ledger or a contiguous history containing exclusively no-effect outcomes. A
+present submission requires exactly one final effect-producing attempt, matching intent
+and recomputed payload fingerprints, the deterministic provider submission ID, and a
+valid non-negative replay counter. Orphaned rows, gaps, unknown outcomes, missing or
+contradictory effects, malformed identifiers/digests, and histories above 1,000 attempts
+fail closed. Evidence verification is read-only and never retries a provider operation.
+This contract applies only to the no-network SQLite sandbox provider; it does not enable
+or claim verification for a live employer ATS.

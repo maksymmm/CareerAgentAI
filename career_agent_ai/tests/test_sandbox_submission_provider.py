@@ -13,7 +13,11 @@ import pytest
 
 from career_agent_ai.application.api import candidate_approval_openapi_document
 from career_agent_ai.application.career import ApplicationSubmissionService
-from career_agent_ai.application.career.application_submission import PreSubmissionError
+from career_agent_ai.application.career.application_submission import (
+    EvidenceState,
+    PreSubmissionError,
+    ReconciliationEvidenceError,
+)
 from career_agent_ai.application.external_actions import (
     ExternalActionService,
     ExternalActionStatus,
@@ -580,3 +584,225 @@ def test_openapi_contract_exposes_no_new_sandbox_provider_surface():
     assert methods == {"post"}
     assert "409" in paths[route]["post"]["responses"]
     assert not [p for p in paths if "ledger" in p or "provider" in p or "sandbox-" in p]
+
+
+# --------------------------- durable evidence integrity ---------------------------
+
+
+def _submission_evidence_rows(stack):
+    connection = stack.database.connection
+    return (
+        connection.execute(
+            "SELECT idempotency_key, fingerprint FROM sandbox_submission_intents "
+            "WHERE idempotency_key = ?",
+            (OP,),
+        ).fetchall(),
+        connection.execute(
+            "SELECT attempt_no, outcome FROM sandbox_submission_attempts "
+            "WHERE idempotency_key = ? ORDER BY attempt_no",
+            (OP,),
+        ).fetchall(),
+        connection.execute(
+            "SELECT idempotency_key, fingerprint, job_id, application_id, artifact_sha256, "
+            "candidate_snapshot_sha256, provider_submission_id, replays "
+            "FROM sandbox_submission_ledger WHERE idempotency_key = ?",
+            (OP,),
+        ).fetchall(),
+    )
+
+
+def test_verify_submission_confirms_absence_only_for_empty_or_no_effect_history(path):
+    stack = Stack(path, always(OUTCOME.NO_EFFECT), evidence=True)
+
+    assert stack.provider.verify_submission(OP).state == EvidenceState.ABSENT_CONFIRMED
+    with pytest.raises(PreSubmissionError):
+        stack.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
+    assert stack.provider.verify_submission(OP).state == EvidenceState.ABSENT_CONFIRMED
+    assert stack.provider.attempts(OP) == (OUTCOME.NO_EFFECT,)
+    assert stack.provider.ledger_entries() == ()
+
+    stack.close()
+
+
+def test_verify_submission_accepts_contiguous_no_effect_retry_then_one_final_effect(path):
+    stack = Stack(
+        path,
+        scripted_outcomes({OP: [OUTCOME.NO_EFFECT, OUTCOME.SUCCESS]}),
+        evidence=True,
+    )
+
+    with pytest.raises(PreSubmissionError):
+        stack.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
+    result = stack.provider.submit(OP, "job-1", "application-1", CONTENT, DIGEST, SNAPSHOT)
+    evidence = stack.provider.verify_submission(OP)
+
+    assert result["provider_submission_id"] == "fake:application-1"
+    assert evidence.state == EvidenceState.PRESENT
+    assert evidence.job_id == "job-1"
+    assert evidence.application_id == "application-1"
+    assert evidence.artifact_sha256 == DIGEST
+    assert evidence.candidate_snapshot_sha256 == SNAPSHOT
+    assert stack.provider.attempts(OP) == (OUTCOME.NO_EFFECT, OUTCOME.SUCCESS)
+    assert len(stack.provider.ledger_entries()) == 1
+
+    stack.close()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "orphan_intent",
+        "orphan_attempt",
+        "orphan_effect",
+        "missing_effect_after_timeout",
+        "effect_without_attempt",
+        "attempt_gap",
+        "fractional_attempt_number",
+        "unknown_outcome",
+        "effect_without_effect_attempt",
+        "multiple_effect_attempts",
+        "attempt_after_effect",
+        "intent_fingerprint_mismatch",
+        "effect_fingerprint_mismatch",
+        "effect_payload_mismatch",
+        "provider_submission_id_mismatch",
+        "fractional_replay_counter",
+    ],
+)
+def test_corrupt_submission_evidence_fails_closed_without_reconciliation_writes(
+    path, corruption
+):
+    stack = Stack(path, always(OUTCOME.TIMEOUT_AFTER_EFFECT), evidence=True)
+    assert stack.service.submit(OP, **_submit_kwargs()) is None
+    assert stack.status() == ExternalActionStatus.RECONCILIATION_REQUIRED
+    connection = stack.database.connection
+
+    if corruption == "orphan_intent":
+        connection.execute(
+            "DELETE FROM sandbox_submission_attempts WHERE idempotency_key = ?", (OP,)
+        )
+        connection.execute(
+            "DELETE FROM sandbox_submission_ledger WHERE idempotency_key = ?", (OP,)
+        )
+    elif corruption == "orphan_attempt":
+        connection.execute(
+            "DELETE FROM sandbox_submission_intents WHERE idempotency_key = ?", (OP,)
+        )
+        connection.execute(
+            "DELETE FROM sandbox_submission_ledger WHERE idempotency_key = ?", (OP,)
+        )
+    elif corruption == "orphan_effect":
+        connection.execute(
+            "DELETE FROM sandbox_submission_intents WHERE idempotency_key = ?", (OP,)
+        )
+        connection.execute(
+            "DELETE FROM sandbox_submission_attempts WHERE idempotency_key = ?", (OP,)
+        )
+    elif corruption == "missing_effect_after_timeout":
+        connection.execute(
+            "DELETE FROM sandbox_submission_ledger WHERE idempotency_key = ?", (OP,)
+        )
+    elif corruption == "effect_without_attempt":
+        connection.execute(
+            "DELETE FROM sandbox_submission_attempts WHERE idempotency_key = ?", (OP,)
+        )
+    elif corruption == "attempt_gap":
+        connection.execute(
+            "UPDATE sandbox_submission_attempts SET attempt_no = 2 WHERE idempotency_key = ?",
+            (OP,),
+        )
+    elif corruption == "fractional_attempt_number":
+        connection.execute(
+            "UPDATE sandbox_submission_attempts SET attempt_no = 1.5 WHERE idempotency_key = ?",
+            (OP,),
+        )
+    elif corruption == "unknown_outcome":
+        connection.execute(
+            "UPDATE sandbox_submission_attempts SET outcome = 'future_outcome' "
+            "WHERE idempotency_key = ?",
+            (OP,),
+        )
+    elif corruption == "effect_without_effect_attempt":
+        connection.execute(
+            "UPDATE sandbox_submission_attempts SET outcome = ? WHERE idempotency_key = ?",
+            (OUTCOME.NO_EFFECT.value, OP),
+        )
+    elif corruption == "multiple_effect_attempts":
+        connection.execute(
+            "INSERT INTO sandbox_submission_attempts(idempotency_key, attempt_no, outcome) "
+            "VALUES (?, 2, ?)",
+            (OP, OUTCOME.SUCCESS.value),
+        )
+    elif corruption == "attempt_after_effect":
+        connection.execute(
+            "INSERT INTO sandbox_submission_attempts(idempotency_key, attempt_no, outcome) "
+            "VALUES (?, 2, ?)",
+            (OP, OUTCOME.NO_EFFECT.value),
+        )
+    elif corruption == "intent_fingerprint_mismatch":
+        connection.execute(
+            "UPDATE sandbox_submission_intents SET fingerprint = ? WHERE idempotency_key = ?",
+            ("f" * 64, OP),
+        )
+    elif corruption == "effect_fingerprint_mismatch":
+        connection.execute(
+            "UPDATE sandbox_submission_ledger SET fingerprint = ? WHERE idempotency_key = ?",
+            ("e" * 64, OP),
+        )
+    elif corruption == "effect_payload_mismatch":
+        connection.execute(
+            "UPDATE sandbox_submission_ledger SET job_id = 'job-other' "
+            "WHERE idempotency_key = ?",
+            (OP,),
+        )
+    elif corruption == "provider_submission_id_mismatch":
+        connection.execute(
+            "UPDATE sandbox_submission_ledger SET provider_submission_id = 'fake:other' "
+            "WHERE idempotency_key = ?",
+            (OP,),
+        )
+    elif corruption == "fractional_replay_counter":
+        connection.execute(
+            "UPDATE sandbox_submission_ledger SET replays = 1.5 WHERE idempotency_key = ?",
+            (OP,),
+        )
+    else:  # pragma: no cover - parameter list and branches must remain exhaustive
+        raise AssertionError(f"Unknown corruption scenario: {corruption}")
+
+    connection.commit()
+    before = _submission_evidence_rows(stack)
+
+    with pytest.raises(PreSubmissionError):
+        stack.provider.verify_submission(OP)
+    with pytest.raises(ReconciliationEvidenceError):
+        stack.service.resolve_reconciliation(
+            OP,
+            submitted=True,
+            provider_submission_id="fake:application-1",
+        )
+
+    assert stack.status() == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert _submission_evidence_rows(stack) == before
+    stack.close()
+
+
+def test_verify_submission_bounds_attempt_history_before_classifying_absence(path):
+    stack = Stack(path, evidence=True)
+    connection = stack.database.connection
+    connection.execute(
+        "INSERT INTO sandbox_submission_intents(idempotency_key, fingerprint) VALUES (?, ?)",
+        (OP, "a" * 64),
+    )
+    connection.executemany(
+        "INSERT INTO sandbox_submission_attempts(idempotency_key, attempt_no, outcome) "
+        "VALUES (?, ?, ?)",
+        [(OP, attempt, OUTCOME.NO_EFFECT.value) for attempt in range(1, 1_002)],
+    )
+    connection.commit()
+
+    with pytest.raises(PreSubmissionError, match="exceeds the verification limit"):
+        stack.provider.verify_submission(OP)
+
+    assert len(stack.provider.ledger_entries()) == 0
+    assert len(stack.provider.attempts(OP)) == 1_001
+    stack.close()
