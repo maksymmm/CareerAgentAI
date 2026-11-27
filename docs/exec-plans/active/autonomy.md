@@ -1631,3 +1631,14 @@ after a new RuntimeCandidateApp/browser session and explicit Continue. ADR 0042 
 the no-compensation contract. Next: extend browser cancellation coverage to stale-version
 and competing-approval races at later gates, then rerun exact-head full CI and request
 independent code/security review.
+
+
+Candidate cancellation versus later approval races: authenticated Chromium/WSGI regressions
+now cover cancellation competing with message approval and interview acceptance from the same
+fresh owner-scoped state version. Both winner orderings are deterministic at the SQLite
+execution-lease boundary. A cancellation winner prevents the downstream provider call; an
+approval winner commits exactly one communication delivery or calendar acceptance before
+advancing the workflow. Earlier application/message effects remain exactly once, the interview
+event advances only to accepted version 2 when approval wins, and the losing request returns
+HTTP 409 without an additional provider attempt. ADR 0045 records the invariants. Next: exact-head
+full CI, both coverage gates, and independent code/security review.
