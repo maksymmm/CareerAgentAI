@@ -502,8 +502,11 @@ _HTML = r"""<!doctype html>
           button.setAttribute('aria-label', 'Recover pending decline ' + (index + 1) +
             ': ' + item.event.event_id);
           button.addEventListener('click', () => {
-            if (generation === declineIntentsGeneration) guarded(
-              () => loadEventDetail(item.event.event_id, item.event.state_version, button), true);
+            if (generation === declineIntentsGeneration) {
+              clearDeclineIntents();
+              guarded(
+                () => loadEventDetail(item.event.event_id, item.event.state_version, button), true);
+            }
           });
           row.appendChild(button);
           byId('pending-decline-intents').appendChild(row);
