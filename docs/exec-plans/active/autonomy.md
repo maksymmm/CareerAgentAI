@@ -1590,3 +1590,18 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate application terminal-persistence recovery is now covered through the actual
+Chromium dashboard and two RuntimeCandidateApp instances over one durable SQLite file.
+The first candidate approval commits one sandbox application submission, then an
+injected SQLite trigger rejects only the external-action terminal `in_progress` to
+`succeeded` write. The runtime conservatively retains `reconciliation_required`;
+after restart, status reads remain read-only and the dashboard keeps reconciliation
+controls disabled until the candidate supplies a fresh explicit attestation and the
+provider submission ID. Reconciliation completes the run and advances the application
+tracker to applied without another provider attempt or replay. The test uses only
+synthetic candidate/application data, loopback HTTP, Chromium and the no-network SQLite
+sandbox provider. See ADR 0047. Next: complete owner-scoped recovery for pending
+candidate interview decisions and keep provider reconciliation bound to exact durable
+event/application versions.
