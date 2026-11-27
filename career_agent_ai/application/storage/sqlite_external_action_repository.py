@@ -238,7 +238,7 @@ class SQLiteExternalActionOperationRepository(ExternalActionOperationRepository)
         for status in ("failed", "reconciliation_required", "in_progress", "prepared"):
             connection.execute(
                 f"""CREATE INDEX IF NOT EXISTS idx_external_actions_recovery_{status}
-                    ON external_action_operations(julianday(updated_at), operation_id)
+                    ON external_action_operations(status, julianday(updated_at), operation_id)
                     WHERE status = '{status}'"""
             )
         connection.commit()

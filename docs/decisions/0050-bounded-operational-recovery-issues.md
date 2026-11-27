@@ -20,6 +20,7 @@ perform a full-table sort.
   indexes; preserve the rule that human-gated and actively leased runs are not stuck.
 - Return an explicit `truncated` boolean when additional issues exist beyond the page.
 - Keep the probe read-only and expose no raw malformed payloads.
+- Refuse inspection when required recovery indexes are missing rather than falling back to an unbounded scan.
 
 The independent coverage CLI gate also runs after pytest unless the job is cancelled,
 so a failed test run does not silently skip the second coverage threshold.

@@ -267,3 +267,16 @@ def test_candidate_ci_runs_independent_coverage_gate_after_pytest():
     assert workflow.index("Run test suite") < workflow.index(
         "Enforce independent coverage threshold"
     )
+
+
+def test_operational_probe_fails_closed_when_recovery_index_is_missing():
+    database = SQLiteDatabase()
+    SQLiteExternalActionOperationRepository(database)
+    database.connection.execute("DROP INDEX idx_external_actions_recovery_failed")
+    database.connection.commit()
+
+    with pytest.raises(ValueError, match="recovery indexes are missing"):
+        SQLiteOperationalProbe(database).inspect_page(
+            now=NOW, stale_after_seconds=60, limit=10
+        )
+    database.close()

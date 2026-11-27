@@ -3,8 +3,9 @@ Bounded operational recovery inspection: the authenticated read-only
 maximum 500) and returns an explicit truncation signal. External-action statuses and
 career-loop failed/stale/malformed states are read through per-state partial expression
 indexes with SQL `LIMIT limit + 1`; the probe never materializes the full recovery
-ledger, and the API remains read-only. Malformed loop JSON is represented by a
-sanitized `career_loop_malformed` issue. The CI workflow now runs both pytest-cov and
+ledger, and the API remains read-only. Missing indexes fail closed rather than
+falling back to full-table scans. Malformed loop JSON is represented by a sanitized
+`career_loop_malformed` issue. The CI workflow now runs both pytest-cov and
 an independent two-decimal coverage CLI gate, including after a failed pytest step
 unless the job is cancelled. Next: exact-head full CI and independent code/security
 review, then continue cross-provider concurrent writer and evidence verification.

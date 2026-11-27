@@ -75,6 +75,14 @@ class SQLiteOperationalProbe:
     ) -> tuple[list[OperationalIssue], bool]:
         if not self._table_exists("external_action_operations"):
             return [], False
+        self._require_indexes(
+            (
+                "idx_external_actions_recovery_failed",
+                "idx_external_actions_recovery_reconciliation_required",
+                "idx_external_actions_recovery_in_progress",
+                "idx_external_actions_recovery_prepared",
+            )
+        )
 
         specifications = (
             (
@@ -111,7 +119,7 @@ class SQLiteOperationalProbe:
             )
             parameters: tuple[object, ...]
             if stale_only:
-                sql += " AND julianday(updated_at) < julianday(?)"
+                sql += " AND (julianday(updated_at) < julianday(?) OR julianday(updated_at) IS NULL)"
                 parameters = (status, cutoff.isoformat())
             else:
                 parameters = (status,)
@@ -148,8 +156,15 @@ class SQLiteOperationalProbe:
     ) -> tuple[list[OperationalIssue], bool]:
         if not self._table_exists("autonomous_career_loops"):
             return [], False
+        self._require_indexes(
+            (
+                "idx_autonomous_loop_failed_updated",
+                "idx_autonomous_loop_stale_updated",
+                "idx_autonomous_loop_malformed_updated",
+            )
+        )
 
-        issues: list[OperationalIssue] = []
+        issues: list[OperationalIssue] =
         truncated = False
 
         malformed = self._database.connection.execute(
@@ -218,11 +233,12 @@ class SQLiteOperationalProbe:
                    execution_claim_owner, execution_claim_expires_at
             FROM autonomous_career_loops
             WHERE phase NOT IN ('complete', 'failed')
-              AND julianday(updated_at) < julianday(?)
+              AND (julianday(updated_at) < julianday(?) OR julianday(updated_at) IS NULL)
               AND (
                     execution_claim_owner IS NULL
                     OR execution_claim_expires_at IS NULL
                     OR julianday(execution_claim_expires_at) <= julianday(?)
+                    OR julianday(execution_claim_expires_at) IS NULL
               )
               AND json_valid(payload_json) = 1
               AND CASE
@@ -277,6 +293,16 @@ class SQLiteOperationalProbe:
         if phase != projected_phase:
             raise ValueError("Persisted autonomous-loop phase projection is inconsistent.")
         return payload
+
+    def _require_indexes(self, names: tuple[str, ...]) -> None:
+        existing = {
+            row[0]
+            for row in self._database.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        if any(name not in existing for name in names):
+            raise ValueError("Operational recovery indexes are missing; refusing an unbounded scan.")
 
     def _table_exists(self, table: str) -> bool:
         row = self._database.connection.execute(
