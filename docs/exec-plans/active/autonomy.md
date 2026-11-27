@@ -1602,3 +1602,15 @@ connections to reproduce a duplicate during the provider call and cover stale ex
 clock skew, invalid bounds and concurrent terminal completion.
 Next: exact-head full CI and independent code/security review, then continue sandbox
 provider evidence hardening without coupling to unrelated correlation metadata.
+
+
+Candidate communication reply live-duplicate recovery: the provider-backed reply workflow
+now has a deterministic two-runtime race. The first reply commits one SQLite sandbox
+delivery and returns `TIMEOUT_AFTER_EFFECT`; while its response is paused, a duplicate
+same-key reply observes the live `in_progress` operation and returns without invoking
+the provider plan. After restart, positive delivery evidence reconciles the exact reply,
+thread ID, and parent message into `succeeded` without redelivery. The regression asserts
+one provider attempt, one reply delivery, zero provider replays, and preserved inbound
+parent/outbound reply directions. Synthetic `.example.test` identities and no-network
+SQLite only. Next: extend the same candidate-approved concurrency contract to interview
+reschedule/decline recovery while preserving exact event-version and provider-effect fences.
