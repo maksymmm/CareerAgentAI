@@ -224,7 +224,8 @@ def test_candidate_cancellation_is_browser_confirmed_and_terminal_after_runtime_
     database = SQLiteDatabase.open_read_only(database_path)
     try:
         projection = database.connection.execute(
-            "SELECT phase, version, payload_json FROM candidate_run_status"
+            "SELECT phase, version, payload_json FROM autonomous_career_loops WHERE run_id = ?",
+            (run_id,),
         ).fetchone()
         assert projection is not None
         assert projection[0] == "cancelled"
