@@ -39,8 +39,13 @@ jobs:
           done
 
       - name: Run test suite
+        id: test
         run: |
           python -m pytest             --cov=career_agent_ai             --cov-report=term-missing             --cov-fail-under=90
+
+      - name: Enforce independent coverage threshold
+        if: always() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
+        run: python -m coverage report --precision=2 --fail-under=90
 
   release-evidence:
     needs: test

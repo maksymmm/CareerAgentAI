@@ -6,7 +6,9 @@ unknown action values, action/status mismatches and malformed event evidence. Ab
 consistent no-effect ledger; positive evidence requires matching intent/effect fingerprints.
 Regression cases corrupt each ledger layer and prove reconciliation remains
 `reconciliation_required` without additional writes. ADR 0039 records the provider
-contract. Next: apply equivalent cross-ledger consistency checks to sandbox mailbox and
+contract. The CI workflow also runs an independent two-decimal coverage report after
+pytest, including when tests fail; a workflow regression locks the ordering and threshold.
+Next: apply equivalent cross-ledger consistency checks to sandbox mailbox and
 application-submission evidence.
 
 Relevance boundary follow-up: hyphens are separators between complete technology
