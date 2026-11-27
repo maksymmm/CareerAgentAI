@@ -339,7 +339,10 @@ def test_candidate_browser_recovers_confirmed_message_no_effect_after_runtime_re
         provider_messages = connection.execute(
             "SELECT message_id, direction FROM sandbox_communication_messages"
         ).fetchall()
-        event = SQLiteSchedulingRepository(database).get(event_id)
+        event = connection.execute(
+            "SELECT status, version FROM scheduling_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
     finally:
         database.close()
 
@@ -376,7 +379,7 @@ def test_candidate_browser_recovers_confirmed_message_no_effect_after_runtime_re
         )
     ]
     assert provider_messages == [(message_id, "outbound")]
-    assert event is not None and event.status.value == "proposed"
+    assert event == ("proposed", 1)
 
 
 def test_ci_enforces_independent_coverage_gate_after_pytest():
