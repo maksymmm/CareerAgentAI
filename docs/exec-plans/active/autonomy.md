@@ -1615,3 +1615,15 @@ The CI coverage step is also independent of pytest success: it runs after failed
 unless the job is cancelled or pytest was skipped, and retains two-decimal >=90% precision.
 Next: rerun the dependent calendar concurrency PR #355 after the live-operation guard is
 independently reviewed and integrated; do not weaken its unrelated full-suite regression.
+
+
+Cross-provider evidence/write serialization: application submission, mailbox delivery,
+and calendar evidence verification are now exercised against an in-flight provider
+transaction from an independent SQLite connection. The verifier must wait for a
+TIMEOUT_AFTER_EFFECT transaction to commit, then return PRESENT rather than a false
+ABSENT_CONFIRMED result. Regressions assert one outcome-plan call, one attempt, one
+effect, zero replays, and no provider-plan invocation from verification. ADR 0051
+records the local sandbox boundary. The independent two-decimal coverage CLI gate is
+inherited from the stacked external-action concurrency base and remains after pytest.
+Next: continue concurrent writer/evidence verification through the candidate workflow
+and retain exact-head full CI plus independent code/security review before integration.
