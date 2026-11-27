@@ -1602,3 +1602,16 @@ connections to reproduce a duplicate during the provider call and cover stale ex
 clock skew, invalid bounds and concurrent terminal completion.
 Next: exact-head full CI and independent code/security review, then continue sandbox
 provider evidence hardening without coupling to unrelated correlation metadata.
+
+
+External-action prepared-claim race: concurrent callers can both read the same
+`prepared` operation before either attempts the compare-and-swap transition. Only the
+caller that commits `prepared → in_progress` may invoke the adapter. A losing caller
+re-reads the durable row and returns the winner only if the operation ID, action type,
+and payload are unchanged; a missing, still-prepared, or rebound operation remains a
+conflict. Two independent SQLite connections and a blocked sandbox adapter prove the
+loser observes `in_progress`, the winner completes, and exactly one provider call occurs.
+The CI coverage step is also independent of pytest success: it runs after failed pytest
+unless the job is cancelled or pytest was skipped, and retains two-decimal >=90% precision.
+Next: rerun the dependent calendar concurrency PR #355 after the live-operation guard is
+independently reviewed and integrated; do not weaken its unrelated full-suite regression.

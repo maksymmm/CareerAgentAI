@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from threading import Barrier, Event, Lock, Thread
 from typing import Any, Mapping
 
 import pytest
@@ -631,3 +632,165 @@ def test_execution_rejects_naive_recovery_clock_without_mutating_operation():
 
     assert repository.get("operation-naive-clock").status == ExternalActionStatus.PREPARED
     assert adapter.calls == []
+
+
+
+def test_concurrent_prepared_claim_loser_observes_winner_without_second_provider_call(
+    tmp_path,
+):
+    path = str(tmp_path / "prepared-claim-race.sqlite")
+    seed_database = SQLiteDatabase(path)
+    seed_repository = SQLiteExternalActionOperationRepository(seed_database)
+    seed_service = ExternalActionService(seed_repository, RecordingAdapter())
+    seed_service.prepare("operation-prepared-race", "application", {"job": "1"})
+    seed_database.close()
+
+    barrier = Barrier(2)
+    provider_started = Event()
+    release_provider = Event()
+    first_worker_finished = Event()
+    finish_lock = Lock()
+    result_lock = Lock()
+    finish_count = 0
+    results = []
+    errors = []
+
+    class BlockingAdapter:
+        def __init__(self):
+            self.calls = []
+            self._lock = Lock()
+
+        def execute(self, operation_id, action_type, payload):
+            with self._lock:
+                self.calls.append((operation_id, action_type, dict(payload)))
+            provider_started.set()
+            if not release_provider.wait(timeout=10):
+                raise TimeoutError("The test provider was not released.")
+            return {"provider_reference": "ref-123"}
+
+    class BarrierReadRepository(SQLiteExternalActionOperationRepository):
+        """Synchronize the two initial reads so both callers observe PREPARED."""
+
+        def __init__(self, database, initial_read_barrier):
+            super().__init__(database)
+            self._initial_read_barrier = initial_read_barrier
+            self._initial_read = True
+            self._initial_read_lock = Lock()
+
+        def get(self, operation_id):
+            operation = super().get(operation_id)
+            with self._initial_read_lock:
+                wait_for_peer = self._initial_read
+                self._initial_read = False
+            if (
+                wait_for_peer
+                and operation is not None
+                and operation.status == ExternalActionStatus.PREPARED
+            ):
+                self._initial_read_barrier.wait(timeout=10)
+            return operation
+
+    adapter = BlockingAdapter()
+
+    def worker():
+        nonlocal finish_count
+        database = SQLiteDatabase(path)
+        try:
+            repository = BarrierReadRepository(database, barrier)
+            service = ExternalActionService(repository, adapter)
+            result = service.execute(
+                "operation-prepared-race", human_approved=True
+            )
+            with result_lock:
+                results.append(result)
+        except BaseException as exc:  # surfaced below with the thread result
+            with result_lock:
+                errors.append(exc)
+        finally:
+            database.close()
+            with finish_lock:
+                finish_count += 1
+                if finish_count == 1:
+                    first_worker_finished.set()
+
+    workers = [Thread(target=worker), Thread(target=worker)]
+    for thread in workers:
+        thread.start()
+
+    provider_was_started = provider_started.wait(timeout=10)
+    losing_worker_returned = (
+        first_worker_finished.wait(timeout=10) if provider_was_started else False
+    )
+    release_provider.set()
+    for thread in workers:
+        thread.join(timeout=15)
+
+    assert provider_was_started
+    assert losing_worker_returned
+    assert all(not thread.is_alive() for thread in workers)
+    assert errors == []
+    assert len(results) == 2
+    assert {result.status for result in results} == {
+        ExternalActionStatus.IN_PROGRESS,
+        ExternalActionStatus.SUCCEEDED,
+    }
+    assert len(adapter.calls) == 1
+
+    final_database = SQLiteDatabase(path)
+    final_repository = SQLiteExternalActionOperationRepository(final_database)
+    final_operation = final_repository.get("operation-prepared-race")
+    assert final_operation is not None
+    assert final_operation.status == ExternalActionStatus.SUCCEEDED
+    assert final_operation.result == {"provider_reference": "ref-123"}
+    final_database.close()
+
+
+def test_lost_prepared_claim_rejects_a_concurrently_rebound_payload():
+    class ReboundPreparedClaimRepository(SQLiteExternalActionOperationRepository):
+        """Simulate another worker changing and claiming the prepared intent."""
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if (
+                expected_status == ExternalActionStatus.PREPARED
+                and status == ExternalActionStatus.IN_PROGRESS
+            ):
+                self.replace_prepared_payload(
+                    operation_id, {"job": "1"}, {"job": "2"}
+                )
+                super().transition(
+                    operation_id,
+                    ExternalActionStatus.PREPARED,
+                    ExternalActionStatus.IN_PROGRESS,
+                )
+                raise OperationConflictError("another worker claimed a changed intent")
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase()
+    repository = ReboundPreparedClaimRepository(database)
+    adapter = RecordingAdapter()
+    service = ExternalActionService(repository, adapter)
+    service.prepare("operation-rebound-claim", "application", {"job": "1"})
+
+    with pytest.raises(OperationConflictError, match="changed intent"):
+        service.execute("operation-rebound-claim", human_approved=True)
+
+    current = repository.get("operation-rebound-claim")
+    assert current is not None
+    assert current.status == ExternalActionStatus.IN_PROGRESS
+    assert dict(current.payload) == {"job": "2"}
+    assert adapter.calls == []
+    database.close()

@@ -257,7 +257,14 @@ Consequential provider calls are coordinated through a provider-neutral external
 
 Operations move through `prepared`, `in_progress`, `succeeded`, `failed`, and `reconciliation_required` states. Intent is committed before an adapter is invoked and the terminal outcome is committed afterward. Reusing an operation ID with a different intent is rejected, while repeating a completed invocation returns its existing result without another provider call.
 
-An `in_progress` operation found after restart is treated as ambiguous. It moves to `reconciliation_required` and is **not** blindly executed again; a future provider-specific reconciliation workflow must determine the real external outcome. Adapters must also pass the operation ID to providers as their idempotency key.
+An `in_progress` operation is treated as live during a bounded five-minute grace
+period so a concurrent duplicate cannot prematurely classify an active provider call as
+ambiguous. Only an older operation moves to `reconciliation_required`, and recovery never
+invokes the adapter. Future timestamps are conservatively treated as live under clock
+skew. If two callers both read the same `prepared` operation, only the compare-and-swap
+winner invokes the adapter; the loser returns the durable winning state only when the
+operation identity and payload are unchanged. Adapters must also pass the operation ID
+to providers as their idempotency key.
 
 The current capability is infrastructure only: no production communication or application provider is configured, and no real external action is sent.
 
