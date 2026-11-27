@@ -882,3 +882,88 @@ def test_open_ended_decline_retry_accepts_explicit_null_end_snapshot(tmp_path):
     assert result["outcome"] == "completed"
     assert result["event"]["status"] == "declined"
     assert _effect_count(path) == 1
+
+
+def test_pending_decline_recovers_provider_applied_event_after_success_write_failure(tmp_path):
+    path = tmp_path / "decline-success-write-failure.sqlite"
+    _seed(path, _event())
+    candidate = Candidate(path)
+
+    # Fail only the terminal operation-status write, after the provider adapter has
+    # committed the declined event and cleared its active-action pointer.
+    database, _, _, _ = candidate.app._open_stack()
+    try:
+        database.connection.execute(
+            """
+            CREATE TRIGGER fail_decline_success_persistence
+            BEFORE UPDATE OF status ON external_action_operations
+            WHEN NEW.action_type = 'calendar.decline'
+              AND NEW.status = 'succeeded'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated terminal persistence failure');
+            END
+            """
+        )
+        database.connection.commit()
+    finally:
+        database.close()
+
+    status, result = candidate.decline()
+    assert status == "202 Accepted"
+    assert result["outcome"] == "reconciliation_required"
+    assert _effect_count(path) == 1
+
+    operation_id = CandidateScheduleDeclineWSGIApp._operation_id(
+        OWNER, EVENT_ID, 1
+    )
+    connection = sqlite3.connect(path)
+    try:
+        operation_status = connection.execute(
+            "SELECT status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        event_state = connection.execute(
+            """
+            SELECT status, version, active_action_operation_id
+            FROM scheduling_events
+            WHERE event_id = ?
+            """,
+            (EVENT_ID,),
+        ).fetchone()
+        assert operation_status == ("reconciliation_required",)
+        assert event_state == ("declined", 2, None)
+        connection.execute("DROP TRIGGER fail_decline_success_persistence")
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "200 OK",
+        {
+            "schema_version": 1,
+            "outcome": "pending",
+            "event_id": EVENT_ID,
+            "state_version": 1,
+        },
+    )
+
+    status, result = restarted.reconcile(True)
+    assert status == "200 OK"
+    assert result["outcome"] == "completed"
+    assert result["event"]["status"] == "declined"
+    assert result["event"]["state_version"] == 2
+    assert _effect_count(path) == 1
+    assert restarted.pending() == (
+        "200 OK",
+        {"schema_version": 1, "outcome": "none", "event_id": EVENT_ID},
+    )
+
+    connection = sqlite3.connect(path)
+    try:
+        assert connection.execute(
+            "SELECT status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone() == ("succeeded",)
+    finally:
+        connection.close()
