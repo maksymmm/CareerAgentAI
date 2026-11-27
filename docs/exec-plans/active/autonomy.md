@@ -1627,6 +1627,7 @@ still finds the operation, authoritative event/pending reads restore the exact t
 and all evidence controls remain disabled until a fresh candidate attestation. Positive
 durable provider evidence then completes reconciliation without another provider attempt,
 effect, or replay. ADR 0037 records the fail-closed pointerless recovery contract.
+The CI now uses two-decimal coverage precision for both pytest-cov and the independent CLI gate; the independent gate runs after pytest even when the test step fails.
 Next: exact-head full CI and independent code/security review; then add a stale-attestation
 regression where a competing event-version advance occurs between recovery display and
 candidate reconciliation.
