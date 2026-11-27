@@ -807,7 +807,10 @@ def test_ci_enforces_independent_coverage_gate_after_full_pytest():
     pytest_step = workflow.index("name: Run test suite")
     coverage_step = workflow.index("name: Enforce independent coverage threshold")
     assert coverage_step > pytest_step
-    assert "python -m coverage report --fail-under=90" in workflow
+    assert "python -m coverage report --precision=2 --fail-under=90" in workflow
+    assert "--cov-fail-under=90" in workflow
+    assert "id: pytest" in workflow
+    assert "steps.pytest.outcome != 'skipped'" in workflow
 
 
 def test_candidate_sandbox_browser_submits_and_reconciles_owned_interview_reschedule(tmp_path):
