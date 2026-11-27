@@ -1631,3 +1631,7 @@ The CI now uses two-decimal coverage precision for both pytest-cov and the indep
 Next: exact-head full CI and independent code/security review; then add a stale-attestation
 regression where a competing event-version advance occurs between recovery display and
 candidate reconciliation.
+
+Candidate reschedule stale-attestation version fencing: a pointerless recovery may display the exact provider-applied target at source version + 1, but a second approved same-slot reschedule can advance that event again while preserving the visible status and target. Reconciliation now accepts an already-applied target only at exactly source version + 1; an older attestation cannot complete an operation after a later event version. A Chromium/runtime regression restores the original pending operation, commits a competing same-target approval at version 3, submits the old browser attestation, and proves the original operation remains reconciliation-required with exactly two total provider attempts/effects (one per operation) and zero replays. ADR 0038 records the exact-version fence.
+Next: apply the same source-version + 1 recovery invariant to candidate interview accept/decline reconciliation and add equivalent stale-attestation browser regressions.
+

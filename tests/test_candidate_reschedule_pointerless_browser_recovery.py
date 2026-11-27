@@ -244,3 +244,211 @@ def test_candidate_browser_recovers_pointerless_provider_applied_reschedule_afte
             if second is not None:
                 second.close()
             browser.close()
+
+def test_stale_pointerless_reschedule_attestation_is_rejected_after_same_target_version_advance(
+    tmp_path,
+):
+    """A newer same-slot approval must fence an older recovered attestation."""
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    from playwright.sync_api import expect
+    from datetime import datetime, timezone
+
+    path = tmp_path / "candidate-stale-reschedule-attestation.sqlite"
+    _seed(path, _event())
+
+    bootstrap = CandidateScheduleActionWSGIApp(
+        database_path=str(path),
+        resolve_bearer=TOKENS.get,
+    )
+    database, _, _, _ = bootstrap._open_stack()
+    database.close()
+
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_reschedule_success_persistence
+            BEFORE UPDATE OF status ON external_action_operations
+            WHEN NEW.action_type = 'calendar.reschedule'
+              AND NEW.status = 'succeeded'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated terminal persistence failure');
+            END
+            """
+        )
+        connection.commit()
+
+    target_start = datetime.fromisoformat(START).astimezone(timezone.utc)
+    target_end = datetime.fromisoformat(END).astimezone(timezone.utc)
+    original_operation_id = CandidateScheduleActionWSGIApp._operation_id(
+        OWNER, EVENT_ID, 1, target_start, target_end, ZONE
+    )
+    competing_operation_id = CandidateScheduleActionWSGIApp._operation_id(
+        OWNER, EVENT_ID, 2, target_start, target_end, ZONE
+    )
+
+    first = Candidate(path)
+    second = None
+    competitor = None
+    server = thread = second_server = second_thread = None
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            server, thread = _serve(first)
+            first_page = browser.new_page()
+            first_page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            first_page.locator("#token").fill("owner-token")
+            first_page.locator("#list-events").click()
+            first_page.get_by_role(
+                "button", name=f"View event 1: {EVENT_ID}"
+            ).wait_for()
+            first_page.get_by_role(
+                "button", name=f"View event 1: {EVENT_ID}"
+            ).click()
+            first_page.locator("#event-detail").get_by_text(
+                '"state_version": 1'
+            ).wait_for()
+            first_page.locator("#reschedule-start").fill(START)
+            first_page.locator("#reschedule-end").fill(END)
+            first_page.locator("#reschedule-timezone").fill(ZONE)
+            first_page.locator("#request-reschedule").click()
+            expect(
+                first_page.locator("#reschedule-reconciliation-state")
+            ).to_contain_text("Provider outcome is uncertain")
+
+            assert _durable_snapshot(path, original_operation_id) == {
+                "event": ("reschedule_requested", 2, None),
+                "operation": ("reconciliation_required",),
+                "attempts": [(1, "success")],
+                "effect": ("reschedule", 0),
+            }
+
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "DROP TRIGGER fail_reschedule_success_persistence"
+                )
+                connection.commit()
+
+            first_page.close()
+            _stop(server, thread)
+            server = thread = None
+            first.close()
+            first = None
+
+            second = Candidate(path)
+            second_server, second_thread = _serve(second)
+            page = browser.new_page()
+            page.goto(
+                f"http://127.0.0.1:{second_server.server_port}/sandbox/candidate"
+            )
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-pending-reschedules").click()
+            review = page.get_by_role(
+                "button",
+                name=f"Review pending reschedule for event {EVENT_ID}",
+            )
+            review.wait_for()
+            review.click()
+            expect(
+                page.locator("#reschedule-reconciliation-state")
+            ).to_contain_text(
+                "An ambiguous reschedule was restored from durable storage"
+            )
+            assert not page.locator(
+                "#reschedule-reconciliation-verified"
+            ).is_checked()
+
+            # A second, explicitly approved reschedule reuses the same target
+            # but advances the event to version 3. The first operation's
+            # browser snapshot and attestation remain bound to source version 1.
+            competitor = Candidate(path)
+            status, result = competitor.reschedule(
+                {
+                    "schema_version": 1,
+                    "event_id": EVENT_ID,
+                    "state_version": 2,
+                    "start_at": START,
+                    "end_at": END,
+                    "timezone_name": ZONE,
+                    "decision": "approve",
+                }
+            )
+            assert status == "200 OK"
+            assert result["outcome"] == "completed"
+            assert result["event"]["state_version"] == 3
+            competitor.close()
+            competitor = None
+
+            original_before_stale_submit = _durable_snapshot(
+                path, original_operation_id
+            )
+            competing_before_stale_submit = _durable_snapshot(
+                path, competing_operation_id
+            )
+            assert original_before_stale_submit == {
+                "event": ("reschedule_requested", 3, None),
+                "operation": ("reconciliation_required",),
+                "attempts": [(1, "success")],
+                "effect": ("reschedule", 0),
+            }
+            assert competing_before_stale_submit == {
+                "event": ("reschedule_requested", 3, None),
+                "operation": ("succeeded",),
+                "attempts": [(1, "success")],
+                "effect": ("reschedule", 0),
+            }
+
+            def ledger_totals():
+                connection = sqlite3.connect(path)
+                try:
+                    attempts = connection.execute(
+                        "SELECT COUNT(*) FROM sandbox_calendar_attempts"
+                    ).fetchone()[0]
+                    effects = connection.execute(
+                        "SELECT COUNT(*) FROM sandbox_calendar_effects"
+                    ).fetchone()[0]
+                    replays = connection.execute(
+                        "SELECT COALESCE(SUM(replays), 0) FROM sandbox_calendar_effects"
+                    ).fetchone()[0]
+                    return attempts, effects, replays
+                finally:
+                    connection.close()
+
+            before_stale_submit = ledger_totals()
+            assert before_stale_submit == (2, 2, 0)
+
+            page.locator("#reschedule-reconciliation-verified").check()
+            page.locator("#confirm-reschedule-completed").click()
+            expect(
+                page.locator("#reschedule-reconciliation-state")
+            ).to_contain_text(
+                "Provider evidence did not confirm the reported outcome"
+            )
+            assert not page.locator(
+                "#reschedule-reconciliation-verified"
+            ).is_checked()
+            assert page.locator("#confirm-reschedule-completed").is_disabled()
+            assert page.locator("#confirm-reschedule-no-effect").is_disabled()
+
+            # The stale attestation cannot resolve the old operation or trigger
+            # another provider call; both durable operations and effects persist.
+            assert _durable_snapshot(path, original_operation_id) == (
+                original_before_stale_submit
+            )
+            assert _durable_snapshot(path, competing_operation_id) == (
+                competing_before_stale_submit
+            )
+            assert ledger_totals() == before_stale_submit
+        finally:
+            if server is not None:
+                _stop(server, thread)
+            if second_server is not None:
+                _stop(second_server, second_thread)
+            if first is not None:
+                first.close()
+            if second is not None:
+                second.close()
+            if competitor is not None:
+                competitor.close()
+            browser.close()
+
