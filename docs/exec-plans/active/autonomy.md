@@ -1618,3 +1618,16 @@ independent coverage CLI at two-decimal precision and even after a pytest failur
 Next: exact-head full CI and independent code/security review, then extend browser
 cancellation coverage to message and interview approval gates without replaying
 earlier successful sandbox effects.
+
+
+Candidate cancellation at later approval gates: parameterized Chromium acceptance now
+cancels from the message and interview gates after the preceding application submission
+and, for interview, message delivery have already committed in SQLite sandbox providers.
+The browser must invalidate the old status snapshot after each approval mutation and
+keep cancellation disabled until a fresh authenticated status read binds the current
+phase/version. Cancellation preserves the earlier application submission and optional
+message delivery exactly, creates no calendar attempt/effect, and remains terminal
+after a new RuntimeCandidateApp/browser session and explicit Continue. ADR 0042 records
+the no-compensation contract. Next: extend browser cancellation coverage to stale-version
+and competing-approval races at later gates, then rerun exact-head full CI and request
+independent code/security review.
