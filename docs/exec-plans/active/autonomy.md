@@ -1603,3 +1603,18 @@ successful sandbox effects without compensation.
 Next: exact-head full CI and independent Codex review for the cancellation change;
 after integration, treat application withdrawal/provider compensation as a separate
 explicitly approved provider contract rather than an implicit consequence of stopping a run.
+
+
+Candidate cancellation browser/restart acceptance: the actual Chromium dashboard now
+loads the authenticated owner-scoped run list and fresh status, enables cancellation
+only at the ordinary application approval gate, and submits the exact observed
+state version through its dedicated control. A second RuntimeCandidateApp and browser
+session reopen the same SQLite database; the run remains terminally cancelled, the
+cancellation control stays disabled, and an authenticated continuation returns the
+same terminal snapshot. Provider ledgers remain empty, proving cancellation itself
+does not submit applications, send messages, accept calendar events, or create
+external-action operations. ADR 0041 records the browser contract. CI now runs the
+independent coverage CLI at two-decimal precision and even after a pytest failure.
+Next: exact-head full CI and independent code/security review, then extend browser
+cancellation coverage to message and interview approval gates without replaying
+earlier successful sandbox effects.
