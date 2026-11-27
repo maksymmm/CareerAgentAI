@@ -1610,3 +1610,17 @@ nullable key from an open-ended event's prepared intent and prove the retry fail
 closed without a provider effect, while a present explicit null remains safely
 retryable after confirmed no-effect evidence. Next: exact-head full CI and Codex
 code/security review, then continue candidate interview acceptance workflow.
+
+
+Candidate decline post-commit recovery: when the provider effect and declined event
+transition are durable but the terminal external-action success write fails, the event's
+active-action pointer may already be cleared while its operation remains
+reconciliation-required. Pending lookup now recovers only one owner/event/version-bound
+reconciliation-required operation whose event is already at the exact declined target
+version. Pointerless in-progress rows and rows whose event remains at the source state
+still fail closed. The restarted candidate must still submit independent provider
+evidence; recovery never replays the calendar provider. An HTTP/SQLite regression injects
+a SQLite trigger that rejects only the terminal success write, then proves one provider
+effect, pointerless pending recovery, and successful evidence reconciliation without a
+second effect. Next: exact-head full CI, both coverage gates, and Codex code/security
+review.

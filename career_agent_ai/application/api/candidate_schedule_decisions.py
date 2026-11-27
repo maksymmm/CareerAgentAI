@@ -244,12 +244,15 @@ class CandidateScheduleDeclineWSGIApp:
         event_status: str,
     ) -> bool:
         """Validate the active ledger row and report whether it is still ambiguous."""
-        if active_operation_id is None:
-            if pending_ids:
+        pointerless_reconciliation = active_operation_id is None
+        if pointerless_reconciliation:
+            if not pending_ids:
+                return False
+            if len(pending_ids) != 1:
                 raise SchedulingOperationConflict(
-                    "An ambiguous decline is not referenced by the event's active action."
+                    "A pointerless decline must have exactly one ambiguous operation."
                 )
-            return False
+            active_operation_id = pending_ids[0]
         try:
             normalized = validate_schedule_identifier(
                 active_operation_id, "active_action_operation_id"
@@ -327,6 +330,16 @@ class CandidateScheduleDeclineWSGIApp:
             if pending_ids != (active_operation_id,):
                 raise SchedulingOperationConflict(
                     "The event's active action does not match its ambiguous decline row."
+                )
+            if pointerless_reconciliation and (
+                status != ExternalActionStatus.RECONCILIATION_REQUIRED.value
+                or type(event_version) is not int
+                or state_version >= _MAX_STATE_VERSION
+                or event_version != state_version + 1
+                or event_status != ScheduleStatus.DECLINED.value
+            ):
+                raise SchedulingOperationConflict(
+                    "A pointerless decline is recoverable only after its exact target event state is committed."
                 )
             return True
         if status == ExternalActionStatus.PREPARED.value:
