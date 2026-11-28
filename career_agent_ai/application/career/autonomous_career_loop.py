@@ -1630,16 +1630,22 @@ class AutonomousCareerLoop:
             raise RuntimeError("Interview event is not awaiting acceptance.")
         try:
             view = self._scheduling.human_view(event_id)
+            current_event = self._scheduling.get_event(event_id)
         except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
             raise _RecoverableCareerLoopError(
                 "Interview scheduling view is temporarily unavailable."
             ) from exc
+        if current_event.version != event.version:
+            raise _RecoverableCareerLoopError(
+                "Interview event changed while preparing candidate approval."
+            )
         state.phase = CareerLoopPhase.INTERVIEW_APPROVAL
         state.pending_human_action = HumanActionEvent(
             kind=HumanActionKind.APPROVE_INTERVIEW,
             title="Approve interview/trial-day calendar response",
             details={
                 "event_id": view.event_id,
+                "event_version": event.version,
                 "employer": view.employer_name,
                 "event_type": view.event_type.value,
                 "location": view.location,
@@ -1661,9 +1667,30 @@ class AutonomousCareerLoop:
         approved = self._require_approved_action(
             state, HumanActionKind.APPROVE_INTERVIEW
         )
-        view = self._scheduling.human_view(event_id)
+        try:
+            event = self._scheduling.get_event(event_id)
+            view = self._scheduling.human_view(event_id)
+            latest_event = self._scheduling.get_event(event_id)
+        except (sqlite3.OperationalError, TimeoutError, ConnectionError, OSError) as exc:
+            raise _RecoverableCareerLoopError(
+                "Interview scheduling state is temporarily unavailable."
+            ) from exc
+        if event.version != latest_event.version:
+            raise RuntimeError(
+                "Approved interview intent is stale; refusing calendar response."
+            )
+        approved_details = dict(approved.details)
+        approved_event_version = approved_details.get("event_version")
+        if (
+            type(approved_event_version) is not int
+            or not 1 <= approved_event_version <= (1 << 63) - 1
+        ):
+            raise RuntimeError(
+                "Approved interview intent has no valid event version."
+            )
         current_details = {
             "event_id": view.event_id,
+            "event_version": latest_event.version,
             "employer": view.employer_name,
             "event_type": view.event_type.value,
             "location": view.location,
@@ -1676,13 +1703,17 @@ class AutonomousCareerLoop:
             "end_utc_offset": view.end_utc_offset,
             "status": view.status.value,
         }
-        approved_details = dict(approved.details)
         if view.status == ScheduleStatus.ACCEPTED:
             current_without_status = dict(current_details)
             approved_without_status = dict(approved_details)
             current_without_status.pop("status", None)
             approved_without_status.pop("status", None)
-            if current_without_status != approved_without_status:
+            current_without_status.pop("event_version", None)
+            approved_without_status.pop("event_version", None)
+            if (
+                current_without_status != approved_without_status
+                or latest_event.version != approved_event_version + 1
+            ):
                 raise RuntimeError(
                     "Approved interview intent is stale; refusing calendar response."
                 )
@@ -1700,6 +1731,7 @@ class AutonomousCareerLoop:
             operation_id,
             event_id,
             human_approved=True,
+            expected_version=approved_event_version,
         )
         if accepted is None:
             durable_operation = self._scheduling.get_operation(operation_id)
