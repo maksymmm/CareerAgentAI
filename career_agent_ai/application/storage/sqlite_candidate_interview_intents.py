@@ -197,7 +197,7 @@ class SQLiteCandidateInterviewIntents:
                     or not has_provider_event_id
                 ):
                     raise CandidateInterviewIntentConflictError(
-                        "Pointerless acceptance is not the exact committed target state."
+                        "Persisted candidate interview intent is malformed."
                     )
             else:
                 raise ValueError("event claim belongs to another operation")
