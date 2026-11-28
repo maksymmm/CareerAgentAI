@@ -16,6 +16,18 @@ are required before the existing relevance PR can merge.
 
 # Autonomous Implementation Plan
 
+Candidate decline live-provider recovery grace: the pending-intent GET no longer
+reclassifies every `in_progress` operation as abandoned. It returns a candidate-safe
+`202 in_progress` response without opening a write stack while the provider timestamp
+is younger than the shared 300-second recovery window; future timestamps remain live.
+The dashboard disables decline and reconciliation controls until the provider call
+finishes or the bounded grace expires. Expired operations are compare-and-swap
+transitioned to `reconciliation_required`, then still require independent provider
+evidence. HTTP/SQLite and Chromium regressions cover a live blocked provider call,
+restart recovery after expiry, future clock skew, and disabled browser controls.
+Next: exact-head full CI and independent code/security review, then apply the same
+live-call grace semantics to candidate reschedule recovery.
+
 Candidate interview decline workflow: the authenticated candidate dashboard now
 allows an explicit decline only for owned proposed or reschedule-requested events.
 The server binds the decision to the candidate-approved source version inside
