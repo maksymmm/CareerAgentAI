@@ -272,8 +272,13 @@ class _RequestCandidateLoop:
     def list_interview_intents(self, *, user_id: str, limit: int = 25,
                                after: str | None = None) -> dict[str, Any]:
         """Discover owned pending interview actions through request-local read-only storage."""
-        return SQLiteCandidateInterviewIntents(self._database_path).list_page(
-            user_id=user_id, limit=limit, after=after)
+        try:
+            return SQLiteCandidateInterviewIntents(self._database_path).list_page(
+                user_id=user_id, limit=limit, after=after)
+        except CandidateInterviewIntentConflictError as exc:
+            raise CareerLoopConflictError(
+                "Pending interview acceptance no longer matches the committed event."
+            ) from exc
 
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's event without writable storage or calendar I/O."""
