@@ -25,8 +25,10 @@ finishes or the bounded grace expires. Expired operations are compare-and-swap
 transitioned to `reconciliation_required`, then still require independent provider
 evidence. HTTP/SQLite and Chromium regressions cover a live blocked provider call,
 restart recovery after expiry, future clock skew, and disabled browser controls.
-Next: exact-head full CI and independent code/security review, then apply the same
-live-call grace semantics to candidate reschedule recovery.
+Next: exact-head full CI and independent code/security review, then verify that
+the candidate acceptance path consumes the shared 300-second grace from the
+external-action service. Candidate reschedule recovery already uses an event-scoped
+lease to keep live provider calls from being reclassified.
 
 Candidate interview decline workflow: the authenticated candidate dashboard now
 allows an explicit decline only for owned proposed or reschedule-requested events.
