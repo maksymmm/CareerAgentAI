@@ -40,6 +40,7 @@ def _seed_pending_prompt(path, *, owner: str = OWNER) -> None:
                 schedule_event_id="read-only-prompt-event",
             ),
             phase=CareerLoopPhase.INTERVIEW_APPROVAL,
+            application_id="read-only-prompt-application",
             pending_human_action=HumanActionEvent(
                 kind=HumanActionKind.APPROVE_INTERVIEW,
                 title="Approve interview calendar response",

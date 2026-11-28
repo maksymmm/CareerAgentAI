@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from math import isfinite
+from typing import Any
 
 from career_agent_ai.application.career.approval_contract import (
     build_candidate_approval_prompt,
 )
-import sqlite3
-from math import isfinite
-from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,

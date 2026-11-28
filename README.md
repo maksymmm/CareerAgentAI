@@ -1051,3 +1051,9 @@ providers just to display a prompt, cannot create a missing database, and checks
 metadata before decoding the stored candidate payload. Regression tests verify that
 the existing SQLite file and table set remain unchanged, foreign malformed state is
 not decoded, and malformed owned state is returned as a sanitized error.
+
+The CI coverage contract also runs an independent
+`python -m coverage report --precision=2 --fail-under=90` step after pytest. The
+workflow regression verifies that this second gate still runs after a failed pytest
+step unless the job is cancelled; the pytest-cov threshold remains independently
+enforced at 90%.

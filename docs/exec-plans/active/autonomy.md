@@ -1602,3 +1602,9 @@ stability, no provider-table initialization, no missing-file creation, foreign
 malformed-payload privacy, and sanitized failure for malformed owned state.
 Next: continue independent candidate workflow integration work while preserving
 exact-head CI and independent code/security review requirements.
+
+CI coverage enforcement: the candidate workflow now runs both the pytest-cov
+90% threshold and an independent two-decimal `coverage report --fail-under=90`
+step. The latter runs after pytest failures unless the job is cancelled. A workflow
+regression locks the step identity, ordering, condition and threshold so future CI
+edits cannot silently remove the independent gate.
