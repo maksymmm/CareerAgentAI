@@ -230,6 +230,130 @@ class CandidateScheduleDeclineWSGIApp:
         return active_operation_id
 
     @classmethod
+    def _require_pointerless_applied_decline(
+        cls,
+        connection,
+        pending_ids: tuple[str, ...],
+        user_id: str,
+        event_id: str,
+        event_version: int,
+        event_start_at: str,
+        event_end_at: str | None,
+        event_timezone_name: str,
+        event_status: str,
+    ) -> bool:
+        """Recover only the exact immediately-applied decline whose pointer was cleared."""
+        if not pending_ids:
+            return False
+        if (
+            len(pending_ids) != 1
+            or type(event_version) is not int
+            or not 2 <= event_version <= _MAX_STATE_VERSION
+            or event_status != ScheduleStatus.DECLINED.value
+        ):
+            raise SchedulingOperationConflict(
+                "A pointerless ambiguous decline does not match an applied event."
+            )
+
+        source_version = event_version - 1
+        expected_operation_id = cls._operation_id(
+            user_id, event_id, source_version
+        )
+        if pending_ids != (expected_operation_id,):
+            raise SchedulingOperationConflict(
+                "The pointerless decline does not match the immediately preceding event version."
+            )
+
+        row = connection.execute(
+            """
+            SELECT action_type, payload_json, status
+            FROM external_action_operations
+            WHERE operation_id = ?
+            """,
+            (expected_operation_id,),
+        ).fetchone()
+        if (
+            row is None
+            or row[0] != "calendar.decline"
+            or row[2] not in {
+                ExternalActionStatus.IN_PROGRESS.value,
+                ExternalActionStatus.RECONCILIATION_REQUIRED.value,
+            }
+        ):
+            raise SchedulingOperationConflict(
+                "The pointerless decline operation is missing or not ambiguous."
+            )
+
+        def object_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("Persisted operation payload contains duplicate members.")
+                result[key] = value
+            return result
+
+        def reject_constant(_value):
+            raise ValueError("Persisted operation payload contains a non-finite number.")
+
+        try:
+            payload = json.loads(
+                row[1],
+                object_pairs_hook=object_pairs,
+                parse_constant=reject_constant,
+            )
+            if not isinstance(payload, dict):
+                raise ValueError("Persisted operation payload must be an object.")
+            candidate_id = validate_schedule_identifier(
+                payload.get("candidate_id"), "candidate_id"
+            )
+            stored_event_id = validate_schedule_identifier(
+                payload.get("event_id"), "event_id"
+            )
+            required_snapshot_fields = {
+                "event_start_at",
+                "event_end_at",
+                "event_timezone_name",
+                "event_status",
+            }
+            if not required_snapshot_fields.issubset(payload):
+                raise ValueError("Persisted decline source snapshot is incomplete.")
+            source_start_at = payload["event_start_at"]
+            source_end_at = payload["event_end_at"]
+            source_timezone_name = payload["event_timezone_name"]
+            source_status = payload["event_status"]
+            source_statuses = {
+                ScheduleStatus.PROPOSED.value,
+                ScheduleStatus.RESCHEDULE_REQUESTED.value,
+            }
+            if (
+                candidate_id != payload.get("candidate_id")
+                or stored_event_id != payload.get("event_id")
+                or candidate_id != user_id
+                or stored_event_id != event_id
+                or type(payload.get("event_version")) is not int
+                or payload["event_version"] != source_version
+                or expected_operation_id != cls._operation_id(
+                    candidate_id, stored_event_id, source_version
+                )
+                or not isinstance(source_start_at, str)
+                or (
+                    source_end_at is not None
+                    and not isinstance(source_end_at, str)
+                )
+                or not isinstance(source_timezone_name, str)
+                or source_status not in source_statuses
+                or source_start_at != event_start_at
+                or source_end_at != event_end_at
+                or source_timezone_name != event_timezone_name
+            ):
+                raise ValueError("Persisted decline does not prove the exact applied target.")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SchedulingOperationConflict(
+                "The pointerless decline payload cannot be bound to the applied event."
+            ) from exc
+        return True
+
+    @classmethod
     def _require_active_action_binding(
         cls,
         connection,
@@ -245,11 +369,17 @@ class CandidateScheduleDeclineWSGIApp:
     ) -> bool:
         """Validate the active ledger row and report whether it is still ambiguous."""
         if active_operation_id is None:
-            if pending_ids:
-                raise SchedulingOperationConflict(
-                    "An ambiguous decline is not referenced by the event's active action."
-                )
-            return False
+            return cls._require_pointerless_applied_decline(
+                connection,
+                pending_ids,
+                user_id,
+                event_id,
+                event_version,
+                event_start_at,
+                event_end_at,
+                event_timezone_name,
+                event_status,
+            )
         try:
             normalized = validate_schedule_identifier(
                 active_operation_id, "active_action_operation_id"

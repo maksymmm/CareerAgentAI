@@ -1037,3 +1037,12 @@ retain their legacy child and operation IDs, including replay after restart.
 Long-run creation also rejects a conflicting pre-existing legacy namespace owner.
 The ownership check includes retained applications, messages and external-action
 records, so deleting a terminal loop snapshot cannot release its child namespace.
+
+
+Candidate decline recovery also covers the crash window where the sandbox provider
+effect and event transition commit but the external-action terminal status write does
+not. A read-only pending lookup accepts a pointerless decline only when its deterministic
+candidate/event/source-version identity, complete source snapshot, and exact
+source-version-plus-one declined target still match. Reconciliation still requires
+independent provider evidence; a false no-effect attestation cannot roll back a
+committed decline. The regression uses only the local SQLite sandbox calendar.
