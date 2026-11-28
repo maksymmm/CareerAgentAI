@@ -107,6 +107,23 @@ def test_open_read_only_keeps_rollback_journal_database_readable(tmp_path):
     assert not pathlib.Path(f"{path}-shm").exists()
 
 
+def test_open_read_only_preserves_case_sensitive_uri_query_keys(tmp_path):
+    path = tmp_path / "uppercase-mode.sqlite"
+    writer = sqlite3.connect(path)
+    writer.execute("CREATE TABLE records (value TEXT NOT NULL)")
+    writer.execute("INSERT INTO records(value) VALUES ('readable')")
+    writer.commit()
+    writer.close()
+
+    database = SQLiteDatabase.open_read_only(f"file:{path}?MODE=MEMORY")
+    try:
+        assert database.connection.execute(
+            "SELECT value FROM records"
+        ).fetchall() == [("readable",)]
+    finally:
+        database.close()
+
+
 def test_open_read_only_rejects_memory_mode_file_uri():
     with pytest.raises(ValueError, match="durable database path"):
         SQLiteDatabase.open_read_only("file:shared-memory?mode=memory&cache=shared")
