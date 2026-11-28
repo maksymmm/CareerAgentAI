@@ -1055,6 +1055,8 @@ same maximum. Rejected observations leave provider and durable workflow state un
 The SQLite application, communication, and calendar sandbox providers serialize evidence
 verification with an in-flight provider write. A verifier on a separate connection waits
 for the writer transaction to commit before returning PRESENT or ABSENT_CONFIRMED; it
-cannot mistake an uncommitted effect for absence. The regression also proves that
-verification does not invoke a provider outcome plan, append attempts, or increment
-replay counters. These guarantees apply to the local no-network sandbox providers only.
+cannot mistake an uncommitted effect for absence. Regressions cover both committed
+`TIMEOUT_AFTER_EFFECT` and committed `NO_EFFECT` / `INTERRUPTED_BEFORE_EFFECT` outcomes
+across all three providers. Verification never invokes a provider outcome plan, appends
+attempts, increments replay counters, or creates an effect. These guarantees apply to
+the local no-network sandbox providers only.
