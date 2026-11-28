@@ -866,7 +866,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 details["artifact_sha256"] = "1" * 64
             action_kind = "approve_application"
             title = "Approve application"
-            if 8 <= self.prompt_reads <= 10:
+            if 8 <= self.prompt_reads <= 11:
                 action_kind = "approve_interview"
                 title = "Approve interview"
                 details = {
