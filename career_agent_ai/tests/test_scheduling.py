@@ -311,6 +311,150 @@ def test_accept_requires_human_approval_and_replays_after_restart(tmp_path):
 
 
 
+@pytest.mark.parametrize(
+    "expected_version",
+    [True, 0, -1, 1.0, (1 << 63)],
+)
+def test_accept_rejects_invalid_expected_version_before_mutation(expected_version):
+    service, _, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+
+    with pytest.raises(ValueError, match="expected_version"):
+        service.accept(
+            "accept:invalid-version",
+            "event-1",
+            human_approved=True,
+            expected_version=expected_version,
+        )
+
+    assert operations.get("accept:invalid-version") is None
+    assert provider.calls == []
+
+
+def test_accept_rejects_stale_candidate_approved_version_after_reschedule():
+    service, repository, operations, provider = stack(SQLiteDatabase())
+    service.add_event(event())
+    new_start = BASE_START + timedelta(days=2)
+    rescheduled = service.reschedule(
+        "reschedule:version-winner",
+        "event-1",
+        start_at=new_start,
+        end_at=new_start + timedelta(hours=1),
+        timezone_name="Europe/Berlin",
+        human_approved=True,
+    )
+    assert rescheduled is not None and rescheduled.version == 2
+
+    with pytest.raises(ValueError, match="changed after the candidate approved"):
+        service.accept(
+            "accept:stale-candidate-version",
+            "event-1",
+            human_approved=True,
+            expected_version=1,
+        )
+
+    assert operations.get("accept:stale-candidate-version") is None
+    assert repository.get("event-1") == rescheduled
+    assert provider.calls == [("reschedule", "reschedule:version-winner")]
+
+
+def test_accept_binds_existing_operation_to_candidate_and_approved_version():
+    database = SQLiteDatabase()
+    service, _, operations, provider = stack(database)
+    service.add_event(event())
+
+    with pytest.raises(PermissionError, match="human approval"):
+        service.accept(
+            "accept:bound-intent",
+            "event-1",
+            human_approved=False,
+            expected_version=1,
+        )
+    operation = operations.get("accept:bound-intent")
+    assert operation is not None
+    assert operation.payload["candidate_id"] == "candidate-1"
+    assert operation.payload["event_version"] == 1
+
+    with pytest.raises(ValueError, match="different approved source version"):
+        service.accept(
+            "accept:bound-intent",
+            "event-1",
+            human_approved=True,
+            expected_version=2,
+        )
+
+    rebound = dict(operation.payload)
+    rebound["candidate_id"] = "candidate-2"
+    database.connection.execute(
+        "UPDATE external_action_operations SET payload_json = ? WHERE operation_id = ?",
+        (json.dumps(rebound, separators=(",", ":")), "accept:bound-intent"),
+    )
+    database.connection.commit()
+
+    with pytest.raises(ValueError, match="different candidate"):
+        service.accept(
+            "accept:bound-intent",
+            "event-1",
+            human_approved=True,
+            expected_version=1,
+        )
+    assert provider.calls == []
+    database.close()
+
+
+def test_accept_compare_and_swap_rejects_version_advance_after_approval_snapshot(
+    tmp_path, monkeypatch
+):
+    path = str(tmp_path / "accept-version-race.sqlite")
+    database = SQLiteDatabase(path)
+    service, repository, operations, provider = stack(database)
+    service.add_event(event())
+    original_get_event = service.get_event
+    advanced = False
+
+    def read_then_advance(event_id):
+        nonlocal advanced
+        snapshot = original_get_event(event_id)
+        if not advanced:
+            advanced = True
+            connection = sqlite3.connect(path)
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE scheduling_events
+                    SET status = ?, version = version + 1, updated_at = ?
+                    WHERE event_id = ? AND version = ?
+                    """,
+                    (
+                        ScheduleStatus.RESCHEDULE_REQUESTED.value,
+                        datetime.now(timezone.utc).isoformat(),
+                        event_id,
+                        1,
+                    ),
+                )
+                assert cursor.rowcount == 1
+                connection.commit()
+            finally:
+                connection.close()
+        return snapshot
+
+    monkeypatch.setattr(service, "get_event", read_then_advance)
+
+    assert service.accept(
+        "accept:version-race",
+        "event-1",
+        human_approved=True,
+        expected_version=1,
+    ) is None
+
+    assert advanced
+    assert operations.get("accept:version-race").status == ExternalActionStatus.FAILED
+    assert repository.get("event-1").version == 2
+    assert repository.get("event-1").status == ScheduleStatus.RESCHEDULE_REQUESTED
+    assert provider.calls == []
+    database.close()
+
+
 def test_malformed_durable_replay_snapshot_is_rejected_strictly():
     database = SQLiteDatabase()
     service, _, _, _ = stack(database)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from career_agent_ai.application.api import openapi_document
@@ -224,3 +226,23 @@ def test_production_config_does_not_create_writable_sqlite_uri(tmp_path):
 
     assert config.database_path == uri
     assert not database_path.exists()
+
+
+
+def test_ci_workflow_enforces_independent_coverage_after_pytest():
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "workflows"
+        / "ci.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "id: pytest" in workflow
+    assert "--cov-fail-under=90" in workflow
+    assert (
+        "if: ${{ always() && !cancelled() && steps.pytest.outcome != 'skipped' }}"
+        in workflow
+    )
+    assert (
+        "python -m coverage report --precision=2 --fail-under=90" in workflow
+    )
