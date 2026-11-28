@@ -36,6 +36,8 @@ provider evidence; a `PRESENT` observation is required to confirm completion, an
 - Coherent operation-ID or payload rebinding fails closed.
 - The exact version fence prevents an old intent from being attached to a later
   same-slot event state.
-- Discovery remains read-only and provider-free.
+- Pending discovery never invokes or replays the provider. If the operation is still
+  IN_PROGRESS, the existing restart path may durably classify it as
+  RECONCILIATION_REQUIRED before exposing reconciliation controls.
 - Tests use synthetic interview data, temporary SQLite, and the no-network sandbox
   calendar provider only.

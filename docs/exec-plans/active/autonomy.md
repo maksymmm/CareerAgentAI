@@ -1614,11 +1614,13 @@ code/security review, then continue candidate interview acceptance workflow.
 
 Candidate decline pointerless recovery: the provider-applied crash window is now
 recoverable when the event transition committed and cleared its active-action pointer
-before the external-action ledger reached a terminal status. The read-only pending
+before the external-action ledger reached a terminal status. The provider-free pending
 projection accepts only one deterministic operation bound to the authenticated
 candidate, event, and immediately preceding source version; the complete source slot
 must still match the exact version-plus-one declined target. A later same-slot version
-is stale and remains a conflict. Recovery never invokes the provider: completed
+is stale and remains a conflict. If the operation is still IN_PROGRESS, the existing
+restart path may durably classify it as RECONCILIATION_REQUIRED; it never invokes or
+replays the provider. Completed
 reconciliation still requires independently verified PRESENT evidence, while a
 no-effect claim is rejected when the sandbox ledger proves an effect. HTTP/SQLite
 regressions cover the persistence-failure window, browser-safe pending response,
