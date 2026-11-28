@@ -1590,3 +1590,16 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate calendar acceptance version fence: `SchedulingService.accept` now accepts
+the exact event version shown to the candidate. A stale approval is rejected before
+creating an external-action intent; existing operation IDs are bound to their stored
+source version and candidate identity. The durable calendar claim remains the final
+compare-and-swap if the event advances after the approval snapshot is read. SQLite
+regressions cover invalid versions, a reschedule completed before approval submission,
+candidate/version rebinding, and a concurrent version advance between snapshot read and
+provider claim. The optional argument preserves trusted internal callers that approve
+the current event at invocation time; candidate-facing adapters must pass the displayed
+version. Next: wire and verify the remaining candidate acceptance entry points against
+the version-bound contract, then run exact-head CI and independent code/security review.

@@ -652,24 +652,47 @@ class SchedulingService:
         return delivered.provider_event_id
 
     def accept(
-        self, operation_id: str, event_id: str, *, human_approved: bool
+        self,
+        operation_id: str,
+        event_id: str,
+        *,
+        human_approved: bool,
+        expected_version: int | None = None,
     ) -> ScheduleEvent | None:
-        """Accept one exact persisted slot after explicit human approval.
+        """Accept only the event version explicitly approved by the candidate.
 
-        A repeated operation ID replays its durable outcome. A prepared operation is
-        bound to the event version and slot that the human was asked to approve.
+        A repeated operation ID replays its durable outcome. Candidate-facing
+        callers should pass the version from the displayed event snapshot; the
+        repository claim remains the final compare-and-swap against concurrent
+        scheduling changes.
         """
         self._validate_human_approval(human_approved)
+        if expected_version is not None and (
+            type(expected_version) is not int
+            or not 1 <= expected_version <= (1 << 63) - 1
+        ):
+            raise ValueError("expected_version must be a positive SQLite integer.")
         operation_id = validate_schedule_identifier(operation_id, "operation_id")
         event_id = validate_schedule_identifier(event_id, "event_id")
         event = self.get_event(event_id)
         existing = self._external_actions.get(operation_id)
         if existing is not None:
-            self._validate_existing_operation(existing.action_type, existing.payload, "calendar.accept", event_id)
+            self._validate_existing_operation(
+                existing.action_type, existing.payload, "calendar.accept", event_id
+            )
+            stored_version = _CalendarActionAdapter._prepared_version(existing.payload)
+            if expected_version is not None and stored_version != expected_version:
+                raise ValueError(
+                    "operation_id is bound to a different approved source version."
+                )
+            if existing.payload.get("candidate_id", event.candidate_id) != event.candidate_id:
+                raise ValueError("operation_id is bound to a different candidate.")
             if existing.status == ExternalActionStatus.FAILED and human_approved:
                 _CalendarActionAdapter._validate_prepared_source(event, existing.payload)
                 self._external_actions.reopen_failed(operation_id)
             return self._execute(operation_id, human_approved)
+        if expected_version is not None and event.version != expected_version:
+            raise ValueError("Event changed after the candidate approved acceptance.")
         if event.status not in {
             ScheduleStatus.PROPOSED,
             ScheduleStatus.RESCHEDULE_REQUESTED,
@@ -685,7 +708,11 @@ class SchedulingService:
             raise SchedulingConflictError(
                 "Event conflicts with another committed scheduling event."
             )
-        payload = {"event_id": event.event_id, **self._source_snapshot(event)}
+        payload = {
+            "event_id": event.event_id,
+            "candidate_id": event.candidate_id,
+            **self._source_snapshot(event),
+        }
         self._external_actions.prepare(operation_id, "calendar.accept", payload)
         return self._execute(operation_id, human_approved)
 
