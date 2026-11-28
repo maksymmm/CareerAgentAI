@@ -6,7 +6,7 @@ import io
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from threading import Thread
+from threading import Event, Thread
 from wsgiref.simple_server import WSGIRequestHandler, make_server
 
 import pytest
@@ -172,6 +172,18 @@ def _stored_event(path, event_id=EVENT_ID):
         database.close()
 
 
+def _operation_status(path):
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute(
+            "SELECT status FROM external_action_operations WHERE action_type = ?",
+            ("calendar.decline",),
+        ).fetchone()
+        return None if row is None else row[0]
+    finally:
+        connection.close()
+
+
 def test_candidate_declines_owned_interview_and_replays_after_restart(tmp_path):
     path = tmp_path / "candidate-decline.sqlite"
     _seed(path, _event())
@@ -266,6 +278,134 @@ def test_interruption_before_effect_requires_no_effect_evidence_before_same_key_
     assert retry["outcome"] == "completed"
     assert retry["event"]["status"] == "declined"
     assert _effect_count(path) == 1
+
+
+def test_pending_lookup_does_not_reclassify_a_live_provider_call(tmp_path):
+    path = tmp_path / "decline-live-provider.sqlite"
+    _seed(path, _event())
+    provider_started = Event()
+    release_provider = Event()
+    decline_result = {}
+    pending_result = {}
+    pending_finished = Event()
+
+    def outcome_plan(_key, _attempt):
+        provider_started.set()
+        if not release_provider.wait(10):
+            raise TimeoutError("sandbox provider test was not released")
+        return SandboxCalendarOutcome.SUCCESS
+
+    candidate = Candidate(path, outcome_plan)
+
+    def submit_decline():
+        try:
+            decline_result["value"] = candidate.decline()
+        except BaseException as exc:
+            decline_result["error"] = exc
+
+    def read_pending():
+        try:
+            pending_result["value"] = Candidate(path).pending()
+        except BaseException as exc:
+            pending_result["error"] = exc
+        finally:
+            pending_finished.set()
+
+    submit_thread = Thread(target=submit_decline)
+    submit_thread.start()
+    assert provider_started.wait(5)
+    pending_thread = Thread(target=read_pending)
+    pending_thread.start()
+    try:
+        assert pending_finished.wait(3), "live pending lookup waited on the provider writer"
+        assert pending_result.get("value") == (
+            "202 Accepted",
+            {
+                "schema_version": 1,
+                "outcome": "in_progress",
+                "event_id": EVENT_ID,
+            },
+        )
+        assert _operation_status(path) == "in_progress"
+    finally:
+        release_provider.set()
+        submit_thread.join(10)
+        pending_thread.join(10)
+
+    assert not submit_thread.is_alive()
+    assert not pending_thread.is_alive()
+    assert "error" not in decline_result
+    assert "error" not in pending_result
+    assert decline_result["value"][0] == "200 OK"
+    assert _operation_status(path) == "succeeded"
+    assert _effect_count(path) == 1
+
+
+def test_pending_lookup_reclassifies_only_expired_in_progress_after_restart(tmp_path):
+    path = tmp_path / "decline-expired-provider.sqlite"
+    _seed(path, _event())
+
+    def interrupt_provider(_key, _attempt):
+        raise KeyboardInterrupt("simulated process termination")
+
+    with pytest.raises(KeyboardInterrupt):
+        Candidate(path, interrupt_provider).decline()
+    assert _operation_status(path) == "in_progress"
+    connection = sqlite3.connect(path)
+    try:
+        expired_at = (datetime.now(timezone.utc) - timedelta(seconds=301)).isoformat()
+        connection.execute(
+            "UPDATE external_action_operations SET updated_at = ? "
+            "WHERE action_type = ?",
+            (expired_at, "calendar.decline"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    status, pending = Candidate(path).pending()
+    assert status == "200 OK"
+    assert pending == {
+        "schema_version": 1,
+        "outcome": "pending",
+        "event_id": EVENT_ID,
+        "state_version": 1,
+    }
+    assert _operation_status(path) == "reconciliation_required"
+    assert _effect_count(path) == 0
+
+
+def test_pending_lookup_treats_future_in_progress_timestamp_as_live(tmp_path):
+    path = tmp_path / "decline-future-provider.sqlite"
+    _seed(path, _event())
+
+    def interrupt_provider(_key, _attempt):
+        raise KeyboardInterrupt("simulated process termination")
+
+    with pytest.raises(KeyboardInterrupt):
+        Candidate(path, interrupt_provider).decline()
+    connection = sqlite3.connect(path)
+    try:
+        future_at = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+        connection.execute(
+            "UPDATE external_action_operations SET updated_at = ? "
+            "WHERE action_type = ?",
+            (future_at, "calendar.decline"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert Candidate(path).pending() == (
+        "202 Accepted",
+        {
+            "schema_version": 1,
+            "outcome": "in_progress",
+            "event_id": EVENT_ID,
+        },
+    )
+    assert _operation_status(path) == "in_progress"
+    assert _effect_count(path) == 0
 
 
 def test_definite_no_effect_retries_only_the_same_durable_decline_intent(tmp_path):
@@ -385,7 +525,14 @@ def test_openapi_and_dashboard_publish_candidate_decline_workflow():
     assert CandidateScheduleDeclineWSGIApp.DECLINE_PATH in document["paths"]
     assert CandidateScheduleDeclineWSGIApp.RECONCILIATION_PATH in document["paths"]
     assert CandidateScheduleDeclineWSGIApp.PENDING_PATH in document["paths"]
+    pending_responses = document["paths"][
+        CandidateScheduleDeclineWSGIApp.PENDING_PATH
+    ]["get"]["responses"]
+    assert pending_responses["202"]["content"]["application/json"]["schema"][
+        "properties"
+    ]["outcome"]["const"] == "in_progress"
     html = candidate_sandbox_html().decode("utf-8")
+    assert "The provider call is still within its recovery grace period." in html
     for identifier in (
         "decline-confirmed",
         "decline-event",
@@ -394,6 +541,59 @@ def test_openapi_and_dashboard_publish_candidate_decline_workflow():
         "confirm-decline-no-effect",
     ):
         assert 'id="' + identifier + '"' in html
+
+
+def test_candidate_sandbox_browser_disables_reconciliation_for_live_provider_call(tmp_path):
+    sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
+    path = tmp_path / "decline-live-provider-browser.sqlite"
+    _seed(path, _event())
+    app = build_candidate_sandbox_app_from_env(
+        resolve_bearer=lambda token: OWNER if token == "owner-token" else None,
+        environ={"CAREER_AGENT_DB_PATH": str(path), **ENV},
+    )
+
+    class QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+    server = make_server("127.0.0.1", 0, app, handler_class=QuietHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.route(
+                "**/v1/candidate/schedule-event/decline-pending?*",
+                lambda route: route.fulfill(
+                    status=202,
+                    content_type="application/json",
+                    body=json.dumps({
+                        "schema_version": 1,
+                        "outcome": "in_progress",
+                        "event_id": EVENT_ID,
+                    }),
+                ),
+            )
+            page.goto(f"http://127.0.0.1:{server.server_port}/sandbox/candidate")
+            page.locator("#token").fill("owner-token")
+            page.locator("#list-events").click()
+            event_button = page.get_by_role("button", name="View event 1: " + EVENT_ID)
+            event_button.wait_for()
+            event_button.click()
+            page.get_by_text(
+                "Interview decline is still being processed", exact=False
+            ).wait_for()
+            assert page.locator("#decline-confirmed").is_disabled()
+            assert page.locator("#decline-event").is_disabled()
+            assert page.locator("#decline-reconciliation-verified").is_disabled()
+            assert page.locator("#confirm-decline-completed").is_disabled()
+            assert page.locator("#confirm-decline-no-effect").is_disabled()
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_candidate_sandbox_browser_can_decline_an_owned_interview(tmp_path):

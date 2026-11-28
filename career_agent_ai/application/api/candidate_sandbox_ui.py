@@ -391,8 +391,25 @@ _HTML = r"""<!doctype html>
         encodeURIComponent(identifier), {}, 'Pending interview-decline recovery failed.', true);
       if (generation !== eventDetailGeneration) return;
       if (!pending || pending.schema_version !== 1 || pending.event_id !== identifier ||
-          !['none', 'pending'].includes(pending.outcome)) {
+          !['none', 'pending', 'in_progress'].includes(pending.outcome)) {
         throw new Error('Invalid pending interview-decline snapshot.');
+      }
+      if (pending.outcome === 'in_progress') {
+        pendingDecline = null;
+        byId('decline-panel').disabled = true;
+        byId('decline-confirmed').checked = false;
+        byId('decline-confirmed').disabled = true;
+        byId('decline-event').disabled = true;
+        byId('decline-state').textContent =
+          'Interview decline is still being processed. Refresh this event to check again.';
+        byId('decline-reconciliation-panel').disabled = true;
+        byId('decline-reconciliation-verified').checked = false;
+        byId('decline-reconciliation-verified').disabled = true;
+        byId('confirm-decline-completed').disabled = true;
+        byId('confirm-decline-no-effect').disabled = true;
+        byId('decline-reconciliation-state').textContent =
+          'The provider call is still within its recovery grace period. Reconciliation is not yet available.';
+        return;
       }
       if (pending.outcome === 'pending') {
         if (!Number.isSafeInteger(pending.state_version) || pending.state_version < 1 ||

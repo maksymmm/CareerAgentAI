@@ -6,6 +6,7 @@ import json
 import math
 import re
 import sqlite3
+from datetime import datetime, timezone
 from dataclasses import asdict
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -55,6 +56,7 @@ class CandidateScheduleDeclineWSGIApp:
     RECONCILIATION_PATH = "/v1/candidate/schedule-event/decline-reconciliation"
     ROUTES = frozenset({PENDING_PATH, DECLINE_PATH, RECONCILIATION_PATH})
     MAX_BODY_BYTES = 16_384
+    IN_PROGRESS_STALE_AFTER_SECONDS = 300
 
     def __init__(
         self,
@@ -715,6 +717,21 @@ class CandidateScheduleDeclineWSGIApp:
                     )
         return tuple(matches)
 
+    @classmethod
+    def _in_progress_is_live(cls, updated_at: datetime) -> bool:
+        """Keep recent and future-dated provider calls live during recovery."""
+        if (
+            not isinstance(updated_at, datetime)
+            or updated_at.tzinfo is None
+            or updated_at.utcoffset() is None
+        ):
+            raise ValueError("Persisted external-action timestamp is not timezone-aware.")
+        age = (
+            datetime.now(timezone.utc)
+            - updated_at.astimezone(timezone.utc)
+        ).total_seconds()
+        return age < cls.IN_PROGRESS_STALE_AFTER_SECONDS
+
     def _pending(
         self, start_response, user_id: str, request: Mapping[str, str]
     ) -> Iterable[bytes]:
@@ -771,6 +788,39 @@ class CandidateScheduleDeclineWSGIApp:
                     "200 OK",
                     {"schema_version": 1, "outcome": "none", "event_id": event_id},
                 )
+            if len(pending_ids) != 1:
+                raise SchedulingOperationConflict(
+                    "More than one ambiguous decline is bound to this event."
+                )
+            live_row = read_database.connection.execute(
+                """
+                SELECT status, updated_at
+                FROM external_action_operations
+                WHERE operation_id = ?
+                """,
+                (pending_ids[0],),
+            ).fetchone()
+            if live_row is None:
+                raise SchedulingOperationConflict(
+                    "Pending decline operation disappeared during recovery."
+                )
+            if live_row[0] == ExternalActionStatus.IN_PROGRESS.value:
+                try:
+                    updated_at = datetime.fromisoformat(live_row[1])
+                except (TypeError, ValueError) as exc:
+                    raise SchedulingOperationConflict(
+                        "Pending decline has an invalid provider timestamp."
+                    ) from exc
+                if self._in_progress_is_live(updated_at):
+                    return self._respond(
+                        start_response,
+                        "202 Accepted",
+                        {
+                            "schema_version": 1,
+                            "outcome": "in_progress",
+                            "event_id": event_id,
+                        },
+                    )
         finally:
             read_database.close()
 
@@ -815,18 +865,6 @@ class CandidateScheduleDeclineWSGIApp:
                     "More than one ambiguous decline is bound to this event."
                 )
             operation = pending[0]
-            if operation.status == ExternalActionStatus.IN_PROGRESS:
-                operation = operations.transition(
-                    operation.operation_id,
-                    ExternalActionStatus.IN_PROGRESS,
-                    ExternalActionStatus.RECONCILIATION_REQUIRED,
-                    error=(
-                        "Process restarted while the calendar provider action was in "
-                        "progress; provider evidence is required before retry."
-                    ),
-                )
-            if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
-                raise ValueError("Pending decline is not in a recoverable state.")
             payload = operation.payload
             raw_version = payload.get("event_version")
             if type(raw_version) is not int or not 1 <= raw_version <= _MAX_STATE_VERSION:
@@ -837,6 +875,28 @@ class CandidateScheduleDeclineWSGIApp:
             expected_operation_id = self._operation_id(user_id, event_id, state_version)
             if operation.operation_id != expected_operation_id:
                 raise ValueError("Persisted decline operation identity is invalid.")
+            if operation.status == ExternalActionStatus.IN_PROGRESS:
+                if self._in_progress_is_live(operation.updated_at):
+                    return self._respond(
+                        start_response,
+                        "202 Accepted",
+                        {
+                            "schema_version": 1,
+                            "outcome": "in_progress",
+                            "event_id": event_id,
+                        },
+                    )
+                operation = operations.transition(
+                    operation.operation_id,
+                    ExternalActionStatus.IN_PROGRESS,
+                    ExternalActionStatus.RECONCILIATION_REQUIRED,
+                    error=(
+                        "Provider call exceeded the recovery grace period; provider "
+                        "evidence is required before retry."
+                    ),
+                )
+            if operation.status != ExternalActionStatus.RECONCILIATION_REQUIRED:
+                raise ValueError("Pending decline is not in a recoverable state.")
             return self._respond(
                 start_response,
                 "200 OK",
@@ -1215,6 +1275,22 @@ def candidate_schedule_decision_openapi_paths() -> dict[str, Any]:
                                     "outcome": {"enum": ["none", "pending"]},
                                     "event_id": {"type": "string"},
                                     "state_version": {"type": "integer"}}})},
+                    "202": {
+                        "description": (
+                            "Provider call is still within its recovery grace period; "
+                            "reconciliation is not yet available"
+                        ),
+                        "content": content({
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["schema_version", "outcome", "event_id"],
+                            "properties": {
+                                "schema_version": {"const": 1},
+                                "outcome": {"const": "in_progress"},
+                                "event_id": {"type": "string"},
+                            },
+                        }),
+                    },
                     **common,
                     "405": {"description": "Only GET is allowed"},
                 },
