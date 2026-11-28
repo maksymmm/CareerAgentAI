@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate schedule tracker browser recovery: a Chromium acceptance now drives the actual
+authenticated candidate dashboard through owner-scoped accepted-event pagination,
+status filtering, exact event detail, and a concurrent event-version advance. The browser
+accepts a newer detail after its list snapshot, rejects a later stale detail, hides foreign
+and private provider/application/action identifiers, and repeats the read-only flow after
+the first RuntimeCandidateApp and WSGI server are closed and reconstructed over the same
+SQLite file. Database bytes and the provider/action table set remain unchanged by reads.
+Next: complete owner-scoped recovery for pending candidate interview actions, including
+durable intent discovery after browser reload and version-bound accept/decline/reschedule
+reconciliation; keep all provider effects sandbox-only until explicit human approval.
