@@ -882,3 +882,194 @@ def test_open_ended_decline_retry_accepts_explicit_null_end_snapshot(tmp_path):
     assert result["outcome"] == "completed"
     assert result["event"]["status"] == "declined"
     assert _effect_count(path) == 1
+
+
+
+def test_pending_recovers_provider_applied_decline_after_pointer_clear(
+    monkeypatch, tmp_path
+):
+    from career_agent_ai.application.external_actions.external_action_operation import (
+        ExternalActionStatus,
+    )
+    from career_agent_ai.application.storage.sqlite_external_action_repository import (
+        SQLiteExternalActionOperationRepository,
+    )
+
+    path = tmp_path / "decline-provider-applied-pointerless.sqlite"
+    _seed(path, _event())
+    original_transition = SQLiteExternalActionOperationRepository.transition
+
+    def fail_terminal_success(
+        repository,
+        operation_id,
+        expected_status,
+        status,
+        *,
+        result=None,
+        error=None,
+    ):
+        if (
+            expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.SUCCEEDED
+        ):
+            raise RuntimeError("simulated terminal success persistence failure")
+        return original_transition(
+            repository,
+            operation_id,
+            expected_status,
+            status,
+            result=result,
+            error=error,
+        )
+
+    monkeypatch.setattr(
+        SQLiteExternalActionOperationRepository,
+        "transition",
+        fail_terminal_success,
+    )
+    candidate = Candidate(path)
+    status, result = candidate.decline()
+    assert status == "202 Accepted"
+    assert result["outcome"] == "reconciliation_required"
+
+    event = _stored_event(path)
+    assert event.status == ScheduleStatus.DECLINED
+    assert event.version == 2
+
+    connection = sqlite3.connect(path)
+    try:
+        pointer = connection.execute(
+            "SELECT active_action_operation_id FROM scheduling_events WHERE event_id = ?",
+            (EVENT_ID,),
+        ).fetchone()[0]
+        operation_id = CandidateScheduleDeclineWSGIApp._operation_id(
+            OWNER, EVENT_ID, 1
+        )
+        operation = connection.execute(
+            "SELECT status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        replays = connection.execute(
+            "SELECT replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert pointer is None
+    assert operation == (ExternalActionStatus.RECONCILIATION_REQUIRED.value,)
+    assert replays == 0
+    assert _effect_count(path) == 1
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "200 OK",
+        {
+            "schema_version": 1,
+            "outcome": "pending",
+            "event_id": EVENT_ID,
+            "state_version": 1,
+        },
+    )
+    # A false no-effect attestation must not roll back an already-applied decline.
+    assert restarted.reconcile(False) == (
+        "409 Conflict",
+        {"error": "provider_evidence_conflict"},
+    )
+    completed_status, completed = restarted.reconcile(True)
+    assert completed_status == "200 OK"
+    assert completed["outcome"] == "completed"
+    assert completed["event"]["status"] == "declined"
+    assert completed["event"]["state_version"] == 2
+
+    connection = sqlite3.connect(path)
+    try:
+        operation_status = connection.execute(
+            "SELECT status FROM external_action_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+        replays = connection.execute(
+            "SELECT replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert operation_status == ExternalActionStatus.SUCCEEDED.value
+    assert replays == 0
+    assert _effect_count(path) == 1
+
+
+def test_pointerless_decline_recovery_rejects_later_same_slot_version(
+    monkeypatch, tmp_path
+):
+    from career_agent_ai.application.external_actions.external_action_operation import (
+        ExternalActionStatus,
+    )
+    from career_agent_ai.application.storage.sqlite_external_action_repository import (
+        SQLiteExternalActionOperationRepository,
+    )
+
+    path = tmp_path / "decline-pointerless-stale-target.sqlite"
+    _seed(path, _event())
+    original_transition = SQLiteExternalActionOperationRepository.transition
+
+    def fail_terminal_success(
+        repository,
+        operation_id,
+        expected_status,
+        status,
+        *,
+        result=None,
+        error=None,
+    ):
+        if (
+            expected_status == ExternalActionStatus.IN_PROGRESS
+            and status == ExternalActionStatus.SUCCEEDED
+        ):
+            raise RuntimeError("simulated terminal success persistence failure")
+        return original_transition(
+            repository,
+            operation_id,
+            expected_status,
+            status,
+            result=result,
+            error=error,
+        )
+
+    monkeypatch.setattr(
+        SQLiteExternalActionOperationRepository,
+        "transition",
+        fail_terminal_success,
+    )
+    candidate = Candidate(path)
+    assert candidate.decline()[0] == "202 Accepted"
+    assert _stored_event(path).version == 2
+
+    # Simulate a later same-slot state transition after the original decline.
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            """
+            UPDATE scheduling_events
+            SET version = version + 1, updated_at = ?
+            WHERE event_id = ?
+            """,
+            (datetime.now(timezone.utc).isoformat(), EVENT_ID),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    restarted = Candidate(path)
+    assert restarted.pending() == (
+        "409 Conflict",
+        {"error": "approval_conflict"},
+    )
+    assert _effect_count(path) == 1
+    connection = sqlite3.connect(path)
+    try:
+        replays = connection.execute(
+            "SELECT replays FROM sandbox_calendar_effects"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert replays == 0
