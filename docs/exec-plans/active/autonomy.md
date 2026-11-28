@@ -1615,3 +1615,16 @@ missing/invalid event versions; SQLite/runtime regressions cover a concurrent re
 between approval snapshot validation and provider claim. Next: finish browser-driven pending
 acceptance discovery/recovery after reload and runtime restart, then exact-head CI and
 independent code/security review.
+
+
+Candidate interview acceptance runtime concurrency proof: an authenticated WSGI regression
+uses two independent RuntimeCandidateApp instances over one durable SQLite database. The
+first request advances the owner-scoped run from the exact version-bound interview approval
+and pauses immediately before the SQLite sandbox calendar effect. A duplicate approval from
+the second runtime must receive HTTP 409 without reaching the provider. The first request
+then completes the run, accepts the event and advances the application tracker to interview;
+a third runtime confirms the terminal state after restart. The durable ledger must contain
+one provider attempt, one effect and zero replays. ADR 0057 records the candidate HTTP/runtime
+contract and complements the provider-boundary proof in PR #400. Next: exact-head full CI and
+independent code/security review, then exercise the same end-to-end contract for candidate
+interview decline and reschedule actions.
