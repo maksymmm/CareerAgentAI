@@ -1046,3 +1046,13 @@ candidate/event/source-version identity, complete source snapshot, and exact
 source-version-plus-one declined target still match. Reconciliation still requires
 independent provider evidence; a false no-effect attestation cannot roll back a
 committed decline. The regression uses only the local SQLite sandbox calendar.
+
+
+Candidate decline reconciliation is also fenced at the scheduling-service boundary.
+Provider evidence alone cannot resolve an older decline when the current event has
+advanced beyond the exact source-version-plus-one transition, even if its visible
+declined status and slot still match. This protects callers that reach the shared
+service without passing through the candidate pointerless-intent projection. The
+regression injects a terminal ledger-write failure after one sandbox effect, advances
+the durable event version while preserving the visible target, and proves reconciliation
+remains pending without replaying the provider.
