@@ -1598,3 +1598,15 @@ writes to temporary or attached databases through the same connection. Regressio
 tests cover primary, temporary and attached-database writes while preserving reads.
 This is a connection guardrail, not an isolation boundary against code that can
 deliberately reconfigure the raw SQLite connection.
+
+
+Read-only SQLite WAL side-effect boundary: URI `mode=ro` protects the main database
+but a WAL reader can still create or update the `-shm` coordination sidecar. The
+shared read-only opener now inspects the SQLite header and rejects WAL-mode files
+before connecting, while preserving normal rollback-journal reads and the
+`query_only` guard for temporary/attached databases. Regressions cover active WAL,
+closed WAL with absent sidecars, file-URI paths, and unchanged rollback-journal reads.
+The implementation intentionally avoids `immutable=1`, which could ignore
+uncheckpointed WAL data and expose stale candidate state. No database conversion,
+checkpoint, or mutation is performed.
+Next: continue independent candidate workflow recovery work after exact-head CI and review.
