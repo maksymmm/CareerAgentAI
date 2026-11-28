@@ -15,7 +15,7 @@ def _read_only_filesystem_path(path: str) -> Path:
         if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
             raise ValueError("Read-only SQLite requires a local file path.")
         if any(
-            key.casefold() == "mode" and value.casefold() == "memory"
+            key == "mode" and value == "memory"
             for key, value in parse_qsl(parsed.query, keep_blank_values=True)
         ):
             raise ValueError("Read-only SQLite requires a durable database path.")
