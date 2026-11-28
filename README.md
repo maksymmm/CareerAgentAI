@@ -1041,3 +1041,13 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+## Candidate approval prompt read boundary
+
+Authenticated candidate approval prompt GETs now use a read-only, owner-scoped SQLite
+projection. The route no longer composes writable submission, mailbox or calendar
+providers just to display a prompt, cannot create a missing database, and checks owner
+metadata before decoding the stored candidate payload. Regression tests verify that
+the existing SQLite file and table set remain unchanged, foreign malformed state is
+not decoded, and malformed owned state is returned as a sanitized error.

@@ -1590,3 +1590,15 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+Candidate approval prompt read boundary: authenticated GET now opens the existing
+SQLite database read-only and uses an owner-scoped prompt projection. It no longer
+constructs writable submission, communication or calendar providers, initializes
+their schemas, or creates a missing database. The projection checks owner metadata
+before decoding the private loop payload and reuses the strict state deserializer and
+candidate fingerprint contract. HTTP/SQLite regressions prove byte-for-byte storage
+stability, no provider-table initialization, no missing-file creation, foreign
+malformed-payload privacy, and sanitized failure for malformed owned state.
+Next: continue independent candidate workflow integration work while preserving
+exact-head CI and independent code/security review requirements.

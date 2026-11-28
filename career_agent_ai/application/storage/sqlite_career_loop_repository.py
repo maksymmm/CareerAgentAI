@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+
+from career_agent_ai.application.career.approval_contract import (
+    build_candidate_approval_prompt,
+)
 import sqlite3
 from math import isfinite
 from datetime import datetime, timedelta, timezone
@@ -785,6 +789,41 @@ class SQLiteCandidateRunStatusProjection:
         if row is None or row[0] != owner:
             raise KeyError("Unknown autonomous career loop for this user.")
         return self._status_from_row(identifier, row, owner=owner)
+
+    def get_approval_prompt(self, run_id: str, *, user_id: str):
+        """Return one candidate prompt from a read-only, owner-checked snapshot."""
+        identifier = SQLiteCareerLoopRepository._identifier(run_id, "run_id")
+        owner = SQLiteCareerLoopRepository._identifier(user_id, "user_id")
+        row = self._database.connection.execute(
+            """
+            SELECT owner_user_id, payload_json, version
+            FROM autonomous_career_loops
+            WHERE run_id = ?
+            """,
+            (identifier,),
+        ).fetchone()
+        # Check trusted ownership metadata before decoding any private payload.
+        if row is None or row[0] != owner:
+            raise KeyError("Unknown autonomous career loop for this user.")
+        try:
+            payload = json.loads(
+                row[1],
+                parse_constant=lambda token: (_ for _ in ()).throw(
+                    ValueError(f"Invalid JSON constant: {token}.")
+                ),
+            )
+            state = SQLiteCareerLoopRepository._deserialize(
+                payload, storage_version=row[2]
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "Persisted autonomous-loop approval state is malformed."
+            ) from exc
+        if state.run_id != identifier:
+            raise ValueError(
+                "Persisted autonomous-loop run_id does not match its storage key."
+            )
+        return build_candidate_approval_prompt(state, user_id=owner)
 
     @staticmethod
     def _status_from_row(identifier: str, row: tuple[Any, ...], *, owner: str) -> dict[str, Any]:
