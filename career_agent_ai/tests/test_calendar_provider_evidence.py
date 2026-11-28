@@ -199,3 +199,100 @@ def test_evidence_cannot_replace_existing_provider_event_id(tmp_path):
     with pytest.raises(CalendarReconciliationEvidenceError, match="existing provider"):
         service.resolve_reconciliation("accept:evidence", completed=True)
     assert operations.get("accept:evidence").status == ExternalActionStatus.RECONCILIATION_REQUIRED
+
+
+def test_stale_decline_reconciliation_rejects_later_same_slot_version(tmp_path):
+    class FailFirstSuccessRepository(SQLiteExternalActionOperationRepository):
+        def __init__(self, database):
+            self.fail_success_once = True
+            super().__init__(database)
+
+        def transition(
+            self,
+            operation_id,
+            expected_status,
+            status,
+            *,
+            result=None,
+            error=None,
+        ):
+            if status == ExternalActionStatus.SUCCEEDED and self.fail_success_once:
+                self.fail_success_once = False
+                raise RuntimeError("simulated terminal success persistence failure")
+            return super().transition(
+                operation_id,
+                expected_status,
+                status,
+                result=result,
+                error=error,
+            )
+
+    database = SQLiteDatabase(str(tmp_path / "stale-decline.sqlite"))
+    provider = SQLiteSandboxCalendarProvider(database)
+    events = SQLiteSchedulingRepository(database)
+    operations = FailFirstSuccessRepository(database)
+    external = ExternalActionService(
+        operations, SchedulingService.action_adapter(provider, events)
+    )
+    service = SchedulingService(
+        events, provider, external, require_provider_evidence=True
+    )
+    source = _event()
+    service.add_event(source)
+
+    # The provider effect and event transition commit, but the external-action
+    # terminal write fails. This leaves an ambiguous operation over a declined
+    # version-2 event, matching the real post-provider crash window.
+    assert service.decline(
+        "decline:stale-version",
+        source.event_id,
+        human_approved=True,
+        expected_version=source.version,
+    ) is None
+    operation = operations.get("decline:stale-version")
+    assert operation is not None
+    assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    declined = service.get_event(source.event_id)
+    assert declined.status == ScheduleStatus.DECLINED
+    assert declined.version == source.version + 1
+
+    # Model a later durable event-version advance that preserves the visible
+    # declined status and slot. The old provider evidence must not authorize it.
+    database.connection.execute(
+        """
+        UPDATE scheduling_events
+        SET version = version + 1, updated_at = ?
+        WHERE event_id = ?
+        """,
+        (datetime.now(timezone.utc).isoformat(), source.event_id),
+    )
+    database.connection.commit()
+    current = service.get_event(source.event_id)
+    assert current.status == ScheduleStatus.DECLINED
+    assert current.version == source.version + 2
+    assert provider.verify_calendar_action(
+        "decline:stale-version"
+    ).state == CalendarEvidenceState.PRESENT
+
+    with pytest.raises(
+        ValueError, match="stale for the current event version"
+    ):
+        service.resolve_reconciliation(
+            "decline:stale-version",
+            completed=True,
+        )
+
+    operation = operations.get("decline:stale-version")
+    assert operation is not None
+    assert operation.status == ExternalActionStatus.RECONCILIATION_REQUIRED
+    assert provider.effect_count("decline:stale-version") == 1
+    assert database.connection.execute(
+        """
+        SELECT COUNT(*), MAX(replays)
+        FROM sandbox_calendar_attempts
+        JOIN sandbox_calendar_effects USING (operation_id)
+        WHERE operation_id = ?
+        """,
+        ("decline:stale-version",),
+    ).fetchone() == (1, 0)
+    database.close()

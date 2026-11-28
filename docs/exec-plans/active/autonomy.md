@@ -1626,3 +1626,15 @@ no-effect claim is rejected when the sandbox ledger proves an effect. HTTP/SQLit
 regressions cover the persistence-failure window, browser-safe pending response,
 false no-effect rejection, and stale target rejection. Next: exact-head full CI and
 independent code/security review before integration.
+
+
+Candidate decline service-level version fence: the pointerless candidate API already
+requires the exact source-version-plus-one declined target, but the shared
+SchedulingService reconciliation method also needs to enforce that invariant for
+every caller. A provider-applied decline with a failed terminal ledger write can no
+longer be resolved against a later event version merely because the visible status,
+slot, and provider evidence still match. The service rejects the stale operation
+before marking its ledger row succeeded; the regression injects the terminal-write
+failure, advances the event version without changing the visible target, and verifies
+one sandbox effect, zero replays, and a still-pending reconciliation. Next: exact-head
+full CI and independent code/security review, then continue candidate workflow hardening.
