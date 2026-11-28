@@ -1590,3 +1590,72 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+Sandbox employer-withdrawal provider primitive (no network): a new SQLite-backed
+adapter first verifies the exact application/provider-submission pair in the durable
+sandbox submission ledger, then binds one immutable withdrawal operation to it. It
+persists attempt/effect ledgers, permits same-intent retry
+only after a confirmed no-effect outcome, and reconciles timeout-after-effect from
+durable evidence without creating a second effect. Constructor and evidence paths
+reject ambient transactions; writer contention fails closed before outcome-plan
+consumption. This is deliberately provider-only: the candidate withdrawal action
+remains tracker-only until a separately reviewed, explicitly approved runtime
+workflow is implemented. Regression coverage includes restart, idempotent replay,
+no-effect retry, timeout recovery, intent rebinding, ambient transaction ownership,
+busy-writer behavior, missing-submission rejection, and concurrent same-intent calls.
+Next: wire this adapter only through a distinct candidate-approved employer
+withdrawal operation with owner/version fencing and durable external-action status;
+never reinterpret local tracker withdrawal as employer-side completion.
+Same-process external-action execution is now serialized by operation ID across
+service instances, so a live worker is not mistaken for a crashed `IN_PROGRESS`
+action. The lock is intentionally process-local; after restart an `IN_PROGRESS`
+operation remains ambiguous and is resolved only from the provider's durable evidence.
+The concurrent application-submission regression verifies both callers observe one
+terminal success with one provider attempt/effect.
+
+
+Sandbox withdrawal evidence identity binding: withdrawal reconciliation can now be
+scoped to the exact application ID and provider submission ID. Under the SQLite writer
+lock, the provider cross-checks immutable intent and effect identities; missing or
+mismatched intent and corrupted effect/intent pairs fail closed instead of being
+misreported as confirmed absence for another application. Regression coverage proves
+present evidence binding, no-effect absence binding, partial-identity rejection, and
+corrupt-ledger rejection. Next: wire the adapter through a separately approved,
+owner/version-fenced candidate workflow with durable external-action status; retain the
+tracker-only withdrawal semantics until that workflow is independently reviewed.
+
+## Candidate-approved sandbox application withdrawal
+
+Delivered a separate authenticated `POST /v1/candidate/application/withdraw-employer`
+workflow. It requires an exact schema-versioned body, explicit
+`confirm_employer_withdrawal: true`, and the current application state version.
+The provider submission ID is never accepted from the client: the runtime resolves
+it from the candidate-owned application's linked, successful
+`application.submit` external-action record.
+
+The service derives one stable owner/application withdrawal operation ID, persists
+an `application.withdraw` external-action intent, and invokes only
+`SQLiteSandboxApplicationWithdrawalProvider`. Reconciliation supplies both expected
+application and provider-submission identities; the provider verifies them against
+the immutable intent and effect under its SQLite writer lock. The application
+transitions to `WITHDRAWN` only after matching provider evidence is confirmed and
+the repository state-version update succeeds.
+
+A definite `NO_EFFECT` remains failed until a second explicit candidate request;
+that request verifies the exact intent identity before reopening the same operation.
+Interrupted and timeout outcomes are reconciled from the durable provider ledger.
+Recent `IN_PROGRESS` operations are protected by a five-minute grace period, and
+provider evidence contention, rebinding, or mismatch fails closed. Owner filtering
+happens before private application children are decoded.
+
+Regression coverage exercises the authenticated runtime route, one-effect success,
+explicit no-effect retry, timeout-after-effect reconciliation, idempotent replay,
+foreign-owner isolation with corrupted private child data, missing prior submission,
+stale versions, strict body validation, and a rebound-intent retry. This is a
+SQLite sandbox simulation only; it does not contact an employer or claim a
+real-world withdrawal.
+
+Next: add the candidate dashboard's separate employer-withdrawal confirmation and
+status presentation, preserving the existing tracker-only withdrawal as a distinct
+action. Then verify browser restart/reload behavior against the same durable
+operation and provider evidence.

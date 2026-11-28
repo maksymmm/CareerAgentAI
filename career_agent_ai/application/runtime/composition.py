@@ -45,6 +45,9 @@ from career_agent_ai.application.external_actions.external_action_repository imp
     ExternalActionOperationRepository,
 )
 from career_agent_ai.application.jobs.job import Job
+from career_agent_ai.application.jobs.candidate_employer_application_withdrawal_service import (
+    CandidateEmployerApplicationWithdrawalService,
+)
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
 from career_agent_ai.application.jobs.in_memory_job_repository import InMemoryJobRepository
 from career_agent_ai.application.observability import OperationalIssue
@@ -69,6 +72,10 @@ from career_agent_ai.application.storage.sqlite_sandbox_communication_provider i
 )
 from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
     SQLiteSandboxCalendarProvider,
+)
+from career_agent_ai.application.storage.sqlite_sandbox_withdrawal_provider import (
+    SandboxApplicationWithdrawalOutcomePlan,
+    SQLiteSandboxApplicationWithdrawalProvider,
 )
 from career_agent_ai.application.storage.sqlite_candidate_applications import SQLiteCandidateApplications
 from career_agent_ai.application.storage.sqlite_operational_probe import (
@@ -121,6 +128,31 @@ class RuntimeOperationalApp:
         self.close()
 
 
+def _withdraw_candidate_application_with_provider(
+    database_path: str,
+    application_id: str,
+    *,
+    user_id: str,
+    expected_state_version: int,
+    outcome_plan: SandboxApplicationWithdrawalOutcomePlan | None = None,
+) -> dict[str, object]:
+    """Run one separately approved sandbox provider withdrawal on request-owned storage."""
+    database = SQLiteDatabase(database_path)
+    try:
+        applications = SQLiteJobApplicationRepository(database)
+        operations = SQLiteExternalActionOperationRepository(database)
+        provider = SQLiteSandboxApplicationWithdrawalProvider(database, outcome_plan)
+        service = CandidateEmployerApplicationWithdrawalService(
+            applications, operations, provider
+        )
+        return service.withdraw(
+            application_id, user_id=user_id,
+            expected_state_version=expected_state_version,
+        )
+    finally:
+        database.close()
+
+
 class RuntimeCandidateApp:
     """Create request-local candidate loops over one durable SQLite database."""
 
@@ -131,11 +163,13 @@ class RuntimeCandidateApp:
         jobs: tuple[Job, ...],
         resolve_bearer: Callable[[str], str | None],
         sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+        withdrawal_outcome_plan: SandboxApplicationWithdrawalOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._resolve_bearer = resolve_bearer
         self._sandbox_outcome_plan = sandbox_outcome_plan
+        self._withdrawal_outcome_plan = withdrawal_outcome_plan
         self._closed = False
 
     def __call__(self, environ: Mapping[str, Any], start_response) -> Iterable[bytes]:
@@ -144,7 +178,8 @@ class RuntimeCandidateApp:
             raise RuntimeError("Candidate sandbox runtime is closed.")
         app = CandidateApprovalWSGIApp(
             _RequestCandidateLoop(
-                self._database_path, self._jobs, self._sandbox_outcome_plan
+                self._database_path, self._jobs, self._sandbox_outcome_plan,
+                self._withdrawal_outcome_plan,
             ),
             resolve_bearer=self._resolve_bearer,
         )
@@ -246,10 +281,12 @@ class _RequestCandidateLoop:
         database_path: str,
         jobs: tuple[Job, ...],
         outcome_plan: SandboxOutcomePlan | None = None,
+        withdrawal_outcome_plan: SandboxApplicationWithdrawalOutcomePlan | None = None,
     ) -> None:
         self._database_path = database_path
         self._jobs = jobs
         self._outcome_plan = outcome_plan
+        self._withdrawal_outcome_plan = withdrawal_outcome_plan
 
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]:
         """Read authenticated owner's event without writable storage or calendar I/O."""
@@ -271,6 +308,16 @@ class _RequestCandidateLoop:
         """Read authenticated owner's snapshot without constructing writable storage."""
         return SQLiteCandidateApplications(self._database_path).get_snapshot(
             application_id, user_id=user_id)
+
+    def withdraw_application_with_provider(
+        self, application_id: str, *, user_id: str, expected_state_version: int
+    ) -> dict[str, object]:
+        """Execute a separately approved, evidence-verified sandbox withdrawal."""
+        return _withdraw_candidate_application_with_provider(
+            self._database_path, application_id, user_id=user_id,
+            expected_state_version=expected_state_version,
+            outcome_plan=self._withdrawal_outcome_plan,
+        )
 
     def list_applications(self, *, user_id: str, limit: int = 25,
                           after: str | None = None,
@@ -426,6 +473,7 @@ def build_candidate_sandbox_app_from_env(
     jobs: Iterable[Job] = (),
     environ: Mapping[str, str] | None = None,
     sandbox_outcome_plan: SandboxOutcomePlan | None = None,
+    withdrawal_outcome_plan: SandboxApplicationWithdrawalOutcomePlan | None = None,
 ) -> RuntimeCandidateApp:
     """Compose a durable candidate API using only deterministic no-I/O adapters."""
     config = validate_candidate_sandbox_environment(environ)
@@ -448,6 +496,7 @@ def build_candidate_sandbox_app_from_env(
         jobs=configured_jobs,
         resolve_bearer=resolve_bearer,
         sandbox_outcome_plan=sandbox_outcome_plan,
+        withdrawal_outcome_plan=withdrawal_outcome_plan,
     )
 
 

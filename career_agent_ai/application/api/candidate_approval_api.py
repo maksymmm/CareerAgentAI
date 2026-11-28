@@ -27,6 +27,7 @@ from career_agent_ai.application.career.autonomous_loop_models import (
 from .candidate_sandbox_ui import candidate_sandbox_html
 from career_agent_ai.application.scheduling.models import ScheduleStatus, validate_schedule_identifier
 from career_agent_ai.application.jobs.job_application_status import JobApplicationStatus
+from career_agent_ai.application.jobs.job_application_repository import ApplicationConflictError
 
 
 _STRICT_START_TEXT_PATTERN = (
@@ -54,6 +55,9 @@ class CandidateApprovalLoop(Protocol):
                           status: JobApplicationStatus | None = None) -> dict[str, Any]: ...
     def get_application(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
     def get_application_history(self, application_id: str, *, user_id: str) -> dict[str, Any]: ...
+    def withdraw_application_with_provider(
+        self, application_id: str, *, user_id: str, expected_state_version: int
+    ) -> dict[str, Any]: ...
     def get_schedule_event(self, event_id: str, *, user_id: str) -> dict[str, Any]: ...
     def list_schedule_events(self, *, user_id: str, limit: int = 25, after: str | None = None,
                              status: ScheduleStatus | None = None) -> dict[str, Any]: ...
@@ -142,6 +146,7 @@ class CandidateApprovalWSGIApp:
         parts = path.strip("/").split("/")
         is_start = parts == ["v1", "candidate", "runs"]
         is_applications = parts == ["v1", "candidate", "applications"]
+        is_employer_withdrawal = parts == ["v1", "candidate", "application", "withdraw-employer"]
         is_history = parts == ["v1", "candidate", "application", "history"]
         is_application = parts == ["v1", "candidate", "application"] or is_history
         is_schedule = parts == ["v1", "candidate", "schedule-event"]
@@ -153,7 +158,7 @@ class CandidateApprovalWSGIApp:
             and parts[4] in {"approval", "continue", "status", "application-reconciliation",
                              "message-reconciliation", "interview-reconciliation"}
         )
-        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule:
+        if not is_start and not is_existing_run and not is_list and not is_application and not is_schedule and not is_employer_withdrawal:
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
         authorization = str(environ.get("HTTP_AUTHORIZATION", ""))
         scheme, separator, credentials = authorization.partition(" ")
@@ -183,6 +188,35 @@ class CandidateApprovalWSGIApp:
                     {"error": "invalid_request", "message": str(exc)[:500]},
                 )
         try:
+            if is_employer_withdrawal:
+                if method != "POST":
+                    return self._respond(
+                        start_response, "405 Method Not Allowed",
+                        {"error": "method_not_allowed"}, [("Allow", "POST")],
+                    )
+                if str(environ.get("QUERY_STRING", "")) != "":
+                    return self._respond(
+                        start_response, "400 Bad Request", {"error": "invalid_request"}
+                    )
+                media_type = str(environ.get("CONTENT_TYPE", "")).partition(";")[0]
+                if media_type.strip().casefold() != "application/json":
+                    return self._respond(
+                        start_response, "415 Unsupported Media Type",
+                        {"error": "unsupported_media_type"},
+                    )
+                try:
+                    payload = self._read_json(environ)
+                    application_id, expected_state_version = self._employer_application_withdrawal(payload)
+                except (TypeError, ValueError, InvalidOperation) as exc:
+                    return self._respond(
+                        start_response, "400 Bad Request",
+                        {"error": "invalid_request", "message": str(exc)[:500]},
+                    )
+                result = self._loop.withdraw_application_with_provider(
+                    application_id, user_id=user_id,
+                    expected_state_version=expected_state_version,
+                )
+                return self._respond(start_response, "200 OK", result)
             if is_application or is_schedule:
                 if method != "GET":
                     return self._respond(start_response, "405 Method Not Allowed", {"error": "method_not_allowed"}, [("Allow", "GET")])
@@ -463,7 +497,7 @@ class CandidateApprovalWSGIApp:
             )
         except (KeyError, PermissionError):
             return self._respond(start_response, "404 Not Found", {"error": "not_found"})
-        except (CandidateApprovalConflictError, CareerLoopConflictError):
+        except (ApplicationConflictError, CandidateApprovalConflictError, CareerLoopConflictError):
             return self._respond(
                 start_response,
                 "409 Conflict",
@@ -548,6 +582,36 @@ class CandidateApprovalWSGIApp:
                 raise ValueError(error)
             return int(value)
         raise ValueError(error)
+
+    @staticmethod
+    def _employer_application_withdrawal(payload: Mapping[str, Any]) -> tuple[str, int]:
+        """Validate a separate, explicit, version-bound employer-withdrawal approval."""
+        required = {
+            "schema_version", "application_id", "state_version",
+            "confirm_employer_withdrawal",
+        }
+        if set(payload) != required:
+            raise ValueError("employer-withdrawal body has unknown or missing fields.")
+        schema_version = payload["schema_version"]
+        if type(schema_version) not in {int, float, Decimal} or schema_version != 1:
+            raise ValueError("schema_version must equal 1.")
+        application_id = payload["application_id"]
+        if (
+            not isinstance(application_id, str)
+            or not application_id
+            or application_id != application_id.strip()
+            or len(application_id) > 200
+        ):
+            raise ValueError("application_id must be a canonical non-empty string of at most 200 characters.")
+        application_id.encode("utf-8", errors="strict")
+        state_version = CandidateApprovalWSGIApp._reconciliation_state_version(
+            payload["state_version"]
+        )
+        if state_version < 1:
+            raise ValueError("state_version must be a positive SQLite integer.")
+        if payload["confirm_employer_withdrawal"] is not True:
+            raise ValueError("confirm_employer_withdrawal must be true.")
+        return application_id, state_version
 
     @staticmethod
     def _application_reconciliation(
@@ -1300,6 +1364,74 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                         "405": {"description": "Only POST is allowed", "content": content(error_schema)},
                         "415": {"description": "Request body is not application/json", "content": content(error_schema)},
                     },
+                },
+            },
+        },
+    }
+    employer_withdrawal_request_schema = {
+        "type": "object",
+        "required": [
+            "schema_version", "application_id", "state_version",
+            "confirm_employer_withdrawal",
+        ],
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "application_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            "state_version": {
+                "type": "integer", "minimum": 1,
+                "maximum": MAX_SQLITE_STATE_VERSION,
+            },
+            "confirm_employer_withdrawal": {"type": "boolean", "const": True},
+        },
+        "additionalProperties": False,
+    }
+    document["paths"]["/v1/candidate/application/withdraw-employer"] = {
+        "post": {
+            "operationId": "withdrawCandidateApplicationWithSandboxProvider",
+            "security": [{"bearerAuth": []}],
+            "requestBody": {
+                "required": True,
+                "content": content(employer_withdrawal_request_schema),
+            },
+            "responses": {
+                "200": {
+                    "description": "Candidate-approved sandbox provider withdrawal confirmed and recorded in the application tracker",
+                    "headers": {"Cache-Control": {"schema": {"const": "no-store"}}},
+                    "content": content({
+                        "type": "object", "additionalProperties": False,
+                        "required": [
+                            "application_id", "status", "state_version",
+                            "updated_at", "provider_status",
+                        ],
+                        "properties": {
+                            "application_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                            "status": {"type": "string", "const": "withdrawn"},
+                            "state_version": {
+                                "type": "integer", "minimum": 2,
+                                "maximum": MAX_SQLITE_STATE_VERSION,
+                            },
+                            "updated_at": {"type": "string", "format": "date-time"},
+                            "provider_status": {"type": "string", "const": "confirmed"},
+                        },
+                    }),
+                },
+                **common_responses,
+                "404": {
+                    "description": "Missing or foreign application",
+                    "content": content(error_schema),
+                },
+                "409": {
+                    "description": "Stale state, missing prior submission, no-effect outcome, or provider reconciliation required",
+                    "content": content(approval_conflict_schema),
+                },
+                "405": {
+                    "description": "Only POST is allowed",
+                    "headers": {"Allow": {"schema": {"const": "POST"}}},
+                    "content": content(error_schema),
+                },
+                "415": {
+                    "description": "Request body is not application/json",
+                    "content": content(error_schema),
                 },
             },
         },
