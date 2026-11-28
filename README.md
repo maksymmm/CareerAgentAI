@@ -950,6 +950,7 @@ Implemented foundations:
 - Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
+- Read-only owner-scoped candidate schedule tracker with status filtering, keyset pagination, version-monotonic event detail and Chromium recovery across runtime restart
 - Pre-vacancy opportunity scoring
 - Bounded pre-vacancy action policy
 - Unsent proactive outreach drafting
