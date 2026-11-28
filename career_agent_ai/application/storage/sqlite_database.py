@@ -2,9 +2,50 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from career_agent_ai.application.storage.database import Database
+
+
+
+def _read_only_filesystem_path(path: str) -> Path:
+    """Resolve the local file behind a SQLite path or file URI for safe preflight."""
+    if path.startswith("file:"):
+        parsed = urlsplit(path)
+        if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+            raise ValueError("Read-only SQLite requires a local file path.")
+        if any(
+            key == "mode" and value == "memory"
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        ):
+            raise ValueError("Read-only SQLite requires a durable database path.")
+        filename = unquote(parsed.path)
+    else:
+        filename = path
+    if not filename or filename == ":memory:":
+        raise ValueError("Read-only SQLite requires a durable database path.")
+    return Path(filename).absolute()
+
+
+def _reject_wal_mode(database_path: Path) -> None:
+    """Reject WAL files before SQLite can create or update shared-memory sidecars."""
+    if not database_path.is_file():
+        return
+    try:
+        with database_path.open("rb") as stream:
+            header = stream.read(20)
+    except OSError:
+        # Let sqlite3.connect preserve its normal, non-creating open error.
+        return
+    if (
+        header[:16] == b"SQLite format 3\x00"
+        and len(header) >= 20
+        and 2 in header[18:20]
+    ):
+        raise ValueError(
+            "Read-only SQLite does not support WAL-mode databases because opening "
+            "them can create or update -wal/-shm sidecar files."
+        )
 
 
 class SQLiteDatabase(Database):
@@ -18,6 +59,8 @@ class SQLiteDatabase(Database):
         """Open an existing database read-only, including attached/temp databases."""
         if path == ":memory:":
             raise ValueError("Read-only SQLite requires a durable database path.")
+        database_path = _read_only_filesystem_path(path)
+        _reject_wal_mode(database_path)
         if path.startswith("file:"):
             base, separator, fragment = path.partition("#")
             delimiter = "&" if "?" in base else "?"
@@ -25,8 +68,7 @@ class SQLiteDatabase(Database):
             if separator:
                 uri = f"{uri}#{fragment}"
         else:
-            absolute_path = Path(path).absolute()
-            uri = f"file:{quote(str(absolute_path), safe='/')}?mode=ro"
+            uri = f"file:{quote(str(database_path), safe='/')}?mode=ro"
 
         database = cls.__new__(cls)
         database._path = path

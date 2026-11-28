@@ -1041,3 +1041,14 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+Read-only SQLite projections also fail closed for WAL-mode databases. SQLite can
+create or update the `-shm` coordination sidecar even when the main database is
+opened with URI `mode=ro`; `PRAGMA query_only` does not prevent that filesystem
+effect. The read-only connection preflights the SQLite file header and rejects WAL
+mode before opening the connection. Rollback-journal databases remain readable,
+while WAL databases require a separately controlled checkpoint/conversion before
+they can serve these strict no-side-effect projections. The code deliberately does
+not use SQLite's `immutable=1` shortcut, which can ignore uncheckpointed WAL data
+and return a stale candidate snapshot.
