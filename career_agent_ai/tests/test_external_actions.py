@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import pytest
@@ -223,6 +224,14 @@ def test_restart_marks_in_progress_operation_for_reconciliation(tmp_path):
         ExternalActionStatus.PREPARED,
         ExternalActionStatus.IN_PROGRESS,
     )
+    first_database.connection.execute(
+        "UPDATE external_action_operations SET updated_at = ? WHERE operation_id = ?",
+        (
+            (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(),
+            "operation-1",
+        ),
+    )
+    first_database.connection.commit()
     first_database.close()
 
     adapter = RecordingAdapter()
