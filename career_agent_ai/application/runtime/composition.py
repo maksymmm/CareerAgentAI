@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from career_agent_ai.application.storage.sqlite_candidate_schedule import SQLiteCandidateSchedule
-from career_agent_ai.application.storage.sqlite_candidate_interview_intents import SQLiteCandidateInterviewIntents
+from career_agent_ai.application.storage.sqlite_candidate_interview_intents import (
+    CandidateInterviewIntentConflictError,
+    SQLiteCandidateInterviewIntents,
+)
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 
@@ -22,6 +25,7 @@ from career_agent_ai.application.agents.resume.resume_agent import ResumeAgent
 from career_agent_ai.application.career import (
     ApplicationSubmissionService,
     AutonomousCareerLoop,
+    CareerLoopConflictError,
 )
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
@@ -233,8 +237,13 @@ class RuntimeCandidateApp:
         """Discover owned pending interview actions through read-only storage."""
         if self._closed:
             raise RuntimeError("Candidate sandbox runtime is closed.")
-        return SQLiteCandidateInterviewIntents(self._database_path).list_page(
-            user_id=user_id, limit=limit, after=after)
+        try:
+            return SQLiteCandidateInterviewIntents(self._database_path).list_page(
+                user_id=user_id, limit=limit, after=after)
+        except CandidateInterviewIntentConflictError as exc:
+            raise CareerLoopConflictError(
+                "Pending interview acceptance no longer matches the committed event."
+            ) from exc
 
     def __enter__(self) -> "RuntimeCandidateApp":
         """Return this open candidate sandbox runtime."""

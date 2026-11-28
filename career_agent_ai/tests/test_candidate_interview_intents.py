@@ -33,6 +33,7 @@ from career_agent_ai.application.scheduling.models import (
     ScheduleStatus,
 )
 from career_agent_ai.application.storage.sqlite_candidate_interview_intents import (
+    CandidateInterviewIntentConflictError,
     SQLiteCandidateInterviewIntents,
 )
 from career_agent_ai.application.storage.sqlite_career_loop_repository import (
@@ -57,6 +58,7 @@ def _seed_interview_intent(
     run_id: str = "run-1",
     event_id: str = "event-1",
     operation_id: str = "run-1:interview-accept",
+    pointerless: bool = False,
 ):
     database = SQLiteDatabase(str(path))
     event = ScheduleEvent(
@@ -102,6 +104,17 @@ def _seed_interview_intent(
         (ExternalActionStatus.RECONCILIATION_REQUIRED.value, operation_id),
     )
     database.connection.commit()
+    if pointerless:
+        accepted = event.transition(
+            ScheduleStatus.ACCEPTED,
+            provider_event_id="private-provider-event-1",
+            occurred_at=NOW + timedelta(minutes=1),
+        )
+        scheduling.complete_action(
+            accepted,
+            operation_id,
+            expected_version=event.version,
+        )
 
     view = HumanScheduleView.from_event(event)
     state = CareerLoopState(
@@ -188,6 +201,7 @@ def test_projection_discovers_only_owned_pending_interview_intents_and_redacts_i
     item = page["items"][0]
     assert item["run_id"] == run_id
     assert item["state_version"] == 1
+    assert item["source_event_version"] == 1
     assert item["action_type"] == "calendar.accept"
     assert item["operation_status"] == "reconciliation_required"
     assert item["event"]["event_id"] == event_id
@@ -315,7 +329,8 @@ def test_interview_intent_openapi_is_explicit_and_redacts_provider_identifiers()
     item = schema["properties"]["items"]["items"]
     assert item["additionalProperties"] is False
     assert set(item["required"]) == {
-        "run_id", "state_version", "action_type", "operation_status", "event"
+        "run_id", "state_version", "source_event_version", "action_type",
+        "operation_status", "event"
     }
     assert "provider_event_id" not in str(item)
     assert "operation_id" not in str(item)
@@ -335,14 +350,15 @@ def _stop_server(server, thread):
     server.server_close()
 
 
+@pytest.mark.parametrize("pointerless", [False, True])
 def test_candidate_can_discover_interview_intent_after_runtime_and_browser_restart_and_reject_stale_version(
-    tmp_path,
+    tmp_path, pointerless,
 ):
     sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
     from playwright.sync_api import expect
 
     path = tmp_path / "candidate-interview-intents.sqlite"
-    run_id, _, _ = _seed_interview_intent(path)
+    run_id, _, _ = _seed_interview_intent(path, pointerless=pointerless)
     owner = "candidate-1"
 
     def build_runtime():
@@ -409,6 +425,16 @@ def test_candidate_can_discover_interview_intent_after_runtime_and_browser_resta
                 page.locator("#load-interview-intents").click()
                 expect(page.locator("#pending-interview-intents button")).to_have_count(1)
                 page.locator("#pending-interview-intents button").click()
+                if pointerless:
+                    expect(page.locator("#interview-intent-detail")).to_contain_text(
+                        '"source_event_version": 1'
+                    )
+                    expect(page.locator("#interview-intent-detail")).to_contain_text(
+                        '"state_version": 2'
+                    )
+                    expect(page.locator("#interview-intent-detail")).to_contain_text(
+                        '"status": "accepted"'
+                    )
                 expect(page.locator("#run-overview")).to_contain_text("interview reconciliation")
                 expect(page.locator("#interview-intent-detail")).to_contain_text("Sandbox Logistics")
                 expect(page.locator("#interview-intent-detail")).to_contain_text(run_id)
@@ -460,4 +486,28 @@ def test_projection_rejects_run_request_bound_to_a_different_event(tmp_path):
     database.close()
 
     with pytest.raises(ValueError, match="Persisted candidate interview intent is malformed"):
+        SQLiteCandidateInterviewIntents(str(path)).list_page(user_id="candidate-1")
+
+
+def test_pointerless_acceptance_requires_exact_next_event_version_and_provider_identity(tmp_path):
+    path = tmp_path / "pointerless-stale.sqlite"
+    _seed_interview_intent(path, pointerless=True)
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE scheduling_events SET version = 3 WHERE event_id = 'event-1'"
+    )
+    database.connection.commit()
+    database.close()
+
+    with pytest.raises(CandidateInterviewIntentConflictError):
+        SQLiteCandidateInterviewIntents(str(path)).list_page(user_id="candidate-1")
+
+    database = SQLiteDatabase(str(path))
+    database.connection.execute(
+        "UPDATE scheduling_events SET version = 2, provider_event_id = NULL "
+        "WHERE event_id = 'event-1'"
+    )
+    database.connection.commit()
+    database.close()
+    with pytest.raises(CandidateInterviewIntentConflictError):
         SQLiteCandidateInterviewIntents(str(path)).list_page(user_id="candidate-1")

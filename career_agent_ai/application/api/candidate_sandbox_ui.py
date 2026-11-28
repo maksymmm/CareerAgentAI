@@ -996,20 +996,28 @@ _HTML = r"""<!doctype html>
       byId('interview-intent-detail').textContent = '';
     }
     function validateInterviewIntent(item) {
-      const fields = ['run_id', 'state_version', 'action_type', 'operation_status', 'event'];
+      const fields = ['run_id', 'state_version', 'source_event_version', 'action_type',
+        'operation_status', 'event'];
       if (!item || typeof item !== 'object' || Array.isArray(item) ||
           Object.keys(item).length !== fields.length || !fields.every(key => Object.hasOwn(item, key)) ||
           !validRunIdentifier(item.run_id) || !Number.isSafeInteger(item.state_version) ||
-          item.state_version < 1 || item.action_type !== 'calendar.accept' ||
+          item.state_version < 1 || !Number.isSafeInteger(item.source_event_version) ||
+          item.source_event_version < 1 || item.source_event_version >= Number.MAX_SAFE_INTEGER ||
+          item.action_type !== 'calendar.accept' ||
           item.operation_status !== 'reconciliation_required') {
         throw new Error('Invalid pending interview intent.');
       }
       const event = eventSnapshot(item.event);
-      if (!['proposed', 'reschedule_requested'].includes(event.status)) {
-        throw new Error('Invalid pending interview event.');
+      const activeClaim = event.state_version === item.source_event_version &&
+        ['proposed', 'reschedule_requested'].includes(event.status);
+      const committedAcceptance = event.state_version === item.source_event_version + 1 &&
+        event.status === 'accepted';
+      if (!activeClaim && !committedAcceptance) {
+        throw new Error('Pending interview event is not the exact source or committed target version.');
       }
       return {run_id: item.run_id, state_version: item.state_version,
-        action_type: item.action_type, operation_status: item.operation_status, event};
+        source_event_version: item.source_event_version, action_type: item.action_type,
+        operation_status: item.operation_status, event};
     }
     async function loadInterviewIntents(after = null) {
       if (interviewIntentsInFlight) throw new Error('Pending interview actions are already loading.');
@@ -1091,6 +1099,7 @@ _HTML = r"""<!doctype html>
       byId('interview-intent-detail').textContent = JSON.stringify({
         run_id: selected.run_id,
         state_version: selected.state_version,
+        source_event_version: selected.source_event_version,
         action_type: selected.action_type,
         operation_status: selected.operation_status,
         event: selected.event

@@ -1605,3 +1605,19 @@ includes foreign malformed payload isolation, keyset pagination, stale/corrupt b
 rejection, strict HTTP/OpenAPI, Chromium restart discovery and stale-version fencing.
 Next: extend the same candidate-safe discovery/recovery contract to explicitly approved
 interview decline and reschedule actions without exposing provider identities.
+
+
+Provider-applied candidate acceptance recovery delivered: after the sandbox calendar
+provider commits the accepted event and SQLite clears its active-action pointer, a
+crash before the external-action success transition no longer hides the pending
+reconciliation. Owner-scoped discovery verifies the exact durable acceptance payload,
+source slot, source version, and provider identity, and accepts a pointerless event only
+at exactly source version + 1 with accepted status. The browser can rediscover this
+state after runtime/tab restart and requires a fresh run-status read before enabling
+provider attestation. Scheduling reconciliation independently rejects a later
+same-slot acceptance at a newer event version and maps the typed conflict to HTTP 409.
+SQLite and Chromium regressions prove restart discovery, no provider replay, no stale
+reconciliation, and unchanged durable state on conflict.
+Next: extend the same exact-version recovery contract to candidate interview decline
+and reschedule while preserving their independent provider-ledger and active-lease
+invariants.
