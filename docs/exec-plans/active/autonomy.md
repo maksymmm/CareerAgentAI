@@ -1631,3 +1631,6 @@ The CI now uses two-decimal coverage precision for both pytest-cov and the indep
 Next: exact-head full CI and independent code/security review; then add a stale-attestation
 regression where a competing event-version advance occurs between recovery display and
 candidate reconciliation.
+
+Candidate interview reschedule cross-runtime single-winner acceptance: two independent candidate runtime compositions and loopback WSGI listeners share one file-backed SQLite database. A deterministic first sandbox-provider callback is held while a second runtime submits the same owner/event/source-version/target approval. The second runtime must return `202 Accepted` with `outcome=running` without invoking its provider plan or recording an attempt/effect. After the first runtime commits, a replay from the second runtime must return the durable completed event with exactly one provider attempt, one effect, and zero replays. ADR 0039 records the HTTP/runtime idempotency contract; the test uses only synthetic events and the no-network SQLite calendar provider.
+Next: exact-head full CI and independent code/security review, then audit the remaining candidate application-withdrawal and interview-decline flows for equivalent cross-runtime single-winner guarantees.
