@@ -1627,3 +1627,14 @@ records the local sandbox boundary. The independent two-decimal coverage CLI gat
 inherited from the stacked external-action concurrency base and remains after pytest.
 Next: continue concurrent writer/evidence verification through the candidate workflow
 and retain exact-head full CI plus independent code/security review before integration.
+
+Cross-provider negative evidence/write serialization: application submission, mailbox
+delivery, and calendar evidence verification now also wait for committed no-effect
+outcomes before returning ABSENT_CONFIRMED. Six independent-connection regressions
+cover NO_EFFECT and INTERRUPTED_BEFORE_EFFECT for all three sandbox providers. Each
+test observes the verifier request its SQLite writer lock while the provider transaction
+is held, then proves the verifier returns absence only after the attempt commits, with
+one outcome-plan call, one attempt, zero effects, and no provider-plan invocation from
+verification. ADR 0061 records the negative-evidence contract.
+Next: exercise these positive and negative evidence guarantees through candidate-facing
+application, message, and interview reconciliation HTTP flows.
