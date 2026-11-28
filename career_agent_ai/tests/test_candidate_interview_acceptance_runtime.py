@@ -225,7 +225,7 @@ def test_duplicate_candidate_interview_approval_is_fenced_across_runtime_instanc
     # A new runtime must observe the terminal workflow state without another provider call.
     with _runtime(path) as restarted:
         (status, _), snapshot = _request(restarted, status_path)
-        assert status[0] == "200 OK"
+        assert status == "200 OK"
         assert snapshot["phase"] == "complete"
         assert snapshot["terminal"] is True
         assert snapshot["waiting_for_human"] is False
