@@ -463,7 +463,7 @@ def test_candidate_can_discover_interview_intent_after_runtime_and_browser_resta
 def test_ci_enforces_independent_coverage_gate_after_full_pytest():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     pytest_gate = workflow.index("python -m pytest")
-    independent_gate = workflow.index("python -m coverage report --fail-under=90")
+    independent_gate = workflow.index("python -m coverage report --precision=2 --fail-under=90")
     assert independent_gate > pytest_gate
     assert "- name: Enforce independent coverage threshold" in workflow
 
