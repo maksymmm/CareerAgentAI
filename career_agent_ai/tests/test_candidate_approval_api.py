@@ -871,6 +871,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 title = "Approve interview"
                 details = {
                     "event_id": "event-1",
+                    "event_version": 1,
                     "employer": "Sandbox GmbH",
                     "event_type": "interview",
                     "location": "Berlin",
@@ -886,7 +887,9 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                 if self.prompt_reads == 8:
                     details["local_date"] = "2026-02-30"
                     details["status"] = "accepted"
-            elif self.prompt_reads >= 11:
+                elif self.prompt_reads == 9:
+                    details["event_version"] = 0
+            elif self.prompt_reads >= 12:
                 action_kind = "approve_message"
                 title = "Approve message"
                 details = {
@@ -896,7 +899,7 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
                     "subject": "\ufeffApplication follow-up\ufeff",
                     "body": "\ufeffThank you for considering my application.\ufeff",
                 }
-                if self.prompt_reads == 11:
+                if self.prompt_reads == 12:
                     details["message_id"] = "../private-message"
                     details["subject"] = "Approved\nBcc: attacker@example.test"
             fingerprint = sha256(json.dumps(
@@ -1024,7 +1027,13 @@ def test_candidate_sandbox_browser_completes_prompt_bound_approval():
             assert page.locator("#decline").is_disabled()
 
             page.locator("#prompt").click()
+            page.locator("#result").get_by_text("Invalid approval prompt").wait_for()
+            assert page.locator("#approve").is_disabled()
+            assert page.locator("#decline").is_disabled()
+
+            page.locator("#prompt").click()
             page.locator("#action-title").get_by_text("Approve interview").wait_for()
+            assert '"event_version": 1' in page.locator("#action-details").text_content()
             assert '"local_end_date": null' in page.locator("#action-details").text_content()
             assert '"local_end_time": null' in page.locator("#action-details").text_content()
             assert '"end_utc_offset": null' in page.locator("#action-details").text_content()
