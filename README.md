@@ -1041,3 +1041,15 @@ floating-point JSON forms are checked for finiteness, integrality and range befo
 integer conversion, so extreme exponents cannot trigger unbounded integer
 materialization or reach a provider resolver. The OpenAPI request schemas publish the
 same maximum. Rejected observations leave provider and durable workflow state untouched.
+
+
+Candidate interview intent recovery now covers the provider-applied acceptance crash
+window after the scheduling repository commits the accepted event and clears its active
+action pointer but before the external-action ledger durably records success. Discovery
+is allowed only when the immutable operation payload matches the event slot and the
+event is exactly source version + 1, accepted, with a provider identity present. The
+candidate-safe response includes the source event version but never the operation or
+provider ID. The browser accepts either the exact active source snapshot or that exact
+committed target snapshot. A later same-slot acceptance at a newer version is rejected
+as a conflict both during discovery and reconciliation; no stale attestation can
+complete the older operation.

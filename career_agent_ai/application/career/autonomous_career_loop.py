@@ -64,6 +64,9 @@ from career_agent_ai.application.scheduling import (
     ScheduleStatus,
     SchedulingService,
 )
+from career_agent_ai.application.scheduling.scheduling_repository import (
+    SchedulingOperationConflict,
+)
 
 
 _MAX_DERIVED_IDENTIFIER_LENGTH = 200
@@ -528,6 +531,10 @@ class AutonomousCareerLoop:
             except CalendarReconciliationEvidenceError as exc:
                 raise CareerLoopConflictError(
                     "Provider evidence does not support the claimed outcome."
+                ) from exc
+            except SchedulingOperationConflict as exc:
+                raise CareerLoopConflictError(
+                    "Scheduling event changed before reconciliation."
                 ) from exc
             state.pending_human_action = None
             state.last_error = None

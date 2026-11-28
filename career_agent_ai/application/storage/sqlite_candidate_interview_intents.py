@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from career_agent_ai.application.career.approval_contract import MAX_SQLITE_STATE_VERSION
 from career_agent_ai.application.career.autonomous_loop_models import (
     CareerLoopPhase,
     validate_loop_identifier,
@@ -16,6 +17,7 @@ from career_agent_ai.application.storage.sqlite_candidate_schedule import (
     SQLiteCandidateSchedule,
 )
 from career_agent_ai.application.storage.sqlite_database import SQLiteDatabase
+
 
 _EVENT_COLUMNS = (
     "event_id, candidate_id, employer_name, event_type, location, "
@@ -30,6 +32,10 @@ _REQUIRED_OPERATION_FIELDS = {
     "event_timezone_name",
     "event_status",
 }
+
+
+class CandidateInterviewIntentConflictError(ValueError):
+    """Raised when a previously pending interview intent is no longer current."""
 
 
 class SQLiteCandidateInterviewIntents:
@@ -126,21 +132,16 @@ class SQLiteCandidateInterviewIntents:
 
             event_row = connection.execute(
                 "SELECT " + _EVENT_COLUMNS +
-                "active_action_operation_id FROM scheduling_events "
+                "active_action_operation_id, provider_event_id IS NOT NULL "
+                "FROM scheduling_events "
                 "WHERE candidate_id = ? AND event_id = ?",
                 (owner, event_id),
             ).fetchone()
-            if event_row is None or event_row[16] != operation_id:
-                raise ValueError("event claim mismatch")
+            if event_row is None:
+                raise ValueError("event is missing")
             event = SQLiteCandidateSchedule._snapshot(event_row[:16])
-            if (
-                event["status"] not in {"proposed", "reschedule_requested"}
-                or details.get("employer") != event["employer_name"]
-                or details.get("local_date") != event["local_date"]
-                or details.get("local_start_time") != event["local_start_time"]
-                or details.get("timezone") != event["timezone_name"]
-            ):
-                raise ValueError("event snapshot mismatch")
+            active_operation_id = event_row[16]
+            has_provider_event_id = bool(event_row[17])
 
             operation_row = connection.execute(
                 """
@@ -157,24 +158,60 @@ class SQLiteCandidateInterviewIntents:
             ):
                 raise ValueError("operation state mismatch")
             operation_payload = cls._json_object(operation_row[2])
+            source_version = operation_payload.get("event_version")
+            source_status = operation_payload.get("event_status")
             if (
                 set(operation_payload) != _REQUIRED_OPERATION_FIELDS
                 or operation_payload.get("event_id") != event_id
-                or type(operation_payload.get("event_version")) is not int
-                or operation_payload.get("event_version") != event["state_version"]
+                or type(source_version) is not int
+                or not 1 <= source_version <= MAX_SQLITE_STATE_VERSION
+                or source_status not in {"proposed", "reschedule_requested"}
                 or operation_payload.get("event_start_at") != event["start_at"]
                 or operation_payload.get("event_end_at") != event["end_at"]
                 or operation_payload.get("event_timezone_name") != event["timezone_name"]
-                or operation_payload.get("event_status") != event["status"]
             ):
                 raise ValueError("operation intent mismatch")
+
+            if (
+                details.get("employer") != event["employer_name"]
+                or details.get("local_date") != event["local_date"]
+                or details.get("local_start_time") != event["local_start_time"]
+                or details.get("timezone") != event["timezone_name"]
+            ):
+                raise ValueError("event snapshot mismatch")
+
+            if active_operation_id == operation_id:
+                if (
+                    event["state_version"] != source_version
+                    or event["status"] != source_status
+                ):
+                    raise ValueError("active event claim no longer matches its source")
+            elif active_operation_id is None:
+                # complete_action commits the accepted event and clears its active
+                # pointer before ExternalActionService persists SUCCEEDED. A crash
+                # in that window is recoverable only at exactly source + 1.
+                if (
+                    source_version >= MAX_SQLITE_STATE_VERSION
+                    or event["state_version"] != source_version + 1
+                    or event["status"] != "accepted"
+                    or not has_provider_event_id
+                ):
+                    raise CandidateInterviewIntentConflictError(
+                        "Persisted candidate interview intent is malformed."
+                    )
+            else:
+                raise ValueError("event claim belongs to another operation")
+
             return {
                 "run_id": run_id,
                 "state_version": storage_version,
+                "source_event_version": source_version,
                 "action_type": operation_row[0],
                 "operation_status": operation_row[1],
                 "event": event,
             }
+        except CandidateInterviewIntentConflictError:
+            raise
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(
                 "Persisted candidate interview intent is malformed."

@@ -1412,6 +1412,10 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
         "responses": {
             **common_responses,
             "405": {"description": "Only GET is allowed", "content": content(error_schema)},
+            "409": {
+                "description": "The pending interview acceptance no longer matches its exact source or committed target version",
+                "content": content(error_schema),
+            },
             "200": {
                 "description": (
                     "Bounded owner-scoped pending interview actions. Internal operation IDs "
@@ -1430,8 +1434,8 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                                 "type": "object",
                                 "additionalProperties": False,
                                 "required": [
-                                    "run_id", "state_version", "action_type",
-                                    "operation_status", "event"
+                                    "run_id", "state_version", "source_event_version",
+                                    "action_type", "operation_status", "event"
                                 ],
                                 "properties": {
                                     "run_id": {
@@ -1439,6 +1443,10 @@ def candidate_approval_openapi_document() -> dict[str, Any]:
                                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]*$"
                                     },
                                     "state_version": {
+                                        "type": "integer", "minimum": 1,
+                                        "maximum": MAX_SQLITE_STATE_VERSION
+                                    },
+                                    "source_event_version": {
                                         "type": "integer", "minimum": 1,
                                         "maximum": MAX_SQLITE_STATE_VERSION
                                     },
