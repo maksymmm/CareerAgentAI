@@ -1590,3 +1590,18 @@ publishes the same bound; HTTP regressions cover all three reconciliation routes
 including the maximum accepted value. No provider I/O or durable mutation is added.
 Next: finish durable recovery for pending candidate interview actions, including
 owner-scoped intent discovery after browser reload and version-bound reconciliation.
+
+
+External-action concurrency claim hardening (ADR 0054): the shared application, messaging,
+and calendar action service now leaves a live `in_progress` provider call unchanged during
+a bounded grace interval and promotes only expired calls to reconciliation. A losing stale
+recovery compare-and-swap re-reads the durable winner. Two callers that both observe
+`prepared` now race on one compare-and-swap; only the winner reaches the adapter, while a
+loser returns the same operation only when its ID, action type, and immutable payload still
+match. Deterministic SQLite regressions cover live duplicate observation, stale and
+future-dated recovery, terminal-winner races, prepared-claim races, and payload rebinding.
+The CI job independently enforces two-decimal coverage after pytest, including when pytest
+fails unless the job is cancelled. This addresses the service-level concurrent submission
+failure observed by PR #355 without depending on its provider-only test branch.
+Next: exact-head full CI and independent code/security review, then verify the same claim
+contract through candidate application, mailbox, and calendar sandbox workflows.
