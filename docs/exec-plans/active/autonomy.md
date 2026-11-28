@@ -1605,3 +1605,14 @@ fails unless the job is cancelled. This addresses the service-level concurrent s
 failure observed by PR #355 without depending on its provider-only test branch.
 Next: exact-head full CI and independent code/security review, then verify the same claim
 contract through candidate application, mailbox, and calendar sandbox workflows.
+
+
+Candidate calendar acceptance live-provider integration: a regression now drives
+`SchedulingService.accept` through the SQLite sandbox calendar provider while a
+second runtime with an independent SQLite connection repeats the same operation
+during the provider transaction. The duplicate must observe `in_progress` without
+reclassifying the live call or invoking the provider; the original worker must finish
+with one accepted event, one durable provider effect and zero replays. This verifies
+the shared 300-second grace at the actual calendar service/provider boundary.
+Next: exact-head full CI and independent code/security review, then apply the same
+integration proof to the candidate-facing runtime restart path.

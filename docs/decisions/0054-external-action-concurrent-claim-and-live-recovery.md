@@ -39,3 +39,14 @@ operation is already being executed.
   terminal-winner races, concurrent prepared claims, and payload rebinding.
 - The guarantee applies to this local durable claim protocol; it does not assert that a real
   external provider supplies transactional or idempotency guarantees.
+
+
+## Candidate calendar integration proof
+
+The scheduling integration regression drives `SchedulingService.accept` through the
+SQLite sandbox calendar provider while a second runtime, using an independent SQLite
+connection, repeats the same approved operation from inside the provider outcome plan.
+The duplicate must observe the durable `in_progress` claim, return without invoking
+the provider or mutating the operation, and leave the original worker able to commit
+one `accepted` event and one provider effect. This verifies the shared grace contract
+at the calendar service/provider boundary, not only against a synthetic adapter.
