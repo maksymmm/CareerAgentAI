@@ -38,7 +38,7 @@ def _reject_wal_mode(database_path: Path) -> None:
         # Let sqlite3.connect preserve its normal, non-creating open error.
         return
     if (
-        header[:16] == b"SQLite format 3\\x00"
+        header[:16] == b"SQLite format 3\x00"
         and len(header) >= 20
         and 2 in header[18:20]
     ):
