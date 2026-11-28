@@ -666,7 +666,7 @@ _HTML = r"""<!doctype html>
       approve_message: ['message_id', 'sender', 'recipient', 'subject', 'body'],
       approve_interview: ['event_id', 'employer', 'event_type', 'location', 'local_date',
         'local_start_time', 'local_end_date', 'local_end_time', 'timezone', 'utc_offset',
-        'end_utc_offset', 'status'],
+        'end_utc_offset', 'status', 'event_version'],
     };
     const approvalPhases = {
       approve_application: 'application_approval',
@@ -737,10 +737,12 @@ _HTML = r"""<!doctype html>
       }
       if (kind === 'approve_interview') {
         const nullableFields = ['local_end_date', 'local_end_time', 'end_utc_offset'];
-        const validScalars = fields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]) ||
+        const textFields = fields.filter(field => field !== 'event_version');
+        const validScalars = textFields.every(field => validApprovalText(value[field], approvalTextLimits[kind][field]) ||
           (nullableFields.includes(field) && value[field] === null));
         const endValues = nullableFields.map(field => value[field]);
-        if (!validScalars || !eventId(value.event_id) ||
+        if (!validScalars || !Number.isSafeInteger(value.event_version) || value.event_version < 1 ||
+            !eventId(value.event_id) ||
             !['interview', 'trial_day', 'phone_call', 'video_call', 'other'].includes(value.event_type) ||
             !['proposed', 'reschedule_requested'].includes(value.status) ||
             !calendarDate(value.local_date) || !localTime(value.local_start_time) ||

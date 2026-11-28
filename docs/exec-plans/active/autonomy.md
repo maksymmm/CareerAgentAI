@@ -1603,3 +1603,15 @@ provider claim. The optional argument preserves trusted internal callers that ap
 the current event at invocation time; candidate-facing adapters must pass the displayed
 version. Next: wire and verify the remaining candidate acceptance entry points against
 the version-bound contract, then run exact-head CI and independent code/security review.
+
+Candidate interview acceptance version binding: the owner-scoped interview approval prompt
+now carries the exact event version together with the displayed slot, so the existing prompt
+fingerprint binds both. Candidate approval rechecks a stable event snapshot and passes the
+approved version unchanged into `SchedulingService.accept(expected_version=...)`. The
+service's SQLite compare-and-swap rejects a reschedule that wins after the prompt was read,
+before creating or invoking a new calendar provider action. An already-applied acceptance is
+recognized only at exactly source version + 1 with the same approved slot. Chromium rejects
+missing/invalid event versions; SQLite/runtime regressions cover a concurrent reschedule
+between approval snapshot validation and provider claim. Next: finish browser-driven pending
+acceptance discovery/recovery after reload and runtime restart, then exact-head CI and
+independent code/security review.

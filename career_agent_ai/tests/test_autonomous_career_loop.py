@@ -1507,7 +1507,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     database.close()
 
     third = build_stack(path)
-    database, loop, applications, messages, _, submission_provider, communication_provider, _ = third
+    database, loop, applications, messages, scheduling, submission_provider, communication_provider, _ = third
     after_message = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert after_message.phase == CareerLoopPhase.INTERVIEW_APPROVAL
@@ -1515,6 +1515,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     assert after_message.human_action.kind == HumanActionKind.APPROVE_INTERVIEW
     details = after_message.human_action.details
     assert details["employer"] == "Acme Logistics"
+    assert details["event_version"] == scheduling.get_event("interview-1").version
     assert details["location"] == "Hauptstrasse 1, Karlsruhe"
     assert details["local_date"] == "2026-11-12"
     assert details["local_start_time"] == "10:00:00"
@@ -2375,6 +2376,58 @@ def test_interview_approval_is_bound_to_the_exact_displayed_slot(tmp_path):
     assert calendar_provider.calls == provider_calls_before
     assert all(call[1] != f"{run_id}:interview-accept" for call in calendar_provider.calls)
     database.close()
+
+def test_interview_accept_claim_reuses_candidate_approved_event_version(tmp_path, monkeypatch):
+    path = str(tmp_path / "interview-accept-version-race.sqlite")
+    run_id = "interview-accept-version-race"
+    database, loop, _, _, scheduling, _, _, calendar_provider = build_stack(path)
+    add_interview(scheduling, f"{run_id}:application")
+    assert loop.start(request(), run_id=run_id).phase == CareerLoopPhase.APPLICATION_APPROVAL
+    assert loop.resume(run_id, approved=True, user_id="user-1").phase == CareerLoopPhase.MESSAGE_APPROVAL
+    gate = loop.resume(run_id, approved=True, user_id="user-1")
+    assert gate.phase == CareerLoopPhase.INTERVIEW_APPROVAL
+    approved_version = gate.human_action.details["event_version"]
+    assert approved_version == 1
+
+    original_accept = scheduling.accept
+
+    def reschedule_after_approval_snapshot(
+        operation_id, event_id, *, human_approved, expected_version=None
+    ):
+        assert expected_version == approved_version
+        current = scheduling.get_event(event_id)
+        moved_start = current.start_at + timedelta(days=1)
+        changed = scheduling.reschedule(
+            "concurrent-reschedule-before-accept",
+            event_id,
+            start_at=moved_start,
+            end_at=moved_start + timedelta(hours=1),
+            timezone_name=current.timezone_name,
+            human_approved=True,
+        )
+        assert changed is not None
+        assert changed.version == approved_version + 1
+        return original_accept(
+            operation_id,
+            event_id,
+            human_approved=human_approved,
+            expected_version=expected_version,
+        )
+
+    monkeypatch.setattr(scheduling, "accept", reschedule_after_approval_snapshot)
+    result = loop.resume(run_id, approved=True, user_id="user-1")
+
+    assert result.phase == CareerLoopPhase.FAILED
+    assert "Event changed after the candidate approved acceptance" in (result.error or "")
+    assert calendar_provider.calls == [
+        ("reschedule", "concurrent-reschedule-before-accept")
+    ]
+    assert scheduling.get_operation(f"{run_id}:interview-accept") is None
+    current = scheduling.get_event("interview-1")
+    assert current.version == approved_version + 1
+    assert current.status == ScheduleStatus.RESCHEDULE_REQUESTED
+    database.close()
+
 
 def test_new_run_cannot_resubmit_a_job_that_is_already_applied(tmp_path):
     path = str(tmp_path / "cross-run-duplicate.sqlite")

@@ -405,6 +405,13 @@ Accept, decline, and reschedule are provider-neutral calendar actions. Every con
 
 The included fake calendar adapter is deterministic, in-memory, and performs no network I/O. No production calendar provider or credential is configured.
 
+Candidate interview approval prompts include the exact event version shown with the employer,
+slot, timezone and UTC offset. That version is covered by the prompt fingerprint and is passed
+unchanged to the durable calendar acceptance claim. If a reschedule wins after the candidate
+reviews the prompt, acceptance fails before creating a new provider intent. A previously applied
+acceptance is recognized only as the single source-version-to-accepted-version transition for
+the same approved slot; later event changes remain stale and cannot be attested by the old prompt.
+
 ---
 
 ## Application Tracker
