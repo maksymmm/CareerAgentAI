@@ -7,12 +7,19 @@ from threading import Event
 
 import pytest
 
-from career_agent_ai.application.career.application_submission import EvidenceState
+from career_agent_ai.application.career.application_submission import (
+    EvidenceState,
+    PreSubmissionError,
+)
+from career_agent_ai.application.communication.communication_adapter import (
+    PreDeliveryCommunicationError,
+)
 from career_agent_ai.application.communication import (
     CommunicationMessage,
     DeliveryEvidenceState,
     MessageDirection,
 )
+from career_agent_ai.application.scheduling.calendar_adapter import PreCalendarActionError
 from career_agent_ai.application.scheduling import (
     CalendarEvidenceState,
     ScheduleEvent,
@@ -222,6 +229,144 @@ def test_provider_evidence_waits_for_inflight_effect_commit(tmp_path, kind):
     finally:
         verification.close()
 
+
+
+@pytest.mark.parametrize("kind", ["application", "communication", "calendar"])
+@pytest.mark.parametrize("outcome_name", ["no_effect", "interrupted_before_effect"])
+def test_provider_evidence_waits_for_inflight_no_effect_commit(tmp_path, kind, outcome_name):
+    """Negative evidence is returned only after a concurrent no-effect write commits."""
+    path = str(tmp_path / f"{kind}-{outcome_name}-evidence-lock.sqlite")
+    setup = SQLiteDatabase(path)
+    setup_provider = _provider(kind, setup, None)
+    if kind == "communication":
+        setup_provider.draft(_message())
+    setup.close()
+
+    plan_entered = Event()
+    release_plan = Event()
+    writer_ready = Event()
+    verifier_ready = Event()
+    start_verification = Event()
+    verification_lock_requested = Event()
+    plan_calls = []
+
+    def plan(operation_id, attempt_no):
+        plan_calls.append((operation_id, attempt_no))
+        plan_entered.set()
+        if not release_plan.wait(timeout=10):
+            raise AssertionError("The test did not release the sandbox provider transaction.")
+        if kind == "application":
+            return (
+                SandboxOutcome.NO_EFFECT
+                if outcome_name == "no_effect"
+                else SandboxOutcome.INTERRUPTED_BEFORE_EFFECT
+            )
+        if kind == "communication":
+            return (
+                SandboxCommunicationOutcome.NO_EFFECT
+                if outcome_name == "no_effect"
+                else SandboxCommunicationOutcome.INTERRUPTED_BEFORE_EFFECT
+            )
+        return (
+            SandboxCalendarOutcome.NO_EFFECT
+            if outcome_name == "no_effect"
+            else SandboxCalendarOutcome.INTERRUPTED_BEFORE_EFFECT
+        )
+
+    def write():
+        database = SQLiteDatabase(path)
+        provider = _provider(kind, database, plan)
+        writer_ready.set()
+        try:
+            _write(kind, provider)
+        except (
+            PreSubmissionError,
+            PreDeliveryCommunicationError,
+            PreCalendarActionError,
+            ConnectionError,
+        ) as exc:
+            return type(exc).__name__
+        finally:
+            database.close()
+        raise AssertionError("A no-effect provider outcome must not return success.")
+
+    def verify():
+        database = SQLiteDatabase(path)
+        provider = _provider(
+            kind,
+            database,
+            lambda *_: pytest.fail("Evidence verification must never invoke the provider plan."),
+        )
+        database.connection.set_trace_callback(
+            lambda statement: verification_lock_requested.set()
+            if statement.strip().upper() == "BEGIN IMMEDIATE"
+            else None
+        )
+        verifier_ready.set()
+        try:
+            if not start_verification.wait(timeout=10):
+                raise AssertionError("The test did not start evidence verification.")
+            return _verify(kind, provider)
+        finally:
+            database.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        verify_future = executor.submit(verify)
+        assert verifier_ready.wait(timeout=5)
+        write_future = executor.submit(write)
+        assert writer_ready.wait(timeout=5)
+        assert plan_entered.wait(timeout=5)
+        start_verification.set()
+        try:
+            assert verification_lock_requested.wait(timeout=5)
+            with pytest.raises(FutureTimeoutError):
+                verify_future.result(timeout=0.05)
+        finally:
+            release_plan.set()
+
+        expected_error = (
+            "ConnectionError"
+            if outcome_name == "interrupted_before_effect"
+            else {
+                "application": "PreSubmissionError",
+                "communication": "PreDeliveryCommunicationError",
+                "calendar": "PreCalendarActionError",
+            }[kind]
+        )
+        assert write_future.result(timeout=5) == expected_error
+        evidence = verify_future.result(timeout=5)
+
+    assert plan_calls == [(OPERATION_ID, 1)]
+    if kind == "application":
+        assert evidence.state is EvidenceState.ABSENT_CONFIRMED
+        attempts_table = "sandbox_submission_attempts"
+        key_column = "idempotency_key"
+        effect_table = "sandbox_submission_ledger"
+    elif kind == "communication":
+        assert evidence.state is DeliveryEvidenceState.ABSENT_CONFIRMED
+        attempts_table = "sandbox_communication_attempts"
+        key_column = "operation_id"
+        effect_table = "sandbox_communication_deliveries"
+    else:
+        assert evidence.state is CalendarEvidenceState.ABSENT_CONFIRMED
+        attempts_table = "sandbox_calendar_attempts"
+        key_column = "operation_id"
+        effect_table = "sandbox_calendar_effects"
+
+    verification = SQLiteDatabase(path)
+    try:
+        attempts = verification.connection.execute(
+            f"SELECT attempt_no, outcome FROM {attempts_table} "
+            f"WHERE {key_column} = ? ORDER BY attempt_no",
+            (OPERATION_ID,),
+        ).fetchall()
+        assert attempts == [(1, outcome_name)]
+        assert verification.connection.execute(
+            f"SELECT COUNT(*) FROM {effect_table} WHERE {key_column} = ?",
+            (OPERATION_ID,),
+        ).fetchone() == (0,)
+    finally:
+        verification.close()
 
 def test_ci_runs_independent_coverage_gate_after_full_pytest():
     """The CLI coverage gate must run after pytest, including a failed test run."""
