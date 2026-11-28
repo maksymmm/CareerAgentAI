@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 
 import pytest
