@@ -29,6 +29,10 @@ from career_agent_ai.application.storage.sqlite_external_action_repository impor
 from career_agent_ai.application.storage.sqlite_scheduling_repository import (
     SQLiteSchedulingRepository,
 )
+from career_agent_ai.application.storage.sqlite_sandbox_calendar_provider import (
+    SQLiteSandboxCalendarProvider,
+    SandboxCalendarOutcome,
+)
 
 
 BASE_CREATED = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -1029,3 +1033,85 @@ def test_succeeded_calendar_reconciliation_replay_enriches_missing_provider_id()
     assert persisted is not None
     assert persisted.provider_event_id == opaque_id
     assert replay.result["event_snapshot"]["provider_event_id"] == opaque_id
+
+
+
+def test_live_duplicate_candidate_acceptance_keeps_one_sandbox_calendar_effect(tmp_path):
+    path = str(tmp_path / "live-candidate-acceptance.sqlite")
+    operation_id = "candidate-interview-accept:live"
+    database = SQLiteDatabase(path)
+    schedules = SQLiteSchedulingRepository(database)
+    operations = SQLiteExternalActionOperationRepository(database)
+    duplicate_database = None
+    duplicate_service = None
+    duplicate_operations = None
+    duplicate_observation = {}
+
+    def outcome_plan(observed_operation_id, attempt):
+        assert observed_operation_id == operation_id
+        assert attempt == 1
+        duplicate_result = duplicate_service.accept(
+            operation_id,
+            "event-1",
+            human_approved=True,
+        )
+        duplicate_operation = duplicate_operations.get(operation_id)
+        duplicate_observation["result"] = duplicate_result
+        duplicate_observation["status_during_provider"] = (
+            None if duplicate_operation is None else duplicate_operation.status
+        )
+        return SandboxCalendarOutcome.SUCCESS
+
+    provider = SQLiteSandboxCalendarProvider(database, outcome_plan)
+    service = SchedulingService(
+        schedules,
+        provider,
+        ExternalActionService(
+            operations,
+            SchedulingService.action_adapter(provider, schedules),
+        ),
+    )
+    service.add_event(event())
+
+    # A second runtime has its own SQLite connection and repositories before the
+    # provider call starts. It observes the committed IN_PROGRESS claim while the
+    # first provider transaction is open, but must not write or invoke the adapter.
+    duplicate_database = SQLiteDatabase(path)
+    duplicate_schedules = SQLiteSchedulingRepository(duplicate_database)
+    duplicate_operations = SQLiteExternalActionOperationRepository(duplicate_database)
+    duplicate_service = SchedulingService(
+        duplicate_schedules,
+        provider,
+        ExternalActionService(
+            duplicate_operations,
+            SchedulingService.action_adapter(provider, duplicate_schedules),
+        ),
+    )
+
+    try:
+        accepted = service.accept(
+            operation_id,
+            "event-1",
+            human_approved=True,
+        )
+
+        assert duplicate_observation["result"] is None
+        assert (
+            duplicate_observation["status_during_provider"]
+            == ExternalActionStatus.IN_PROGRESS
+        )
+        assert accepted is not None
+        assert accepted.status == ScheduleStatus.ACCEPTED
+        assert schedules.get("event-1") == accepted
+        assert operations.get(operation_id).status == ExternalActionStatus.SUCCEEDED
+        assert duplicate_operations.get(operation_id).status == ExternalActionStatus.SUCCEEDED
+        assert provider.calls == [("accept", operation_id)]
+        assert provider.effect_count(operation_id) == 1
+        replay_count = database.connection.execute(
+            "SELECT replays FROM sandbox_calendar_effects WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()[0]
+        assert replay_count == 0
+    finally:
+        duplicate_database.close()
+        database.close()
