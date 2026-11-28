@@ -948,6 +948,7 @@ Implemented foundations:
 - Restart-safe persistence of communication thread, message, and reply identifiers
 - Durable, human-gated interview/trial-day scheduling with conflict detection and exact local-time presentation
 - Durable application lifecycle tracking, history, duplicate prevention, and operation linkage
+- Read-only owner-scoped candidate application tracker with status filtering, keyset pagination, minimal detail, and privacy-preserving lifecycle history; verified in Chromium across runtime restart
 - Durable, versioned SQLite career memory with user/type retrieval
 - Workflow state restoration
 - Pre-vacancy opportunity scoring
