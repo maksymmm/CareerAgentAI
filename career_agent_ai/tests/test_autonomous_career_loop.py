@@ -1507,7 +1507,7 @@ def test_end_to_end_loop_survives_restarts_and_stops_at_each_human_gate(tmp_path
     database.close()
 
     third = build_stack(path)
-    database, loop, applications, messages, _, submission_provider, communication_provider, _ = third
+    database, loop, applications, messages, scheduling, submission_provider, communication_provider, _ = third
     after_message = loop.resume(run_id, approved=True, user_id="user-1")
 
     assert after_message.phase == CareerLoopPhase.INTERVIEW_APPROVAL
